@@ -1,7 +1,7 @@
 import CredibleCompilation.CertChecker
 
 /-!
-# Decidable Certificate Checker
+# Executable Certificate Checker
 
 An executable certificate checker that returns `Bool`.
 Use `#eval! checkCertificate cert` or run `lake exe checker` from the terminal.
@@ -12,13 +12,13 @@ represented as lists of `(var, val)` atoms; variable maps are implicitly identit
 -/
 
 -- ============================================================
--- § 1. Decidable invariants and helpers
+-- § 1. Executable invariants and helpers
 -- ============================================================
 
-/-- Decidable invariant: conjunction of `var = val` atoms. -/
-abbrev DInv := List (Var × Val)
+/-- Executable invariant: conjunction of `var = val` atoms. -/
+abbrev EInv := List (Var × Val)
 
-def lookupVar (inv : DInv) (v : Var) : Option Val :=
+def lookupVar (inv : EInv) (v : Var) : Option Val :=
   (inv.find? (fun p => p.1 == v)).map (·.2)
 
 -- ============================================================
@@ -26,7 +26,7 @@ def lookupVar (inv : DInv) (v : Var) : Option Val :=
 -- ============================================================
 
 /-- Simplify an `Expr` by substituting known variable values and constant-folding. -/
-def Expr.simplify (inv : DInv) : Expr → Expr
+def Expr.simplify (inv : EInv) : Expr → Expr
   | .lit n => .lit n
   | .var v => match lookupVar inv v with
     | some n => .lit n
@@ -93,7 +93,7 @@ def Expr.isNonZeroLit : Expr → Bool
 /-- Like `canReach`, but for `ifgoto` also verifies the branch direction
     via the symbolic value of the condition variable under the invariant.
     Non-ifgoto instructions fall back to plain `canReach`. -/
-def canReachSym (ss : SymStore) (inv : DInv) (instr : TAC) (pc next : Label) : Bool :=
+def canReachSym (ss : SymStore) (inv : EInv) (instr : TAC) (pc next : Label) : Bool :=
   match instr with
   | .ifgoto x l =>
     let sv := (ssGet ss x).simplify inv
@@ -113,35 +113,35 @@ def collectAllVars (p1 p2 : Prog) : List Var :=
   go p1 ++ go p2
 
 -- ============================================================
--- § 5. Decidable certificate types
+-- § 5. Executable certificate types
 -- ============================================================
 
 /-- A single transition correspondence with labels of the original path. -/
-structure DTransCorr where
+structure ETransCorr where
   /-- Labels of original PCs visited (successors of pc_orig, ending at pc_orig'). -/
   origLabels : List Label
   deriving Repr, Inhabited
 
 /-- Per-instruction certificate entry. -/
-structure DInstrCert where
+structure EInstrCert where
   pc_orig     : Label
-  transitions : List DTransCorr
+  transitions : List ETransCorr
   deriving Repr, Inhabited
 
 /-- Per-halt certificate entry. -/
-structure DHaltCert where
+structure EHaltCert where
   pc_orig : Label
   deriving Repr, Inhabited
 
-/-- A decidable certificate: all data needed to verify the transformation. -/
-structure DCertificate where
+/-- An executable certificate: all data needed to verify the transformation. -/
+structure ECertificate where
   orig       : Prog
   trans      : Prog
-  inv_orig   : Array DInv
-  inv_trans  : Array DInv
+  inv_orig   : Array EInv
+  inv_trans  : Array EInv
   observable : List Var
-  instrCerts : Array DInstrCert
-  haltCerts  : Array DHaltCert
+  instrCerts : Array EInstrCert
+  haltCerts  : Array EHaltCert
   /-- Well-founded measure for non-termination (per transformed label). -/
   measure    : Array Nat
 
@@ -150,21 +150,21 @@ structure DCertificate where
 -- ============================================================
 
 /-- **Condition 1**: Start labels correspond, initial variable map is identity. -/
-def checkStart (cert : DCertificate) : Bool :=
+def checkStart (cert : ECertificate) : Bool :=
   match cert.instrCerts[0]? with
   | some ic => ic.pc_orig == 0
   | none    => false
 
 /-- **Condition 2a**: Invariants are trivially true at label 0. -/
-def checkInvariantsAtStart (cert : DCertificate) : Bool :=
-  (cert.inv_orig.getD 0 ([] : DInv)).isEmpty &&
-  (cert.inv_trans.getD 0 ([] : DInv)).isEmpty
+def checkInvariantsAtStart (cert : ECertificate) : Bool :=
+  (cert.inv_orig.getD 0 ([] : EInv)).isEmpty &&
+  (cert.inv_trans.getD 0 ([] : EInv)).isEmpty
 
 /-- Check that a single invariant atom is preserved by an instruction.
     Two cases: (1) if the instruction assigns to the atom's variable,
     verify the new value matches; (2) if it does NOT assign to it,
     verify the atom already held in the pre-invariant. -/
-def checkInvAtom (inv_pre : DInv) (instr : TAC) (atom : Var × Val) : Bool :=
+def checkInvAtom (inv_pre : EInv) (instr : TAC) (atom : Var × Val) : Bool :=
   let (x, v) := atom
   -- Does the instruction modify x?
   let modifiesX : Bool :=
@@ -190,20 +190,20 @@ def checkInvAtom (inv_pre : DInv) (instr : TAC) (atom : Var × Val) : Bool :=
     lookupVar inv_pre x == some v
 
 /-- **Condition 2b**: Invariants are preserved by both programs. -/
-def checkInvariantsPreserved (cert : DCertificate) : Bool :=
-  let checkProg (prog : Prog) (inv : Array DInv) : Bool :=
+def checkInvariantsPreserved (cert : ECertificate) : Bool :=
+  let checkProg (prog : Prog) (inv : Array EInv) : Bool :=
     (List.range prog.size).all fun pc =>
       match prog[pc]? with
       | some instr =>
         (successors instr pc).all fun pc' =>
-          (inv.getD pc' ([] : DInv)).all (checkInvAtom (inv.getD pc ([] : DInv)) instr)
+          (inv.getD pc' ([] : EInv)).all (checkInvAtom (inv.getD pc ([] : EInv)) instr)
       | none => true
   checkProg cert.orig cert.inv_orig &&
   checkProg cert.trans cert.inv_trans
 
 /-- **Condition 4a**: Each halt in trans corresponds to a halt in orig.
     Uses `instrCerts` (not `haltCerts`) for consistency with the simulation. -/
-def checkHaltCorrespondence (cert : DCertificate) : Bool :=
+def checkHaltCorrespondence (cert : ECertificate) : Bool :=
   (List.range cert.trans.size).all fun pc =>
     match cert.trans[pc]? with
     | some .halt =>
@@ -214,10 +214,10 @@ def checkHaltCorrespondence (cert : DCertificate) : Bool :=
 
 /-- **Condition 4b**: Observable equivalence at halt.
     Trivially true for identity variable maps. -/
-def checkHaltObservable (_ : DCertificate) : Bool := true
+def checkHaltObservable (_ : ECertificate) : Bool := true
 
 /-- Compute the next PC from an instruction, using symbolic branch analysis for ifgoto. -/
-def computeNextPC (instr : TAC) (pc : Label) (ss : SymStore) (inv : DInv) : Option Label :=
+def computeNextPC (instr : TAC) (pc : Label) (ss : SymStore) (inv : EInv) : Option Label :=
   match instr with
   | .const _ _ | .copy _ _ | .binop _ _ _ _ => some (pc + 1)
   | .goto l => some l
@@ -230,7 +230,7 @@ def computeNextPC (instr : TAC) (pc : Label) (ss : SymStore) (inv : DInv) : Opti
 
 /-- Verify that the original path is structurally valid:
     at each PC, the instruction's successor matches the next label. -/
-def checkOrigPath (orig : Prog) (ss : SymStore) (inv : DInv)
+def checkOrigPath (orig : Prog) (ss : SymStore) (inv : EInv)
     (pc : Label) (labels : List Label) (pc_next : Label) : Bool :=
   match labels with
   | [] => pc == pc_next
@@ -246,7 +246,7 @@ def checkOrigPath (orig : Prog) (ss : SymStore) (inv : DInv)
     have equal simplified expressions under the respective invariants. -/
 def checkVarMapConsistency (vars : List Var)
     (orig : Prog) (pc_orig : Label) (origLabels : List Label) (transInstr : TAC)
-    (inv_orig inv_trans : DInv) : Bool :=
+    (inv_orig inv_trans : EInv) : Bool :=
   let origSS := execPath orig ([] : SymStore) pc_orig origLabels
   let transSS := execSymbolic ([] : SymStore) transInstr
   vars.all fun v =>
@@ -254,7 +254,7 @@ def checkVarMapConsistency (vars : List Var)
 
 /-- **Condition 3**: Every transition in the transformed program has a
     corresponding original-program path with consistent variable effects. -/
-def checkAllTransitions (cert : DCertificate) : Bool :=
+def checkAllTransitions (cert : ECertificate) : Bool :=
   let vars := collectAllVars cert.orig cert.trans
   (List.range cert.trans.size).all fun pc_t =>
     match cert.trans[pc_t]? with
@@ -265,16 +265,16 @@ def checkAllTransitions (cert : DCertificate) : Bool :=
         (successors instr pc_t).all fun pc_t' =>
           let ic' := cert.instrCerts.getD pc_t' default
           ic.transitions.any fun tc =>
-            checkOrigPath cert.orig ([] : SymStore) (cert.inv_orig.getD ic.pc_orig ([] : DInv))
+            checkOrigPath cert.orig ([] : SymStore) (cert.inv_orig.getD ic.pc_orig ([] : EInv))
               ic.pc_orig tc.origLabels ic'.pc_orig &&
             checkVarMapConsistency vars cert.orig ic.pc_orig tc.origLabels instr
-              (cert.inv_orig.getD ic.pc_orig ([] : DInv))
-              (cert.inv_trans.getD pc_t ([] : DInv))
+              (cert.inv_orig.getD ic.pc_orig ([] : EInv))
+              (cert.inv_trans.getD pc_t ([] : EInv))
       | none => false
     | none => true
 
 /-- **Condition 5**: Zero-step original transitions decrease the measure. -/
-def checkNontermination (cert : DCertificate) : Bool :=
+def checkNontermination (cert : ECertificate) : Bool :=
   (List.range cert.trans.size).all fun pc_t =>
     match cert.trans[pc_t]? with
     | some .halt => true
@@ -294,7 +294,7 @@ def checkNontermination (cert : DCertificate) : Bool :=
 -- ============================================================
 
 /-- Check all certificate conditions. Returns `true` iff the certificate is valid. -/
-def checkCertificate (cert : DCertificate) : Bool :=
+def checkCertificate (cert : ECertificate) : Bool :=
   checkStart cert &&
   checkInvariantsAtStart cert &&
   checkInvariantsPreserved cert &&
@@ -304,7 +304,7 @@ def checkCertificate (cert : DCertificate) : Bool :=
   checkNontermination cert
 
 /-- Verbose check: returns the result of each individual condition. -/
-def checkCertificateVerbose (cert : DCertificate) : List (String × Bool) :=
+def checkCertificateVerbose (cert : ECertificate) : List (String × Bool) :=
   [ ("start_correspondence",  checkStart cert),
     ("invariants_at_start",   checkInvariantsAtStart cert),
     ("invariants_preserved",  checkInvariantsPreserved cert),
@@ -321,9 +321,9 @@ def checkCertificateVerbose (cert : DCertificate) : List (String × Bool) :=
   Original:  `0: x:=5; 1: y:=x; 2: halt`
   Transformed: `0: x:=5; 1: y:=5; 2: halt`
 -/
-namespace DExample1
+namespace EExample1
 
-def cert : DCertificate :=
+def cert : ECertificate :=
   { orig  := #[.const "x" 5, .copy "y" "x", .halt]
     trans := #[.const "x" 5, .const "y" 5, .halt]
     inv_orig  := #[[], [("x", 5)], [("x", 5)]]
@@ -339,15 +339,15 @@ def cert : DCertificate :=
 #eval! checkCertificate cert              -- true
 #eval! checkCertificateVerbose cert
 
-end DExample1
+end EExample1
 
 /-! ### Example 2: Constant propagation into binop operand
   Original:  `0: a:=10; 1: b:=a; 2: c:=b+y; 3: halt`
   Transformed: `0: a:=10; 1: b:=10; 2: c:=b+y; 3: halt`
 -/
-namespace DExample2
+namespace EExample2
 
-def cert : DCertificate :=
+def cert : ECertificate :=
   { orig  := #[.const "a" 10, .copy "b" "a", .binop "c" .add "b" "y", .halt]
     trans := #[.const "a" 10, .const "b" 10, .binop "c" .add "b" "y", .halt]
     inv_orig  := #[[], [("a", 10)], [("a", 10), ("b", 10)], [("a", 10), ("b", 10)]]
@@ -364,16 +364,16 @@ def cert : DCertificate :=
 #eval! checkCertificate cert              -- true
 #eval! checkCertificateVerbose cert
 
-end DExample2
+end EExample2
 
 /-! ### Example 3: Redundant assignment removal in a loop
   Original (7 instr): includes redundant `step:=2` at pc 4
   Transformed (6 instr): redundant assignment removed
   Trans 3→4 maps to orig 3→4→5 (two original steps)
 -/
-namespace DExample3
+namespace EExample3
 
-def cert : DCertificate :=
+def cert : ECertificate :=
   { orig := #[
       .const "step" 2,                -- 0
       .ifgoto "n" 3,                  -- 1
@@ -407,16 +407,16 @@ def cert : DCertificate :=
 #eval! checkCertificate cert              -- true
 #eval! checkCertificateVerbose cert
 
-end DExample3
+end EExample3
 
 /-! ### Bad Example: Buggy transformation (y:=x → y:=3, should be y:=5)
   The checker rejects this because the symbolic effects don't match:
   orig `copy "y" "x"` under invariant `x=5` produces `y=5`,
   but trans `const "y" 3` produces `y=3`.
 -/
-namespace DBadExample
+namespace EBadExample
 
-def cert : DCertificate :=
+def cert : ECertificate :=
   { orig  := #[.const "x" 5, .copy "y" "x", .halt]
     trans := #[.const "x" 5, .const "y" 3, .halt]
     inv_orig  := #[[], [("x", 5)], [("x", 5)]]
@@ -432,4 +432,4 @@ def cert : DCertificate :=
 #eval! checkCertificate cert              -- false
 #eval! checkCertificateVerbose cert       -- all_transitions fails
 
-end DBadExample
+end EBadExample

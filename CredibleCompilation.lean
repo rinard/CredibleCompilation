@@ -1,5 +1,5 @@
 import CredibleCompilation.Semantics
 import CredibleCompilation.CertChecker
 import CredibleCompilation.CertExamples
-import CredibleCompilation.DecidableChecker
+import CredibleCompilation.ExecChecker
 import CredibleCompilation.SoundnessBridge

@@ -1,16 +1,16 @@
-import CredibleCompilation.DecidableChecker
+import CredibleCompilation.ExecChecker
 import CredibleCompilation.CertExamples
 import Mathlib.Tactic
 
 /-!
-# Soundness Bridge: Decidable Checker → Prop-based Checker
+# Soundness Bridge: Executable Checker → Prop-based Checker
 
 We prove that if the executable `checkCertificate` returns `true`,
 then `CertificateValid` holds for the corresponding `Certificate`.
 
 ## Structure
 
-1. **Translation**: `toCertificate` lifts a `DCertificate` to a `Certificate`
+1. **Translation**: `toCertificate` lifts a `ECertificate` to a `Certificate`
 2. **Per-condition soundness**: each Bool check implies its Prop counterpart
 3. **Main theorem**: `soundness_bridge`
 
@@ -19,12 +19,12 @@ then `CertificateValid` holds for the corresponding `Certificate`.
 An iff is **not possible** in general:
 - The Prop-based `Certificate` uses `InvariantMap := Label → Store → Prop`
   (arbitrary predicates on stores)
-- The decidable `DCertificate` uses `DInv := List (Var × Val)`
+- The executable `ECertificate` uses `EInv := List (Var × Val)`
   (only `var = constant` atoms)
 
 Any `CertificateValid` proof using invariants beyond `var = val`
 (e.g., relational invariants like `x < y`) cannot be captured by `checkCertificate`.
-The decidable checker is **sound but incomplete**.
+The executable checker is **sound but incomplete**.
 -/
 
 set_option maxRecDepth 2048
@@ -45,31 +45,31 @@ private theorem orig_eq_of_beq {orig : Prog} {pc : Label} {instr : TAC}
     exact congrArg some (tac_beq_eq h)
 
 -- ============================================================
--- § 1. Lifting DInv to Prop
+-- § 1. Lifting EInv to Prop
 -- ============================================================
 
-/-- A `DInv` as a proposition: every atom `(x, v)` asserts `σ x = v`. -/
-def DInv.toProp (inv : DInv) : Invariant :=
+/-- A `EInv` as a proposition: every atom `(x, v)` asserts `σ x = v`. -/
+def EInv.toProp (inv : EInv) : Invariant :=
   fun σ => ∀ p ∈ inv, σ p.1 = p.2
 
-theorem DInv.toProp_nil : DInv.toProp [] = fun _ => True := by
-  funext σ; simp [DInv.toProp]
+theorem EInv.toProp_nil : EInv.toProp [] = fun _ => True := by
+  funext σ; simp [EInv.toProp]
 
-theorem DInv.toProp_cons (x : Var) (v : Val) (rest : DInv) :
-    DInv.toProp ((x, v) :: rest) = fun σ => σ x = v ∧ DInv.toProp rest σ := by
-  funext σ; simp [DInv.toProp]
+theorem EInv.toProp_cons (x : Var) (v : Val) (rest : EInv) :
+    EInv.toProp ((x, v) :: rest) = fun σ => σ x = v ∧ EInv.toProp rest σ := by
+  funext σ; simp [EInv.toProp]
 
 -- ============================================================
--- § 2. Translation: DCertificate → Certificate
+-- § 2. Translation: ECertificate → Certificate
 -- ============================================================
 
-/-- Lift a decidable certificate to a Prop-based certificate.
+/-- Lift an executable certificate to a Prop-based certificate.
     Uses identity variable maps throughout. -/
-def toCertificate (dc : DCertificate) : Certificate :=
+def toCertificate (dc : ECertificate) : Certificate :=
   { orig       := dc.orig
     trans      := dc.trans
-    inv_orig   := fun l => (dc.inv_orig.getD l ([] : DInv)).toProp
-    inv_trans  := fun l => (dc.inv_trans.getD l ([] : DInv)).toProp
+    inv_orig   := fun l => (dc.inv_orig.getD l ([] : EInv)).toProp
+    inv_trans  := fun l => (dc.inv_trans.getD l ([] : EInv)).toProp
     observable := dc.observable
     instrCerts := fun l =>
       let dic := dc.instrCerts.getD l default
@@ -87,22 +87,22 @@ def toCertificate (dc : DCertificate) : Certificate :=
   }
 
 /-- Lift the measure: ignores the store (depends only on label). -/
-def toMeasure (dc : DCertificate) : TransMeasure :=
+def toMeasure (dc : ECertificate) : TransMeasure :=
   fun l _ => dc.measure.getD l 0
 
 -- ============================================================
 -- § 3. lookupVar soundness
 -- ============================================================
 
-theorem lookupVar_sound (inv : DInv) (v : Var) (n : Val) (σ : Store)
+theorem lookupVar_sound (inv : EInv) (v : Var) (n : Val) (σ : Store)
     (hlook : lookupVar inv v = some n)
-    (hinv : DInv.toProp inv σ) :
+    (hinv : EInv.toProp inv σ) :
     σ v = n := by
   induction inv with
   | nil => simp [lookupVar] at hlook
   | cons p rest ih =>
     obtain ⟨x, val⟩ := p
-    rw [DInv.toProp_cons] at hinv
+    rw [EInv.toProp_cons] at hinv
     simp only [lookupVar, List.find?, Option.map] at hlook
     by_cases hxv : x == v
     · simp [hxv] at hlook
@@ -117,8 +117,8 @@ theorem lookupVar_sound (inv : DInv) (v : Var) (n : Val) (σ : Store)
 
 /-- Simplification preserves semantics: evaluating `e.simplify inv` in `σ`
     gives the same result as evaluating `e` in `σ`, provided `σ` satisfies `inv`. -/
-theorem Expr.simplify_sound (inv : DInv) (e : Expr) (σ : Store)
-    (hinv : DInv.toProp inv σ) :
+theorem Expr.simplify_sound (inv : EInv) (e : Expr) (σ : Store)
+    (hinv : EInv.toProp inv σ) :
     (e.simplify inv).eval σ = e.eval σ := by
   induction e with
   | lit n => simp [Expr.simplify, Expr.eval]
@@ -149,7 +149,7 @@ theorem Expr.simplify_sound (inv : DInv) (e : Expr) (σ : Store)
 -- ============================================================
 
 /-- **Condition 1**: checkStart → check_start_correspondence -/
-theorem checkStart_sound (dc : DCertificate)
+theorem checkStart_sound (dc : ECertificate)
     (h : checkStart dc = true) :
     check_start_correspondence (toCertificate dc) := by
   simp [checkStart] at h
@@ -170,26 +170,26 @@ theorem checkStart_sound (dc : DCertificate)
   · contradiction
 
 /-- **Condition 2a**: checkInvariantsAtStart → check_invariants_at_start -/
-theorem checkInvariantsAtStart_sound (dc : DCertificate)
+theorem checkInvariantsAtStart_sound (dc : ECertificate)
     (h : checkInvariantsAtStart dc = true) :
     check_invariants_at_start (toCertificate dc) := by
   unfold checkInvariantsAtStart at h
-  have h1 : (dc.inv_orig.getD 0 ([] : DInv)).isEmpty = true := by
-    revert h; cases (dc.inv_orig.getD 0 ([] : DInv)).isEmpty <;> simp
-  have h2 : (dc.inv_trans.getD 0 ([] : DInv)).isEmpty = true := by
-    revert h; cases (dc.inv_trans.getD 0 ([] : DInv)).isEmpty <;> simp
-  have horig_nil : dc.inv_orig.getD 0 ([] : DInv) = [] := by
-    revert h1; cases dc.inv_orig.getD 0 ([] : DInv) <;> simp [List.isEmpty]
-  have htrans_nil : dc.inv_trans.getD 0 ([] : DInv) = [] := by
-    revert h2; cases dc.inv_trans.getD 0 ([] : DInv) <;> simp [List.isEmpty]
+  have h1 : (dc.inv_orig.getD 0 ([] : EInv)).isEmpty = true := by
+    revert h; cases (dc.inv_orig.getD 0 ([] : EInv)).isEmpty <;> simp
+  have h2 : (dc.inv_trans.getD 0 ([] : EInv)).isEmpty = true := by
+    revert h; cases (dc.inv_trans.getD 0 ([] : EInv)).isEmpty <;> simp
+  have horig_nil : dc.inv_orig.getD 0 ([] : EInv) = [] := by
+    revert h1; cases dc.inv_orig.getD 0 ([] : EInv) <;> simp [List.isEmpty]
+  have htrans_nil : dc.inv_trans.getD 0 ([] : EInv) = [] := by
+    revert h2; cases dc.inv_trans.getD 0 ([] : EInv) <;> simp [List.isEmpty]
   refine ⟨fun σ => ?_, fun σ => ?_⟩
-  · change (dc.inv_trans.getD 0 ([] : DInv)).toProp σ
-    rw [htrans_nil]; simp [DInv.toProp]
-  · change (dc.inv_orig.getD 0 ([] : DInv)).toProp σ
-    rw [horig_nil]; simp [DInv.toProp]
+  · change (dc.inv_trans.getD 0 ([] : EInv)).toProp σ
+    rw [htrans_nil]; simp [EInv.toProp]
+  · change (dc.inv_orig.getD 0 ([] : EInv)).toProp σ
+    rw [horig_nil]; simp [EInv.toProp]
 
 /-- **Condition 4a**: checkHaltCorrespondence → check_halt_correspondence -/
-theorem checkHaltCorrespondence_sound (dc : DCertificate)
+theorem checkHaltCorrespondence_sound (dc : ECertificate)
     (h : checkHaltCorrespondence dc = true) :
     check_halt_correspondence (toCertificate dc) := by
   intro pc_t
@@ -207,7 +207,7 @@ theorem checkHaltCorrespondence_sound (dc : DCertificate)
   | some instr => cases instr <;> simp
 
 /-- **Condition 4b**: checkHaltObservable → check_halt_observable -/
-theorem checkHaltObservable_sound (dc : DCertificate)
+theorem checkHaltObservable_sound (dc : ECertificate)
     (_h : checkHaltObservable dc = true) :
     check_halt_observable (toCertificate dc) := by
   intro pc_t σ_t σ_o _hhalt
@@ -223,10 +223,10 @@ theorem checkHaltObservable_sound (dc : DCertificate)
 /-- Key lemma: checkInvAtom soundness.
     If checkInvAtom succeeds, then for any store satisfying inv_pre,
     after executing `instr`, the atom holds in the post-store. -/
-theorem checkInvAtom_sound (inv_pre : DInv) (instr : TAC) (atom : Var × Val)
+theorem checkInvAtom_sound (inv_pre : EInv) (instr : TAC) (atom : Var × Val)
     (σ σ' : Store) (pc pc' : Label) (prog : Prog)
     (hcheck : checkInvAtom inv_pre instr atom = true)
-    (hinv : DInv.toProp inv_pre σ)
+    (hinv : EInv.toProp inv_pre σ)
     (hstep : Step prog (Cfg.run pc σ) (Cfg.run pc' σ'))
     (hinstr : prog[pc]? = some instr) :
     σ' atom.1 = atom.2 := by
@@ -327,14 +327,14 @@ private theorem and_true_split {a b : Bool} (h : (a && b) = true) :
   simp [Bool.and_eq_true] at h; exact h
 
 /-- Helper: checkProg soundness for one program/invariant pair. -/
-private theorem checkProg_sound (prog : Prog) (inv : Array DInv)
+private theorem checkProg_sound (prog : Prog) (inv : Array EInv)
     (h : (List.range prog.size).all (fun pc =>
       match prog[pc]? with
       | some instr =>
         (successors instr pc).all fun pc' =>
-          (inv.getD pc' ([] : DInv)).all (checkInvAtom (inv.getD pc ([] : DInv)) instr)
+          (inv.getD pc' ([] : EInv)).all (checkInvAtom (inv.getD pc ([] : EInv)) instr)
       | none => true) = true) :
-    InvariantMap.preserved (fun l => (inv.getD l ([] : DInv)).toProp) prog := by
+    InvariantMap.preserved (fun l => (inv.getD l ([] : EInv)).toProp) prog := by
   intro pc σ hinvpc pc' σ' hstep
   obtain ⟨instr, hinstr⟩ := step_run_instr hstep
   have hbound := bound_of_getElem? hinstr
@@ -347,11 +347,11 @@ private theorem checkProg_sound (prog : Prog) (inv : Array DInv)
   rw [List.all_eq_true] at hpc'
   -- hpc' : ∀ atom ∈ (inv.getD pc' []), checkInvAtom (inv.getD pc []) instr atom = true
   intro atom hatom
-  exact checkInvAtom_sound (inv.getD pc ([] : DInv)) instr atom σ σ' pc pc' prog
+  exact checkInvAtom_sound (inv.getD pc ([] : EInv)) instr atom σ σ' pc pc' prog
     (hpc' atom hatom) hinvpc hstep hinstr
 
 /-- **Condition 2b**: checkInvariantsPreserved → check_invariants_preserved -/
-theorem checkInvariantsPreserved_sound (dc : DCertificate)
+theorem checkInvariantsPreserved_sound (dc : ECertificate)
     (h : checkInvariantsPreserved dc = true) :
     check_invariants_preserved (toCertificate dc) := by
   unfold checkInvariantsPreserved at h
@@ -561,10 +561,10 @@ private theorem isNonZeroLit_sound {e : Expr} (h : e.isNonZeroLit = true) :
 
 /-- Generalized path execution soundness with arbitrary initial symbolic store.
     The path check includes symbolic branch-direction verification for ifgoto. -/
-private theorem execPath_sound_gen (orig : Prog) (ss : SymStore) (inv : DInv)
+private theorem execPath_sound_gen (orig : Prog) (ss : SymStore) (inv : EInv)
     (σ₀ σ : Store) (pc : Label) (labels : List Label) (pc' : Label)
     (hrepr : ∀ v, (ssGet ss v).eval σ₀ = σ v)
-    (hinv : DInv.toProp inv σ₀)
+    (hinv : EInv.toProp inv σ₀)
     (hpath : checkOrigPath orig ss inv pc labels pc' = true) :
     ∃ σ', Steps orig (Cfg.run pc σ) (Cfg.run pc' σ') ∧
           ∀ v, (ssGet (execPath orig ss pc labels) v).eval σ₀ = σ' v := by
@@ -653,10 +653,10 @@ private theorem execPath_sound_gen (orig : Prog) (ss : SymStore) (inv : DInv)
         exact ⟨σ', Steps.step hstep_orig hsteps_rest, hexec ▸ hrepr_final⟩
 
 /-- Path execution soundness: specialization with empty initial symbolic store. -/
-private theorem execPath_sound (orig : Prog) (inv : DInv) (σ : Store)
+private theorem execPath_sound (orig : Prog) (inv : EInv) (σ : Store)
     (pc : Label) (labels : List Label) (pc' : Label)
     (hrepr : ∀ v, (ssGet ([] : SymStore) v).eval σ = σ v)
-    (hinv : DInv.toProp inv σ)
+    (hinv : EInv.toProp inv σ)
     (hpath : checkOrigPath orig ([] : SymStore) inv pc labels pc' = true) :
     ∃ σ', Steps orig (Cfg.run pc σ) (Cfg.run pc' σ') ∧
           ∀ v, (ssGet (execPath orig ([] : SymStore) pc labels) v).eval σ = σ' v :=
@@ -670,19 +670,19 @@ private theorem expr_beq_eq {e₁ e₂ : Expr} (h : (e₁ == e₂) = true) : e�
     Given: checkOrigPath and checkVarMapConsistency both pass, and stores
     satisfy invariants with identity variable maps. Then the original path
     produces steps reaching the target with the correct store. -/
-private theorem transVarmap_sound (dc : DCertificate) (pc_t pc_t' : Label)
-    (dic : DInstrCert) (dtc : DTransCorr) (instr : TAC)
+private theorem transVarmap_sound (dc : ECertificate) (pc_t pc_t' : Label)
+    (dic : EInstrCert) (dtc : ETransCorr) (instr : TAC)
     (pc_o' : Label)
     (hinstr : dc.trans[pc_t]? = some instr)
-    (hpath : checkOrigPath dc.orig ([] : SymStore) (dc.inv_orig.getD dic.pc_orig ([] : DInv))
+    (hpath : checkOrigPath dc.orig ([] : SymStore) (dc.inv_orig.getD dic.pc_orig ([] : EInv))
       dic.pc_orig dtc.origLabels pc_o' = true)
     (hvm : checkVarMapConsistency (collectAllVars dc.orig dc.trans)
       dc.orig dic.pc_orig dtc.origLabels instr
-      (dc.inv_orig.getD dic.pc_orig ([] : DInv))
-      (dc.inv_trans.getD pc_t ([] : DInv)) = true) :
+      (dc.inv_orig.getD dic.pc_orig ([] : EInv))
+      (dc.inv_trans.getD pc_t ([] : EInv)) = true) :
     check_transition_varmap dc.orig dc.trans
-      (fun l => (dc.inv_orig.getD l ([] : DInv)).toProp)
-      (fun l => (dc.inv_trans.getD l ([] : DInv)).toProp)
+      (fun l => (dc.inv_orig.getD l ([] : EInv)).toProp)
+      (fun l => (dc.inv_trans.getD l ([] : EInv)).toProp)
       pc_t pc_t' dic.pc_orig pc_o'
       { origLabels := dtc.origLabels
         vm := idVarMap
@@ -694,7 +694,7 @@ private theorem transVarmap_sound (dc : DCertificate) (pc_t pc_t' : Label)
   rw [h_eq] at hinv_o ⊢
   -- From checkOrigPath: the original path produces Steps with symbolic tracking
   obtain ⟨σ_o', horig_steps, horig_repr⟩ := execPath_sound dc.orig
-    (dc.inv_orig.getD dic.pc_orig ([] : DInv)) σ_t
+    (dc.inv_orig.getD dic.pc_orig ([] : EInv)) σ_t
     dic.pc_orig dtc.origLabels pc_o'
     (fun v => ssGet_nil σ_t v) hinv_o hpath
   -- From execSymbolic_sound: the transformed instruction is tracked symbolically
@@ -713,10 +713,10 @@ private theorem transVarmap_sound (dc : DCertificate) (pc_t pc_t' : Label)
   · -- v ∈ vars: use the simplification chain
     have hvm_v := hvm v hv
     have h_orig_simp := Expr.simplify_sound
-      (dc.inv_orig.getD dic.pc_orig ([] : DInv))
+      (dc.inv_orig.getD dic.pc_orig ([] : EInv))
       (ssGet (execPath dc.orig ([] : SymStore) dic.pc_orig dtc.origLabels) v) σ_t hinv_o
     have h_trans_simp := Expr.simplify_sound
-      (dc.inv_trans.getD pc_t ([] : DInv))
+      (dc.inv_trans.getD pc_t ([] : EInv))
       (ssGet (execSymbolic ([] : SymStore) instr) v) σ_t hinv_t
     rw [← h_orig_simp, ← h_trans_simp, hvm_v]
   · -- v not in any instruction → symbolic stores didn't modify v
@@ -733,7 +733,7 @@ private theorem transVarmap_sound (dc : DCertificate) (pc_t pc_t' : Label)
         execSymbolic_preserves_var ([] : SymStore) instr v hv_not_in_trans]
 
 /-- Extract Bool information from checkAllTransitions for a specific step. -/
-private theorem extractTransCheck (dc : DCertificate)
+private theorem extractTransCheck (dc : ECertificate)
     (h : checkAllTransitions dc = true)
     (pc_t pc_t' : Label) (instr : TAC)
     (hinstr : dc.trans[pc_t]? = some instr)
@@ -741,12 +741,12 @@ private theorem extractTransCheck (dc : DCertificate)
     (hsucc : pc_t' ∈ successors instr pc_t) :
     ∃ dic, dc.instrCerts[pc_t]? = some dic ∧
     ∃ dtc ∈ dic.transitions,
-      checkOrigPath dc.orig ([] : SymStore) (dc.inv_orig.getD dic.pc_orig ([] : DInv))
+      checkOrigPath dc.orig ([] : SymStore) (dc.inv_orig.getD dic.pc_orig ([] : EInv))
         dic.pc_orig dtc.origLabels (dc.instrCerts.getD pc_t' default).pc_orig = true ∧
       checkVarMapConsistency (collectAllVars dc.orig dc.trans)
         dc.orig dic.pc_orig dtc.origLabels instr
-        (dc.inv_orig.getD dic.pc_orig ([] : DInv))
-        (dc.inv_trans.getD pc_t ([] : DInv)) = true := by
+        (dc.inv_orig.getD dic.pc_orig ([] : EInv))
+        (dc.inv_trans.getD pc_t ([] : EInv)) = true := by
   simp only [checkAllTransitions] at h
   rw [List.all_eq_true] at h
   have h_pc := h pc_t (List.mem_range.mpr (bound_of_getElem? hinstr))
@@ -756,12 +756,12 @@ private theorem extractTransCheck (dc : DCertificate)
       (successors instr pc_t).all fun pc_t'' =>
         let ic' := dc.instrCerts.getD pc_t'' default
         ic.transitions.any fun tc =>
-          checkOrigPath dc.orig ([] : SymStore) (dc.inv_orig.getD ic.pc_orig ([] : DInv))
+          checkOrigPath dc.orig ([] : SymStore) (dc.inv_orig.getD ic.pc_orig ([] : EInv))
             ic.pc_orig tc.origLabels ic'.pc_orig &&
           checkVarMapConsistency (collectAllVars dc.orig dc.trans)
             dc.orig ic.pc_orig tc.origLabels instr
-            (dc.inv_orig.getD ic.pc_orig ([] : DInv))
-            (dc.inv_trans.getD pc_t ([] : DInv))
+            (dc.inv_orig.getD ic.pc_orig ([] : EInv))
+            (dc.inv_trans.getD pc_t ([] : EInv))
     | none => false) = true := by
     revert h_pc; cases instr with
     | halt => exact absurd rfl hne
@@ -788,7 +788,7 @@ private theorem array_getD_of_getElem? {α : Type} {arr : Array α} {n : Nat} {v
   simp [Array.getD, dif_pos hb, heq]
 
 /-- **Condition 3**: checkAllTransitions → check_all_transitions -/
-theorem checkAllTransitions_sound (dc : DCertificate)
+theorem checkAllTransitions_sound (dc : ECertificate)
     (h : checkAllTransitions dc = true) :
     check_all_transitions (toCertificate dc) := by
   intro pc_t σ_t σ_t' pc_t' hstep
@@ -830,7 +830,7 @@ theorem checkAllTransitions_sound (dc : DCertificate)
 /-- Helper: extract inner check from checkNontermination for a non-halt instruction.
     Uses definitional equality (match reduction) to convert between the full
     match form and the instrCerts-level check. -/
-private theorem nonterm_inner (dc : DCertificate)
+private theorem nonterm_inner (dc : ECertificate)
     (h : checkNontermination dc = true) (pc_t pc_t' : Label)
     (instr : TAC) (hinstr : dc.trans[pc_t]? = some instr) (hne : instr ≠ .halt)
     (hsucc : pc_t' ∈ successors instr pc_t)
@@ -883,7 +883,7 @@ private theorem nonterm_inner (dc : DCertificate)
       exact hpc pc_t''
 
 /-- **Condition 5**: checkNontermination → check_nontermination -/
-theorem checkNontermination_sound (dc : DCertificate)
+theorem checkNontermination_sound (dc : ECertificate)
     (h : checkNontermination dc = true) :
     check_nontermination (toCertificate dc) (toMeasure dc) := by
   intro pc_t pc_t' σ_t σ_t' σ_o _ _ _ hexec horig_eq
@@ -901,7 +901,7 @@ theorem checkNontermination_sound (dc : DCertificate)
 -- § 9. Main soundness theorem
 -- ============================================================
 
-/-- **Main Theorem**: If the decidable checker accepts a certificate,
+/-- **Main Theorem**: If the executable checker accepts a certificate,
     then `CertificateValid` holds for the corresponding Prop-based certificate.
 
     This connects the executable world (`Bool`) to the proof world (`Prop`):
@@ -912,7 +912,7 @@ private theorem and_true_of_and_eq_true {a b : Bool} (h : (a && b) = true) :
     a = true ∧ b = true := by
   simp [Bool.and_eq_true] at h; exact h
 
-theorem soundness_bridge (dc : DCertificate)
+theorem soundness_bridge (dc : ECertificate)
     (h : checkCertificate dc = true) :
     CertificateValid (toCertificate dc) (toMeasure dc) := by
   -- checkCertificate is: c1 && c2 && c3 && c4 && c5 && c6 && c7
@@ -945,15 +945,15 @@ theorem soundness_bridge (dc : DCertificate)
 for several reasons:
 
 1. **Expressiveness gap**: The Prop-based system supports arbitrary invariants
-   (`Store → Prop`), while the decidable system only supports `var = val` atoms.
+   (`Store → Prop`), while the executable system only supports `var = val` atoms.
    A certificate using `x < y` as an invariant is valid in the Prop world
-   but has no representation in `DCertificate`.
+   but has no representation in `ECertificate`.
 
 2. **Variable map generality**: The Prop system supports arbitrary `VarMap`s
-   (`Var → Expr`), while the decidable system assumes identity maps throughout.
+   (`Var → Expr`), while the executable system assumes identity maps throughout.
 
-3. **Information loss**: `toCertificate` maps every `DCertificate` to a
-   `Certificate` with identity var maps and `DInv.toProp` invariants.
+3. **Information loss**: `toCertificate` maps every `ECertificate` to a
+   `Certificate` with identity var maps and `EInv.toProp` invariants.
    Many different `Certificate`s could satisfy `CertificateValid` for the
    same programs, but only those expressible as `toCertificate dc` for some `dc`
    are in the image of the translation.
@@ -969,7 +969,7 @@ The relationship is:
     ∃ b', program_behavior dc.orig σ₀ b' ∧ ...
 ```
 
-The decidable checker is a **sufficient** but not **necessary** condition
+The executable checker is a **sufficient** but not **necessary** condition
 for semantic preservation. It is a practical tool for certifying common
 compiler optimizations (constant propagation, dead code elimination,
 redundant assignment removal).
@@ -979,14 +979,14 @@ redundant assignment removal).
 -- § 11. End-to-end theorem
 -- ============================================================
 
-/-- **End-to-end correctness**: If the decidable checker accepts,
+/-- **End-to-end correctness**: If the executable checker accepts,
     then every behavior of the transformed program has a corresponding
     behavior in the original program (with observable equivalence at halt).
 
     This is the composition of `soundness_bridge` and
     `credible_compilation_soundness` — the complete pipeline from
     `checkCertificate dc = true` to semantic preservation. -/
-theorem decidable_checker_correct (dc : DCertificate)
+theorem exec_checker_correct (dc : ECertificate)
     (h : checkCertificate dc = true)
     (σ₀ : Store) (b : Behavior)
     (htrans : program_behavior dc.trans σ₀ b) :
