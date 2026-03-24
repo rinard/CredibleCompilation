@@ -995,7 +995,7 @@ theorem decidable_checker_correct (dc : DCertificate)
       | .halts σ_t, .halts σ_o =>
           ∀ v ∈ dc.observable, σ_t v = σ_o v
       | .diverges, .diverges => True
-      | _, _ => True := by
+      | _, _ => False := by
   cases b with
   | halts σ_t' =>
     obtain ⟨σ_o', ho, hobs⟩ := soundness_halt

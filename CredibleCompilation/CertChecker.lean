@@ -662,7 +662,7 @@ theorem credible_compilation_soundness
       | .halts σ_t, .halts σ_o =>
           ∀ v ∈ cert.observable, σ_t v = σ_o v
       | .diverges, .diverges => True
-      | _, _ => True := by
+      | _, _ => False := by
   cases b with
   | halts σ_t' =>
     obtain ⟨σ_o', ho, hobs⟩ := soundness_halt cert μ hvalid σ₀ σ_t' htrans
