@@ -198,6 +198,57 @@ inductive Step (p : Prog) : Cfg → Cfg → Prop where
 -- p ⊩ c ⟶ c'   (⊩ avoids conflict with Lean's reserved ⊢)
 notation:50 p " ⊩ " c " ⟶ " c' => Step p c c'
 
+/-- Successor PCs of a TAC instruction (for bounds checking). -/
+def TAC.successors (instr : TAC) (pc : Label) : List Label :=
+  match instr with
+  | .const _ _ | .copy _ _ | .binop _ _ _ _ => [pc + 1]
+  | .goto l        => [l]
+  | .ifgoto _ l    => [l, pc + 1]
+  | .halt          => []
+
+/-- A step from `Cfg.run pc σ` to `Cfg.run pc' σ'` implies `pc'` is
+    a successor of the instruction at `pc`. -/
+theorem Step.mem_successors {p : Prog} {pc pc' : Nat} {σ σ' : Store}
+    (hstep : p ⊩ Cfg.run pc σ ⟶ Cfg.run pc' σ') :
+    ∃ instr, p[pc]? = some instr ∧ pc' ∈ instr.successors pc := by
+  cases hstep with
+  | const h    => exact ⟨_, h, by simp [TAC.successors]⟩
+  | copy h     => exact ⟨_, h, by simp [TAC.successors]⟩
+  | binop h    => exact ⟨_, h, by simp [TAC.successors]⟩
+  | goto h     => exact ⟨_, h, by simp [TAC.successors]⟩
+  | iftrue h _ => exact ⟨_, h, by simp [TAC.successors]⟩
+  | iffall h _ => exact ⟨_, h, by simp [TAC.successors]⟩
+
+/-- A step from an in-bounds PC to a run-config stays in-bounds.
+    This is the Prop-level condition for totality. -/
+def StepClosedInBounds (p : Prog) : Prop :=
+  p.size > 0 ∧
+  ∀ pc pc' : Nat, ∀ σ σ' : Store,
+    pc < p.size → (p ⊩ Cfg.run pc σ ⟶ Cfg.run pc' σ') → pc' < p.size
+
+/-- Decidable check: all successors of every in-bounds PC are in bounds. -/
+def checkStepClosed (p : Prog) : Bool :=
+  p.size > 0 &&
+  (List.range p.size).all fun pc =>
+    match p[pc]? with
+    | some instr => (instr.successors pc).all (· < p.size)
+    | none => true
+
+/-- Soundness: `checkStepClosed` implies `StepClosedInBounds`. -/
+theorem checkStepClosed_sound {p : Prog} (h : checkStepClosed p = true) :
+    StepClosedInBounds p := by
+  simp only [checkStepClosed, Bool.and_eq_true, decide_eq_true_eq,
+    List.all_eq_true, List.mem_range] at h
+  obtain ⟨hpos, hall⟩ := h
+  constructor
+  · exact hpos
+  · intro pc pc' σ σ' hpc hstep
+    obtain ⟨instr, hinstr, hmem⟩ := Step.mem_successors hstep
+    have := hall pc hpc
+    rw [hinstr] at this
+    simp only [List.all_eq_true, decide_eq_true_eq] at this
+    exact this pc' hmem
+
 -- ============================================================
 -- § 6. Multi-step closure   ⟶*
 -- ============================================================

@@ -86,7 +86,8 @@ def cert : PCertificate :=
     haltCerts := fun pc =>
       match pc with
       | 3 => { pc_orig := 3, storeRel := idStoreRel }
-      | _ => defaultHaltCert }
+      | _ => defaultHaltCert
+    measure := fun _ _ => 0 }
 
 theorem start_ok : checkStartCorrespondenceProp cert :=
   ⟨rfl, idStoreRel_refl⟩
@@ -198,7 +199,7 @@ theorem transitions_ok : checkAllTransitionsProp cert := by
   · -- pc_t = 3: halt
     cases hstep <;> simp_all
 
-theorem nonterm_ok : checkNonterminationProp cert (fun _ _ => 0) := by
+theorem nonterm_ok : checkNonterminationProp cert := by
   intro pc_t pc_t' σ_t σ_t' σ_o _ _ _ ⟨c', hstep, hc'⟩ horig_eq
   subst hc'
   have hlt : pc_t < cert.trans.size := by
@@ -220,14 +221,15 @@ theorem nonterm_ok : checkNonterminationProp cert (fun _ _ => 0) := by
 theorem start_inv_ok : checkInvariantsAtStartProp cert :=
   ⟨fun σ => by simp [cert, inv], fun σ => by simp [cert, inv]⟩
 
-theorem valid : PCertificateValid cert (fun _ _ => 0) :=
+theorem valid : PCertificateValid cert :=
   { start_corr    := start_ok
     start_inv     := start_inv_ok
     inv_preserved := inv_ok
     transitions   := transitions_ok
     halt_corr     := halt_corr_ok
     halt_obs      := halt_obs_ok
-    nonterm       := nonterm_ok }
+    nonterm       := nonterm_ok
+    step_closed   := checkStepClosed_sound (by native_decide) }
 
 end Example1
 
@@ -278,7 +280,8 @@ def cert : PCertificate :=
     haltCerts := fun pc =>
       match pc with
       | 2 => { pc_orig := 2, storeRel := idStoreRel }
-      | _ => defaultHaltCert }
+      | _ => defaultHaltCert
+    measure := fun _ _ => 0 }
 
 theorem start_ok : checkStartCorrespondenceProp cert :=
   ⟨rfl, idStoreRel_refl⟩
@@ -372,7 +375,7 @@ theorem transitions_ok : checkAllTransitionsProp cert := by
   · -- pc_t = 2: halt
     cases hstep <;> simp_all
 
-theorem nonterm_ok : checkNonterminationProp cert (fun _ _ => 0) := by
+theorem nonterm_ok : checkNonterminationProp cert := by
   intro pc_t pc_t' σ_t σ_t' σ_o _ _ _ ⟨c', hstep, hc'⟩ horig_eq
   subst hc'
   have hlt : pc_t < cert.trans.size := by
@@ -393,14 +396,15 @@ theorem nonterm_ok : checkNonterminationProp cert (fun _ _ => 0) := by
 theorem start_inv_ok : checkInvariantsAtStartProp cert :=
   ⟨fun σ => by simp [cert, inv], fun σ => by simp [cert, inv]⟩
 
-theorem valid : PCertificateValid cert (fun _ _ => 0) :=
+theorem valid : PCertificateValid cert :=
   { start_corr    := start_ok
     start_inv     := start_inv_ok
     inv_preserved := inv_ok
     transitions   := transitions_ok
     halt_corr     := halt_corr_ok
     halt_obs      := halt_obs_ok
-    nonterm       := nonterm_ok }
+    nonterm       := nonterm_ok
+    step_closed   := checkStepClosed_sound (by native_decide) }
 
 end Example2
 
@@ -453,7 +457,8 @@ def cert : PCertificate :=
     haltCerts := fun pc =>
       match pc with
       | 3 => { pc_orig := 3, storeRel := idStoreRel }
-      | _ => defaultHaltCert }
+      | _ => defaultHaltCert
+    measure := fun _ _ => 0 }
 
 theorem start_ok : checkStartCorrespondenceProp cert :=
   ⟨rfl, idStoreRel_refl⟩
@@ -566,7 +571,7 @@ theorem transitions_ok : checkAllTransitionsProp cert := by
   · -- pc_t = 3: halt
     cases hstep <;> simp_all
 
-theorem nonterm_ok : checkNonterminationProp cert (fun _ _ => 0) := by
+theorem nonterm_ok : checkNonterminationProp cert := by
   intro pc_t pc_t' σ_t σ_t' σ_o _ _ _ ⟨c', hstep, hc'⟩ horig_eq
   subst hc'
   have hlt : pc_t < cert.trans.size := by
@@ -588,14 +593,15 @@ theorem nonterm_ok : checkNonterminationProp cert (fun _ _ => 0) := by
 theorem start_inv_ok : checkInvariantsAtStartProp cert :=
   ⟨fun σ => by simp [cert, inv], fun σ => by simp [cert, inv]⟩
 
-theorem valid : PCertificateValid cert (fun _ _ => 0) :=
+theorem valid : PCertificateValid cert :=
   { start_corr    := start_ok
     start_inv     := start_inv_ok
     inv_preserved := inv_ok
     transitions   := transitions_ok
     halt_corr     := halt_corr_ok
     halt_obs      := halt_obs_ok
-    nonterm       := nonterm_ok }
+    nonterm       := nonterm_ok
+    step_closed   := checkStepClosed_sound (by native_decide) }
 
 end Example3
 
@@ -647,7 +653,8 @@ def cert : PCertificate :=
     haltCerts := fun pc =>
       match pc with
       | 2 => { pc_orig := 2, storeRel := idStoreRel }
-      | _ => defaultHaltCert }
+      | _ => defaultHaltCert
+    measure := fun _ _ => 0 }
 
 /-- The transition correspondence FAILS at pc_t = 1.
     The transformed program sets y := 3, but the original sets y := x = 5.
@@ -697,8 +704,8 @@ theorem transitions_fail : ¬ checkAllTransitionsProp cert := by
     | iffall h _ => exact absurd (ho1.symm.trans h) (by simp)
 
 /-- Therefore, no valid certificate exists for this buggy transformation. -/
-theorem no_valid_cert : ¬ PCertificateValid cert μ := by
-  intro ⟨_, _, _, htrans, _, _, _⟩
+theorem no_valid_cert : ¬ PCertificateValid cert := by
+  intro ⟨_, _, _, htrans, _, _, _, _⟩
   exact transitions_fail htrans
 
 end PBadExample

@@ -80,6 +80,14 @@ structure PHaltCert where
   /-- Store relation at this instruction -/
   storeRel : PStoreRel
 
+/-- A well-founded measure for proving non-termination correspondence.
+    At each label in the transformed program, a measure on the original
+    program's corresponding state. When the transformed program takes
+    a step with 0 original transitions, the measure must decrease.
+    This ensures we cannot have infinitely many transformed steps
+    with 0 original steps — eventually the original must also progress. -/
+def PTransMeasure := Label → Store → Nat
+
 /-- The full compilation certificate. -/
 structure PCertificate where
   /-- Original program -/
@@ -96,6 +104,8 @@ structure PCertificate where
   instrCerts  : Label → PInstrCert
   /-- PCertificate entry for halt instructions in the transformed program -/
   haltCerts   : Label → PHaltCert
+  /-- Well-founded measure for non-termination (per transformed label and store). -/
+  measure     : PTransMeasure
 
 -- ============================================================
 -- § 6. PCertificate checking conditions
@@ -180,19 +190,12 @@ def IsInfiniteExec (p : Prog) (f : Nat → Cfg) : Prop :=
   (∃ σ₀, f 0 = Cfg.run 0 σ₀) ∧
   ∀ n, p ⊩ f n ⟶ f (n + 1)
 
-/-- A well-founded measure for proving non-termination correspondence.
-    At each label in the transformed program, a measure on the original
-    program's corresponding state. When the transformed program takes
-    a step with 0 original transitions, the measure must decrease.
-    This ensures we cannot have infinitely many transformed steps
-    with 0 original steps — eventually the original must also progress. -/
-def PTransMeasure := Label → Store → Nat
 
 /-- Condition 5: Zero-step transitions decrease a well-founded measure.
     This ensures that if the transformed program diverges, the original
     also diverges: any infinite transformed execution forces infinitely
     many original steps. -/
-def checkNonterminationProp (cert : PCertificate) (μ : PTransMeasure) : Prop :=
+def checkNonterminationProp (cert : PCertificate) : Prop :=
   ∀ (pc_t pc_t' : Label) (σ_t σ_t' σ_o : Store),
     cert.inv_trans pc_t σ_t →
     cert.inv_orig (cert.instrCerts pc_t).pc_orig σ_o →
@@ -201,21 +204,22 @@ def checkNonterminationProp (cert : PCertificate) (μ : PTransMeasure) : Prop :=
     -- If the original takes 0 steps (pc_orig doesn't change)
     (cert.instrCerts pc_t).pc_orig = (cert.instrCerts pc_t').pc_orig →
     -- Then the measure strictly decreases
-    μ pc_t' σ_t' < μ pc_t σ_t
+    cert.measure pc_t' σ_t' < cert.measure pc_t σ_t
 
 -- ============================================================
 -- § 8. Complete certificate validity
 -- ============================================================
 
 /-- A certificate is valid if all checking conditions hold. -/
-structure PCertificateValid (cert : PCertificate) (μ : PTransMeasure) : Prop where
+structure PCertificateValid (cert : PCertificate) : Prop where
   start_corr      : checkStartCorrespondenceProp cert
   start_inv       : checkInvariantsAtStartProp cert
   inv_preserved   : checkInvariantsPreservedProp cert
   transitions     : checkAllTransitionsProp cert
   halt_corr       : checkHaltCorrespondenceProp cert
   halt_obs        : checkHaltObservableProp cert
-  nonterm         : checkNonterminationProp cert μ
+  nonterm         : checkNonterminationProp cert
+  step_closed     : StepClosedInBounds cert.trans
 
 -- ============================================================
 -- § 9. Soundness: simulation relation
@@ -266,8 +270,8 @@ theorem inv_preserved_steps {inv : PInvariantMap} {p : Prog}
 
 /-- Single-step simulation: a transformed step is matched by original steps,
     preserving the simulation relation. -/
-theorem step_sim {cert : PCertificate} {μ : PTransMeasure}
-    (hvalid : PCertificateValid cert μ)
+theorem step_sim {cert : PCertificate}
+    (hvalid : PCertificateValid cert)
     {pc_t : Label} {σ_t σ_t' : Store} {pc_o : Label} {σ_o : Store} {pc_t' : Label}
     (hsim : PSimRel cert pc_t σ_t pc_o σ_o)
     (hstep : cert.trans ⊩ Cfg.run pc_t σ_t ⟶ Cfg.run pc_t' σ_t') :
@@ -297,8 +301,8 @@ theorem step_sim {cert : PCertificate} {μ : PTransMeasure}
     the transformed program halts, the original program also halts
     with the same observable values. -/
 theorem soundness_halt
-    (cert : PCertificate) (μ : PTransMeasure)
-    (hvalid : PCertificateValid cert μ)
+    (cert : PCertificate)
+    (hvalid : PCertificateValid cert)
     (σ₀ σ_t' : Store)
     (hexec : haltsWithResult cert.trans 0 σ₀ σ_t') :
     ∃ σ_o', haltsWithResult cert.orig 0 σ₀ σ_o' ∧
@@ -501,8 +505,8 @@ theorem StepsN_intermediate_run {p : Prog} {pc₀ : Label} {σ₀ : Store}
     and the transformed program diverges, the original program also
     diverges. -/
 theorem soundness_diverge
-    (cert : PCertificate) (μ : PTransMeasure)
-    (hvalid : PCertificateValid cert μ)
+    (cert : PCertificate)
+    (hvalid : PCertificateValid cert)
     (f : Nat → Cfg) (σ₀ : Store)
     (hinf : IsInfiniteExec cert.trans f)
     (hf0 : f 0 = Cfg.run 0 σ₀) :
@@ -534,7 +538,7 @@ theorem soundness_diverge
   have hf_run := inf_exec_is_run hinf
   -- Progress: from any simulation state with μ-bound m, advance original ≥ 1 step
   have advance : ∀ (m n : Nat) (pc_o : Label) (σ_o : Store) (total : Nat),
-      (∀ pc_t σ_t, f n = Cfg.run pc_t σ_t → μ pc_t σ_t ≤ m) →
+      (∀ pc_t σ_t, f n = Cfg.run pc_t σ_t → cert.measure pc_t σ_t ≤ m) →
       (∀ pc_t σ_t, f n = Cfg.run pc_t σ_t → PSimRel cert pc_t σ_t pc_o σ_o) →
       StepsN cert.orig (Cfg.run 0 σ₀) (Cfg.run pc_o σ_o) total →
       ∃ (n' : Nat) (pc_o' : Label) (σ_o' : Store) (total' : Nat),
@@ -607,7 +611,7 @@ theorem soundness_diverge
     obtain ⟨n, pc_o, σ_o, total, hsim_fn, hsteps, hge⟩ := ih
     obtain ⟨pc_t, σ_t, hfn⟩ := hf_run n
     obtain ⟨n', pc_o', σ_o', total', hsim', hsteps', hge'⟩ :=
-      advance (μ pc_t σ_t) n pc_o σ_o total
+      advance (cert.measure pc_t σ_t) n pc_o σ_o total
         (fun pc σ hf => by rw [hfn] at hf; obtain ⟨rfl, rfl⟩ := Cfg.run.inj hf; omega)
         hsim_fn hsteps
     exact ⟨n', pc_o', σ_o', total', hsim', hsteps', by omega⟩
@@ -631,12 +635,6 @@ def program_behavior (p : Prog) (σ₀ : Store) (b : Behavior) : Prop :=
 -- § 10a. Totality: bounds-closed programs always have a behavior
 -- ============================================================
 
-/-- A step from an in-bounds PC to a run-config stays in-bounds.
-    This is the Prop-level version of the executable `checkSuccessorsInBounds`. -/
-def StepClosedInBounds (p : Prog) : Prop :=
-  p.size > 0 ∧
-  ∀ pc pc' : Nat, ∀ σ σ' : Store,
-    pc < p.size → (p ⊩ Cfg.run pc σ ⟶ Cfg.run pc' σ') → pc' < p.size
 
 /-- Convert StepsN to Steps. -/
 private theorem StepsN_to_Steps' {p : Prog} {c c' : Cfg} {n : Nat}
@@ -686,8 +684,8 @@ theorem has_behavior (p : Prog) (σ₀ : Store)
     store, every behavior of the transformed program has a corresponding
     behavior in the original program (with observable equivalence at halt). -/
 theorem credible_compilation_soundness
-    (cert : PCertificate) (μ : PTransMeasure)
-    (hvalid : PCertificateValid cert μ)
+    (cert : PCertificate)
+    (hvalid : PCertificateValid cert)
     (σ₀ : Store) (b : Behavior)
     (htrans : program_behavior cert.trans σ₀ b) :
     ∃ b', program_behavior cert.orig σ₀ b' ∧
@@ -698,9 +696,34 @@ theorem credible_compilation_soundness
       | _, _ => False := by
   cases b with
   | halts σ_t' =>
-    obtain ⟨σ_o', ho, hobs⟩ := soundness_halt cert μ hvalid σ₀ σ_t' htrans
+    obtain ⟨σ_o', ho, hobs⟩ := soundness_halt cert hvalid σ₀ σ_t' htrans
     exact ⟨.halts σ_o', ho, hobs⟩
   | diverges =>
     obtain ⟨f, hinf, hf0⟩ := htrans
-    obtain ⟨g, hg, hg0⟩ := soundness_diverge cert μ hvalid f σ₀ hinf hf0
+    obtain ⟨g, hg, hg0⟩ := soundness_diverge cert hvalid f σ₀ hinf hf0
     exact ⟨.diverges, ⟨g, hg, hg0⟩, trivial⟩
+
+/-- **Total soundness**: If the certificate is valid and the transformed
+    program is step-closed, then for every initial store there exists a
+    behavior of the transformed program and a corresponding behavior of
+    the original program (with observable equivalence at halt). -/
+theorem credible_compilation_total
+    (cert : PCertificate)
+    (hvalid : PCertificateValid cert)
+    (σ₀ : Store) :
+    ∃ b, program_behavior cert.trans σ₀ b ∧
+      ∃ b', program_behavior cert.orig σ₀ b' ∧
+        match b, b' with
+        | .halts σ_t, .halts σ_o =>
+            ∀ v ∈ cert.observable, σ_t v = σ_o v
+        | .diverges, .diverges => True
+        | _, _ => False := by
+  obtain ⟨b, hb⟩ := has_behavior cert.trans σ₀ hvalid.step_closed
+  cases b with
+  | halts σ_t =>
+    obtain ⟨σ_o, ho, hobs⟩ := soundness_halt cert hvalid σ₀ σ_t hb
+    exact ⟨.halts σ_t, hb, .halts σ_o, ho, hobs⟩
+  | diverges =>
+    obtain ⟨f, hinf, hf0⟩ := hb
+    obtain ⟨g, hg, hg0⟩ := soundness_diverge cert hvalid f σ₀ hinf hf0
+    exact ⟨.diverges, ⟨f, hinf, hf0⟩, .diverges, ⟨g, hg, hg0⟩, trivial⟩
