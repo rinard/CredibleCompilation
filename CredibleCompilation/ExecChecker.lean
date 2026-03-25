@@ -504,3 +504,16 @@ def checkCertificateVerboseExec (cert : ECertificate) : List (String × Bool) :=
     ("nontermination",        checkNonterminationExec cert),
     ("successors_in_bounds",  checkSuccessorsInBounds cert) ]
 
+/-- Observable output of a configuration with respect to an executable certificate.
+    - If the current instruction is `halt`, returns `halt` with observable variable–value pairs.
+    - If the PC is out of bounds (stuck), returns `stuck`.
+    - Otherwise returns `nothing`. -/
+def observeExec (cert : ECertificate) (c : Cfg) : Observation :=
+  match c with
+  | .halt σ => Observation.halt (cert.observable.map fun v => (v, σ v))
+  | .run pc σ =>
+    match cert.trans[pc]? with
+    | some .halt => Observation.halt (cert.observable.map fun v => (v, σ v))
+    | some _     => Observation.nothing
+    | none       => Observation.stuck
+

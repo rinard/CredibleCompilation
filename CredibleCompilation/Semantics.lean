@@ -356,7 +356,20 @@ theorem Step.progress (p : Prog) (pc : Nat) (σ : Store)
   | .halt           => exact ⟨_, .halt (hp ▸ hinstr)⟩
 
 -- ============================================================
--- § 10. Example program:  acc := 1 + 2 + … + n
+-- § 10. Observable output at a configuration
+-- ============================================================
+
+/-- An observation at a configuration: either the program halted (with
+    observable variable–value pairs), the program is stuck (PC out of
+    bounds and not halted), or nothing observable happened yet. -/
+inductive Observation where
+  | halt    : List (Var × Val) → Observation
+  | stuck   : Observation
+  | nothing : Observation
+  deriving Repr, DecidableEq
+
+-- ============================================================
+-- § 11. Example program:  acc := 1 + 2 + … + n
 -- ============================================================
 --
 --  Variables:  "n"   – loop counter (counts down to 0)
