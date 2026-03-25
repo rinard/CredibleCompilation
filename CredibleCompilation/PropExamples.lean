@@ -430,7 +430,7 @@ namespace Example3
 
 def origProg : Prog := #[
   .const  "step" 2,                     -- 0
-  .ifgoto "n" 3,                        -- 1
+  .ifgoto (.var "n") 3,                        -- 1
   .halt,                                -- 2
   .binop  "acc" .add "acc" "n",         -- 3
   .const  "step" 2,                     -- 4  ← redundant
@@ -440,7 +440,7 @@ def origProg : Prog := #[
 
 def transProg : Prog := #[
   .const  "step" 2,                     -- 0
-  .ifgoto "n" 3,                        -- 1
+  .ifgoto (.var "n") 3,                        -- 1
   .halt,                                -- 2
   .binop  "acc" .add "acc" "n",         -- 3
   .binop  "n" .sub "n" "step",          -- 4
@@ -492,7 +492,7 @@ theorem inv_ok : checkInvariantsPreservedProp cert := by
       | iftrue h _ => exact bound_of_getElem? h
       | iffall h _ => exact bound_of_getElem? h
     have : cert.orig[0]? = some (.const "step" 2) := by native_decide
-    have : cert.orig[1]? = some (.ifgoto "n" 3) := by native_decide
+    have : cert.orig[1]? = some (.ifgoto (.var "n") 3) := by native_decide
     have : cert.orig[2]? = some .halt := by native_decide
     have : cert.orig[3]? = some (.binop "acc" .add "acc" "n") := by native_decide
     have : cert.orig[4]? = some (.const "step" 2) := by native_decide
@@ -510,7 +510,7 @@ theorem inv_ok : checkInvariantsPreservedProp cert := by
       | iftrue h _ => exact bound_of_getElem? h
       | iffall h _ => exact bound_of_getElem? h
     have : cert.trans[0]? = some (.const "step" 2) := by native_decide
-    have : cert.trans[1]? = some (.ifgoto "n" 3) := by native_decide
+    have : cert.trans[1]? = some (.ifgoto (.var "n") 3) := by native_decide
     have : cert.trans[2]? = some .halt := by native_decide
     have : cert.trans[3]? = some (.binop "acc" .add "acc" "n") := by native_decide
     have : cert.trans[4]? = some (.binop "n" .sub "n" "step") := by native_decide
@@ -543,7 +543,7 @@ theorem transitions_ok : checkAllTransitionsProp cert := by
     | iffall h _ => exact bound_of_getElem? h
   change pc_t < 6 at hlt
   have : cert.trans[0]? = some (.const "step" 2) := by native_decide
-  have : cert.trans[1]? = some (.ifgoto "n" 3) := by native_decide
+  have : cert.trans[1]? = some (.ifgoto (.var "n") 3) := by native_decide
   have : cert.trans[2]? = some .halt := by native_decide
   have : cert.trans[3]? = some (.binop "acc" .add "acc" "n") := by native_decide
   have : cert.trans[4]? = some (.binop "n" .sub "n" "step") := by native_decide
@@ -564,25 +564,25 @@ theorem transitions_ok : checkAllTransitionsProp cert := by
   · -- pc_t = 1: ifgoto "n" 3
     cases hstep with
     | iftrue h hne =>
-      have h1 : cert.trans[1]? = some (.ifgoto "n" 3) := by native_decide
+      have h1 : cert.trans[1]? = some (.ifgoto (.var "n") 3) := by native_decide
       have := h ▸ h1; simp at this; obtain ⟨rfl, rfl⟩ := this
       -- Now: x = "n", pc_t' = 3
       refine ⟨⟨[3], idStoreRel, idStoreRel⟩, List.Mem.head _, rfl, rfl, ?_⟩
       intro σ_t_ σ_t'_ σ_o_ _ _ hvm hstep'
       simp [idStoreRel] at hvm; subst hvm
-      have ho : cert.orig[1]? = some (.ifgoto "n" 3) := by native_decide
+      have ho : cert.orig[1]? = some (.ifgoto (.var "n") 3) := by native_decide
       cases hstep' with
       | iftrue h' hne' =>
         simp_all
         exact ⟨σ_t'_, Steps.single (.iftrue ho hne'), rfl⟩
       | _ => simp_all
     | iffall h heq =>
-      have h1 : cert.trans[1]? = some (.ifgoto "n" 3) := by native_decide
+      have h1 : cert.trans[1]? = some (.ifgoto (.var "n") 3) := by native_decide
       have := h ▸ h1; simp at this; obtain ⟨rfl, rfl⟩ := this
       refine ⟨⟨[2], idStoreRel, idStoreRel⟩, List.Mem.tail _ (List.Mem.head _), rfl, rfl, ?_⟩
       intro σ_t_ σ_t'_ σ_o_ _ _ hvm hstep'
       simp [idStoreRel] at hvm; subst hvm
-      have ho : cert.orig[1]? = some (.ifgoto "n" 3) := by native_decide
+      have ho : cert.orig[1]? = some (.ifgoto (.var "n") 3) := by native_decide
       cases hstep' with
       | iffall h' heq' =>
         simp_all
@@ -647,7 +647,7 @@ theorem nonterm_ok : checkNonterminationProp cert (fun _ _ => 0) := by
     | iffall h _ => exact bound_of_getElem? h
   change pc_t < 6 at hlt
   have : cert.trans[0]? = some (.const "step" 2) := by native_decide
-  have : cert.trans[1]? = some (.ifgoto "n" 3) := by native_decide
+  have : cert.trans[1]? = some (.ifgoto (.var "n") 3) := by native_decide
   have : cert.trans[2]? = some .halt := by native_decide
   have : cert.trans[3]? = some (.binop "acc" .add "acc" "n") := by native_decide
   have : cert.trans[4]? = some (.binop "n" .sub "n" "step") := by native_decide

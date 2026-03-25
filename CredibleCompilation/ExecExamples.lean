@@ -86,7 +86,7 @@ namespace EExample3
 def cert : ECertificate :=
   { orig := #[
       .const "step" 2,                -- 0
-      .ifgoto "n" 3,                  -- 1
+      .ifgoto (.var "n") 3,                  -- 1
       .halt,                          -- 2
       .binop "acc" .add "acc" "n",    -- 3
       .const "step" 2,               -- 4 (redundant)
@@ -94,7 +94,7 @@ def cert : ECertificate :=
       .goto 1 ]                       -- 6
     trans := #[
       .const "step" 2,                -- 0
-      .ifgoto "n" 3,                  -- 1
+      .ifgoto (.var "n") 3,                  -- 1
       .halt,                          -- 2
       .binop "acc" .add "acc" "n",    -- 3
       .binop "n" .sub "n" "step",    -- 4
@@ -232,7 +232,7 @@ namespace EExample6
 def cert : ECertificate :=
   { orig := #[
       .binop "k" .mul "a" "b",         -- 0
-      .ifgoto "n" 3,                    -- 1
+      .ifgoto (.var "n") 3,                    -- 1
       .halt,                            -- 2
       .binop "acc" .add "acc" "k",      -- 3
       .binop "k" .mul "a" "b",         -- 4 (redundant)
@@ -240,7 +240,7 @@ def cert : ECertificate :=
       .goto 1 ]                         -- 6
     trans := #[
       .binop "k" .mul "a" "b",         -- 0
-      .ifgoto "n" 3,                    -- 1
+      .ifgoto (.var "n") 3,                    -- 1
       .halt,                            -- 2
       .binop "acc" .add "acc" "k",      -- 3
       .binop "n" .sub "n" "one",       -- 4
@@ -311,7 +311,7 @@ def cert : ECertificate :=
       .const "n" 10,                -- 0
       .const "m" 10,                -- 1
       .binop "t" .add "n" "m",     -- 2: t := n+m (= 20)
-      .ifgoto "t" 5,               -- 3: always taken
+      .ifgoto (.var "t") 5,               -- 3: always taken
       .halt,                        -- 4: dead (unreachable)
       .binop "x" .mul "a" "b",     -- 5
       .binop "y" .mul "a" "b",     -- 6: CSE target
@@ -398,7 +398,7 @@ def cert : ECertificate :=
       .const "n" 500,              -- 0
       .const "k" 500,              -- 1
       .const "one" 1,              -- 2
-      .ifgoto "n" 5,               -- 3: while n ≠ 0
+      .ifgoto (.var "n") 5,               -- 3: while n ≠ 0
       .goto 7,                     -- 4: exit loop
       .binop "n" .sub "n" "one",   -- 5: n -= 1
       .goto 3,                     -- 6: loop back
@@ -408,7 +408,7 @@ def cert : ECertificate :=
       .const "n" 500,              -- 0
       .const "k" 500,              -- 1
       .const "one" 1,              -- 2
-      .ifgoto "n" 6,               -- 3: while n ≠ 0
+      .ifgoto (.var "n") 6,               -- 3: while n ≠ 0
       .const "k" 0,               -- 4: post-loop cleanup (inlined)
       .halt,                       -- 5
       .binop "n" .sub "n" "one",   -- 6: n -= 1
@@ -502,7 +502,7 @@ def cert : ECertificate :=
       .const "n" 1,                  -- 2
       .const "k" 500,               -- 3
       .binop "rem" .sub "k" "i",    -- 4: loop head — recompute rem
-      .ifgoto "rem" 7,              -- 5: enter body if i < k
+      .ifgoto (.var "rem") 7,              -- 5: enter body if i < k
       .goto 10,                      -- 6: exit loop
       .binop "n" .add "n" "k",      -- 7: body
       .binop "i" .add "i" "one",   -- 8: i++
@@ -515,7 +515,7 @@ def cert : ECertificate :=
       .const "n" 1,                  -- 2
       .const "k" 500,               -- 3
       .binop "rem" .sub "k" "i",    -- 4: initial rem = 500 (computed once)
-      .ifgoto "rem" 7,              -- 5: loop head
+      .ifgoto (.var "rem") 7,              -- 5: loop head
       .goto 11,                      -- 6: exit loop
       .binop "n" .add "n" "k",      -- 7: body (same)
       .binop "i" .add "i" "one",   -- 8: i++ (same)
@@ -701,7 +701,7 @@ def cert : ECertificate :=
       .const "hundred" 100,           -- 1
       .copy "rem" "hundred",          -- 2: rem := 100
       .binop "k" .sub "hundred" "rem",-- 3: k := 100 - rem = 0 (init)
-      .ifgoto "rem" 6,                -- 4: loop head
+      .ifgoto (.var "rem") 6,                -- 4: loop head
       .halt,                          -- 5
       .binop "j" .add "j" "k",        -- 6: j += k
       .binop "rem" .sub "rem" "one",  -- 7: rem--
@@ -712,7 +712,7 @@ def cert : ECertificate :=
       .const "hundred" 100,           -- 1
       .copy "rem" "hundred",          -- 2: rem := 100
       .const "k" 0,                   -- 3: k := 0
-      .ifgoto "rem" 6,                -- 4: loop head
+      .ifgoto (.var "rem") 6,                -- 4: loop head
       .halt,                          -- 5
       .binop "j" .add "j" "k",        -- 6: j += k
       .binop "k" .add "k" "one",     -- 7: k++ (IVE)

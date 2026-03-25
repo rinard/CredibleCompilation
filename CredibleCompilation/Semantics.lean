@@ -60,6 +60,74 @@ def BinOp.eval : BinOp → Val → Val → Val
   | .mul, a, b => a * b
 
 -- ============================================================
+-- § 2b. Comparison operators and boolean expressions
+-- ============================================================
+
+inductive CmpOp | eq | ne | lt | le deriving Repr, DecidableEq
+
+def CmpOp.eval : CmpOp → Val → Val → Bool
+  | .eq, a, b => a == b
+  | .ne, a, b => a != b
+  | .lt, a, b => decide (a < b)
+  | .le, a, b => decide (a ≤ b)
+
+/-- Boolean expressions for conditional branches. -/
+inductive BoolExpr where
+  | var : Var → BoolExpr                    -- x ≠ 0 (backward compatible)
+  | cmp : CmpOp → Var → Var → BoolExpr     -- x op y
+  | not : BoolExpr → BoolExpr
+  | and : BoolExpr → BoolExpr → BoolExpr
+  | or  : BoolExpr → BoolExpr → BoolExpr
+  deriving Repr, DecidableEq
+
+def BoolExpr.eval (σ : Store) : BoolExpr → Bool
+  | .var x     => σ x != 0
+  | .cmp op x y => op.eval (σ x) (σ y)
+  | .not e     => !e.eval σ
+  | .and a b   => a.eval σ && b.eval σ
+  | .or a b    => a.eval σ || b.eval σ
+
+theorem BoolExpr.eval_congr (cond : BoolExpr) (σ τ : Store)
+    (hagree : ∀ y, σ y = τ y) : cond.eval σ = cond.eval τ := by
+  induction cond with
+  | var x => simp [BoolExpr.eval, hagree]
+  | cmp op x y => simp [BoolExpr.eval, hagree]
+  | not e ih => simp [BoolExpr.eval, ih]
+  | and a b iha ihb => simp [BoolExpr.eval, iha, ihb]
+  | or a b iha ihb => simp [BoolExpr.eval, iha, ihb]
+
+/-- Collect all variable names from a boolean expression. -/
+def BoolExpr.vars : BoolExpr → List Var
+  | .var x     => [x]
+  | .cmp _ x y => [x, y]
+  | .not e     => e.vars
+  | .and a b   => a.vars ++ b.vars
+  | .or a b    => a.vars ++ b.vars
+
+/-- Extract the single variable from a `BoolExpr.var`, if applicable. -/
+def BoolExpr.asVar : BoolExpr → Option Var
+  | .var x => some x
+  | _      => none
+
+theorem BoolExpr.asVar_eq {b : BoolExpr} {x : Var} (h : b.asVar = some x) :
+    b = .var x := by
+  cases b with
+  | var v => simp [asVar] at h; subst h; rfl
+  | _ => simp [asVar] at h
+
+theorem BoolExpr.var_eval_true {σ : Store} {x : Var}
+    (h : BoolExpr.eval σ (.var x) = true) : σ x ≠ 0 := by
+  intro heq; simp [BoolExpr.eval, heq] at h
+
+theorem BoolExpr.var_eval_false {σ : Store} {x : Var}
+    (h : BoolExpr.eval σ (.var x) = false) : σ x = 0 := by
+  simp only [BoolExpr.eval] at h
+  -- h : (σ x != 0) = false, i.e. !(σ x == 0) = false
+  have h2 : (σ x == 0) = true := by
+    cases hb : (σ x == 0) <;> simp_all [bne]
+  exact beq_iff_eq.mp h2
+
+-- ============================================================
 -- § 3. Syntax – Three-Address Code instructions
 -- ============================================================
 
@@ -72,7 +140,7 @@ x := n          -- assign constant
 x := y          -- copy
 x := y ⊕ z     -- binary operation  (⊕ ∈ {+, -, *})
 goto l          -- unconditional jump
-if x goto l     -- conditional jump (branch if x ≠ 0, else fall through)
+if cond goto l  -- conditional jump (branch if cond is true, else fall through)
 halt            -- normal termination
 ```
 -/
@@ -81,9 +149,9 @@ inductive TAC where
   | copy   : Var → Var → TAC                  -- x := y
   | binop  : Var → BinOp → Var → Var → TAC   -- x := y ⊕ z
   | goto   : Label → TAC                      -- goto l
-  | ifgoto : Var → Label → TAC                -- if x ≠ 0 then goto l
+  | ifgoto : BoolExpr → Label → TAC           -- if cond then goto l
   | halt   : TAC
-  deriving Repr, DecidableEq, BEq
+  deriving Repr, DecidableEq
 
 abbrev Prog := Array TAC
 
@@ -124,10 +192,10 @@ inductive Step (p : Prog) : Cfg → Cfg → Prop where
   | goto   : p[pc]? = some (.goto l) →
       Step p (.run pc σ) (.run l σ)
 
-  | iftrue : p[pc]? = some (.ifgoto x l) → σ x ≠ 0 →
+  | iftrue : p[pc]? = some (.ifgoto b l) → b.eval σ = true →
       Step p (.run pc σ) (.run l σ)
 
-  | iffall : p[pc]? = some (.ifgoto x l) → σ x = 0 →
+  | iffall : p[pc]? = some (.ifgoto b l) → b.eval σ = false →
       Step p (.run pc σ) (.run (pc + 1) σ)
 
   | halt   : p[pc]? = some .halt →
@@ -217,8 +285,8 @@ theorem Step.store_congr {p : Prog} {pc : Nat} {σ τ : Store} {c : Cfg}
   | copy   h => exact ⟨_, .copy h⟩
   | binop  h => exact ⟨_, .binop h⟩
   | goto   h => exact ⟨_, .goto h⟩
-  | iftrue h hne => exact ⟨_, .iftrue h (hagree _ ▸ hne)⟩
-  | iffall h heq => exact ⟨_, .iffall h (hagree _ ▸ heq)⟩
+  | iftrue h hne => exact ⟨_, .iftrue h (BoolExpr.eval_congr _ σ τ hagree ▸ hne)⟩
+  | iffall h heq => exact ⟨_, .iffall h (BoolExpr.eval_congr _ σ τ hagree ▸ heq)⟩
   | halt   h => exact ⟨_, .halt h⟩
 
 -- ============================================================
@@ -236,10 +304,10 @@ theorem Step.progress (p : Prog) (pc : Nat) (σ : Store)
   | .copy x y       => exact ⟨_, .copy (hp ▸ hinstr)⟩
   | .binop x op y z => exact ⟨_, .binop (hp ▸ hinstr)⟩
   | .goto l         => exact ⟨_, .goto (hp ▸ hinstr)⟩
-  | .ifgoto x l     =>
-    by_cases hx : σ x = 0
-    · exact ⟨_, .iffall (hp ▸ hinstr) hx⟩
-    · exact ⟨_, .iftrue (hp ▸ hinstr) hx⟩
+  | .ifgoto b l     =>
+    by_cases hb : b.eval σ = true
+    · exact ⟨_, .iftrue (hp ▸ hinstr) hb⟩
+    · exact ⟨_, .iffall (hp ▸ hinstr) (Bool.eq_false_iff.mpr hb)⟩
   | .halt           => exact ⟨_, .halt (hp ▸ hinstr)⟩
 
 -- ============================================================
@@ -257,7 +325,7 @@ theorem Step.progress (p : Prog) (pc : Nat) (σ : Store)
 --  4:  goto 0             -- loop back
 
 def sumProg : Prog := #[
-  .ifgoto "n"   2,                     -- 0
+  .ifgoto (.var "n") 2,                -- 0
   .halt,                               -- 1
   .binop  "acc" .add "acc" "n",        -- 2
   .binop  "n"   .sub "n"   "one",      -- 3
@@ -271,7 +339,7 @@ def sumStore (n : Val) : Store :=
 
 -- ▸ One step from pc=0 with n=3: the conditional is taken, jump to pc=2.
 example : sumProg ⊩ Cfg.run 0 (sumStore 3) ⟶ Cfg.run 2 (sumStore 3) :=
-  .iftrue rfl (by simp [sumStore, Store.update])
+  .iftrue rfl (by simp [BoolExpr.eval, sumStore, Store.update])
 
 -- ▸ Step from pc=2: acc := acc + n fires; the updated store exists.
 example : ∃ σ', sumProg ⊩ Cfg.run 2 (sumStore 3) ⟶ Cfg.run 3 σ' :=

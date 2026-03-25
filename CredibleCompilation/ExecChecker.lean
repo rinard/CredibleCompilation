@@ -100,9 +100,9 @@ def execPath (orig : Prog) (ss : SymStore) (pc : Label) : List Label → SymStor
 def successors (instr : TAC) (pc : Label) : List Label :=
   match instr with
   | .const _ _ | .copy _ _ | .binop _ _ _ _ => [pc + 1]
-  | .goto l       => [l]
-  | .ifgoto _ l   => [l, pc + 1]
-  | .halt         => []
+  | .goto l        => [l]
+  | .ifgoto _ l    => [l, pc + 1]
+  | .halt          => []
 
 def canReach (instr : TAC) (pc next : Label) : Bool :=
   (successors instr pc).contains next
@@ -115,12 +115,16 @@ def Expr.isNonZeroLit : Expr → Bool
 
 /-- Like `canReach`, but for `ifgoto` also verifies the branch direction
     via the symbolic value of the condition variable under the invariant.
+    Only handles `BoolExpr.var x` for symbolic resolution.
     Non-ifgoto instructions fall back to plain `canReach`. -/
 def canReachSym (ss : SymStore) (inv : EInv) (instr : TAC) (pc next : Label) : Bool :=
   match instr with
-  | .ifgoto x l =>
-    let sv := (ssGet ss x).simplify inv
-    (next == l && sv.isNonZeroLit) || (next == pc + 1 && sv == .lit 0)
+  | .ifgoto b l =>
+    match b.asVar with
+    | some x =>
+      let sv := (ssGet ss x).simplify inv
+      (next == l && sv.isNonZeroLit) || (next == pc + 1 && sv == Expr.lit 0)
+    | none => canReach instr pc next
   | _ => canReach instr pc next
 
 /-- Collect all variable names from both programs. -/
@@ -130,7 +134,7 @@ def collectAllVars (p1 p2 : Prog) : List Var :=
     | .const x _     => [x]
     | .copy x y      => [x, y]
     | .binop x _ y z => [x, y, z]
-    | .ifgoto x _    => [x]
+    | .ifgoto b _    => b.vars
     | _              => []
   let go (p : Prog) := p.toList.foldl (fun acc i => acc ++ extract i) ([] : List Var)
   go p1 ++ go p2
@@ -283,11 +287,14 @@ def computeNextPC (instr : TAC) (pc : Label) (ss : SymStore) (inv : EInv) : Opti
   match instr with
   | .const _ _ | .copy _ _ | .binop _ _ _ _ => some (pc + 1)
   | .goto l => some l
-  | .ifgoto x l =>
-    let sv := (ssGet ss x).simplify inv
-    if sv.isNonZeroLit then some l
-    else if sv == .lit 0 then some (pc + 1)
-    else none
+  | .ifgoto b l =>
+    match b.asVar with
+    | some x =>
+      let sv := (ssGet ss x).simplify inv
+      if sv.isNonZeroLit then some l
+      else if sv == .lit 0 then some (pc + 1)
+      else none
+    | none => none
   | .halt => none
 
 /-- Verify that the original path is structurally valid:
@@ -310,8 +317,10 @@ def checkOrigPath (orig : Prog) (ss : SymStore) (inv : EInv)
           -- Fallback: if the transformed ifgoto checks the same variable,
           -- use its branch direction (stores agree via identity varmap)
           match branchInfo, instr with
-          | some (xv, true),  .ifgoto x l => x == xv && nextPC == l
-          | some (xv, false), .ifgoto x _ => x == xv && nextPC == pc + 1
+          | some (xv, true),  .ifgoto b l =>
+            match b.asVar with | some x => x == xv && nextPC == l | none => false
+          | some (xv, false), .ifgoto b _ =>
+            match b.asVar with | some x => x == xv && nextPC == pc + 1 | none => false
           | _, _ => false
       pcOk &&
       checkOrigPath orig (execSymbolic ss instr) inv nextPC rest pc_next none
@@ -350,11 +359,14 @@ def checkAllTransitionsExec (cert : ECertificate) : Bool :=
           -- Map the condition variable through the relation to orig space.
           -- Guard: l ≠ pc+1 ensures pc_t' disambiguates taken vs fallthrough.
           let branchInfo := match instr with
-            | .ifgoto x l =>
-              match relGetOrigExpr ic.rel x with
-              | .var origX =>
-                if !(l == pc_t + 1) then some (origX, pc_t' == l) else none
-              | _ => none  -- non-variable: computeNextPC resolves via invariant
+            | .ifgoto b l =>
+              match b.asVar with
+              | some x =>
+                match relGetOrigExpr ic.rel x with
+                | .var origX =>
+                  if !(l == pc_t + 1) then some (origX, pc_t' == l) else none
+                | _ => none
+              | none => none
             | _ => none
           ic.transitions.any fun tc =>
             tc.rel == ic.rel &&
