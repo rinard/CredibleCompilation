@@ -1,4 +1,4 @@
-import CredibleCompilation.CertChecker
+import CredibleCompilation.PropChecker
 import Mathlib.Tactic
 
 set_option maxRecDepth 2048
@@ -27,15 +27,15 @@ correct; a custom tactic or `native_decide` could close these.
 -- Helpers
 -- ============================================================
 
-def idVarMap : VarMap := fun v => .var v
+def idVarMap : PVarMap := fun v => .var v
 
 theorem idVarMap_consistent (σ : Store) : idVarMap.consistent σ σ :=
   fun _ => rfl
 
-def defaultInstrCert : InstrCert :=
+def defaultInstrCert : PInstrCert :=
   { pc_orig := 0, vm := idVarMap, transitions := [] }
 
-def defaultHaltCert : HaltCert :=
+def defaultHaltCert : PHaltCert :=
   { pc_orig := 0, vm := idVarMap }
 
 theorem bound_of_getElem? {a : Array α} {i : Nat} {v : α}
@@ -51,7 +51,7 @@ theorem bound_of_getElem? {a : Array α} {i : Nat} {v : α}
     1: y := x       →           1: y := 5       (propagated)
     2: halt                      2: halt
 
-  Invariant x=5 at labels ≥ 1 justifies replacing `y := x` with `y := 5`.
+  PInvariant x=5 at labels ≥ 1 justifies replacing `y := x` with `y := 5`.
 -/
 
 namespace Example1
@@ -68,10 +68,10 @@ def transProg : Prog := #[
   .halt                -- 2
 ]
 
-def inv : InvariantMap := fun pc σ =>
+def inv : PInvariantMap := fun pc σ =>
   if pc ≥ 1 then σ "x" = 5 else True
 
-def cert : Certificate :=
+def cert : PCertificate :=
   { orig       := origProg
     trans      := transProg
     inv_orig   := inv
@@ -90,10 +90,10 @@ def cert : Certificate :=
       | 2 => { pc_orig := 2, vm := idVarMap }
       | _ => defaultHaltCert }
 
-theorem start_ok : check_start_correspondence cert :=
+theorem start_ok : checkStartCorrespondenceProp cert :=
   ⟨rfl, idVarMap_consistent⟩
 
-theorem inv_ok : check_invariants_preserved cert := by
+theorem inv_ok : checkInvariantsPreservedProp cert := by
   constructor
   · -- orig program preserves inv
     intro pc σ hinv pc' σ' hstep; simp only [cert, inv] at hinv ⊢
@@ -126,20 +126,20 @@ theorem inv_ok : check_invariants_preserved cert := by
     change pc < 3 at hlt
     interval_cases pc <;> cases hstep <;> simp_all [Store.update]
 
-theorem halt_corr_ok : check_halt_correspondence cert := by
+theorem halt_corr_ok : checkHaltCorrespondenceProp cert := by
   intro pc_t h
   have hlt := bound_of_getElem? h; change pc_t < 3 at hlt
   interval_cases pc_t <;> simp_all [cert, origProg, transProg]
 
-theorem halt_obs_ok : check_halt_observable cert := by
+theorem halt_obs_ok : checkHaltObservableProp cert := by
   intro pc_t σ_t σ_o h
   change transProg[pc_t]? = some .halt at h
   have hlt := bound_of_getElem? h; change pc_t < 3 at hlt
   simp only [cert]; intro hvm v hv
   interval_cases pc_t <;> simp_all [transProg]
-  simp [VarMap.consistent, idVarMap, Expr.eval] at hvm; exact hvm "y"
+  simp [PVarMap.consistent, idVarMap, Expr.eval] at hvm; exact hvm "y"
 
-theorem transitions_ok : check_all_transitions cert := by
+theorem transitions_ok : checkAllTransitionsProp cert := by
   intro pc_t σ_t σ_t' pc_t' hstep
   have hlt : pc_t < cert.trans.size := by
     cases hstep with
@@ -159,7 +159,7 @@ theorem transitions_ok : check_all_transitions cert := by
     | const h =>
       refine ⟨⟨[1], idVarMap, idVarMap⟩, List.Mem.head _, rfl, rfl, ?_⟩
       · intro σ_t_ σ_t'_ σ_o_ _ _ hvm hstep'
-        simp [VarMap.consistent, idVarMap, Expr.eval] at hvm ⊢
+        simp [PVarMap.consistent, idVarMap, Expr.eval] at hvm ⊢
         cases hstep' with
         | const h' =>
           exact ⟨σ_o_["x" ↦ 5], Steps.single (.const (by native_decide)),
@@ -171,7 +171,7 @@ theorem transitions_ok : check_all_transitions cert := by
     | const h =>
       refine ⟨⟨[2], idVarMap, idVarMap⟩, List.Mem.head _, rfl, rfl, ?_⟩
       · intro σ_t_ σ_t'_ σ_o_ _ hinv_o hvm hstep'
-        simp [VarMap.consistent, idVarMap, Expr.eval] at hvm ⊢
+        simp [PVarMap.consistent, idVarMap, Expr.eval] at hvm ⊢
         simp [cert, inv] at hinv_o
         cases hstep' with
         | const h' =>
@@ -182,7 +182,7 @@ theorem transitions_ok : check_all_transitions cert := by
   · -- pc_t = 2: halt
     cases hstep <;> simp_all
 
-theorem nonterm_ok : check_nontermination cert (fun _ _ => 0) := by
+theorem nonterm_ok : checkNonterminationProp cert (fun _ _ => 0) := by
   intro pc_t pc_t' σ_t σ_t' σ_o _ _ _ ⟨c', hstep, hc'⟩ horig_eq
   subst hc'
   have hlt : pc_t < cert.trans.size := by
@@ -201,11 +201,11 @@ theorem nonterm_ok : check_nontermination cert (fun _ _ => 0) := by
   interval_cases pc_t <;> cases hstep <;> simp_all <;>
     (simp [cert] at horig_eq)
 
-theorem start_inv_ok : check_invariants_at_start cert :=
+theorem start_inv_ok : checkInvariantsAtStartProp cert :=
   ⟨fun σ => by simp [cert, inv], fun σ => by simp [cert, inv]⟩
 
 /-- The certificate for Example 1 is valid: the checker accepts it. -/
-theorem valid : CertificateValid cert (fun _ _ => 0) :=
+theorem valid : PCertificateValid cert (fun _ _ => 0) :=
   { start_corr    := start_ok
     start_inv     := start_inv_ok
     inv_preserved := inv_ok
@@ -243,11 +243,11 @@ def transProg : Prog := #[
   .halt                           -- 3
 ]
 
-def inv : InvariantMap := fun pc σ =>
+def inv : PInvariantMap := fun pc σ =>
   (if pc ≥ 1 then σ "a" = 10 else True) ∧
   (if pc ≥ 2 then σ "b" = 10 else True)
 
-def cert : Certificate :=
+def cert : PCertificate :=
   { orig       := origProg
     trans      := transProg
     inv_orig   := inv
@@ -268,10 +268,10 @@ def cert : Certificate :=
       | 3 => { pc_orig := 3, vm := idVarMap }
       | _ => defaultHaltCert }
 
-theorem start_ok : check_start_correspondence cert :=
+theorem start_ok : checkStartCorrespondenceProp cert :=
   ⟨rfl, idVarMap_consistent⟩
 
-theorem inv_ok : check_invariants_preserved cert := by
+theorem inv_ok : checkInvariantsPreservedProp cert := by
   constructor
   · intro pc σ hinv pc' σ' hstep; simp only [cert, inv] at hinv ⊢
     have hlt : pc < cert.orig.size := by
@@ -304,20 +304,20 @@ theorem inv_ok : check_invariants_preserved cert := by
     change pc < 4 at hlt
     interval_cases pc <;> cases hstep <;> simp_all [Store.update]
 
-theorem halt_corr_ok : check_halt_correspondence cert := by
+theorem halt_corr_ok : checkHaltCorrespondenceProp cert := by
   intro pc_t h
   have hlt := bound_of_getElem? h; change pc_t < 4 at hlt
   interval_cases pc_t <;> simp_all [cert, origProg, transProg]
 
-theorem halt_obs_ok : check_halt_observable cert := by
+theorem halt_obs_ok : checkHaltObservableProp cert := by
   intro pc_t σ_t σ_o h
   change transProg[pc_t]? = some .halt at h
   have hlt := bound_of_getElem? h; change pc_t < 4 at hlt
   simp only [cert]; intro hvm v hv
   interval_cases pc_t <;> simp_all [transProg]
-  simp [VarMap.consistent, idVarMap, Expr.eval] at hvm; exact hvm "c"
+  simp [PVarMap.consistent, idVarMap, Expr.eval] at hvm; exact hvm "c"
 
-theorem transitions_ok : check_all_transitions cert := by
+theorem transitions_ok : checkAllTransitionsProp cert := by
   intro pc_t σ_t σ_t' pc_t' hstep
   have hlt : pc_t < cert.trans.size := by
     cases hstep with
@@ -338,7 +338,7 @@ theorem transitions_ok : check_all_transitions cert := by
     | const h =>
       refine ⟨⟨[1], idVarMap, idVarMap⟩, List.Mem.head _, rfl, rfl, ?_⟩
       · intro σ_t_ σ_t'_ σ_o_ _ _ hvm hstep'
-        simp [VarMap.consistent, idVarMap, Expr.eval] at hvm ⊢
+        simp [PVarMap.consistent, idVarMap, Expr.eval] at hvm ⊢
         cases hstep' with
         | const h' =>
           exact ⟨σ_o_["a" ↦ 10], Steps.single (.const (by native_decide)),
@@ -350,7 +350,7 @@ theorem transitions_ok : check_all_transitions cert := by
     | const h =>
       refine ⟨⟨[2], idVarMap, idVarMap⟩, List.Mem.head _, rfl, rfl, ?_⟩
       · intro σ_t_ σ_t'_ σ_o_ _ hinv_o hvm hstep'
-        simp [VarMap.consistent, idVarMap, Expr.eval] at hvm ⊢
+        simp [PVarMap.consistent, idVarMap, Expr.eval] at hvm ⊢
         simp [cert, inv] at hinv_o
         cases hstep' with
         | const h' =>
@@ -363,7 +363,7 @@ theorem transitions_ok : check_all_transitions cert := by
     | binop h =>
       refine ⟨⟨[3], idVarMap, idVarMap⟩, List.Mem.head _, rfl, rfl, ?_⟩
       · intro σ_t_ σ_t'_ σ_o_ _ _ hvm hstep'
-        simp [VarMap.consistent, idVarMap, Expr.eval] at hvm ⊢
+        simp [PVarMap.consistent, idVarMap, Expr.eval] at hvm ⊢
         cases hstep' with
         | binop h' =>
           exact ⟨σ_o_["c" ↦ BinOp.add.eval (σ_o_ "b") (σ_o_ "y")],
@@ -374,7 +374,7 @@ theorem transitions_ok : check_all_transitions cert := by
   · -- pc_t = 3: halt
     cases hstep <;> simp_all
 
-theorem nonterm_ok : check_nontermination cert (fun _ _ => 0) := by
+theorem nonterm_ok : checkNonterminationProp cert (fun _ _ => 0) := by
   intro pc_t pc_t' σ_t σ_t' σ_o _ _ _ ⟨c', hstep, hc'⟩ horig_eq
   subst hc'
   have hlt : pc_t < cert.trans.size := by
@@ -393,11 +393,11 @@ theorem nonterm_ok : check_nontermination cert (fun _ _ => 0) := by
   interval_cases pc_t <;> cases hstep <;> simp_all <;>
     (simp [cert] at horig_eq)
 
-theorem start_inv_ok : check_invariants_at_start cert :=
+theorem start_inv_ok : checkInvariantsAtStartProp cert :=
   ⟨fun σ => by simp [cert, inv], fun σ => by simp [cert, inv]⟩
 
 /-- The certificate for Example 2 is valid: the checker accepts it. -/
-theorem valid : CertificateValid cert (fun _ _ => 0) :=
+theorem valid : PCertificateValid cert (fun _ _ => 0) :=
   { start_corr    := start_ok
     start_inv     := start_inv_ok
     inv_preserved := inv_ok
@@ -422,7 +422,7 @@ end Example2
     6: goto 1
 
   Trans 3→4 maps to orig 3→(4→)5 (two original steps, absorbing redundant step:=2).
-  Invariant: step = 2 at all labels ≥ 1.
+  PInvariant: step = 2 at all labels ≥ 1.
 -/
 
 namespace Example3
@@ -446,10 +446,10 @@ def transProg : Prog := #[
   .goto   1                             -- 5
 ]
 
-def inv : InvariantMap := fun pc σ =>
+def inv : PInvariantMap := fun pc σ =>
   if pc ≥ 1 then σ "step" = 2 else True
 
-def cert : Certificate :=
+def cert : PCertificate :=
   { orig       := origProg
     trans      := transProg
     inv_orig   := inv
@@ -476,10 +476,10 @@ def cert : Certificate :=
       | 2 => { pc_orig := 2, vm := idVarMap }
       | _ => defaultHaltCert }
 
-theorem start_ok : check_start_correspondence cert :=
+theorem start_ok : checkStartCorrespondenceProp cert :=
   ⟨rfl, idVarMap_consistent⟩
 
-theorem inv_ok : check_invariants_preserved cert := by
+theorem inv_ok : checkInvariantsPreservedProp cert := by
   constructor
   · intro pc σ hinv pc' σ' hstep; simp only [cert, inv] at hinv ⊢
     have hlt : pc < cert.orig.size := by
@@ -517,20 +517,20 @@ theorem inv_ok : check_invariants_preserved cert := by
     change pc < 6 at hlt
     interval_cases pc <;> cases hstep <;> simp_all [Store.update]
 
-theorem halt_corr_ok : check_halt_correspondence cert := by
+theorem halt_corr_ok : checkHaltCorrespondenceProp cert := by
   intro pc_t h
   have hlt := bound_of_getElem? h; change pc_t < 6 at hlt
   interval_cases pc_t <;> simp_all [cert, origProg, transProg]
 
-theorem halt_obs_ok : check_halt_observable cert := by
+theorem halt_obs_ok : checkHaltObservableProp cert := by
   intro pc_t σ_t σ_o h
   change transProg[pc_t]? = some .halt at h
   have hlt := bound_of_getElem? h; change pc_t < 6 at hlt
   simp only [cert]; intro hvm v hv
   interval_cases pc_t <;> simp_all [transProg]
-  simp [VarMap.consistent, idVarMap, Expr.eval] at hvm; exact hvm "acc"
+  simp [PVarMap.consistent, idVarMap, Expr.eval] at hvm; exact hvm "acc"
 
-theorem transitions_ok : check_all_transitions cert := by
+theorem transitions_ok : checkAllTransitionsProp cert := by
   intro pc_t σ_t σ_t' pc_t' hstep
   have hlt : pc_t < cert.trans.size := by
     cases hstep with
@@ -553,7 +553,7 @@ theorem transitions_ok : check_all_transitions cert := by
     | const h =>
       refine ⟨⟨[1], idVarMap, idVarMap⟩, List.Mem.head _, rfl, rfl, ?_⟩
       · intro σ_t_ σ_t'_ σ_o_ _ _ hvm hstep'
-        simp [VarMap.consistent, idVarMap, Expr.eval] at hvm ⊢
+        simp [PVarMap.consistent, idVarMap, Expr.eval] at hvm ⊢
         cases hstep' with
         | const h' =>
           exact ⟨σ_o_["step" ↦ 2], Steps.single (.const (by native_decide)),
@@ -568,7 +568,7 @@ theorem transitions_ok : check_all_transitions cert := by
       -- Now: x = "n", pc_t' = 3
       refine ⟨⟨[3], idVarMap, idVarMap⟩, List.Mem.head _, rfl, rfl, ?_⟩
       intro σ_t_ σ_t'_ σ_o_ _ _ hvm hstep'
-      simp [VarMap.consistent, idVarMap, Expr.eval] at hvm ⊢
+      simp [PVarMap.consistent, idVarMap, Expr.eval] at hvm ⊢
       have ho : cert.orig[1]? = some (.ifgoto "n" 3) := by native_decide
       have ht : cert.trans[1]? = some (.ifgoto "n" 3) := by native_decide
       cases hstep' with
@@ -582,7 +582,7 @@ theorem transitions_ok : check_all_transitions cert := by
       have := h ▸ h1; simp at this; obtain ⟨rfl, rfl⟩ := this
       refine ⟨⟨[2], idVarMap, idVarMap⟩, List.Mem.tail _ (List.Mem.head _), rfl, rfl, ?_⟩
       intro σ_t_ σ_t'_ σ_o_ _ _ hvm hstep'
-      simp [VarMap.consistent, idVarMap, Expr.eval] at hvm ⊢
+      simp [PVarMap.consistent, idVarMap, Expr.eval] at hvm ⊢
       have ho : cert.orig[1]? = some (.ifgoto "n" 3) := by native_decide
       have ht : cert.trans[1]? = some (.ifgoto "n" 3) := by native_decide
       cases hstep' with
@@ -599,7 +599,7 @@ theorem transitions_ok : check_all_transitions cert := by
     | binop h =>
       refine ⟨⟨[4, 5], idVarMap, idVarMap⟩, List.Mem.head _, rfl, rfl, ?_⟩
       · intro σ_t_ σ_t'_ σ_o_ _ hinv_o hvm hstep'
-        simp [VarMap.consistent, idVarMap, Expr.eval] at hvm ⊢
+        simp [PVarMap.consistent, idVarMap, Expr.eval] at hvm ⊢
         simp [cert, inv] at hinv_o
         cases hstep' with
         | binop h' =>
@@ -615,7 +615,7 @@ theorem transitions_ok : check_all_transitions cert := by
     | binop h =>
       refine ⟨⟨[6], idVarMap, idVarMap⟩, List.Mem.head _, rfl, rfl, ?_⟩
       · intro σ_t_ σ_t'_ σ_o_ _ _ hvm hstep'
-        simp [VarMap.consistent, idVarMap, Expr.eval] at hvm ⊢
+        simp [PVarMap.consistent, idVarMap, Expr.eval] at hvm ⊢
         cases hstep' with
         | binop h' =>
           exact ⟨σ_o_["n" ↦ BinOp.sub.eval (σ_o_ "n") (σ_o_ "step")],
@@ -630,7 +630,7 @@ theorem transitions_ok : check_all_transitions cert := by
       have := h ▸ h1; simp at this; subst this
       refine ⟨⟨[1], idVarMap, idVarMap⟩, List.Mem.head _, rfl, rfl, ?_⟩
       intro σ_t_ σ_t'_ σ_o_ _ _ hvm hstep'
-      simp [VarMap.consistent, idVarMap, Expr.eval] at hvm ⊢
+      simp [PVarMap.consistent, idVarMap, Expr.eval] at hvm ⊢
       cases hstep' with
       | goto h' =>
         exact ⟨σ_o_, Steps.single (.goto (by native_decide)),
@@ -638,7 +638,7 @@ theorem transitions_ok : check_all_transitions cert := by
       | _ => simp_all
     | _ => simp_all
 
-theorem nonterm_ok : check_nontermination cert (fun _ _ => 0) := by
+theorem nonterm_ok : checkNonterminationProp cert (fun _ _ => 0) := by
   intro pc_t pc_t' σ_t σ_t' σ_o _ _ _ ⟨c', hstep, hc'⟩ horig_eq
   subst hc'
   have hlt : pc_t < cert.trans.size := by
@@ -659,11 +659,11 @@ theorem nonterm_ok : check_nontermination cert (fun _ _ => 0) := by
   interval_cases pc_t <;> cases hstep <;> simp_all <;>
     (simp [cert] at horig_eq)
 
-theorem start_inv_ok : check_invariants_at_start cert :=
+theorem start_inv_ok : checkInvariantsAtStartProp cert :=
   ⟨fun σ => by simp [cert, inv], fun σ => by simp [cert, inv]⟩
 
 /-- The certificate for Example 3 is valid: the checker accepts it. -/
-theorem valid : CertificateValid cert (fun _ _ => 0) :=
+theorem valid : PCertificateValid cert (fun _ _ => 0) :=
   { start_corr    := start_ok
     start_inv     := start_inv_ok
     inv_preserved := inv_ok
@@ -704,10 +704,10 @@ def transProg : Prog := #[
 
 /-- No matter what invariants we pick, we cannot build a valid certificate.
     Here we demonstrate the checker rejects the natural attempt. -/
-def inv : InvariantMap := fun pc σ =>
+def inv : PInvariantMap := fun pc σ =>
   if pc ≥ 1 then σ "x" = 5 else True
 
-def cert : Certificate :=
+def cert : PCertificate :=
   { orig       := origProg
     trans      := transProg
     inv_orig   := inv
@@ -730,7 +730,7 @@ def cert : Certificate :=
     The transformed program sets y := 3, but the original sets y := x = 5.
     With identity variable maps, we'd need σ_t'("y") = σ_o'("y"),
     but 3 ≠ 5. -/
-theorem transitions_fail : ¬ check_all_transitions cert := by
+theorem transitions_fail : ¬ checkAllTransitionsProp cert := by
   intro h
   -- Use a store where x = 5 (required by invariant at pc ≥ 1)
   let σ₀ : Store := fun v => if v == "x" then 5 else 0
@@ -786,7 +786,7 @@ theorem transitions_fail : ¬ check_all_transitions cert := by
     | iffall h => simp_all
 
 /-- Therefore, no valid certificate exists for this buggy transformation. -/
-theorem no_valid_cert : ¬ CertificateValid cert μ := by
+theorem no_valid_cert : ¬ PCertificateValid cert μ := by
   intro ⟨_, _, _, htrans, _, _, _⟩
   exact transitions_fail htrans
 

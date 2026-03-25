@@ -1,10 +1,10 @@
 import CredibleCompilation.Semantics
 
 /-!
-# Certificate Checker for Credible Compilation
+# Propositional PCertificate Checker for Credible Compilation
 
-A certificate checker that verifies: every behavior of a transformed program
-has a corresponding behavior in the original program.
+A Prop-based certificate checker that verifies: every behavior of a transformed
+program has a corresponding behavior in the original program.
 
 Based on the credible compilation framework (Rinard, MIT-LCS-TR-776).
 -/
@@ -31,20 +31,20 @@ def Expr.eval (σ : Store) : Expr → Val
 -- ============================================================
 
 /-- A predicate on stores, attached to a program point. -/
-def Invariant := Store → Prop
+def PInvariant := Store → Prop
 
 /-- An invariant map assigns an invariant to each label in a program. -/
-def InvariantMap := Label → Invariant
+def PInvariantMap := Label → PInvariant
 
 /-- An invariant map is valid for program `p` starting at `pc` with store `σ`
     if the invariant at `pc` holds for `σ`, and for every reachable
     configuration `(pc', σ')`, the invariant at `pc'` holds for `σ'`. -/
-def InvariantMap.locally_preserved (inv : InvariantMap) (p : Prog)
+def PInvariantMap.locally_preserved (inv : PInvariantMap) (p : Prog)
     (pc : Label) (σ : Store) : Prop :=
   inv pc σ →
   ∀ pc' σ', (p ⊩ Cfg.run pc σ ⟶ Cfg.run pc' σ') → inv pc' σ'
 
-def InvariantMap.preserved (inv : InvariantMap) (p : Prog) : Prop :=
+def PInvariantMap.preserved (inv : PInvariantMap) (p : Prog) : Prop :=
   ∀ pc σ, inv.locally_preserved p pc σ
 
 -- ============================================================
@@ -53,12 +53,12 @@ def InvariantMap.preserved (inv : InvariantMap) (p : Prog) : Prop :=
 
 /-- Maps each variable in the transformed program to an expression over
     the original program's variables that should have the same value. -/
-def VarMap := Var → Expr
+def PVarMap := Var → Expr
 
 /-- A variable mapping is consistent with two stores if for every variable,
     the transformed store's value equals the expression evaluated in the
     original store. -/
-def VarMap.consistent (vm : VarMap) (σ_orig σ_trans : Store) : Prop :=
+def PVarMap.consistent (vm : PVarMap) (σ_orig σ_trans : Store) : Prop :=
   ∀ x : Var, σ_trans x = (vm x).eval σ_orig
 
 -- ============================================================
@@ -71,59 +71,59 @@ def VarMap.consistent (vm : VarMap) (σ_orig σ_trans : Store) : Prop :=
     original label of `pc_t'`). The labels are the successive PCs
     visited: the first is a successor of `pc_o`, each subsequent label
     is a successor of the previous, and the last equals `pc_o'`. -/
-structure TransCorr where
+structure PTransCorr where
   /-- Labels of original PCs visited (successors of pc_orig, ending at pc_orig') -/
   origLabels   : List Label
   /-- Variable map at the source -/
-  vm           : VarMap
+  vm           : PVarMap
   /-- Variable map at the target -/
-  vm_next      : VarMap
+  vm_next      : PVarMap
 
 -- ============================================================
--- § 5. Certificate
+-- § 5. PCertificate
 -- ============================================================
 
 /-- Per-instruction certificate entry for a non-halt instruction
     in the transformed program. -/
-structure InstrCert where
+structure PInstrCert where
   /-- Corresponding label in original program -/
   pc_orig    : Label
   /-- Variable map at this instruction -/
-  vm         : VarMap
+  vm         : PVarMap
   /-- For each possible successor `pc_t'` in the transformed program,
       a proof obligation that the original program can match. -/
-  transitions : List TransCorr
+  transitions : List PTransCorr
 
 /-- Per-instruction certificate entry for a halt instruction. -/
-structure HaltCert where
+structure PHaltCert where
   /-- Corresponding label in original program -/
   pc_orig  : Label
   /-- Variable map at this instruction -/
-  vm       : VarMap
+  vm       : PVarMap
 
 /-- The full compilation certificate. -/
-structure Certificate where
+structure PCertificate where
   /-- Original program -/
   orig        : Prog
   /-- Transformed program -/
   trans       : Prog
   /-- Invariants for the original program -/
-  inv_orig    : InvariantMap
+  inv_orig    : PInvariantMap
   /-- Invariants for the transformed program -/
-  inv_trans   : InvariantMap
+  inv_trans   : PInvariantMap
   /-- Observable variables (checked at halt for equivalence) -/
   observable  : List Var
-  /-- Certificate entry for each label in the transformed program -/
-  instrCerts  : Label → InstrCert
-  /-- Certificate entry for halt instructions in the transformed program -/
-  haltCerts   : Label → HaltCert
+  /-- PCertificate entry for each label in the transformed program -/
+  instrCerts  : Label → PInstrCert
+  /-- PCertificate entry for halt instructions in the transformed program -/
+  haltCerts   : Label → PHaltCert
 
 -- ============================================================
--- § 6. Certificate checking conditions
+-- § 6. PCertificate checking conditions
 -- ============================================================
 
 /-- Condition 2: Invariants are preserved in both programs. -/
-def check_invariants_preserved (cert : Certificate) : Prop :=
+def checkInvariantsPreservedProp (cert : PCertificate) : Prop :=
   cert.inv_orig.preserved cert.orig ∧
   cert.inv_trans.preserved cert.trans
 
@@ -131,10 +131,10 @@ def check_invariants_preserved (cert : Certificate) : Prop :=
     When the transformed program steps from `pc_t` to `pc_t'`,
     if the variable maps are consistent before the step,
     they remain consistent after. -/
-def check_transition_varmap
+def checkTransitionVarmapProp
     (p_orig p_trans : Prog)
-    (inv_orig : InvariantMap) (inv_trans : InvariantMap)
-    (pc_t pc_t' : Label) (pc_o pc_o' : Label) (tc : TransCorr)
+    (inv_orig : PInvariantMap) (inv_trans : PInvariantMap)
+    (pc_t pc_t' : Label) (pc_o pc_o' : Label) (tc : PTransCorr)
     : Prop :=
   ∀ σ_t σ_t' σ_o,
     inv_trans pc_t σ_t →
@@ -148,7 +148,7 @@ def check_transition_varmap
 /-- Condition 3: For each instruction in the transformed program,
     every transition has a corresponding sequence of transitions
     in the original program. -/
-def check_all_transitions (cert : Certificate) : Prop :=
+def checkAllTransitionsProp (cert : PCertificate) : Prop :=
   ∀ pc_t : Label,
     ∀ σ_t σ_t' : Store,
     ∀ pc_t' : Label,
@@ -159,14 +159,14 @@ def check_all_transitions (cert : Certificate) : Prop :=
       ∃ tc ∈ ic.transitions,
         tc.vm = ic.vm ∧
         tc.vm_next = ic'.vm ∧
-        check_transition_varmap cert.orig cert.trans
+        checkTransitionVarmapProp cert.orig cert.trans
           cert.inv_orig cert.inv_trans pc_t pc_t' ic.pc_orig ic'.pc_orig tc
 
 /-- Condition 4a: Each halt in the transformed program corresponds to
     a halt in the original program. Uses `instrCerts` (not `haltCerts`)
     so that the simulation relation, which tracks `instrCerts`, can
     directly conclude the original also halts. -/
-def check_halt_correspondence (cert : Certificate) : Prop :=
+def checkHaltCorrespondenceProp (cert : PCertificate) : Prop :=
   ∀ pc_t : Label,
     cert.trans[pc_t]? = some .halt →
     let ic := cert.instrCerts pc_t
@@ -174,7 +174,7 @@ def check_halt_correspondence (cert : Certificate) : Prop :=
 
 /-- Condition 4b: Observable variables have the same values at halt.
     Uses `instrCerts` for consistency with the simulation relation. -/
-def check_halt_observable (cert : Certificate) : Prop :=
+def checkHaltObservableProp (cert : PCertificate) : Prop :=
   ∀ pc_t : Label,
   ∀ σ_t σ_o : Store,
     cert.trans[pc_t]? = some .halt →
@@ -183,13 +183,13 @@ def check_halt_observable (cert : Certificate) : Prop :=
     ∀ v ∈ cert.observable, σ_t v = σ_o v
 
 /-- Condition 1 (start): The start instructions correspond. -/
-def check_start_correspondence (cert : Certificate) : Prop :=
+def checkStartCorrespondenceProp (cert : PCertificate) : Prop :=
   (cert.instrCerts 0).pc_orig = 0 ∧
   -- Initial variable map is identity (programs start with same store)
   ∀ σ : Store, (cert.instrCerts 0).vm.consistent σ σ
 
 /-- Condition for invariants to hold at start. -/
-def check_invariants_at_start (cert : Certificate) : Prop :=
+def checkInvariantsAtStartProp (cert : PCertificate) : Prop :=
   (∀ σ, cert.inv_trans 0 σ) ∧ (∀ σ, cert.inv_orig 0 σ)
 
 -- ============================================================
@@ -208,13 +208,13 @@ def IsInfiniteExec (p : Prog) (f : Nat → Cfg) : Prop :=
     a step with 0 original transitions, the measure must decrease.
     This ensures we cannot have infinitely many transformed steps
     with 0 original steps — eventually the original must also progress. -/
-def TransMeasure := Label → Store → Nat
+def PTransMeasure := Label → Store → Nat
 
 /-- Condition 5: Zero-step transitions decrease a well-founded measure.
     This ensures that if the transformed program diverges, the original
     also diverges: any infinite transformed execution forces infinitely
     many original steps. -/
-def check_nontermination (cert : Certificate) (μ : TransMeasure) : Prop :=
+def checkNonterminationProp (cert : PCertificate) (μ : PTransMeasure) : Prop :=
   ∀ (pc_t pc_t' : Label) (σ_t σ_t' σ_o : Store),
     cert.inv_trans pc_t σ_t →
     cert.inv_orig (cert.instrCerts pc_t).pc_orig σ_o →
@@ -230,14 +230,14 @@ def check_nontermination (cert : Certificate) (μ : TransMeasure) : Prop :=
 -- ============================================================
 
 /-- A certificate is valid if all checking conditions hold. -/
-structure CertificateValid (cert : Certificate) (μ : TransMeasure) : Prop where
-  start_corr      : check_start_correspondence cert
-  start_inv       : check_invariants_at_start cert
-  inv_preserved   : check_invariants_preserved cert
-  transitions     : check_all_transitions cert
-  halt_corr       : check_halt_correspondence cert
-  halt_obs        : check_halt_observable cert
-  nonterm         : check_nontermination cert μ
+structure PCertificateValid (cert : PCertificate) (μ : PTransMeasure) : Prop where
+  start_corr      : checkStartCorrespondenceProp cert
+  start_inv       : checkInvariantsAtStartProp cert
+  inv_preserved   : checkInvariantsPreservedProp cert
+  transitions     : checkAllTransitionsProp cert
+  halt_corr       : checkHaltCorrespondenceProp cert
+  halt_obs        : checkHaltObservableProp cert
+  nonterm         : checkNonterminationProp cert μ
 
 -- ============================================================
 -- § 9. Soundness: simulation relation
@@ -246,7 +246,7 @@ structure CertificateValid (cert : Certificate) (μ : TransMeasure) : Prop where
 /-- The simulation relation: transformed config at `(pc_t, σ_t)` is
     related to original config at `(pc_o, σ_o)` when the variable map
     is consistent and invariants hold. -/
-def SimRel (cert : Certificate) (pc_t : Label) (σ_t : Store)
+def PSimRel (cert : PCertificate) (pc_t : Label) (σ_t : Store)
     (pc_o : Label) (σ_o : Store) : Prop :=
   let ic := cert.instrCerts pc_t
   ic.pc_orig = pc_o ∧
@@ -254,8 +254,8 @@ def SimRel (cert : Certificate) (pc_t : Label) (σ_t : Store)
   cert.inv_trans pc_t σ_t ∧
   cert.inv_orig pc_o σ_o
 
-/-- Invariant preservation across multi-step execution. -/
-theorem inv_preserved_steps {inv : InvariantMap} {p : Prog}
+/-- PInvariant preservation across multi-step execution. -/
+theorem inv_preserved_steps {inv : PInvariantMap} {p : Prog}
     (hpres : inv.preserved p) {pc pc' : Label} {σ σ' : Store}
     (hsteps : p ⊩ Cfg.run pc σ ⟶* Cfg.run pc' σ')
     (hinv : inv pc σ) :
@@ -288,16 +288,16 @@ theorem inv_preserved_steps {inv : InvariantMap} {p : Prog}
 
 /-- Single-step simulation: a transformed step is matched by original steps,
     preserving the simulation relation. -/
-theorem step_sim {cert : Certificate} {μ : TransMeasure}
-    (hvalid : CertificateValid cert μ)
+theorem step_sim {cert : PCertificate} {μ : PTransMeasure}
+    (hvalid : PCertificateValid cert μ)
     {pc_t : Label} {σ_t σ_t' : Store} {pc_o : Label} {σ_o : Store} {pc_t' : Label}
-    (hsim : SimRel cert pc_t σ_t pc_o σ_o)
+    (hsim : PSimRel cert pc_t σ_t pc_o σ_o)
     (hstep : cert.trans ⊩ Cfg.run pc_t σ_t ⟶ Cfg.run pc_t' σ_t') :
     ∃ pc_o' σ_o',
       (cert.orig ⊩ Cfg.run pc_o σ_o ⟶* Cfg.run pc_o' σ_o') ∧
-      SimRel cert pc_t' σ_t' pc_o' σ_o' := by
+      PSimRel cert pc_t' σ_t' pc_o' σ_o' := by
   obtain ⟨hpc_orig, hvm_cons, hinv_t, hinv_o⟩ := hsim
-  -- From check_all_transitions, get matching transition
+  -- From checkAllTransitionsProp, get matching transition
   obtain ⟨tc, _, hvm1, hvm2, htrans⟩ :=
     hvalid.transitions pc_t σ_t σ_t' pc_t' hstep
   -- Variable map consistency from hsim + tc agreement
@@ -309,7 +309,7 @@ theorem step_sim {cert : Certificate} {μ : TransMeasure}
     htrans σ_t σ_t' σ_o hinv_t hinv_o hvm_tc hstep
   -- Build the original steps from pc_o
   refine ⟨(cert.instrCerts pc_t').pc_orig, σ_o', horig_steps, ?_⟩
-  -- Establish SimRel at new config
+  -- Establish PSimRel at new config
   exact ⟨rfl,
          hvm2 ▸ hvm_next,
          hvalid.inv_preserved.2 pc_t σ_t hinv_t pc_t' σ_t' hstep,
@@ -319,20 +319,20 @@ theorem step_sim {cert : Certificate} {μ : TransMeasure}
     the transformed program halts, the original program also halts
     with the same observable values. -/
 theorem soundness_halt
-    (cert : Certificate) (μ : TransMeasure)
-    (hvalid : CertificateValid cert μ)
+    (cert : PCertificate) (μ : PTransMeasure)
+    (hvalid : PCertificateValid cert μ)
     (σ₀ σ_t' : Store)
     (hexec : haltsWithResult cert.trans 0 σ₀ σ_t') :
     ∃ σ_o', haltsWithResult cert.orig 0 σ₀ σ_o' ∧
       ∀ v ∈ cert.observable, σ_t' v = σ_o' v := by
   -- Establish initial simulation relation
-  have hsim₀ : SimRel cert 0 σ₀ 0 σ₀ :=
+  have hsim₀ : PSimRel cert 0 σ₀ 0 σ₀ :=
     ⟨hvalid.start_corr.1, hvalid.start_corr.2 σ₀,
      hvalid.start_inv.1 σ₀, hvalid.start_inv.2 σ₀⟩
   -- Main simulation: induction on the transformed execution trace
   suffices ∀ c c', Steps cert.trans c c' → c' = Cfg.halt σ_t' →
       ∀ pc_t σ_t pc_o σ_o, c = Cfg.run pc_t σ_t →
-        SimRel cert pc_t σ_t pc_o σ_o →
+        PSimRel cert pc_t σ_t pc_o σ_o →
         ∃ σ_o', (cert.orig ⊩ Cfg.run pc_o σ_o ⟶* Cfg.halt σ_o') ∧
           ∀ v ∈ cert.observable, σ_t' v = σ_o' v by
     obtain ⟨σ_o', hsteps, hobs⟩ :=
@@ -523,8 +523,8 @@ theorem StepsN_intermediate_run {p : Prog} {pc₀ : Label} {σ₀ : Store}
     and the transformed program diverges, the original program also
     diverges. -/
 theorem soundness_diverge
-    (cert : Certificate) (μ : TransMeasure)
-    (hvalid : CertificateValid cert μ)
+    (cert : PCertificate) (μ : PTransMeasure)
+    (hvalid : PCertificateValid cert μ)
     (f : Nat → Cfg) (σ₀ : Store)
     (hinf : IsInfiniteExec cert.trans f)
     (hf0 : f 0 = Cfg.run 0 σ₀) :
@@ -557,10 +557,10 @@ theorem soundness_diverge
   -- Progress: from any simulation state with μ-bound m, advance original ≥ 1 step
   have advance : ∀ (m n : Nat) (pc_o : Label) (σ_o : Store) (total : Nat),
       (∀ pc_t σ_t, f n = Cfg.run pc_t σ_t → μ pc_t σ_t ≤ m) →
-      (∀ pc_t σ_t, f n = Cfg.run pc_t σ_t → SimRel cert pc_t σ_t pc_o σ_o) →
+      (∀ pc_t σ_t, f n = Cfg.run pc_t σ_t → PSimRel cert pc_t σ_t pc_o σ_o) →
       StepsN cert.orig (Cfg.run 0 σ₀) (Cfg.run pc_o σ_o) total →
       ∃ (n' : Nat) (pc_o' : Label) (σ_o' : Store) (total' : Nat),
-        (∀ pc_t σ_t, f n' = Cfg.run pc_t σ_t → SimRel cert pc_t σ_t pc_o' σ_o') ∧
+        (∀ pc_t σ_t, f n' = Cfg.run pc_t σ_t → PSimRel cert pc_t σ_t pc_o' σ_o') ∧
         StepsN cert.orig (Cfg.run 0 σ₀) (Cfg.run pc_o' σ_o') total' ∧
         total' ≥ total + 1 := by
     intro m; induction m with
@@ -612,9 +612,9 @@ theorem soundness_diverge
         exact ⟨n + 1, pc_o', σ_o', total + (k' + 1),
           fun pc σ hf => by rw [hfn1] at hf; obtain ⟨rfl, rfl⟩ := Cfg.run.inj hf; exact hsim',
           StepsN_trans hsteps hk, by omega⟩
-  -- For any N, find enough original steps via stronger induction carrying SimRel
+  -- For any N, find enough original steps via stronger induction carrying PSimRel
   suffices ∀ N, ∃ (n : Nat) (pc_o : Label) (σ_o : Store) (total : Nat),
-      (∀ pc_t σ_t, f n = Cfg.run pc_t σ_t → SimRel cert pc_t σ_t pc_o σ_o) ∧
+      (∀ pc_t σ_t, f n = Cfg.run pc_t σ_t → PSimRel cert pc_t σ_t pc_o σ_o) ∧
       StepsN cert.orig (Cfg.run 0 σ₀) (Cfg.run pc_o σ_o) total ∧ total ≥ N by
     intro N
     obtain ⟨_, _, _, total, _, hsteps, hge⟩ := this N
@@ -653,8 +653,8 @@ def program_behavior (p : Prog) (σ₀ : Store) (b : Behavior) : Prop :=
     store, every behavior of the transformed program has a corresponding
     behavior in the original program (with observable equivalence at halt). -/
 theorem credible_compilation_soundness
-    (cert : Certificate) (μ : TransMeasure)
-    (hvalid : CertificateValid cert μ)
+    (cert : PCertificate) (μ : PTransMeasure)
+    (hvalid : PCertificateValid cert μ)
     (σ₀ : Store) (b : Behavior)
     (htrans : program_behavior cert.trans σ₀ b) :
     ∃ b', program_behavior cert.orig σ₀ b' ∧
