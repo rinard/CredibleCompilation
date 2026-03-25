@@ -246,6 +246,49 @@ structure ECertificate where
   measure    : Array Nat
 
 -- ============================================================
+-- § 5b. Shared certificate-building utilities
+-- ============================================================
+
+/-- Build instrCerts for a 1:1 PC mapping (orig PC = trans PC).
+    Used by optimizers that preserve program size (ConstProp, CSE, LICM). -/
+def buildInstrCerts1to1 (trans : Prog) : Array EInstrCert :=
+  let arr := (List.range trans.size).map fun i =>
+    match trans[i]? with
+    | some .halt => { pc_orig := i, transitions := ([] : List ETransCorr) }
+    | some (.const _ _) | some (.copy _ _) | some (.binop _ _ _ _) =>
+      { pc_orig := i, transitions := [{ origLabels := [i + 1] }] }
+    | some (.goto l) =>
+      { pc_orig := i, transitions := [{ origLabels := [l] }] }
+    | some (.ifgoto _ l) =>
+      { pc_orig := i,
+        transitions := [{ origLabels := [l] }, { origLabels := [i + 1] }] }
+    | none => default
+  arr.toArray
+
+/-- Build haltCerts from instrCerts.  Shared by all optimizers. -/
+def buildHaltCerts (instrCerts : Array EInstrCert) (trans : Prog)
+    : Array EHaltCert :=
+  let arr := (List.range trans.size).map fun i =>
+    { pc_orig := (instrCerts.getD i default).pc_orig : EHaltCert }
+  arr.toArray
+
+/-- Sorted list of kept orig PCs, indexed by trans PC.
+    `kept[i] = true` means orig PC `i` is retained.
+    Used by compacting optimizers (DCE, Peephole). -/
+def buildOrigMap (kept : Array Bool) : Array Nat :=
+  ((List.range kept.size).filterMap fun i =>
+    if kept.getD i false then some i else none).toArray
+
+/-- Reverse mapping: orig PC → trans PC (0 for removed PCs).
+    Used by compacting optimizers (DCE, Peephole). -/
+def buildRevMap (origMap : Array Nat) (origSize : Nat) : Array Nat :=
+  (List.range origMap.size).foldl (fun arr i =>
+    match origMap[i]? with
+    | some pc => if pc < arr.size then arr.set! pc i else arr
+    | none => arr
+  ) (Array.replicate origSize 0)
+
+-- ============================================================
 -- § 6. Individual check functions
 -- ============================================================
 

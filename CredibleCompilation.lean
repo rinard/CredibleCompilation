@@ -4,3 +4,13 @@ import CredibleCompilation.PropExamples
 import CredibleCompilation.ExecChecker
 import CredibleCompilation.ExecExamples
 import CredibleCompilation.SoundnessBridge
+import CredibleCompilation.ConstPropOpt
+import CredibleCompilation.ConstPropOptExamples
+import CredibleCompilation.CSEOpt
+import CredibleCompilation.CSEOptExamples
+import CredibleCompilation.DCEOpt
+import CredibleCompilation.DCEOptExamples
+import CredibleCompilation.LICMOpt
+import CredibleCompilation.LICMOptExamples
+import CredibleCompilation.PeepholeOpt
+import CredibleCompilation.PeepholeOptExamples

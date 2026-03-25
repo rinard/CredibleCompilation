@@ -10,24 +10,7 @@ Based on the credible compilation framework (Rinard, MIT-LCS-TR-776).
 -/
 
 -- ============================================================
--- § 1. Expressions over stores
--- ============================================================
-
-/-- Expressions that can be evaluated in a store. Used to describe
-    how transformed-program variables map to original-program values. -/
-inductive Expr where
-  | lit  : Val → Expr
-  | var  : Var → Expr
-  | bin  : BinOp → Expr → Expr → Expr
-  deriving Repr, DecidableEq
-
-def Expr.eval (σ : Store) : Expr → Val
-  | .lit n       => n
-  | .var x       => σ x
-  | .bin op a b  => op.eval (a.eval σ) (b.eval σ)
-
--- ============================================================
--- § 2. Invariants (Floyd-Hoare style properties)
+-- § 1. Invariants (Floyd-Hoare style properties)
 -- ============================================================
 
 /-- A predicate on stores, attached to a program point. -/

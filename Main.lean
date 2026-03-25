@@ -1,8 +1,14 @@
 import CredibleCompilation.ExecExamples
+import CredibleCompilation.ConstPropOptExamples
+import CredibleCompilation.CSEOptExamples
+import CredibleCompilation.DCEOptExamples
+import CredibleCompilation.LICMOptExamples
+import CredibleCompilation.PeepholeOptExamples
 
 def main : IO Unit := do
   IO.println "=== Credible Compilation Certificate Checker ==="
   IO.println ""
+  IO.println "--- Hand-written certificates ---"
   let examples : List (String × Bool) := [
     ("Constant Propagation", checkCertificateExec ConstProp.cert),
     ("Copy Propagation", checkCertificateExec CopyProp.cert),
@@ -10,11 +16,57 @@ def main : IO Unit := do
     ("Dead Code Elimination", checkCertificateExec DCE.cert),
     ("Loop-Invariant Code Motion", checkCertificateExec LICM.cert),
     ("Induction Variable Elimination", checkCertificateExec IVE.cert),
+    ("IVE (variable removal)", checkCertificateExec IVE2.cert),
     ("Bad Example (buggy transform)", checkCertificateExec BadExample.cert)
   ]
   for (name, result) in examples do
     let status := if result then "PASS" else "FAIL"
     IO.println s!"  {name}: {status}"
+  IO.println ""
+  IO.println "--- Automatic constant propagation ---"
+  let cpCerts : List (String × ECertificate) := [
+    ("Chain propagation", ConstPropOptExamples.simpleCert),
+    ("Constant folding", ConstPropOptExamples.foldCert),
+    ("Branch elimination", ConstPropOptExamples.branchCert),
+    ("Loop (no change)", ConstPropOptExamples.loopCert)
+  ]
+  for (name, cert) in cpCerts do
+    let status := if checkCertificateExec cert then "PASS" else "FAIL"
+    IO.println s!"  {name}: {status}"
+  IO.println ""
+  IO.println "--- Automatic CSE ---"
+  let cseCerts : List (String × ECertificate) := [
+    ("Simple reuse", CSEOptExamples.simpleCert),
+    ("Chained reuse", CSEOptExamples.chainCert),
+    ("Kill (no change)", CSEOptExamples.killCert)
+  ]
+  for (name, cert) in cseCerts do
+    let status := if checkCertificateExec cert then "PASS" else "FAIL"
+    IO.println s!"  {name}: {status}"
+  IO.println ""
+  IO.println "--- Automatic DCE ---"
+  let dceCerts : List (String × ECertificate) := [
+    ("Dead branch (always taken)", DCEOptExamples.deadBranchCert),
+    ("Dead fallthrough (always false)", DCEOptExamples.deadFallthroughCert),
+    ("Goto skips dead block", DCEOptExamples.gotoSkipCert)
+  ]
+  for (name, cert) in dceCerts do
+    let status := if checkCertificateExec cert then "PASS" else "FAIL"
+    IO.println s!"  {name}: {status}"
+  IO.println ""
+  IO.println "--- Automatic LICM ---"
+  let licmCerts : List (String × ECertificate) := [
+    ("Classic loop-invariant recomputation", LICMOptExamples.classicCert),
+    ("Straight-line redundant recomputation", LICMOptExamples.straightCert)
+  ]
+  for (name, cert) in licmCerts do
+    let status := if checkCertificateExec cert then "PASS" else "FAIL"
+    IO.println s!"  {name}: {status}"
+  IO.println ""
+  IO.println "--- Automatic Peephole ---"
+  let peepCert := PeepholeOptExamples.licmCert
+  let status := if checkCertificateExec peepCert then "PASS" else "FAIL"
+  IO.println s!"  LICM cleanup ({PeepholeOptExamples.licmProg.size} → {peepCert.trans.size} instrs): {status}"
   IO.println ""
   IO.println "--- Verbose: Bad Example ---"
   for (name, result) in checkCertificateVerboseExec BadExample.cert do

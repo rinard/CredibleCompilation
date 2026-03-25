@@ -445,3 +445,131 @@ def cert : ECertificate :=
 #eval! checkCertificateVerboseExec cert
 
 end IVE
+
+-- ============================================================
+-- § 7. Induction variable elimination with variable removal
+-- ============================================================
+
+/-! ### Example 8: IVE — eliminate induction variable `i` from loop
+
+  Original (precomputes `limit = 4*n + 1` so the loop tests `j < limit`):
+    0: one := 1           5: t1 := n * four
+    1: four := 4          6: limit := t1 + one
+    2: n := 500           7: if j < limit goto 9
+    3: i := 0             8: halt
+    4: j := 1             9: i := i + one
+                          10: j := j + four
+                          11: goto 7
+
+  Transformed (eliminate `i`, constant-fold `t1`/`limit`, keep dead `i`/`t1`):
+    0: one := 1           5: t1 := 2000
+    1: four := 4          6: limit := 2001
+    2: n := 500           7: if j < limit goto 9
+    3: i := 0  (dead)     8: halt
+    4: j := 1             9: j := j + four
+                          10: goto 7
+
+  The setup mirrors 1:1. In the loop, `i` is never updated in the
+  transformed program.  The expression relation maps `(.lit 0, .var "i")`
+  meaning `0 = σ_trans("i")` — the trans-side `i` stays at its init value.
+  Observable: `j` only.
+-/
+namespace IVE2
+
+-- Expression relation at the loop head: identity for shared variables,
+-- dead variable `i` maps to constant 0 on orig side (trans i stays 0).
+private def loopRel : EExprRel :=
+  [(.var "j", .var "j"), (.var "limit", .var "limit"),
+   (.var "one", .var "one"), (.var "four", .var "four"), (.var "n", .var "n"),
+   (.lit 0, .var "i"), (.var "t1", .var "t1")]
+
+-- Setup invariants (accumulate known constants as instructions execute)
+private def inv_one   : EInv := [("one", .lit 1)]
+private def inv_two   : EInv := [("one", .lit 1), ("four", .lit 4)]
+private def inv_base  : EInv := [("one", .lit 1), ("four", .lit 4), ("n", .lit 500)]
+private def inv_i     : EInv := [("one", .lit 1), ("four", .lit 4), ("n", .lit 500), ("i", .lit 0)]
+private def inv_ij    : EInv := [("one", .lit 1), ("four", .lit 4), ("n", .lit 500), ("i", .lit 0), ("j", .lit 1)]
+private def inv_setup : EInv := [("one", .lit 1), ("four", .lit 4), ("n", .lit 500), ("i", .lit 0), ("j", .lit 1), ("t1", .lit 2000)]
+-- Loop invariant: constants that never change inside the loop
+private def inv_loop  : EInv := [("one", .lit 1), ("four", .lit 4), ("n", .lit 500), ("limit", .lit 2001)]
+
+-- Helper: build an ETransCorr with the loop relation
+private abbrev tcRel (labels : List Label) (r : EExprRel) (r' : EExprRel) : ETransCorr :=
+  { origLabels := labels, rel := r, rel_next := r' }
+-- Helper: build an EInstrCert with a relation
+private abbrev icRel (pc : Label) (r : EExprRel) (trans : List ETransCorr) : EInstrCert :=
+  { pc_orig := pc, rel := r, transitions := trans }
+
+def cert : ECertificate :=
+  { orig := #[
+      .const "one" 1,                          -- 0
+      .const "four" 4,                         -- 1
+      .const "n" 500,                          -- 2
+      .const "i" 0,                            -- 3
+      .const "j" 1,                            -- 4
+      .binop "t1" .mul "n" "four",             -- 5: t1 = 2000
+      .binop "limit" .add "t1" "one",          -- 6: limit = 2001
+      .ifgoto (.cmp .lt "j" "limit") 9,        -- 7: loop test
+      .halt,                                   -- 8
+      .binop "i" .add "i" "one",               -- 9: i++
+      .binop "j" .add "j" "four",              -- 10: j += 4
+      .goto 7 ]                                -- 11: loop back
+    trans := #[
+      .const "one" 1,                          -- 0
+      .const "four" 4,                         -- 1
+      .const "n" 500,                          -- 2
+      .const "i" 0,                            -- 3: dead code (mirrors orig)
+      .const "j" 1,                            -- 4
+      .const "t1" 2000,                        -- 5: constant-folded
+      .const "limit" 2001,                     -- 6: constant-folded
+      .ifgoto (.cmp .lt "j" "limit") 9,        -- 7: loop test
+      .halt,                                   -- 8
+      .binop "j" .add "j" "four",              -- 9: j += 4 (no i update!)
+      .goto 7 ]                                -- 10: loop back
+    inv_orig := #[
+      [],                                      -- 0
+      inv_one,                                 -- 1
+      inv_two,                                 -- 2
+      inv_base,                                -- 3
+      inv_i,                                   -- 4
+      inv_ij,                                  -- 5
+      inv_setup,                               -- 6
+      inv_loop,                                -- 7: loop head
+      inv_loop,                                -- 8: halt
+      inv_loop,                                -- 9: loop body
+      inv_loop,                                -- 10
+      inv_loop ]                               -- 11
+    inv_trans := #[
+      [],                                      -- 0
+      inv_one,                                 -- 1
+      inv_two,                                 -- 2
+      inv_base,                                -- 3
+      inv_i,                                   -- 4
+      inv_ij,                                  -- 5
+      inv_setup,                               -- 6
+      inv_loop,                                -- 7: loop head
+      inv_loop,                                -- 8: halt
+      inv_loop,                                -- 9: loop body
+      inv_loop ]                               -- 10
+    observable := ["j"]
+    instrCerts := #[
+      ic 0 ([tc [1]]),                                       -- trans 0: orig 0→1
+      ic 1 ([tc [2]]),                                       -- trans 1: orig 1→2
+      ic 2 ([tc [3]]),                                       -- trans 2: orig 2→3
+      ic 3 ([tc [4]]),                                       -- trans 3: orig 3→4
+      ic 4 ([tc [5]]),                                       -- trans 4: orig 4→5
+      ic 5 ([tc [6]]),                                       -- trans 5: orig 5→6
+      ic 6 ([tcRel [7] ([] : EExprRel) loopRel]),            -- trans 6→7: orig 6→7, introduces loopRel
+      icRel 7 loopRel                                        -- trans 7 (ifgoto): loop head
+        ([tcRel [9] loopRel loopRel,                         --   7→9 taken: orig 7→9
+          tcRel [8] loopRel loopRel]),                        --   7→8 not taken: orig 7→8
+      icRel 8 loopRel ([]),                                  -- trans 8: halt
+      icRel 9 loopRel ([tcRel [10, 11] loopRel loopRel]),   -- trans 9: orig 9→10→11
+      icRel 11 loopRel ([tcRel [7] loopRel loopRel]) ]      -- trans 10: orig 11→7
+    haltCerts := #[hc 0, hc 0, hc 0, hc 0, hc 0, hc 0, hc 0, hc 0, hc 8, hc 0, hc 0]
+    measure := #[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] }
+
+#eval! checkCertificateExec cert              -- true
+#eval! checkCertificateVerboseExec cert
+
+end IVE2

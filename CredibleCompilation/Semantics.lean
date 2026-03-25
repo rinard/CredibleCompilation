@@ -60,6 +60,23 @@ def BinOp.eval : BinOp → Val → Val → Val
   | .mul, a, b => a * b
 
 -- ============================================================
+-- § 2a. Expressions over stores
+-- ============================================================
+
+/-- Expressions that can be evaluated in a store. Used to describe
+    how transformed-program variables map to original-program values. -/
+inductive Expr where
+  | lit  : Val → Expr
+  | var  : Var → Expr
+  | bin  : BinOp → Expr → Expr → Expr
+  deriving Repr, DecidableEq
+
+def Expr.eval (σ : Store) : Expr → Val
+  | .lit n       => n
+  | .var x       => σ x
+  | .bin op a b  => op.eval (a.eval σ) (b.eval σ)
+
+-- ============================================================
 -- § 2b. Comparison operators and boolean expressions
 -- ============================================================
 
