@@ -8,9 +8,9 @@ Use `#eval! checkCertificateExec cert` or run `lake exe checker` from the termin
 
 The checker uses **symbolic execution** and **expression simplification** to verify
 that the transformed program's behavior matches the original. Invariants are
-represented as lists of `(var, expr)` atoms. An explicit **variable map** (per
-transformed PC) relates transformed variables to expressions over original
-variables; unmapped variables default to identity.
+represented as lists of `(var, expr)` atoms. An explicit **expression relation**
+(per transformed PC) relates expressions over original variables to expressions
+over transformed variables via pairs `(e_orig, e_trans)` asserting equality.
 -/
 
 -- ============================================================
@@ -21,11 +21,10 @@ variables; unmapped variables default to identity.
     Each `(x, e)` asserts `σ x = e.eval σ` at runtime. -/
 abbrev EInv := List (Var × Expr)
 
-/-- Executable variable map: maps transformed variable names to expressions
-    over original variable names.  Each `(v, e)` asserts
-    `σ_trans(v) = e.eval(σ_orig)`.  Variables not in the map are implicitly
-    identity (`.var v`).  Same representation as `EInv` / `SymStore`. -/
-abbrev EVarMap := List (Var × Expr)
+/-- Executable expression relation: pairs of expressions asserting equality
+    across stores.  Each `(e_o, e_t)` asserts `e_o.eval(σ_orig) = e_t.eval(σ_trans)`.
+    Generalizes the old variable map: `(v, e)` in the old map becomes `(e, .var v)`. -/
+abbrev EExprRel := List (Expr × Expr)
 
 def lookupExpr (inv : EInv) (v : Var) : Option Expr :=
   (inv.find? (fun p => p.1 == v)).map (·.2)
@@ -140,39 +139,55 @@ def collectAllVars (p1 p2 : Prog) : List Var :=
 structure ETransCorr where
   /-- Labels of original PCs visited (successors of pc_orig, ending at pc_orig'). -/
   origLabels : List Label
-  /-- Variable map at the source of this transition (should equal the
-      enclosing `EInstrCert.vm`). -/
-  vm         : EVarMap := []
-  /-- Variable map at the target of this transition (should equal
-      the successor `EInstrCert.vm`). -/
-  vm_next    : EVarMap := []
+  /-- Expression relation at the source of this transition (should equal the
+      enclosing `EInstrCert.rel`). -/
+  rel        : EExprRel := []
+  /-- Expression relation at the target of this transition (should equal
+      the successor `EInstrCert.rel`). -/
+  rel_next   : EExprRel := []
   deriving Repr, Inhabited
 
 /-- Per-instruction certificate entry. -/
 structure EInstrCert where
   pc_orig     : Label
-  /-- Variable map at this label: maps transformed vars to expressions
-      over original vars.  Empty list = identity. -/
-  vm          : EVarMap := []
+  /-- Expression relation at this label: pairs `(e_o, e_t)` asserting
+      `e_o.eval(σ_orig) = e_t.eval(σ_trans)`.  Empty list = no constraints. -/
+  rel         : EExprRel := []
   transitions : List ETransCorr
   deriving Repr, Inhabited
 
 /-- Per-halt certificate entry. -/
 structure EHaltCert where
   pc_orig : Label
-  /-- Variable map at this halt label. -/
-  vm      : EVarMap := []
+  /-- Expression relation at this halt label. -/
+  rel     : EExprRel := []
   deriving Repr, Inhabited
 
-/-- Shorthand: ETransCorr with identity (empty) variable maps. -/
+/-- Shorthand: ETransCorr with empty (no constraints) relation. -/
 abbrev ETransCorr.id (labels : List Label) : ETransCorr := { origLabels := labels }
 
-/-- Shorthand: EInstrCert with identity (empty) variable map. -/
+/-- Shorthand: EInstrCert with empty relation. -/
 abbrev EInstrCert.id (pc : Label) (trans : List ETransCorr) : EInstrCert :=
   { pc_orig := pc, transitions := trans }
 
-/-- Shorthand: EHaltCert with identity (empty) variable map. -/
+/-- Shorthand: EHaltCert with empty relation. -/
 abbrev EHaltCert.id (pc : Label) : EHaltCert := { pc_orig := pc }
+
+/-- Look up the original-side expression for a transformed variable in a relation.
+    Searches for a pair `(e_o, .var v)` and returns `e_o`.
+    Defaults to `.var v` (identity) if not found. -/
+def relGetOrigExpr (rel : EExprRel) (v : Var) : Expr :=
+  match rel.find? (fun p => p.2 == .var v) with
+  | some (e_o, _) => e_o
+  | none => .var v
+
+/-- Build a substitution map from pre-relation pairs of the form `(e_o, .var v)`.
+    Maps transformed variable `v` to original expression `e_o`. -/
+def buildSubstMap (rel : EExprRel) : SymStore :=
+  rel.filterMap fun (e_o, e_t) =>
+    match e_t with
+    | .var v => some (v, e_o)
+    | _ => none
 
 /-- An executable certificate: all data needed to verify the transformation. -/
 structure ECertificate where
@@ -201,10 +216,10 @@ def checkInvariantsAtStartExec (cert : ECertificate) : Bool :=
   (cert.inv_orig.getD 0 ([] : EInv)).isEmpty &&
   (cert.inv_trans.getD 0 ([] : EInv)).isEmpty
 
-/-- **Condition 2c**: Variable map is identity at label 0
-    (both programs start from the same initial state). -/
-def checkVarMapAtStartExec (cert : ECertificate) : Bool :=
-  (cert.instrCerts.getD 0 default).vm.isEmpty
+/-- **Condition 2c**: Expression relation is empty at label 0
+    (both programs start from the same initial state, no constraints needed). -/
+def checkRelAtStartExec (cert : ECertificate) : Bool :=
+  (cert.instrCerts.getD 0 default).rel.isEmpty
 
 /-- Substitute each variable in an expression with its symbolic post-value. -/
 def Expr.substSym (ss : SymStore) : Expr → Expr
@@ -246,15 +261,17 @@ def checkHaltCorrespondenceExec (cert : ECertificate) : Bool :=
     | _ => true
 
 /-- **Condition 4b**: Observable equivalence at halt.
-    For each halt in trans, every observable variable's varMap entry
-    must be identity (`.var v`).  This ensures the transformed program
-    produces the same observable values as the original at halt. -/
+    For each halt in trans, every observable variable must map to itself
+    via `buildSubstMap` of the expression relation (i.e., `ssGet (buildSubstMap rel) v = .var v`).
+    This ensures the transformed program produces the same observable values
+    as the original at halt. -/
 def checkHaltObservableExec (cert : ECertificate) : Bool :=
   (List.range cert.trans.size).all fun pc =>
     match cert.trans[pc]? with
     | some .halt =>
       let ic := cert.instrCerts.getD pc default
-      cert.observable.all fun v => ssGet ic.vm v == .var v
+      cert.observable.all fun v =>
+        ssGet (buildSubstMap ic.rel) v == .var v
     | _ => true
 
 /-- Compute the next PC from an instruction, using symbolic branch analysis for ifgoto. -/
@@ -296,28 +313,27 @@ def checkOrigPath (orig : Prog) (ss : SymStore) (inv : EInv)
       checkOrigPath orig (execSymbolic ss instr) inv nextPC rest pc_next none
     | none => false
 
-/-- Check variable map consistency via symbolic execution.
-    Symbolically executes both sides, then for each variable `v`:
-    - **trans side**: substitute the pre-varMap into the trans post-value
-      (mapping trans pre-vars to orig expressions), then simplify under `inv_orig`.
-    - **orig side**: substitute the orig post-symbolic-store into the
-      post-varMap entry for `v`, then simplify under `inv_orig`.
-    Both expressions must agree. -/
-def checkVarMapConsistency (vars : List Var)
+/-- Check expression relation consistency via symbolic execution.
+    For every program variable `v`, the post-relation value (via `buildSubstMap rel_post`)
+    after original symbolic execution must agree with the transformed symbolic execution
+    value after substituting the pre-relation map, both simplified under `inv_orig`.
+    The `allVars` parameter should include all variables from both programs. -/
+def checkRelConsistency
     (orig : Prog) (pc_orig : Label) (origLabels : List Label) (transInstr : TAC)
-    (inv_orig : EInv) (vm_pre vm_post : EVarMap) : Bool :=
-  let allVars := vars ++ vm_pre.map Prod.fst ++ vm_post.map Prod.fst
+    (inv_orig : EInv) (rel_pre rel_post : EExprRel) (allVars : List Var) : Bool :=
   let origSS := execPath orig ([] : SymStore) pc_orig origLabels
   let transSS := execSymbolic ([] : SymStore) transInstr
-  allVars.all fun v =>
-    let transVal := (ssGet transSS v).substSym vm_pre |>.simplify inv_orig
-    let origVal := (ssGet vm_post v).substSym origSS |>.simplify inv_orig
-    transVal == origVal
+  let preSubst := buildSubstMap rel_pre
+  let postSubst := buildSubstMap rel_post
+  (allVars ++ preSubst.map Prod.fst ++ postSubst.map Prod.fst).all fun v =>
+    let origVal := (ssGet postSubst v).substSym origSS |>.simplify inv_orig
+    let transVal := (ssGet transSS v).substSym preSubst |>.simplify inv_orig
+    origVal == transVal
 
 /-- **Condition 3**: Every transition in the transformed program has a
     corresponding original-program path with consistent variable effects. -/
 def checkAllTransitionsExec (cert : ECertificate) : Bool :=
-  let vars := collectAllVars cert.orig cert.trans
+  let allVars := collectAllVars cert.orig cert.trans
   (List.range cert.trans.size).all fun pc_t =>
     match cert.trans[pc_t]? with
     | some .halt => true
@@ -327,23 +343,23 @@ def checkAllTransitionsExec (cert : ECertificate) : Bool :=
         (successors instr pc_t).all fun pc_t' =>
           let ic' := cert.instrCerts.getD pc_t' default
           -- For ifgoto: pass branch direction to checkOrigPath.
-          -- Map the condition variable through the varMap to orig space.
+          -- Map the condition variable through the relation to orig space.
           -- Guard: l ≠ pc+1 ensures pc_t' disambiguates taken vs fallthrough.
           let branchInfo := match instr with
             | .ifgoto x l =>
-              match ssGet ic.vm x with
+              match relGetOrigExpr ic.rel x with
               | .var origX =>
                 if !(l == pc_t + 1) then some (origX, pc_t' == l) else none
               | _ => none  -- non-variable: computeNextPC resolves via invariant
             | _ => none
           ic.transitions.any fun tc =>
-            tc.vm == ic.vm &&
-            tc.vm_next == ic'.vm &&
+            tc.rel == ic.rel &&
+            tc.rel_next == ic'.rel &&
             checkOrigPath cert.orig ([] : SymStore) (cert.inv_orig.getD ic.pc_orig ([] : EInv))
               ic.pc_orig tc.origLabels ic'.pc_orig branchInfo &&
-            checkVarMapConsistency vars cert.orig ic.pc_orig tc.origLabels instr
+            checkRelConsistency cert.orig ic.pc_orig tc.origLabels instr
               (cert.inv_orig.getD ic.pc_orig ([] : EInv))
-              tc.vm tc.vm_next
+              tc.rel tc.rel_next allVars
       | none => false
     | none => true
 
@@ -371,7 +387,7 @@ def checkNonterminationExec (cert : ECertificate) : Bool :=
 def checkCertificateExec (cert : ECertificate) : Bool :=
   checkStartCorrespondenceExec cert &&
   checkInvariantsAtStartExec cert &&
-  checkVarMapAtStartExec cert &&
+  checkRelAtStartExec cert &&
   checkInvariantsPreservedExec cert &&
   checkAllTransitionsExec cert &&
   checkHaltCorrespondenceExec cert &&
@@ -382,7 +398,7 @@ def checkCertificateExec (cert : ECertificate) : Bool :=
 def checkCertificateVerboseExec (cert : ECertificate) : List (String × Bool) :=
   [ ("start_correspondence",  checkStartCorrespondenceExec cert),
     ("invariants_at_start",   checkInvariantsAtStartExec cert),
-    ("varmap_at_start",       checkVarMapAtStartExec cert),
+    ("rel_at_start",          checkRelAtStartExec cert),
     ("invariants_preserved",  checkInvariantsPreservedExec cert),
     ("all_transitions",       checkAllTransitionsExec cert),
     ("halt_correspondence",   checkHaltCorrespondenceExec cert),

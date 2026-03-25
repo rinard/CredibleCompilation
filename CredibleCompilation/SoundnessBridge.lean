@@ -63,10 +63,12 @@ theorem EInv.toProp_cons (x : Var) (e : Expr) (rest : EInv) :
 -- § 2. Translation: ECertificate → PCertificate
 -- ============================================================
 
-/-- Convert an executable variable map to a Prop-level variable map.
-    Unmapped variables default to `.var v` (identity). -/
-def eVarMapToVarMap (evm : EVarMap) : PVarMap :=
-  fun v => ssGet evm v
+/-- Convert an executable expression relation to a Prop-level store relation.
+    Uses `buildSubstMap` to create a total store relation: for every variable `v`,
+    `σ_t v = (ssGet (buildSubstMap rel) v).eval σ_o`.
+    Empty relations yield identity (σ_o = σ_t). -/
+def eRelToStoreRel (rel : EExprRel) : PStoreRel :=
+  fun σ_o σ_t => ∀ v, σ_t v = (ssGet (buildSubstMap rel) v).eval σ_o
 
 /-- Lift an executable certificate to a Prop-based certificate. -/
 def toPCertificate (dc : ECertificate) : PCertificate :=
@@ -78,16 +80,16 @@ def toPCertificate (dc : ECertificate) : PCertificate :=
     instrCerts := fun l =>
       let dic := dc.instrCerts.getD l default
       { pc_orig    := dic.pc_orig
-        vm         := eVarMapToVarMap dic.vm
+        storeRel   := eRelToStoreRel dic.rel
         transitions := dic.transitions.map fun dtc =>
           { origLabels   := dtc.origLabels
-            vm           := eVarMapToVarMap dtc.vm
-            vm_next      := eVarMapToVarMap dtc.vm_next }
+            storeRel     := eRelToStoreRel dtc.rel
+            storeRel_next := eRelToStoreRel dtc.rel_next }
       }
     haltCerts := fun l =>
       let dhc := dc.haltCerts.getD l default
       { pc_orig := dhc.pc_orig
-        vm      := eVarMapToVarMap dhc.vm }
+        storeRel := eRelToStoreRel dhc.rel }
   }
 
 /-- Lift the measure: ignores the store (depends only on label). -/
@@ -177,7 +179,7 @@ theorem Expr.simplify_sound (inv : EInv) (e : Expr) (σ : Store)
 /-- **Condition 1**: checkStartCorrespondenceExec → checkStartCorrespondenceProp -/
 theorem checkStartCorrespondenceExec_sound (dc : ECertificate)
     (h : checkStartCorrespondenceExec dc = true)
-    (hvm0 : (dc.instrCerts.getD 0 default).vm = []) :
+    (hrel0 : (dc.instrCerts.getD 0 default).rel = []) :
     checkStartCorrespondenceProp (toPCertificate dc) := by
   simp [checkStartCorrespondenceExec] at h
   split at h
@@ -190,15 +192,15 @@ theorem checkStartCorrespondenceExec_sound (dc : ECertificate)
       simp only [toPCertificate, Array.getD, dif_pos hbound]
       rw [show dc.instrCerts.getInternal 0 hbound = ic from hget]
       exact hpc
-    · -- ∀ σ, vm.consistent σ σ
-      have hvm_ic : ic.vm = [] := by
-        have : (dc.instrCerts.getD 0 default).vm = ic.vm := by
+    · -- ∀ σ, storeRel σ σ
+      have hrel_ic : ic.rel = [] := by
+        have : (dc.instrCerts.getD 0 default).rel = ic.rel := by
           simp [Array.getD, dif_pos hbound, hget]
-        rw [this] at hvm0; exact hvm0
-      intro σ x
-      simp only [toPCertificate, Array.getD, dif_pos hbound]
+        rw [this] at hrel0; exact hrel0
+      intro σ v
+      simp only [Array.getD, dif_pos hbound]
       rw [show dc.instrCerts.getInternal 0 hbound = ic from hget]
-      simp [hvm_ic, eVarMapToVarMap, ssGet, Expr.eval]
+      simp [hrel_ic, buildSubstMap, ssGet, Expr.eval]
   · contradiction
 
 /-- **Condition 2a**: checkInvariantsAtStartExec → checkInvariantsAtStartProp -/
@@ -243,18 +245,20 @@ theorem checkHaltObservableExec_sound (dc : ECertificate)
     (h : checkHaltObservableExec dc = true) :
     checkHaltObservableProp (toPCertificate dc) := by
   intro pc_t σ_t σ_o hhalt
-  dsimp only [toPCertificate, eVarMapToVarMap, PVarMap.consistent]
+  dsimp only [toPCertificate, eRelToStoreRel]
   intro hcons v hv
-  -- From checker: ssGet ic.vm v == .var v for observable v at halt
+  -- From checker: ic.rel has an identity pair (.var v, .var v) for observable v at halt
   have hhalt' : dc.trans[pc_t]? = some .halt := hhalt
   unfold checkHaltObservableExec at h; rw [List.all_eq_true] at h
   have hpc := h pc_t (List.mem_range.mpr (bound_of_getElem? hhalt'))
   rw [hhalt'] at hpc; rw [List.all_eq_true] at hpc
-  have hvar : ssGet (dc.instrCerts.getD pc_t default).vm v = .var v :=
-    beq_iff_eq.mp (hpc v hv)
-  -- hcons v : σ_t v = (ssGet ... v).eval σ_o = (.var v).eval σ_o = σ_o v
-  have hcons_v := hcons v
-  rw [hvar] at hcons_v; simp [Expr.eval] at hcons_v; exact hcons_v
+  have hany := hpc v hv
+  -- hany : ssGet (buildSubstMap ic.rel) v == .var v = true
+  -- So ssGet (buildSubstMap ic.rel) v = .var v
+  have hid := beq_iff_eq.mp hany
+  -- hcons v : σ_t v = (ssGet (buildSubstMap ic.rel) v).eval σ_o
+  rw [hcons v, hid]
+  simp [Expr.eval]
 
 -- ============================================================
 -- § 6. Symbolic execution infrastructure
@@ -348,14 +352,17 @@ theorem execSymbolic_sound (ss : SymStore) (instr : TAC)
     have := step_det _ (Step.halt hinstr)
     exact Cfg.noConfusion this
 
-/-- Empty EVarMap converts to identity PVarMap. -/
-private theorem eVarMapToVarMap_nil : eVarMapToVarMap [] = idVarMap := by
-  funext v; simp [eVarMapToVarMap, ssGet, List.find?, idVarMap]
+/-- Empty expression relation yields identity store relation. -/
+private theorem eRelToStoreRel_nil : eRelToStoreRel [] = fun σ_o σ_t => σ_o = σ_t := by
+  funext σ_o σ_t; simp [eRelToStoreRel, buildSubstMap, ssGet]
+  constructor
+  · intro h; funext v; simp [Expr.eval] at h; exact (h v).symm
+  · intro h v; rw [h]; simp [Expr.eval]
 
-/-- Identity variable map consistency means stores are equal. -/
-private theorem idVarMap_eq {σ₁ σ₂ : Store} (h : idVarMap.consistent σ₁ σ₂) :
+/-- Identity store relation from empty expression relation means stores are equal. -/
+private theorem eRelToStoreRel_nil_eq {σ₁ σ₂ : Store} (h : eRelToStoreRel [] σ₁ σ₂) :
     σ₁ = σ₂ := by
-  funext x; exact (h x).symm
+  rw [eRelToStoreRel_nil] at h; exact h
 
 /-- Initial symbolic store represents identity: ssGet [] v evaluates to σ v. -/
 private theorem ssGet_nil (σ : Store) (v : Var) :
@@ -738,12 +745,12 @@ private theorem execPath_sound (orig : Prog) (inv : EInv) (σ : Store)
   execPath_sound_gen orig ([] : SymStore) inv σ σ pc labels pc' branchInfo
     hrepr hinv hpath hbranch
 
-/-- If `vm.consistent σ_o σ_t`, then evaluating `e` at `σ_t` equals
-    evaluating `e.substSym vm` at `σ_o`. Follows from `substSym_sound`. -/
-theorem Expr.substSym_consistent (vm : EVarMap) (e : Expr) (σ_o σ_t : Store)
-    (hcons : ∀ x, σ_t x = (ssGet vm x).eval σ_o) :
-    e.eval σ_t = (e.substSym vm).eval σ_o :=
-  (Expr.substSym_sound vm e σ_o σ_t (fun v => (hcons v).symm)).symm
+/-- If the store relation holds (∀ x, σ_t x = (ssGet ss x).eval σ_o), then evaluating
+    `e` at `σ_t` equals evaluating `e.substSym ss` at `σ_o`. Follows from `substSym_sound`. -/
+theorem Expr.substSym_consistent (ss : SymStore) (e : Expr) (σ_o σ_t : Store)
+    (hcons : ∀ x, σ_t x = (ssGet ss x).eval σ_o) :
+    e.eval σ_t = (e.substSym ss).eval σ_o :=
+  (Expr.substSym_sound ss e σ_o σ_t (fun v => (hcons v).symm)).symm
 
 /-- BEq on Expr implies equality. -/
 private theorem expr_beq_eq {e₁ e₂ : Expr} (h : (e₁ == e₂) = true) : e₁ = e₂ :=
@@ -754,6 +761,36 @@ private theorem Array_getD_empty {α : Type} (n : Nat) (d : α) :
     Array.getD #[] n d = d := by
   simp [Array.getD]
 
+/-- `relGetOrigExpr` and `ssGet (buildSubstMap ...)` agree: both find the first
+    pair `(e_o, .var x)` in `rel` and return `e_o`, or default to `.var x`. -/
+private theorem relGetOrigExpr_eq_ssGet_buildSubstMap (rel : EExprRel) (x : Var) :
+    relGetOrigExpr rel x = ssGet (buildSubstMap rel) x := by
+  induction rel with
+  | nil => simp [relGetOrigExpr, buildSubstMap, ssGet, List.find?, List.filterMap]
+  | cons p rest ih =>
+    obtain ⟨e_o, e_t⟩ := p
+    cases e_t with
+    | var w =>
+      simp only [relGetOrigExpr, List.find?, buildSubstMap, List.filterMap, ssGet]
+      by_cases hwx : w = x
+      · subst hwx
+        simp [BEq.beq]
+      · have hbeq_expr : (Expr.var w == Expr.var x) = false := by
+          rw [beq_eq_false_iff_ne]; intro h; exact hwx (Expr.var.inj h)
+        have hbeq_var : (w == x) = false := beq_eq_false_iff_ne.mpr hwx
+        simp only [hbeq_expr, hbeq_var]
+        exact ih
+    | lit n =>
+      have hbeq : (Expr.lit n == Expr.var x) = false := by
+        rw [beq_eq_false_iff_ne]; exact Expr.noConfusion
+      simp only [relGetOrigExpr, List.find?, buildSubstMap, List.filterMap, hbeq]
+      exact ih
+    | bin op a b =>
+      have hbeq : (Expr.bin op a b == Expr.var x) = false := by
+        rw [beq_eq_false_iff_ne]; exact Expr.noConfusion
+      simp only [relGetOrigExpr, List.find?, buildSubstMap, List.filterMap, hbeq]
+      exact ih
+
 /-- Branch direction info from the transformed program's ifgoto instruction.
     For `ifgoto x l` with `l ≠ pc + 1`, returns `some (x, pc' == l)` indicating
     whether the branch was taken. -/
@@ -762,20 +799,20 @@ private theorem Array_getD_empty {α : Type} (n : Nat) (d : α) :
   | .ifgoto x l => if !(l == pc_t + 1) then some (x, pc_t' == l) else none
   | _ => none
 
-/-- Compute branchInfo from an instruction and a variable map. -/
-@[reducible] private def branchInfoWithVm (instr : TAC) (vm : EVarMap) (pc_t pc_t' : Label)
+/-- Compute branchInfo from an instruction and an expression relation. -/
+@[reducible] private def branchInfoWithRel (instr : TAC) (rel : EExprRel) (pc_t pc_t' : Label)
     : Option (Var × Bool) :=
   match instr with
   | .ifgoto x l =>
-    match ssGet vm x with
+    match relGetOrigExpr rel x with
     | .var origX => if !(l == pc_t + 1) then some (origX, pc_t' == l) else none
     | _ => none
   | _ => none
 
-/-- With empty varMap, branchInfoWithVm equals transBranchInfo. -/
-private theorem branchInfoWithVm_nil (instr : TAC) (pc_t pc_t' : Label) :
-    branchInfoWithVm instr ([] : EVarMap) pc_t pc_t' = transBranchInfo instr pc_t pc_t' := by
-  cases instr <;> simp [branchInfoWithVm, transBranchInfo, ssGet, List.find?]
+/-- With empty relation, branchInfoWithRel equals transBranchInfo. -/
+private theorem branchInfoWithRel_nil (instr : TAC) (pc_t pc_t' : Label) :
+    branchInfoWithRel instr ([] : EExprRel) pc_t pc_t' = transBranchInfo instr pc_t pc_t' := by
+  cases instr <;> simp [branchInfoWithRel, transBranchInfo, relGetOrigExpr, List.find?]
 
 /-- When the branchInfo computed from `instr` and `pc_t'` says `some (xv, taken)`,
     we can derive the branch condition from any step. -/
@@ -812,159 +849,161 @@ private theorem branchInfo_of_step {prog : Prog} {pc pc' : Label} {σ σ' : Stor
     · simp [transBranchInfo, hguard] at hbi
   | _ => simp [transBranchInfo] at hbi
 
-/-- When `branchInfoWithVm` returns `some (origX, taken)`, a step on the
+/-- When `branchInfoWithRel` returns `some (origX, taken)`, a step on the
     transformed program transfers the branch condition to the original variable
-    via the variable map consistency. Only fires when `ssGet vm x = .var origX`. -/
-private theorem branchInfo_of_step_with_vm {prog : Prog} {pc pc' : Label} {σ_t σ_t' : Store}
+    via the store relation. Only fires when `relGetOrigExpr rel x = .var origX`. -/
+private theorem branchInfo_of_step_with_rel {prog : Prog} {pc pc' : Label} {σ_t σ_t' : Store}
     {instr : TAC} (hinstr : prog[pc]? = some instr)
     (hstep : Step prog (Cfg.run pc σ_t) (Cfg.run pc' σ_t'))
-    {vm : EVarMap} {σ_o : Store}
-    (hcons : ∀ x, σ_t x = (ssGet vm x).eval σ_o)
+    {rel : EExprRel} {σ_o : Store}
+    (hcons : ∀ x, σ_t x = (ssGet (buildSubstMap rel) x).eval σ_o)
     {origX : Var} {taken : Bool}
-    (hbi : branchInfoWithVm instr vm pc pc' = some (origX, taken)) :
+    (hbi : branchInfoWithRel instr rel pc pc' = some (origX, taken)) :
     if taken then σ_o origX ≠ 0 else σ_o origX = 0 := by
   cases instr with
   | ifgoto x l =>
-    simp only [branchInfoWithVm] at hbi
-    -- Case split on ssGet vm x
-    cases hssx : ssGet vm x with
+    simp only [branchInfoWithRel] at hbi
+    -- Case split on relGetOrigExpr rel x
+    cases hrel : relGetOrigExpr rel x with
     | var v =>
-      simp only [hssx] at hbi
+      simp only [hrel] at hbi
       by_cases hguard : (!(l == pc + 1))
       · simp only [hguard, ↓reduceIte, Option.some.injEq, Prod.mk.injEq] at hbi
         obtain ⟨rfl, rfl⟩ := hbi
         -- origX = v, taken = (pc' == l)
-        have hcons_x := hcons x
-        rw [hssx, Expr.eval] at hcons_x
-        -- hcons_x : σ_t x = σ_o v
-        cases hstep with
-        | iftrue h hne =>
-          have heq := Option.some.inj (hinstr.symm.trans h)
-          simp only [TAC.ifgoto.injEq] at heq
-          obtain ⟨rfl, rfl⟩ := heq
-          simp; rwa [← hcons_x]
-        | iffall h hz =>
-          have heq := Option.some.inj (hinstr.symm.trans h)
-          simp only [TAC.ifgoto.injEq] at heq
-          obtain ⟨rfl, rfl⟩ := heq
-          have : ¬(l = pc + 1) := by simpa using hguard
-          have : ¬(pc + 1 = l) := fun h => this h.symm
-          simp [beq_eq_false_iff_ne.mpr this]; rwa [← hcons_x]
-        | const h => exact absurd (hinstr.symm.trans h) (by simp)
-        | copy h => exact absurd (hinstr.symm.trans h) (by simp)
-        | binop h => exact absurd (hinstr.symm.trans h) (by simp)
-        | goto h => exact absurd (hinstr.symm.trans h) (by simp)
+        -- relGetOrigExpr rel x = .var v implies ssGet (buildSubstMap rel) x = .var v
+        have hss : ssGet (buildSubstMap rel) x = Expr.var v := by
+          rw [← relGetOrigExpr_eq_ssGet_buildSubstMap]; exact hrel
+        -- From hcons: σ_t x = (.var v).eval σ_o = σ_o v
+        have hσ_eq : σ_t x = σ_o v := by rw [hcons x, hss]; simp [Expr.eval]
+        -- Use branchInfo_of_step to get branch condition on σ_t x
+        have htbi : transBranchInfo (.ifgoto x l) pc pc' = some (x, pc' == l) := by
+          simp [transBranchInfo, hguard]
+        have hbranch := branchInfo_of_step hinstr hstep htbi
+        -- Transfer from σ_t x to σ_o v
+        rw [← hσ_eq]; exact hbranch
       · simp [hguard] at hbi
-    | lit _ => simp [hssx] at hbi
-    | bin _ _ _ => simp [hssx] at hbi
-  | _ => simp [branchInfoWithVm] at hbi
+    | lit _ => simp [hrel] at hbi
+    | bin _ _ _ => simp [hrel] at hbi
+  | _ => simp [branchInfoWithRel] at hbi
 
-/-- Soundness of checkTransitionVarmapProp from the Bool checks.
-    Given: checkOrigPath and checkVarMapConsistency both pass, the original path
-    produces steps reaching the target with variable map consistency preserved.
-    Supports non-trivial variable maps. -/
-private theorem transVarmap_sound (dc : ECertificate) (pc_t pc_t' : Label)
+/-- Soundness of checkTransitionRelProp from the Bool checks.
+    Given: checkOrigPath and checkRelConsistency both pass, the original path
+    produces steps reaching the target with store relation preserved.
+    Supports non-trivial expression relations. -/
+private theorem transRel_sound (dc : ECertificate) (pc_t pc_t' : Label)
     (dic : EInstrCert) (dtc : ETransCorr) (instr : TAC)
     (pc_o' : Label)
     (hinstr : dc.trans[pc_t]? = some instr)
     (hpath : checkOrigPath dc.orig ([] : SymStore) (dc.inv_orig.getD dic.pc_orig ([] : EInv))
       dic.pc_orig dtc.origLabels pc_o'
-      (branchInfoWithVm instr dtc.vm pc_t pc_t') = true)
-    (hvm : checkVarMapConsistency (collectAllVars dc.orig dc.trans)
+      (branchInfoWithRel instr dtc.rel pc_t pc_t') = true)
+    (hrelcheck : checkRelConsistency
       dc.orig dic.pc_orig dtc.origLabels instr
       (dc.inv_orig.getD dic.pc_orig ([] : EInv))
-      dtc.vm dtc.vm_next = true) :
-    checkTransitionVarmapProp dc.orig dc.trans
+      dtc.rel dtc.rel_next (collectAllVars dc.orig dc.trans) = true) :
+    checkTransitionRelProp dc.orig dc.trans
       (fun l => (dc.inv_orig.getD l ([] : EInv)).toProp)
       (fun l => (dc.inv_trans.getD l ([] : EInv)).toProp)
       pc_t pc_t' dic.pc_orig pc_o'
       { origLabels := dtc.origLabels
-        vm := eVarMapToVarMap dtc.vm
-        vm_next := eVarMapToVarMap dtc.vm_next } := by
+        storeRel := eRelToStoreRel dtc.rel
+        storeRel_next := eRelToStoreRel dtc.rel_next } := by
   intro σ_t σ_t' σ_o hinv_t hinv_o hcons hstep
-  -- hcons : (eVarMapToVarMap dtc.vm).consistent σ_o σ_t, i.e. ∀ x, σ_t x = (ssGet dtc.vm x).eval σ_o
-  change ∀ x, σ_t x = (ssGet dtc.vm x).eval σ_o at hcons
-  -- Branch info transfers through the variable map
+  -- hcons : eRelToStoreRel dtc.rel σ_o σ_t, i.e. ∀ x, σ_t x = (ssGet (buildSubstMap dtc.rel) x).eval σ_o
+  change ∀ x, σ_t x = (ssGet (buildSubstMap dtc.rel) x).eval σ_o at hcons
+  -- Branch info transfers through the relation
   have hbranch_orig : ∀ x taken,
-      branchInfoWithVm instr dtc.vm pc_t pc_t' = some (x, taken) →
+      branchInfoWithRel instr dtc.rel pc_t pc_t' = some (x, taken) →
       if taken then σ_o x ≠ 0 else σ_o x = 0 :=
-    fun x taken hbi => branchInfo_of_step_with_vm hinstr hstep hcons hbi
+    fun x taken hbi => branchInfo_of_step_with_rel hinstr hstep hcons hbi
   -- Execute original path from σ_o
   obtain ⟨σ_o', horig_steps, horig_repr⟩ := execPath_sound dc.orig
     (dc.inv_orig.getD dic.pc_orig ([] : EInv)) σ_o
     dic.pc_orig dtc.origLabels pc_o'
-    (branchInfoWithVm instr dtc.vm pc_t pc_t')
+    (branchInfoWithRel instr dtc.rel pc_t pc_t')
     (ssGet_nil σ_o) hinv_o hpath hbranch_orig
-  -- horig_repr : ∀ v, (ssGet origSS v).eval σ_o = σ_o' v
-  -- Trans symbolic execution from σ_t
-  have htrans_repr : ∀ v, (ssGet (execSymbolic ([] : SymStore) instr) v).eval σ_t = σ_t' v :=
-    execSymbolic_sound [] instr σ_t σ_t σ_t' pc_t pc_t' dc.trans
-      (ssGet_nil σ_t) hstep hinstr
-  -- Abbreviations for the symbolic stores
+  -- Prove store relation holds at the target: eRelToStoreRel dtc.rel_next σ_o' σ_t'
+  refine ⟨σ_o', horig_steps, ?_⟩
+  -- Goal: ∀ v, σ_t' v = (ssGet (buildSubstMap dtc.rel_next) v).eval σ_o'
+  intro v
+  -- Abbreviations
   let origSS := execPath dc.orig ([] : SymStore) dic.pc_orig dtc.origLabels
   let transSS := execSymbolic ([] : SymStore) instr
+  let preSubst := buildSubstMap dtc.rel
+  let postSubst := buildSubstMap dtc.rel_next
   let inv := dc.inv_orig.getD dic.pc_orig ([] : EInv)
-  -- Prove vm_next consistency: ∀ v, σ_t' v = (ssGet dtc.vm_next v).eval σ_o'
-  refine ⟨σ_o', horig_steps, ?_⟩
-  intro v
-  show σ_t' v = (ssGet dtc.vm_next v).eval σ_o'
-  -- Chain: σ_t' v = (ssGet transSS v).eval σ_t
-  --              = ((ssGet transSS v).substSym dtc.vm).eval σ_o     [by substSym_consistent]
-  -- And:  (ssGet dtc.vm_next v).eval σ_o'
-  --              = ((ssGet dtc.vm_next v).substSym origSS).eval σ_o  [by substSym_consistent]
-  rw [← htrans_repr v,
-      Expr.substSym_consistent dtc.vm (ssGet transSS v) σ_o σ_t hcons]
-  have horig_repr_sym : ∀ x, σ_o' x = (ssGet origSS x).eval σ_o :=
-    fun x => (horig_repr x).symm
-  rw [Expr.substSym_consistent origSS (ssGet dtc.vm_next v) σ_o σ_o' horig_repr_sym]
-  -- Now need: ((ssGet transSS v).substSym dtc.vm).eval σ_o
-  --         = ((ssGet dtc.vm_next v).substSym origSS).eval σ_o
-  -- This is what checkVarMapConsistency verifies
-  -- Extract from checkVarMapConsistency: for each v in the extended var list,
-  -- the simplified trans-side and orig-side expressions agree
-  have hvm_mem : ∀ w ∈ collectAllVars dc.orig dc.trans ++ dtc.vm.map Prod.fst ++ dtc.vm_next.map Prod.fst,
-      ((ssGet transSS w).substSym dtc.vm).simplify inv =
-      ((ssGet dtc.vm_next w).substSym origSS).simplify inv := by
-    intro w hw
-    dsimp only [checkVarMapConsistency] at hvm
-    exact beq_iff_eq.mp (List.all_eq_true.mp hvm w hw)
-  by_cases hv : v ∈ collectAllVars dc.orig dc.trans ++ dtc.vm.map Prod.fst ++ dtc.vm_next.map Prod.fst
-  · -- v ∈ allVars: use the simplification chain
-    have hvm_v := hvm_mem v hv
-    -- Both sides agree after simplification under inv
-    have h_trans_simp := Expr.simplify_sound inv
-      ((ssGet transSS v).substSym dtc.vm) σ_o hinv_o
-    have h_orig_simp := Expr.simplify_sound inv
-      ((ssGet dtc.vm_next v).substSym origSS) σ_o hinv_o
-    rw [← h_trans_simp, ← h_orig_simp, hvm_v]
-  · -- v ∉ allVars: not in any instruction and not a key in either varmap
-    have hv_prog : v ∉ collectAllVars dc.orig dc.trans :=
-      fun h => hv (List.mem_append_left _ (List.mem_append_left _ h))
-    have hv_vm : v ∉ dtc.vm.map Prod.fst :=
-      fun h => hv (List.mem_append_left _ (List.mem_append_right _ h))
-    have hv_vm_next : v ∉ dtc.vm_next.map Prod.fst :=
-      fun h => hv (List.mem_append_right _ h)
-    -- ssGet on the varmaps returns .var v
-    have hvm_var : ssGet dtc.vm v = .var v := ssGet_not_key hv_vm
-    have hvm_next_var : ssGet dtc.vm_next v = .var v := ssGet_not_key hv_vm_next
-    -- v not in any instruction → symbolic stores preserve v
-    have hv_not_in_orig : ∀ (l : Label) (instr' : TAC),
-        dc.orig[l]? = some instr' → v ∉ instrVars instr' := by
-      intro l instr' horig hmem
-      exact hv_prog (instrVars_sub_collectAllVars_left dc.orig dc.trans instr'
-        (getElem?_mem_toList horig) v hmem)
-    have hv_not_in_trans : v ∉ instrVars instr := by
-      intro hmem
-      exact hv_prog (instrVars_sub_collectAllVars_right dc.orig dc.trans instr
-        (getElem?_mem_toList hinstr) v hmem)
-    -- Both symbolic stores map v to .var v
-    have h_trans_v : ssGet transSS v = .var v := by
-      rw [execSymbolic_preserves_var ([] : SymStore) instr v hv_not_in_trans]
+  let allVars := collectAllVars dc.orig dc.trans
+  -- execSymbolic_sound: transSS tracks the transformed step
+  have htrans_repr : ∀ w, (ssGet transSS w).eval σ_t = σ_t' w :=
+    execSymbolic_sound ([] : SymStore) instr σ_t σ_t σ_t' pc_t pc_t' dc.trans
+      (ssGet_nil σ_t) hstep hinstr
+  -- preSubst soundness: (ssGet preSubst w).eval σ_o = σ_t w
+  have hpre_sound : ∀ w, (ssGet preSubst w).eval σ_o = σ_t w :=
+    fun w => (hcons w).symm
+  -- substSym_sound for preSubst: for any expr e, (e.substSym preSubst).eval σ_o = e.eval σ_t
+  have hpre_subst : ∀ (e : Expr), (e.substSym preSubst).eval σ_o = e.eval σ_t :=
+    fun e => Expr.substSym_sound preSubst e σ_o σ_t hpre_sound
+  -- Classify v: either in the checked variable set or not in any program variable
+  by_cases hmem : v ∈ allVars ++ preSubst.map Prod.fst ++ postSubst.map Prod.fst
+  · -- Case 1: v is in the checked set — use the checker result
+    -- Extract the checker guarantee for v
+    unfold checkRelConsistency at hrelcheck
+    rw [List.all_eq_true] at hrelcheck
+    have hcheck_v := hrelcheck v hmem
+    have hbeq := beq_iff_eq.mp hcheck_v
+    -- hbeq : ((ssGet postSubst v).substSym origSS).simplify inv =
+    --         ((ssGet transSS v).substSym preSubst).simplify inv
+    -- By simplify_sound (σ_o satisfies inv):
+    have hlhs := Expr.simplify_sound inv ((ssGet postSubst v).substSym origSS) σ_o hinv_o
+    have hrhs := Expr.simplify_sound inv ((ssGet transSS v).substSym preSubst) σ_o hinv_o
+    -- Chain the equalities
+    calc σ_t' v
+        = (ssGet transSS v).eval σ_t := (htrans_repr v).symm
+      _ = ((ssGet transSS v).substSym preSubst).eval σ_o := (hpre_subst _).symm
+      _ = (((ssGet transSS v).substSym preSubst).simplify inv).eval σ_o := hrhs.symm
+      _ = (((ssGet postSubst v).substSym origSS).simplify inv).eval σ_o := by rw [hbeq]
+      _ = ((ssGet postSubst v).substSym origSS).eval σ_o := hlhs
+      _ = (ssGet postSubst v).eval σ_o' :=
+            Expr.substSym_sound origSS (ssGet postSubst v) σ_o σ_o' horig_repr
+  · -- Case 2: v not in any program variable or relation key
+    -- v ∉ allVars, v ∉ preSubst keys, v ∉ postSubst keys
+    simp only [List.mem_append, not_or] at hmem
+    obtain ⟨⟨hv_allvars, hv_pre⟩, hv_post⟩ := hmem
+    -- postSubst doesn't map v: ssGet postSubst v = .var v
+    have hpost_id : ssGet postSubst v = Expr.var v := ssGet_not_key hv_post
+    -- preSubst doesn't map v: ssGet preSubst v = .var v
+    have hpre_id : ssGet preSubst v = Expr.var v := ssGet_not_key hv_pre
+    -- From hcons: σ_t v = (.var v).eval σ_o = σ_o v
+    have hσ_eq : σ_t v = σ_o v := by rw [hcons v, hpre_id]; simp [Expr.eval]
+    -- v not in any instruction of trans: transSS preserves v
+    have hv_trans : v ∉ instrVars instr := by
+      intro hv
+      exact hv_allvars (instrVars_sub_collectAllVars_right dc.orig dc.trans instr
+        (getElem?_mem_toList hinstr) v hv)
+    have htrans_id : ssGet transSS v = Expr.var v := by
+      show ssGet (execSymbolic ([] : SymStore) instr) v = Expr.var v
+      rw [execSymbolic_preserves_var ([] : SymStore) instr v hv_trans]
       exact ssGet_nil_var v
-    have h_orig_v : ssGet origSS v = .var v := by
-      rw [execPath_preserves_var dc.orig ([] : SymStore) dic.pc_orig dtc.origLabels v hv_not_in_orig]
+    -- v not in any instruction of orig: origSS preserves v
+    have horig_id : ssGet origSS v = Expr.var v := by
+      show ssGet (execPath dc.orig ([] : SymStore) dic.pc_orig dtc.origLabels) v = Expr.var v
+      rw [execPath_preserves_var dc.orig ([] : SymStore) dic.pc_orig dtc.origLabels v
+        (fun l instr' hinstr' hv => hv_allvars
+          (instrVars_sub_collectAllVars_left dc.orig dc.trans instr'
+            (getElem?_mem_toList hinstr') v hv))]
       exact ssGet_nil_var v
-    simp [h_trans_v, h_orig_v, hvm_var, hvm_next_var, Expr.substSym, Expr.eval]
+    -- Chain: σ_t' v = σ_t v = σ_o v = σ_o' v = (.var v).eval σ_o'
+    calc σ_t' v
+        = (ssGet transSS v).eval σ_t := (htrans_repr v).symm
+      _ = (Expr.var v).eval σ_t := by rw [htrans_id]
+      _ = σ_t v := by simp [Expr.eval]
+      _ = σ_o v := hσ_eq
+      _ = (Expr.var v).eval σ_o := by simp [Expr.eval]
+      _ = (ssGet origSS v).eval σ_o := by rw [horig_id]
+      _ = σ_o' v := horig_repr v
+      _ = (Expr.var v).eval σ_o' := by simp [Expr.eval]
+      _ = (ssGet postSubst v).eval σ_o' := by rw [hpost_id]
 
 /-- Extract Bool information from checkAllTransitionsExec for a specific step. -/
 private theorem extractTransCheck (dc : ECertificate)
@@ -975,15 +1014,15 @@ private theorem extractTransCheck (dc : ECertificate)
     (hsucc : pc_t' ∈ successors instr pc_t) :
     ∃ dic, dc.instrCerts[pc_t]? = some dic ∧
     ∃ dtc ∈ dic.transitions,
-      dtc.vm = dic.vm ∧
-      dtc.vm_next = (dc.instrCerts.getD pc_t' default).vm ∧
+      dtc.rel = dic.rel ∧
+      dtc.rel_next = (dc.instrCerts.getD pc_t' default).rel ∧
       checkOrigPath dc.orig ([] : SymStore) (dc.inv_orig.getD dic.pc_orig ([] : EInv))
         dic.pc_orig dtc.origLabels (dc.instrCerts.getD pc_t' default).pc_orig
-        (branchInfoWithVm instr dic.vm pc_t pc_t') = true ∧
-      checkVarMapConsistency (collectAllVars dc.orig dc.trans)
+        (branchInfoWithRel instr dic.rel pc_t pc_t') = true ∧
+      checkRelConsistency
         dc.orig dic.pc_orig dtc.origLabels instr
         (dc.inv_orig.getD dic.pc_orig ([] : EInv))
-        dtc.vm dtc.vm_next = true := by
+        dtc.rel dtc.rel_next (collectAllVars dc.orig dc.trans) = true := by
   have hbound := bound_of_getElem? hinstr
   unfold checkAllTransitionsExec at h; rw [List.all_eq_true] at h
   have hpc := h pc_t (List.mem_range.mpr hbound)
@@ -1000,15 +1039,15 @@ private theorem extractTransCheck (dc : ECertificate)
       have hitem := hpc pc_t' hsucc
       rw [List.any_eq_true] at hitem
       obtain ⟨dtc, hdtc_mem, hdtc_check⟩ := hitem
-      -- Decompose: tc.vm == ic.vm && tc.vm_next == ic'.vm && path && vmcheck
+      -- Decompose: tc.rel == ic.rel && tc.rel_next == ic'.rel && path && relcheck
       rw [Bool.and_eq_true] at hdtc_check
-      obtain ⟨h123, hvm_check⟩ := hdtc_check
+      obtain ⟨h123, hrel_check⟩ := hdtc_check
       rw [Bool.and_eq_true] at h123
       obtain ⟨h12, hpath⟩ := h123
       rw [Bool.and_eq_true] at h12
-      obtain ⟨hvm_eq, hvm_next_eq⟩ := h12
+      obtain ⟨hrel_eq, hrel_next_eq⟩ := h12
       refine ⟨dic, rfl, dtc, hdtc_mem,
-        beq_iff_eq.mp hvm_eq, beq_iff_eq.mp hvm_next_eq, hpath, hvm_check⟩
+        beq_iff_eq.mp hrel_eq, beq_iff_eq.mp hrel_next_eq, hpath, hrel_check⟩
   | _ =>
     intro hpc
     cases hdic : dc.instrCerts[pc_t]? with
@@ -1019,13 +1058,13 @@ private theorem extractTransCheck (dc : ECertificate)
       rw [List.any_eq_true] at hitem
       obtain ⟨dtc, hdtc_mem, hdtc_check⟩ := hitem
       rw [Bool.and_eq_true] at hdtc_check
-      obtain ⟨h123, hvm_check⟩ := hdtc_check
+      obtain ⟨h123, hrel_check⟩ := hdtc_check
       rw [Bool.and_eq_true] at h123
       obtain ⟨h12, hpath⟩ := h123
       rw [Bool.and_eq_true] at h12
-      obtain ⟨hvm_eq, hvm_next_eq⟩ := h12
+      obtain ⟨hrel_eq, hrel_next_eq⟩ := h12
       refine ⟨dic, rfl, dtc, hdtc_mem,
-        beq_iff_eq.mp hvm_eq, beq_iff_eq.mp hvm_next_eq, hpath, hvm_check⟩
+        beq_iff_eq.mp hrel_eq, beq_iff_eq.mp hrel_next_eq, hpath, hrel_check⟩
 
 /-- Relate getD to getElem? for arrays. -/
 private theorem array_getD_of_getElem? {α : Type} {arr : Array α} {n : Nat} {val d : α}
@@ -1045,13 +1084,13 @@ theorem checkAllTransitionsExec_sound (dc : ECertificate)
     exact Cfg.noConfusion (Step.deterministic (Step.halt hinstr) hstep)
   have hsucc := step_successor hstep hinstr
   -- Extract Bool-level information
-  obtain ⟨dic, hdic, dtc, hdtc_mem, hvm_eq, hvm_next_eq, hpath, hvm⟩ :=
+  obtain ⟨dic, hdic, dtc, hdtc_mem, hrel_eq, hrel_next_eq, hpath, hrelcheck⟩ :=
     extractTransCheck dc h pc_t pc_t' instr hinstr hne_halt hsucc
   -- The tc in toPCertificate's transitions that corresponds to dtc
   let tc : PTransCorr :=
     { origLabels := dtc.origLabels
-      vm := eVarMapToVarMap dtc.vm
-      vm_next := eVarMapToVarMap dtc.vm_next }
+      storeRel := eRelToStoreRel dtc.rel
+      storeRel_next := eRelToStoreRel dtc.rel_next }
   -- Show tc is in (toPCertificate dc).instrCerts pc_t).transitions
   have hgetD : dc.instrCerts.getD pc_t default = dic := array_getD_of_getElem? hdic
   have htc_mem : tc ∈ ((toPCertificate dc).instrCerts pc_t).transitions := by
@@ -1059,22 +1098,22 @@ theorem checkAllTransitionsExec_sound (dc : ECertificate)
     show tc ∈ dic.transitions.map _
     exact List.mem_map.mpr ⟨dtc, hdtc_mem, rfl⟩
   refine ⟨tc, htc_mem, ?_, ?_, ?_⟩
-  -- 1. tc.vm = ic.vm
+  -- 1. tc.storeRel = ic.storeRel
   · simp only [toPCertificate, hgetD, tc]
-    exact congrArg eVarMapToVarMap hvm_eq
-  -- 2. tc.vm_next = ic'.vm
+    exact congrArg eRelToStoreRel hrel_eq
+  -- 2. tc.storeRel_next = ic'.storeRel
   · simp only [toPCertificate, tc]
-    exact congrArg eVarMapToVarMap hvm_next_eq
-  -- 3. checkTransitionVarmapProp
-  · -- Use the branchInfo with the actual varmap (dtc.vm = dic.vm)
+    exact congrArg eRelToStoreRel hrel_next_eq
+  -- 3. checkTransitionRelProp
+  · -- Use the branchInfo with the actual rel (dtc.rel = dic.rel)
     have hpath' : checkOrigPath dc.orig ([] : SymStore) (dc.inv_orig.getD dic.pc_orig ([] : EInv))
         dic.pc_orig dtc.origLabels (dc.instrCerts.getD pc_t' default).pc_orig
-        (branchInfoWithVm instr dtc.vm pc_t pc_t') = true := by
-      rw [hvm_eq]; exact hpath
+        (branchInfoWithRel instr dtc.rel pc_t pc_t') = true := by
+      rw [hrel_eq]; exact hpath
     simp only [toPCertificate, hgetD]
-    exact transVarmap_sound dc pc_t pc_t' dic dtc instr
+    exact transRel_sound dc pc_t pc_t' dic dtc instr
       ((dc.instrCerts.getD pc_t' default).pc_orig)
-      hinstr hpath' hvm
+      hinstr hpath' hrelcheck
 
 -- ============================================================
 -- § 8. Non-termination soundness
@@ -1178,14 +1217,14 @@ theorem soundness_bridge (dc : ECertificate)
   have ⟨h13, h4⟩ := and_true_of_and_eq_true h14
   have ⟨h12, h3⟩ := and_true_of_and_eq_true h13
   have ⟨h1, h2⟩  := and_true_of_and_eq_true h12
-  -- Derive vm=[] at start from checkVarMapAtStartExec (h3)
-  have hvm0 : (dc.instrCerts.getD 0 default).vm = [] := by
-    revert h3; simp only [checkVarMapAtStartExec]
-    cases (dc.instrCerts.getD 0 default).vm with
+  -- Derive rel=[] at start from checkRelAtStartExec (h3)
+  have hrel0 : (dc.instrCerts.getD 0 default).rel = [] := by
+    revert h3; simp only [checkRelAtStartExec]
+    cases (dc.instrCerts.getD 0 default).rel with
     | nil => intro; rfl
     | cons => simp [List.isEmpty]
   exact {
-    start_corr    := checkStartCorrespondenceExec_sound dc h1 hvm0
+    start_corr    := checkStartCorrespondenceExec_sound dc h1 hrel0
     start_inv     := checkInvariantsAtStartExec_sound dc h2
     inv_preserved := checkInvariantsPreservedExec_sound dc h4
     transitions   := checkAllTransitionsExec_sound dc h5
@@ -1209,13 +1248,13 @@ for several reasons:
    A certificate using `x < y` as an invariant is valid in the Prop world
    but has no representation in `ECertificate`.
 
-2. **Variable map generality**: The Prop system supports arbitrary `PVarMap`s
-   (`Var → Expr`), while the executable system supports `EVarMap` (finite
-   association lists). The soundness proof handles non-trivial variable maps,
+2. **Store relation generality**: The Prop system supports arbitrary `PStoreRel`s
+   (`Store → Store → Prop`), while the executable system supports `EExprRel` (finite
+   lists of expression pairs). The soundness proof handles non-trivial relations,
    but the executable representation is still less general.
 
 3. **Information loss**: `toPCertificate` maps every `ECertificate` to a
-   `PCertificate` with `eVarMapToVarMap` var maps and `EInv.toProp` invariants.
+   `PCertificate` with `eRelToStoreRel` store relations and `EInv.toProp` invariants.
    Many different `PCertificate`s could satisfy `PCertificateValid` for the
    same programs, but only those expressible as `toPCertificate dc` for some `dc`
    are in the image of the translation.

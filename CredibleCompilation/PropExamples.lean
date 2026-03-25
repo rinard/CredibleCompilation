@@ -27,16 +27,15 @@ correct; a custom tactic or `native_decide` could close these.
 -- Helpers
 -- ============================================================
 
-def idVarMap : PVarMap := fun v => .var v
+def idStoreRel : PStoreRel := fun σ_o σ_t => σ_o = σ_t
 
-theorem idVarMap_consistent (σ : Store) : idVarMap.consistent σ σ :=
-  fun _ => rfl
+theorem idStoreRel_refl (σ : Store) : idStoreRel σ σ := rfl
 
 def defaultInstrCert : PInstrCert :=
-  { pc_orig := 0, vm := idVarMap, transitions := [] }
+  { pc_orig := 0, storeRel := idStoreRel, transitions := [] }
 
 def defaultHaltCert : PHaltCert :=
-  { pc_orig := 0, vm := idVarMap }
+  { pc_orig := 0, storeRel := idStoreRel }
 
 theorem bound_of_getElem? {a : Array α} {i : Nat} {v : α}
     (h : a[i]? = some v) : i < a.size := by
@@ -79,19 +78,19 @@ def cert : PCertificate :=
     observable := ["y"]
     instrCerts := (fun pc =>
       match pc with
-      | 0 => { pc_orig := 0, vm := idVarMap,
-                transitions := [⟨[1], idVarMap, idVarMap⟩] }
-      | 1 => { pc_orig := 1, vm := idVarMap,
-                transitions := [⟨[2], idVarMap, idVarMap⟩] }
-      | 2 => { pc_orig := 2, vm := idVarMap, transitions := [] }
+      | 0 => { pc_orig := 0, storeRel := idStoreRel,
+                transitions := [⟨[1], idStoreRel, idStoreRel⟩] }
+      | 1 => { pc_orig := 1, storeRel := idStoreRel,
+                transitions := [⟨[2], idStoreRel, idStoreRel⟩] }
+      | 2 => { pc_orig := 2, storeRel := idStoreRel, transitions := [] }
       | _ => defaultInstrCert)
     haltCerts := fun pc =>
       match pc with
-      | 2 => { pc_orig := 2, vm := idVarMap }
+      | 2 => { pc_orig := 2, storeRel := idStoreRel }
       | _ => defaultHaltCert }
 
 theorem start_ok : checkStartCorrespondenceProp cert :=
-  ⟨rfl, idVarMap_consistent⟩
+  ⟨rfl, idStoreRel_refl⟩
 
 theorem inv_ok : checkInvariantsPreservedProp cert := by
   constructor
@@ -137,7 +136,7 @@ theorem halt_obs_ok : checkHaltObservableProp cert := by
   have hlt := bound_of_getElem? h; change pc_t < 3 at hlt
   simp only [cert]; intro hvm v hv
   interval_cases pc_t <;> simp_all [transProg]
-  simp [PVarMap.consistent, idVarMap, Expr.eval] at hvm; exact hvm "y"
+  simp [idStoreRel] at hvm; subst hvm; rfl
 
 theorem transitions_ok : checkAllTransitionsProp cert := by
   intro pc_t σ_t σ_t' pc_t' hstep
@@ -157,26 +156,27 @@ theorem transitions_ok : checkAllTransitionsProp cert := by
   · -- pc_t = 0
     cases hstep with
     | const h =>
-      refine ⟨⟨[1], idVarMap, idVarMap⟩, List.Mem.head _, rfl, rfl, ?_⟩
+      refine ⟨⟨[1], idStoreRel, idStoreRel⟩, List.Mem.head _, rfl, rfl, ?_⟩
       · intro σ_t_ σ_t'_ σ_o_ _ _ hvm hstep'
-        simp [PVarMap.consistent, idVarMap, Expr.eval] at hvm ⊢
+        simp [idStoreRel] at hvm; subst hvm
         cases hstep' with
         | const h' =>
-          exact ⟨σ_o_["x" ↦ 5], Steps.single (.const (by native_decide)),
-            fun x => by simp [Store.update]; split <;> simp_all⟩
+          simp_all
+          exact ⟨σ_o_["x" ↦ 5], Steps.single (.const (by native_decide)), rfl⟩
         | _ => simp_all
     | _ => simp_all
   · -- pc_t = 1
     cases hstep with
     | const h =>
-      refine ⟨⟨[2], idVarMap, idVarMap⟩, List.Mem.head _, rfl, rfl, ?_⟩
+      refine ⟨⟨[2], idStoreRel, idStoreRel⟩, List.Mem.head _, rfl, rfl, ?_⟩
       · intro σ_t_ σ_t'_ σ_o_ _ hinv_o hvm hstep'
-        simp [PVarMap.consistent, idVarMap, Expr.eval] at hvm ⊢
+        simp [idStoreRel] at hvm; subst hvm
         simp [cert, inv] at hinv_o
         cases hstep' with
         | const h' =>
-          exact ⟨σ_o_["y" ↦ σ_o_ "x"], Steps.single (.copy (by native_decide)),
-            fun x => by simp [Store.update]; split <;> simp_all⟩
+          simp_all
+          refine ⟨σ_o_["y" ↦ σ_o_ "x"], Steps.single (.copy (by native_decide)), ?_⟩
+          simp [idStoreRel]; funext v; simp [Store.update]; split <;> simp_all
         | _ => simp_all
     | _ => simp_all
   · -- pc_t = 2: halt
@@ -255,21 +255,21 @@ def cert : PCertificate :=
     observable := ["c"]
     instrCerts := (fun pc =>
       match pc with
-      | 0 => { pc_orig := 0, vm := idVarMap,
-                transitions := [⟨[1], idVarMap, idVarMap⟩] }
-      | 1 => { pc_orig := 1, vm := idVarMap,
-                transitions := [⟨[2], idVarMap, idVarMap⟩] }
-      | 2 => { pc_orig := 2, vm := idVarMap,
-                transitions := [⟨[3], idVarMap, idVarMap⟩] }
-      | 3 => { pc_orig := 3, vm := idVarMap, transitions := [] }
+      | 0 => { pc_orig := 0, storeRel := idStoreRel,
+                transitions := [⟨[1], idStoreRel, idStoreRel⟩] }
+      | 1 => { pc_orig := 1, storeRel := idStoreRel,
+                transitions := [⟨[2], idStoreRel, idStoreRel⟩] }
+      | 2 => { pc_orig := 2, storeRel := idStoreRel,
+                transitions := [⟨[3], idStoreRel, idStoreRel⟩] }
+      | 3 => { pc_orig := 3, storeRel := idStoreRel, transitions := [] }
       | _ => defaultInstrCert)
     haltCerts := fun pc =>
       match pc with
-      | 3 => { pc_orig := 3, vm := idVarMap }
+      | 3 => { pc_orig := 3, storeRel := idStoreRel }
       | _ => defaultHaltCert }
 
 theorem start_ok : checkStartCorrespondenceProp cert :=
-  ⟨rfl, idVarMap_consistent⟩
+  ⟨rfl, idStoreRel_refl⟩
 
 theorem inv_ok : checkInvariantsPreservedProp cert := by
   constructor
@@ -315,7 +315,7 @@ theorem halt_obs_ok : checkHaltObservableProp cert := by
   have hlt := bound_of_getElem? h; change pc_t < 4 at hlt
   simp only [cert]; intro hvm v hv
   interval_cases pc_t <;> simp_all [transProg]
-  simp [PVarMap.consistent, idVarMap, Expr.eval] at hvm; exact hvm "c"
+  simp [idStoreRel] at hvm; subst hvm; rfl
 
 theorem transitions_ok : checkAllTransitionsProp cert := by
   intro pc_t σ_t σ_t' pc_t' hstep
@@ -336,39 +336,40 @@ theorem transitions_ok : checkAllTransitionsProp cert := by
   · -- pc_t = 0: const "a" 10
     cases hstep with
     | const h =>
-      refine ⟨⟨[1], idVarMap, idVarMap⟩, List.Mem.head _, rfl, rfl, ?_⟩
+      refine ⟨⟨[1], idStoreRel, idStoreRel⟩, List.Mem.head _, rfl, rfl, ?_⟩
       · intro σ_t_ σ_t'_ σ_o_ _ _ hvm hstep'
-        simp [PVarMap.consistent, idVarMap, Expr.eval] at hvm ⊢
+        simp [idStoreRel] at hvm; subst hvm
         cases hstep' with
         | const h' =>
-          exact ⟨σ_o_["a" ↦ 10], Steps.single (.const (by native_decide)),
-            fun x => by simp [Store.update]; split <;> simp_all⟩
+          simp_all
+          exact ⟨σ_o_["a" ↦ 10], Steps.single (.const (by native_decide)), rfl⟩
         | _ => simp_all
     | _ => simp_all
   · -- pc_t = 1: const "b" 10 (trans) vs copy "b" "a" (orig)
     cases hstep with
     | const h =>
-      refine ⟨⟨[2], idVarMap, idVarMap⟩, List.Mem.head _, rfl, rfl, ?_⟩
+      refine ⟨⟨[2], idStoreRel, idStoreRel⟩, List.Mem.head _, rfl, rfl, ?_⟩
       · intro σ_t_ σ_t'_ σ_o_ _ hinv_o hvm hstep'
-        simp [PVarMap.consistent, idVarMap, Expr.eval] at hvm ⊢
+        simp [idStoreRel] at hvm; subst hvm
         simp [cert, inv] at hinv_o
         cases hstep' with
         | const h' =>
-          exact ⟨σ_o_["b" ↦ σ_o_ "a"], Steps.single (.copy (by native_decide)),
-            fun x => by simp [Store.update]; split <;> simp_all⟩
+          simp_all
+          refine ⟨σ_o_["b" ↦ σ_o_ "a"], Steps.single (.copy (by native_decide)), ?_⟩
+          simp [idStoreRel]; funext v; simp [Store.update]; split <;> simp_all
         | _ => simp_all
     | _ => simp_all
   · -- pc_t = 2: binop "c" .add "b" "y" (same in both)
     cases hstep with
     | binop h =>
-      refine ⟨⟨[3], idVarMap, idVarMap⟩, List.Mem.head _, rfl, rfl, ?_⟩
+      refine ⟨⟨[3], idStoreRel, idStoreRel⟩, List.Mem.head _, rfl, rfl, ?_⟩
       · intro σ_t_ σ_t'_ σ_o_ _ _ hvm hstep'
-        simp [PVarMap.consistent, idVarMap, Expr.eval] at hvm ⊢
+        simp [idStoreRel] at hvm; subst hvm
         cases hstep' with
         | binop h' =>
+          simp_all
           exact ⟨σ_o_["c" ↦ BinOp.add.eval (σ_o_ "b") (σ_o_ "y")],
-            Steps.single (.binop (by native_decide)),
-            fun x => by simp [Store.update]; split <;> simp_all⟩
+            Steps.single (.binop (by native_decide)), rfl⟩
         | _ => simp_all
     | _ => simp_all
   · -- pc_t = 3: halt
@@ -457,27 +458,27 @@ def cert : PCertificate :=
     observable := ["acc"]
     instrCerts := (fun pc =>
       match pc with
-      | 0 => { pc_orig := 0, vm := idVarMap,
-                transitions := [⟨[1], idVarMap, idVarMap⟩] }
-      | 1 => { pc_orig := 1, vm := idVarMap,
-                transitions := [⟨[3], idVarMap, idVarMap⟩,   -- branch taken
-                                ⟨[2], idVarMap, idVarMap⟩] } -- fall through
-      | 2 => { pc_orig := 2, vm := idVarMap, transitions := [] }
+      | 0 => { pc_orig := 0, storeRel := idStoreRel,
+                transitions := [⟨[1], idStoreRel, idStoreRel⟩] }
+      | 1 => { pc_orig := 1, storeRel := idStoreRel,
+                transitions := [⟨[3], idStoreRel, idStoreRel⟩,   -- branch taken
+                                ⟨[2], idStoreRel, idStoreRel⟩] } -- fall through
+      | 2 => { pc_orig := 2, storeRel := idStoreRel, transitions := [] }
       -- KEY: trans 3→4 maps to orig 3→(4→)5 — two original steps
-      | 3 => { pc_orig := 3, vm := idVarMap,
-                transitions := [⟨[4, 5], idVarMap, idVarMap⟩] }
-      | 4 => { pc_orig := 5, vm := idVarMap,
-                transitions := [⟨[6], idVarMap, idVarMap⟩] }
-      | 5 => { pc_orig := 6, vm := idVarMap,
-                transitions := [⟨[1], idVarMap, idVarMap⟩] }
+      | 3 => { pc_orig := 3, storeRel := idStoreRel,
+                transitions := [⟨[4, 5], idStoreRel, idStoreRel⟩] }
+      | 4 => { pc_orig := 5, storeRel := idStoreRel,
+                transitions := [⟨[6], idStoreRel, idStoreRel⟩] }
+      | 5 => { pc_orig := 6, storeRel := idStoreRel,
+                transitions := [⟨[1], idStoreRel, idStoreRel⟩] }
       | _ => defaultInstrCert)
     haltCerts := fun pc =>
       match pc with
-      | 2 => { pc_orig := 2, vm := idVarMap }
+      | 2 => { pc_orig := 2, storeRel := idStoreRel }
       | _ => defaultHaltCert }
 
 theorem start_ok : checkStartCorrespondenceProp cert :=
-  ⟨rfl, idVarMap_consistent⟩
+  ⟨rfl, idStoreRel_refl⟩
 
 theorem inv_ok : checkInvariantsPreservedProp cert := by
   constructor
@@ -528,7 +529,7 @@ theorem halt_obs_ok : checkHaltObservableProp cert := by
   have hlt := bound_of_getElem? h; change pc_t < 6 at hlt
   simp only [cert]; intro hvm v hv
   interval_cases pc_t <;> simp_all [transProg]
-  simp [PVarMap.consistent, idVarMap, Expr.eval] at hvm; exact hvm "acc"
+  simp [idStoreRel] at hvm; subst hvm; rfl
 
 theorem transitions_ok : checkAllTransitionsProp cert := by
   intro pc_t σ_t σ_t' pc_t' hstep
@@ -551,13 +552,13 @@ theorem transitions_ok : checkAllTransitionsProp cert := by
   · -- pc_t = 0: const "step" 2
     cases hstep with
     | const h =>
-      refine ⟨⟨[1], idVarMap, idVarMap⟩, List.Mem.head _, rfl, rfl, ?_⟩
+      refine ⟨⟨[1], idStoreRel, idStoreRel⟩, List.Mem.head _, rfl, rfl, ?_⟩
       · intro σ_t_ σ_t'_ σ_o_ _ _ hvm hstep'
-        simp [PVarMap.consistent, idVarMap, Expr.eval] at hvm ⊢
+        simp [idStoreRel] at hvm; subst hvm
         cases hstep' with
         | const h' =>
-          exact ⟨σ_o_["step" ↦ 2], Steps.single (.const (by native_decide)),
-            fun x => by simp [Store.update]; split <;> simp_all⟩
+          simp_all
+          exact ⟨σ_o_["step" ↦ 2], Steps.single (.const (by native_decide)), rfl⟩
         | _ => simp_all
     | _ => simp_all
   · -- pc_t = 1: ifgoto "n" 3
@@ -566,30 +567,26 @@ theorem transitions_ok : checkAllTransitionsProp cert := by
       have h1 : cert.trans[1]? = some (.ifgoto "n" 3) := by native_decide
       have := h ▸ h1; simp at this; obtain ⟨rfl, rfl⟩ := this
       -- Now: x = "n", pc_t' = 3
-      refine ⟨⟨[3], idVarMap, idVarMap⟩, List.Mem.head _, rfl, rfl, ?_⟩
+      refine ⟨⟨[3], idStoreRel, idStoreRel⟩, List.Mem.head _, rfl, rfl, ?_⟩
       intro σ_t_ σ_t'_ σ_o_ _ _ hvm hstep'
-      simp [PVarMap.consistent, idVarMap, Expr.eval] at hvm ⊢
+      simp [idStoreRel] at hvm; subst hvm
       have ho : cert.orig[1]? = some (.ifgoto "n" 3) := by native_decide
-      have ht : cert.trans[1]? = some (.ifgoto "n" 3) := by native_decide
       cases hstep' with
       | iftrue h' hne' =>
-        have := h' ▸ ht; simp at this; obtain ⟨rfl, _⟩ := this
-        refine ⟨σ_o_, Steps.single (.iftrue ho ?_), fun x => by simp_all⟩
-        rw [show σ_o_ "n" = σ_t_ "n" from (hvm "n").symm]; exact hne'
+        simp_all
+        exact ⟨σ_t'_, Steps.single (.iftrue ho hne'), rfl⟩
       | _ => simp_all
     | iffall h heq =>
       have h1 : cert.trans[1]? = some (.ifgoto "n" 3) := by native_decide
       have := h ▸ h1; simp at this; obtain ⟨rfl, rfl⟩ := this
-      refine ⟨⟨[2], idVarMap, idVarMap⟩, List.Mem.tail _ (List.Mem.head _), rfl, rfl, ?_⟩
+      refine ⟨⟨[2], idStoreRel, idStoreRel⟩, List.Mem.tail _ (List.Mem.head _), rfl, rfl, ?_⟩
       intro σ_t_ σ_t'_ σ_o_ _ _ hvm hstep'
-      simp [PVarMap.consistent, idVarMap, Expr.eval] at hvm ⊢
+      simp [idStoreRel] at hvm; subst hvm
       have ho : cert.orig[1]? = some (.ifgoto "n" 3) := by native_decide
-      have ht : cert.trans[1]? = some (.ifgoto "n" 3) := by native_decide
       cases hstep' with
       | iffall h' heq' =>
-        have := h' ▸ ht; simp at this; obtain ⟨rfl, _⟩ := this
-        refine ⟨σ_o_, Steps.single (.iffall ho ?_), fun x => by simp_all⟩
-        rw [show σ_o_ "n" = σ_t_ "n" from (hvm "n").symm]; exact heq'
+        simp_all
+        exact ⟨σ_t'_, Steps.single (.iffall ho heq'), rfl⟩
       | _ => simp_all
     | _ => simp_all
   · -- pc_t = 2: halt
@@ -597,30 +594,31 @@ theorem transitions_ok : checkAllTransitionsProp cert := by
   · -- pc_t = 3: binop "acc" .add "acc" "n", trans 3→4 maps to orig 3→(4→)5
     cases hstep with
     | binop h =>
-      refine ⟨⟨[4, 5], idVarMap, idVarMap⟩, List.Mem.head _, rfl, rfl, ?_⟩
+      refine ⟨⟨[4, 5], idStoreRel, idStoreRel⟩, List.Mem.head _, rfl, rfl, ?_⟩
       · intro σ_t_ σ_t'_ σ_o_ _ hinv_o hvm hstep'
-        simp [PVarMap.consistent, idVarMap, Expr.eval] at hvm ⊢
+        simp [idStoreRel] at hvm; subst hvm
         simp [cert, inv] at hinv_o
         cases hstep' with
         | binop h' =>
+          simp_all
           -- orig steps: 3→4 (binop acc), then 4→5 (const step 2)
           refine ⟨(σ_o_["acc" ↦ BinOp.add.eval (σ_o_ "acc") (σ_o_ "n")])["step" ↦ 2],
             Steps.step (.binop (by native_decide))
-              (Steps.single (.const (by native_decide))),
-            fun x => by simp [Store.update]; split <;> simp_all⟩
+              (Steps.single (.const (by native_decide))), ?_⟩
+          simp [idStoreRel]; funext v; simp [Store.update]; split <;> simp_all
         | _ => simp_all
     | _ => simp_all
   · -- pc_t = 4: binop "n" .sub "n" "step"
     cases hstep with
     | binop h =>
-      refine ⟨⟨[6], idVarMap, idVarMap⟩, List.Mem.head _, rfl, rfl, ?_⟩
+      refine ⟨⟨[6], idStoreRel, idStoreRel⟩, List.Mem.head _, rfl, rfl, ?_⟩
       · intro σ_t_ σ_t'_ σ_o_ _ _ hvm hstep'
-        simp [PVarMap.consistent, idVarMap, Expr.eval] at hvm ⊢
+        rw [show σ_o_ = σ_t_ from hvm] at *
         cases hstep' with
         | binop h' =>
-          exact ⟨σ_o_["n" ↦ BinOp.sub.eval (σ_o_ "n") (σ_o_ "step")],
-            Steps.single (.binop (by native_decide)),
-            fun x => by simp [Store.update]; split <;> simp_all⟩
+          simp_all
+          exact ⟨σ_t_["n" ↦ BinOp.sub.eval (σ_t_ "n") (σ_t_ "step")],
+            Steps.single (.binop (by native_decide)), rfl⟩
         | _ => simp_all
     | _ => simp_all
   · -- pc_t = 5: goto 1
@@ -628,13 +626,11 @@ theorem transitions_ok : checkAllTransitionsProp cert := by
     | goto h =>
       have h1 : cert.trans[5]? = some (.goto 1) := by native_decide
       have := h ▸ h1; simp at this; subst this
-      refine ⟨⟨[1], idVarMap, idVarMap⟩, List.Mem.head _, rfl, rfl, ?_⟩
+      refine ⟨⟨[1], idStoreRel, idStoreRel⟩, List.Mem.head _, rfl, rfl, ?_⟩
       intro σ_t_ σ_t'_ σ_o_ _ _ hvm hstep'
-      simp [PVarMap.consistent, idVarMap, Expr.eval] at hvm ⊢
       cases hstep' with
       | goto h' =>
-        exact ⟨σ_o_, Steps.single (.goto (by native_decide)),
-          fun x => by simp_all⟩
+        exact ⟨σ_o_, Steps.single (.goto (by native_decide)), hvm⟩
       | _ => simp_all
     | _ => simp_all
 
@@ -715,15 +711,15 @@ def cert : PCertificate :=
     observable := ["y"]
     instrCerts := (fun pc =>
       match pc with
-      | 0 => { pc_orig := 0, vm := idVarMap,
-                transitions := [⟨[1], idVarMap, idVarMap⟩] }
-      | 1 => { pc_orig := 1, vm := idVarMap,
-                transitions := [⟨[2], idVarMap, idVarMap⟩] }
-      | 2 => { pc_orig := 2, vm := idVarMap, transitions := [] }
+      | 0 => { pc_orig := 0, storeRel := idStoreRel,
+                transitions := [⟨[1], idStoreRel, idStoreRel⟩] }
+      | 1 => { pc_orig := 1, storeRel := idStoreRel,
+                transitions := [⟨[2], idStoreRel, idStoreRel⟩] }
+      | 2 => { pc_orig := 2, storeRel := idStoreRel, transitions := [] }
       | _ => defaultInstrCert)
     haltCerts := fun pc =>
       match pc with
-      | 2 => { pc_orig := 2, vm := idVarMap }
+      | 2 => { pc_orig := 2, storeRel := idStoreRel }
       | _ => defaultHaltCert }
 
 /-- The transition correspondence FAILS at pc_t = 1.
@@ -740,21 +736,22 @@ theorem transitions_fail : ¬ checkAllTransitionsProp cert := by
   obtain ⟨tc, _, hvm_eq, hvmn_eq, hcheck⟩ := h 1 σ₀ (σ₀["y" ↦ 3]) 2 hstep
   -- Resolve ALL tc fields to concrete values
   simp [cert] at hvm_eq hvmn_eq
-  -- Now: tc.vm = idVarMap, tc.vm_next = idVarMap
+  -- Now: tc.storeRel = idStoreRel, tc.storeRel_next = idStoreRel
   -- Invariants hold: inv 1 σ₀ requires σ₀ "x" = 5
   have hinv_t : cert.inv_trans 1 σ₀ := by simp [cert, inv, σ₀]
   have hinv_o : cert.inv_orig 1 σ₀ := by simp [cert, inv, σ₀]
-  have hcons : tc.vm.consistent σ₀ σ₀ := by rw [hvm_eq]; exact fun x => rfl
+  have hcons : tc.storeRel σ₀ σ₀ := by rw [hvm_eq]; rfl
   -- Simplify pc_orig values
   have hpc1 : (cert.instrCerts 1).pc_orig = 1 := by simp [cert]
   have hpc2 : (cert.instrCerts 2).pc_orig = 2 := by simp [cert]
   rw [hpc1, hpc2] at hcheck
-  -- Apply the varmap proof
+  -- Apply the store relation proof
   obtain ⟨σ_o', hsteps, hcons'⟩ := hcheck σ₀ (σ₀["y" ↦ 3]) σ₀ hinv_t hinv_o hcons
     (.const (by native_decide))
-  -- The identity varmap says σ_t'("y") = σ_o'("y"), i.e. 3 = σ_o'("y")
+  -- The identity store relation says σ_o' = σ_t', i.e. σ_o'("y") = 3
   have heq : 3 = σ_o' "y" := by
-    have := hcons' "y"; rw [hvmn_eq] at this; simpa [idVarMap, Expr.eval, Store.update]
+    have := hcons'; rw [hvmn_eq] at this; simp [idStoreRel] at this
+    rw [this]; simp [Store.update]
   -- Determine σ_o' from the original execution
   have ho1 : cert.orig[1]? = some (.copy "y" "x") := by native_decide
   have ho2 : cert.orig[2]? = some .halt := by native_decide

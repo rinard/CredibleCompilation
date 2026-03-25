@@ -48,18 +48,14 @@ def PInvariantMap.preserved (inv : PInvariantMap) (p : Prog) : Prop :=
   ∀ pc σ, inv.locally_preserved p pc σ
 
 -- ============================================================
--- § 3. Variable mapping
+-- § 3. Store relation
 -- ============================================================
 
-/-- Maps each variable in the transformed program to an expression over
-    the original program's variables that should have the same value. -/
-def PVarMap := Var → Expr
-
-/-- A variable mapping is consistent with two stores if for every variable,
-    the transformed store's value equals the expression evaluated in the
-    original store. -/
-def PVarMap.consistent (vm : PVarMap) (σ_orig σ_trans : Store) : Prop :=
-  ∀ x : Var, σ_trans x = (vm x).eval σ_orig
+/-- A relation between an original store and a transformed store.
+    Generalizes variable maps: instead of mapping each transformed variable
+    to an expression over original variables, we allow arbitrary pairs of
+    expressions `(e_orig, e_trans)` asserting `e_orig.eval σ_o = e_trans.eval σ_t`. -/
+def PStoreRel := Store → Store → Prop
 
 -- ============================================================
 -- § 4. Transition correspondence
@@ -74,10 +70,10 @@ def PVarMap.consistent (vm : PVarMap) (σ_orig σ_trans : Store) : Prop :=
 structure PTransCorr where
   /-- Labels of original PCs visited (successors of pc_orig, ending at pc_orig') -/
   origLabels   : List Label
-  /-- Variable map at the source -/
-  vm           : PVarMap
-  /-- Variable map at the target -/
-  vm_next      : PVarMap
+  /-- Store relation at the source -/
+  storeRel     : PStoreRel
+  /-- Store relation at the target -/
+  storeRel_next : PStoreRel
 
 -- ============================================================
 -- § 5. PCertificate
@@ -88,8 +84,8 @@ structure PTransCorr where
 structure PInstrCert where
   /-- Corresponding label in original program -/
   pc_orig    : Label
-  /-- Variable map at this instruction -/
-  vm         : PVarMap
+  /-- Store relation at this instruction -/
+  storeRel   : PStoreRel
   /-- For each possible successor `pc_t'` in the transformed program,
       a proof obligation that the original program can match. -/
   transitions : List PTransCorr
@@ -98,8 +94,8 @@ structure PInstrCert where
 structure PHaltCert where
   /-- Corresponding label in original program -/
   pc_orig  : Label
-  /-- Variable map at this instruction -/
-  vm       : PVarMap
+  /-- Store relation at this instruction -/
+  storeRel : PStoreRel
 
 /-- The full compilation certificate. -/
 structure PCertificate where
@@ -127,11 +123,11 @@ def checkInvariantsPreservedProp (cert : PCertificate) : Prop :=
   cert.inv_orig.preserved cert.orig ∧
   cert.inv_trans.preserved cert.trans
 
-/-- Condition 3b: Variable map consistency is maintained across transitions.
+/-- Condition 3b: Store relation is maintained across transitions.
     When the transformed program steps from `pc_t` to `pc_t'`,
-    if the variable maps are consistent before the step,
-    they remain consistent after. -/
-def checkTransitionVarmapProp
+    if the store relation holds before the step,
+    it holds after (with the next relation). -/
+def checkTransitionRelProp
     (p_orig p_trans : Prog)
     (inv_orig : PInvariantMap) (inv_trans : PInvariantMap)
     (pc_t pc_t' : Label) (pc_o pc_o' : Label) (tc : PTransCorr)
@@ -139,11 +135,11 @@ def checkTransitionVarmapProp
   ∀ σ_t σ_t' σ_o,
     inv_trans pc_t σ_t →
     inv_orig pc_o σ_o →
-    tc.vm.consistent σ_o σ_t →
+    tc.storeRel σ_o σ_t →
     (p_trans ⊩ Cfg.run pc_t σ_t ⟶ Cfg.run pc_t' σ_t') →
     ∃ σ_o',
       (p_orig ⊩ Cfg.run pc_o σ_o ⟶* Cfg.run pc_o' σ_o') ∧
-      tc.vm_next.consistent σ_o' σ_t'
+      tc.storeRel_next σ_o' σ_t'
 
 /-- Condition 3: For each instruction in the transformed program,
     every transition has a corresponding sequence of transitions
@@ -155,11 +151,10 @@ def checkAllTransitionsProp (cert : PCertificate) : Prop :=
       (cert.trans ⊩ Cfg.run pc_t σ_t ⟶ Cfg.run pc_t' σ_t') →
       let ic := cert.instrCerts pc_t
       let ic' := cert.instrCerts pc_t'
-      -- The successor's certificate must agree on the original label
       ∃ tc ∈ ic.transitions,
-        tc.vm = ic.vm ∧
-        tc.vm_next = ic'.vm ∧
-        checkTransitionVarmapProp cert.orig cert.trans
+        tc.storeRel = ic.storeRel ∧
+        tc.storeRel_next = ic'.storeRel ∧
+        checkTransitionRelProp cert.orig cert.trans
           cert.inv_orig cert.inv_trans pc_t pc_t' ic.pc_orig ic'.pc_orig tc
 
 /-- Condition 4a: Each halt in the transformed program corresponds to
@@ -179,14 +174,14 @@ def checkHaltObservableProp (cert : PCertificate) : Prop :=
   ∀ σ_t σ_o : Store,
     cert.trans[pc_t]? = some .halt →
     let ic := cert.instrCerts pc_t
-    ic.vm.consistent σ_o σ_t →
+    ic.storeRel σ_o σ_t →
     ∀ v ∈ cert.observable, σ_t v = σ_o v
 
 /-- Condition 1 (start): The start instructions correspond. -/
 def checkStartCorrespondenceProp (cert : PCertificate) : Prop :=
   (cert.instrCerts 0).pc_orig = 0 ∧
-  -- Initial variable map is identity (programs start with same store)
-  ∀ σ : Store, (cert.instrCerts 0).vm.consistent σ σ
+  -- Initial store relation is reflexive (programs start with same store)
+  ∀ σ : Store, (cert.instrCerts 0).storeRel σ σ
 
 /-- Condition for invariants to hold at start. -/
 def checkInvariantsAtStartProp (cert : PCertificate) : Prop :=
@@ -218,7 +213,7 @@ def checkNonterminationProp (cert : PCertificate) (μ : PTransMeasure) : Prop :=
   ∀ (pc_t pc_t' : Label) (σ_t σ_t' σ_o : Store),
     cert.inv_trans pc_t σ_t →
     cert.inv_orig (cert.instrCerts pc_t).pc_orig σ_o →
-    (cert.instrCerts pc_t).vm.consistent σ_o σ_t →
+    (cert.instrCerts pc_t).storeRel σ_o σ_t →
     (∃ c', (cert.trans ⊩ Cfg.run pc_t σ_t ⟶ c') ∧ c' = Cfg.run pc_t' σ_t') →
     -- If the original takes 0 steps (pc_orig doesn't change)
     (cert.instrCerts pc_t).pc_orig = (cert.instrCerts pc_t').pc_orig →
@@ -250,7 +245,7 @@ def PSimRel (cert : PCertificate) (pc_t : Label) (σ_t : Store)
     (pc_o : Label) (σ_o : Store) : Prop :=
   let ic := cert.instrCerts pc_t
   ic.pc_orig = pc_o ∧
-  ic.vm.consistent σ_o σ_t ∧
+  ic.storeRel σ_o σ_t ∧
   cert.inv_trans pc_t σ_t ∧
   cert.inv_orig pc_o σ_o
 
@@ -296,22 +291,22 @@ theorem step_sim {cert : PCertificate} {μ : PTransMeasure}
     ∃ pc_o' σ_o',
       (cert.orig ⊩ Cfg.run pc_o σ_o ⟶* Cfg.run pc_o' σ_o') ∧
       PSimRel cert pc_t' σ_t' pc_o' σ_o' := by
-  obtain ⟨hpc_orig, hvm_cons, hinv_t, hinv_o⟩ := hsim
+  obtain ⟨hpc_orig, hrel_cons, hinv_t, hinv_o⟩ := hsim
   -- From checkAllTransitionsProp, get matching transition
-  obtain ⟨tc, _, hvm1, hvm2, htrans⟩ :=
+  obtain ⟨tc, _, hrel1, hrel2, htrans⟩ :=
     hvalid.transitions pc_t σ_t σ_t' pc_t' hstep
-  -- Variable map consistency from hsim + tc agreement
-  have hvm_tc : tc.vm.consistent σ_o σ_t := hvm1 ▸ hvm_cons
+  -- Store relation from hsim + tc agreement
+  have hrel_tc : tc.storeRel σ_o σ_t := hrel1 ▸ hrel_cons
   -- Unify pc_o with ic.pc_orig
   subst hpc_orig
-  -- Transition varmap gives original steps
-  obtain ⟨σ_o', horig_steps, hvm_next⟩ :=
-    htrans σ_t σ_t' σ_o hinv_t hinv_o hvm_tc hstep
+  -- Transition relation gives original steps
+  obtain ⟨σ_o', horig_steps, hrel_next⟩ :=
+    htrans σ_t σ_t' σ_o hinv_t hinv_o hrel_tc hstep
   -- Build the original steps from pc_o
   refine ⟨(cert.instrCerts pc_t').pc_orig, σ_o', horig_steps, ?_⟩
   -- Establish PSimRel at new config
   exact ⟨rfl,
-         hvm2 ▸ hvm_next,
+         hrel2 ▸ hrel_next,
          hvalid.inv_preserved.2 pc_t σ_t hinv_t pc_t' σ_t' hstep,
          inv_preserved_steps hvalid.inv_preserved.1 horig_steps hinv_o⟩
 
@@ -348,7 +343,7 @@ theorem soundness_halt
     cases hstep with
     | halt h =>
       -- Transformed program halts at pc_t
-      obtain ⟨hpc_orig, hvm_cons, _, _⟩ := hsim
+      obtain ⟨hpc_orig, hrel_cons, _, _⟩ := hsim
       -- Unify pc_o with (instrCerts pc_t).pc_orig
       have h_pc_eq : pc_o = (cert.instrCerts pc_t).pc_orig := hpc_orig.symm
       subst h_pc_eq
@@ -359,7 +354,7 @@ theorem soundness_halt
         have := Cfg.halt.inj hc'
         subst this
         exact ⟨σ_o, Steps.single (Step.halt horig_halt),
-               hvalid.halt_obs pc_t σ_t σ_o h hvm_cons⟩
+               hvalid.halt_obs pc_t σ_t σ_o h hrel_cons⟩
       | step s _ => exact absurd s Step.no_step_from_halt
     | const h =>
       obtain ⟨pc_o', σ_o', horig, hsim'⟩ := step_sim hvalid hsim (.const h)

@@ -6,12 +6,21 @@ import CredibleCompilation.ExecChecker
 Example certificates for the executable checker.
 -/
 
--- Helper: build an ETransCorr with identity varmaps
+-- Helper: build an ETransCorr with empty relation
 private abbrev tc (labels : List Label) : ETransCorr := { origLabels := labels }
--- Helper: build an EInstrCert with identity varmap
+-- Helper: build identity pairs from a list of observable variables
+private def obsRel (obs : List Var) : EExprRel :=
+  obs.map fun v => (.var v, .var v)
+-- Helper: build an ETransCorr whose target has observable identity pairs
+private abbrev tcObs (labels : List Label) (obs : EExprRel) : ETransCorr :=
+  { origLabels := labels, rel_next := obs }
+-- Helper: build an EInstrCert with empty relation
 private abbrev ic (pc : Label) (trans : List ETransCorr) : EInstrCert :=
   { pc_orig := pc, transitions := trans }
--- Helper: build an EHaltCert with identity varmap
+-- Helper: build an EInstrCert for a halt label with observable identity pairs
+private abbrev icObs (pc : Label) (obs : EExprRel) : EInstrCert :=
+  { pc_orig := pc, rel := obs, transitions := [] }
+-- Helper: build an EHaltCert with empty relation
 private abbrev hc (pc : Label) : EHaltCert := { pc_orig := pc }
 
 -- ============================================================
@@ -32,8 +41,8 @@ def cert : ECertificate :=
     observable := ["y"]
     instrCerts := #[
       ic 0 ([tc [1]]),                          -- trans 0→1 maps to orig 0→1
-      ic 1 ([tc [2]]),                          -- trans 1→2 maps to orig 1→2
-      ic 2 ([]) ]                                 -- halt
+      ic 1 ([(tcObs [2] (obsRel ["y"]))]),                 -- trans 1→2 maps to orig 1→2
+      icObs 2 (obsRel ["y"]) ]                              -- halt
     haltCerts := #[hc 0, hc 0, hc 2]
     measure := #[0, 0, 0] }
 
@@ -57,8 +66,8 @@ def cert : ECertificate :=
     instrCerts := #[
       ic 0 ([tc [1]]),
       ic 1 ([tc [2]]),
-      ic 2 ([tc [3]]),
-      ic 3 ([]) ]
+      ic 2 ([tcObs [3] (obsRel ["c"])]),
+      icObs 3 (obsRel ["c"]) ]
     haltCerts := #[hc 0, hc 0, hc 0, hc 3]
     measure := #[0, 0, 0, 0] }
 
@@ -97,8 +106,8 @@ def cert : ECertificate :=
     observable := ["acc"]
     instrCerts := #[
       ic 0 ([tc [1]]),                                        -- trans 0→1 : orig 0→1
-      ic 1 ([tc [3], tc [2]]),                                -- trans 1→3 or 1→2
-      ic 2 ([]),                                                -- halt
+      ic 1 ([tc [3], tcObs [2] (obsRel ["acc"])]),                      -- trans 1→3 or 1→2
+      icObs 2 (obsRel ["acc"]),                                          -- halt
       ic 3 ([tc [4, 5]]),                                     -- trans 3→4 : orig 3→4→5 (two steps)
       ic 5 ([tc [6]]),                                        -- trans 4→5 : orig 5→6
       ic 6 ([tc [1]]) ]                                       -- trans 5→1 : orig 6→1
@@ -125,8 +134,8 @@ def cert : ECertificate :=
     observable := ["y"]
     instrCerts := #[
       ic 0 ([tc [1]]),
-      ic 1 ([tc [2]]),
-      ic 2 ([]) ]
+      ic 1 ([tcObs [2] (obsRel ["y"])]),
+      icObs 2 (obsRel ["y"]) ]
     haltCerts := #[hc 0, hc 0, hc 2]
     measure := #[0, 0, 0] }
 
@@ -157,8 +166,8 @@ def cert : ECertificate :=
     observable := ["a", "b"]
     instrCerts := #[
       ic 0 ([tc [1]]),          -- trans 0→1 : orig 0→1
-      ic 1 ([tc [2]]),          -- trans 1→2 : orig 1→2
-      ic 2 ([]) ]                 -- halt
+      ic 1 ([tcObs [2] (obsRel ["a", "b"])]),  -- trans 1→2 : orig 1→2
+      icObs 2 (obsRel ["a", "b"]) ]            -- halt
     haltCerts := #[hc 0, hc 0, hc 2]
     measure := #[0, 0, 0] }
 
@@ -197,8 +206,8 @@ def cert : ECertificate :=
     instrCerts := #[
       ic 0 ([tc [1]]),
       ic 1 ([tc [2]]),
-      ic 2 ([tc [3]]),
-      ic 3 ([]) ]
+      ic 2 ([tcObs [3] (obsRel ["v"])]),
+      icObs 3 (obsRel ["v"]) ]
     haltCerts := #[hc 0, hc 0, hc 0, hc 3]
     measure := #[0, 0, 0, 0] }
 
@@ -250,8 +259,8 @@ def cert : ECertificate :=
     observable := ["acc"]
     instrCerts := #[
       ic 0 ([tc [1]]),                    -- trans 0→1 : orig 0→1
-      ic 1 ([tc [3], tc [2]]),            -- trans 1→3 or 1→2
-      ic 2 ([]),                            -- halt
+      ic 1 ([tc [3], tcObs [2] (obsRel ["acc"])]),  -- trans 1→3 or 1→2
+      icObs 2 (obsRel ["acc"]),                      -- halt
       ic 3 ([tc [4, 5]]),                 -- trans 3→4 : orig 3→4→5 (two steps)
       ic 5 ([tc [6]]),                    -- trans 4→5 : orig 5→6
       ic 6 ([tc [1]]) ]                   -- trans 5→1 : orig 6→1
@@ -341,8 +350,8 @@ def cert : ECertificate :=
       ic 2 ([tc [3, 5]]),           -- trans 2→3 : orig 2→3→5 (const prop + dead code elim)
       ic 5 ([tc [6]]),              -- trans 3→4 : orig 5→6
       ic 6 ([tc [7]]),              -- trans 4→5 : orig 6→7 (CSE)
-      ic 7 ([tc [8]]),              -- trans 5→6 : orig 7→8
-      ic 8 ([]) ]                     -- halt
+      ic 7 ([tcObs [8] (obsRel ["z"])]),      -- trans 5→6 : orig 7→8
+      icObs 8 (obsRel ["z"]) ]                 -- halt
     haltCerts := #[hc 0, hc 0, hc 0, hc 0, hc 0, hc 0, hc 8]
     measure := #[0, 0, 0, 0, 0, 0, 0] }
 
@@ -430,8 +439,8 @@ def cert : ECertificate :=
       ic 2 ([tc [3]]),                -- trans 2→3 : orig 2→3
       ic 3 ([tc [5], tc [4, 7]]),     -- trans 3→6 : orig 3→5 (taken)
                                        -- trans 3→4 : orig 3→4→7 (fall + skip goto)
-      ic 7 ([tc [8]]),                -- trans 4→5 : orig 7→8
-      ic 8 ([]),                        -- halt
+      ic 7 ([tcObs [8] (obsRel ["n", "k"])]),  -- trans 4→5 : orig 7→8
+      icObs 8 (obsRel ["n", "k"]),              -- halt
       ic 5 ([tc [6]]),                -- trans 6→7 : orig 5→6
       ic 6 ([tc [3]]) ]               -- trans 7→3 : orig 6→3 (loop back)
     haltCerts := #[hc 0, hc 0, hc 0, hc 0, hc 0, hc 8, hc 0, hc 0]
@@ -554,8 +563,8 @@ def cert : ECertificate :=
       ic 8 ([tc [9]]),                -- trans 8→9 : orig 8→9
       ic 9 ([tc [4, 5]]),             -- trans 9→10 : orig 9→4→5 (the IVE step!)
       ic 5 ([tc []]),                 -- trans 10→5 : orig 5→5 (zero-step)
-      ic 10 ([tc [11]]),              -- trans 11→12 : orig 10→11
-      ic 11 ([]) ]                      -- halt
+      ic 10 ([tcObs [11] (obsRel ["n", "i"])]),  -- trans 11→12 : orig 10→11
+      icObs 11 (obsRel ["n", "i"]) ]              -- halt
     haltCerts := #[hc 0, hc 0, hc 0, hc 0, hc 0, hc 0, hc 0, hc 0, hc 0, hc 0, hc 0, hc 0, hc 0]
     measure := #[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0] }
 
