@@ -611,6 +611,62 @@ private theorem isNonZeroLit_sound {e : Expr} (h : e.isNonZeroLit = true) :
   | var => simp [Expr.isNonZeroLit] at h
   | bin => simp [Expr.isNonZeroLit] at h
 
+/-- Soundness of `BoolExpr.symEval`: if symbolic evaluation returns a result,
+    it agrees with runtime evaluation. -/
+private theorem BoolExpr.symEval_sound (b : BoolExpr) (ss : SymStore) (inv : EInv)
+    (σ₀ σ : Store)
+    (hrepr : ∀ v, (ssGet ss v).eval σ₀ = σ v)
+    (hinv : EInv.toProp inv σ₀)
+    (r : Bool) (heval : b.symEval ss inv = some r) :
+    b.eval σ = r := by
+  induction b generalizing r with
+  | cmp op x y =>
+    simp only [BoolExpr.symEval] at heval
+    -- Both variables must simplify to literals
+    generalize hsx : (ssGet ss x).simplify inv = sx at heval
+    generalize hsy : (ssGet ss y).simplify inv = sy at heval
+    cases sx <;> cases sy <;> simp at heval
+    case lit.lit a b =>
+      simp [BoolExpr.eval]
+      have hxa := Expr.simplify_sound inv (ssGet ss x) σ₀ hinv
+      have hya := Expr.simplify_sound inv (ssGet ss y) σ₀ hinv
+      rw [hsx, Expr.eval] at hxa; rw [hsy, Expr.eval] at hya
+      rw [← hrepr x, ← hxa, ← hrepr y, ← hya]
+      exact heval
+  | cmpLit op x n =>
+    simp only [BoolExpr.symEval] at heval
+    generalize hsx : (ssGet ss x).simplify inv = sx at heval
+    cases sx <;> simp at heval
+    case lit a =>
+      simp [BoolExpr.eval]
+      have hxa := Expr.simplify_sound inv (ssGet ss x) σ₀ hinv
+      rw [hsx, Expr.eval] at hxa
+      rw [← hrepr x, ← hxa]
+      exact heval
+  | not e ih =>
+    simp only [BoolExpr.symEval, Option.map] at heval
+    cases he : e.symEval ss inv <;> simp [he] at heval
+    case some val =>
+      have := ih val he
+      simp [BoolExpr.eval, this]
+      exact heval
+  | and a b iha ihb =>
+    simp only [BoolExpr.symEval] at heval
+    cases ha : a.symEval ss inv <;> simp [ha] at heval
+    case some va =>
+      cases hb : b.symEval ss inv <;> simp [hb] at heval
+      case some vb =>
+        simp [BoolExpr.eval, iha va ha, ihb vb hb]
+        exact heval
+  | or a b iha ihb =>
+    simp only [BoolExpr.symEval] at heval
+    cases ha : a.symEval ss inv <;> simp [ha] at heval
+    case some va =>
+      cases hb : b.symEval ss inv <;> simp [hb] at heval
+      case some vb =>
+        simp [BoolExpr.eval, iha va ha, ihb vb hb]
+        exact heval
+
 /-- Generalized path execution soundness with arbitrary initial symbolic store.
     The path check includes symbolic branch-direction verification for ifgoto.
     `branchInfo` provides the branch direction for the first step's ifgoto when
@@ -618,12 +674,12 @@ private theorem isNonZeroLit_sound {e : Expr} (h : e.isNonZeroLit = true) :
     matches the branch direction. -/
 private theorem execPath_sound_gen (orig : Prog) (ss : SymStore) (inv : EInv)
     (σ₀ σ : Store) (pc : Label) (labels : List Label) (pc' : Label)
-    (branchInfo : Option (Var × Bool))
+    (branchInfo : Option (BoolExpr × Bool))
     (hrepr : ∀ v, (ssGet ss v).eval σ₀ = σ v)
     (hinv : EInv.toProp inv σ₀)
     (hpath : checkOrigPath orig ss inv pc labels pc' branchInfo = true)
-    (hbranch : ∀ x taken, branchInfo = some (x, taken) →
-        if taken then σ x ≠ 0 else σ x = 0) :
+    (hbranch : ∀ cond taken, branchInfo = some (cond, taken) →
+        cond.eval σ = taken) :
     ∃ σ', Steps orig (Cfg.run pc σ) (Cfg.run pc' σ') ∧
           ∀ v, (ssGet (execPath orig ss pc labels) v).eval σ₀ = σ' v := by
   induction labels generalizing pc σ ss branchInfo with
@@ -672,36 +728,22 @@ private theorem execPath_sound_gen (orig : Prog) (ss : SymStore) (inv : EInv)
           | ifgoto b l =>
             have hexec_id : execSymbolic ss (.ifgoto b l) = ss := rfl
             simp only [computeNextPC] at hnext_opt
-            -- computeNextPC returned some, so b.asVar = some xv for some xv
-            cases hav : b.asVar with
-            | none => simp [hav] at hnext_opt
-            | some xv =>
-              simp only [hav] at hnext_opt
-              have hbeq := BoolExpr.asVar_eq hav  -- b = .var xv
-              have hsimpl := Expr.simplify_sound inv (ssGet ss xv) σ₀ hinv
-              by_cases hnonzero : (ssGet ss xv).simplify inv |>.isNonZeroLit
-              · simp only [hnonzero, ↓reduceIte] at hnext_opt
-                have hpc_eq : nextPC = l := Option.some.inj hnext_opt.symm
+            -- computeNextPC returned some, so b.symEval returned some
+            cases hsym : b.symEval ss inv <;> simp [hsym] at hnext_opt
+            case some r =>
+              cases r with
+              | true =>
+                simp at hnext_opt
+                have hpc_eq : nextPC = l := hnext_opt.symm
                 rw [hpc_eq]
-                obtain ⟨n, hsv, hne⟩ := isNonZeroLit_sound hnonzero
-                rw [hsv, Expr.eval] at hsimpl
-                have : σ xv ≠ 0 := by rw [← hrepr xv, ← hsimpl]; exact hne
-                have : b.eval σ = true := by
-                  rw [hbeq]; simp [BoolExpr.eval]; intro heq; exact this heq
-                exact ⟨σ, Step.iftrue horig_opt this, hexec_id ▸ hrepr⟩
-              · simp only [hnonzero, Bool.false_eq_true, ↓reduceIte] at hnext_opt
-                by_cases hzero : (ssGet ss xv).simplify inv == .lit 0
-                · simp only [hzero, ↓reduceIte] at hnext_opt
-                  have hpc_eq : nextPC = pc + 1 := Option.some.inj hnext_opt.symm
-                  rw [hpc_eq]
-                  have hsv := beq_iff_eq.mp hzero
-                  rw [hsv, Expr.eval] at hsimpl
-                  have : σ xv = 0 := by rw [← hrepr xv, ← hsimpl]
-                  have : b.eval σ = false := by
-                    rw [hbeq]; simp [BoolExpr.eval, this]
-                  exact ⟨σ, Step.iffall horig_opt this, hexec_id ▸ hrepr⟩
-                · simp only [hzero, Bool.false_eq_true, ↓reduceIte] at hnext_opt
-                  exact absurd hnext_opt (by simp)
+                have heval := BoolExpr.symEval_sound b ss inv σ₀ σ hrepr hinv true hsym
+                exact ⟨σ, Step.iftrue horig_opt heval, hexec_id ▸ hrepr⟩
+              | false =>
+                simp at hnext_opt
+                have hpc_eq : nextPC = pc + 1 := hnext_opt.symm
+                rw [hpc_eq]
+                have heval := BoolExpr.symEval_sound b ss inv σ₀ σ hrepr hinv false hsym
+                exact ⟨σ, Step.iffall horig_opt heval, hexec_id ▸ hrepr⟩
           | halt =>
             simp [computeNextPC] at hnext_opt
         | none =>
@@ -710,48 +752,30 @@ private theorem execPath_sound_gen (orig : Prog) (ss : SymStore) (inv : EInv)
           | none =>
             exfalso; revert hnext_eq; rw [hbi]; simp
           | some bi =>
-            obtain ⟨xv, taken⟩ := bi
+            obtain ⟨origCond, taken⟩ := bi
             cases instr with
             | ifgoto b l_orig =>
               have hexec_id : execSymbolic ss (.ifgoto b l_orig) = ss := rfl
-              -- The fallback in checkOrigPath does match b.asVar
+              -- The fallback checks b == origCond
               cases taken with
               | true =>
-                -- hnext_eq unfolds to: match b.asVar with | some x => x == xv && nextPC == l_orig | none => false
-                -- So b.asVar must be some
-                cases hav : b.asVar with
-                | none =>
-                  exfalso; revert hnext_eq; rw [hbi]; simp [hav]
-                | some xvar =>
-                  have hbeq := BoolExpr.asVar_eq hav  -- b = .var xvar
-                  have hfb : (xvar == xv && nextPC == l_orig) = true := by
-                    revert hnext_eq; rw [hbi]; simp [hav]
-                  have ⟨hxeq, hpc_eq⟩ := and_true_split hfb
-                  have hxeq := beq_iff_eq.mp hxeq
-                  have hpc_eq := beq_iff_eq.mp hpc_eq; subst hpc_eq
-                  have hσx : σ xvar ≠ 0 := by
-                    have := hbranch xv true (hbi ▸ rfl); simp at this
-                    rw [hxeq]; exact this
-                  have : b.eval σ = true := by
-                    rw [hbeq]; simp [BoolExpr.eval]; intro heq; exact hσx heq
-                  exact ⟨σ, Step.iftrue horig_opt this, hexec_id ▸ hrepr⟩
+                have hfb : (b == origCond && nextPC == l_orig) = true := by
+                  revert hnext_eq; rw [hbi]; simp
+                have ⟨hbeq, hpc_eq⟩ := and_true_split hfb
+                have hbeq := beq_iff_eq.mp hbeq
+                have hpc_eq := beq_iff_eq.mp hpc_eq; subst hpc_eq
+                have heval : b.eval σ = true := by
+                  rw [hbeq]; exact hbranch origCond true (hbi ▸ rfl)
+                exact ⟨σ, Step.iftrue horig_opt heval, hexec_id ▸ hrepr⟩
               | false =>
-                cases hav : b.asVar with
-                | none =>
-                  exfalso; revert hnext_eq; rw [hbi]; simp [hav]
-                | some xvar =>
-                  have hbeq := BoolExpr.asVar_eq hav
-                  have hfb : (xvar == xv && nextPC == pc + 1) = true := by
-                    revert hnext_eq; rw [hbi]; simp [hav]
-                  have ⟨hxeq, hpc_eq⟩ := and_true_split hfb
-                  have hxeq := beq_iff_eq.mp hxeq
-                  have hpc_eq := beq_iff_eq.mp hpc_eq; subst hpc_eq
-                  have hσx : σ xvar = 0 := by
-                    have := hbranch xv false (hbi ▸ rfl); simp at this
-                    rw [hxeq]; exact this
-                  have : b.eval σ = false := by
-                    rw [hbeq]; simp [BoolExpr.eval, hσx]
-                  exact ⟨σ, Step.iffall horig_opt this, hexec_id ▸ hrepr⟩
+                have hfb : (b == origCond && nextPC == pc + 1) = true := by
+                  revert hnext_eq; rw [hbi]; simp
+                have ⟨hbeq, hpc_eq⟩ := and_true_split hfb
+                have hbeq := beq_iff_eq.mp hbeq
+                have hpc_eq := beq_iff_eq.mp hpc_eq; subst hpc_eq
+                have heval : b.eval σ = false := by
+                  rw [hbeq]; exact hbranch origCond false (hbi ▸ rfl)
+                exact ⟨σ, Step.iffall horig_opt heval, hexec_id ▸ hrepr⟩
             | _ =>
               exfalso; revert hnext_eq; rw [hbi]; cases taken <;> simp
       -- Recursive step (branchInfo = none for rest)
@@ -766,12 +790,12 @@ private theorem execPath_sound_gen (orig : Prog) (ss : SymStore) (inv : EInv)
 /-- Path execution soundness: specialization with empty initial symbolic store. -/
 private theorem execPath_sound (orig : Prog) (inv : EInv) (σ : Store)
     (pc : Label) (labels : List Label) (pc' : Label)
-    (branchInfo : Option (Var × Bool))
+    (branchInfo : Option (BoolExpr × Bool))
     (hrepr : ∀ v, (ssGet ([] : SymStore) v).eval σ = σ v)
     (hinv : EInv.toProp inv σ)
     (hpath : checkOrigPath orig ([] : SymStore) inv pc labels pc' branchInfo = true)
-    (hbranch : ∀ x taken, branchInfo = some (x, taken) →
-        if taken then σ x ≠ 0 else σ x = 0) :
+    (hbranch : ∀ cond taken, branchInfo = some (cond, taken) →
+        cond.eval σ = taken) :
     ∃ σ', Steps orig (Cfg.run pc σ) (Cfg.run pc' σ') ∧
           ∀ v, (ssGet (execPath orig ([] : SymStore) pc labels) v).eval σ = σ' v :=
   execPath_sound_gen orig ([] : SymStore) inv σ σ pc labels pc' branchInfo
@@ -823,121 +847,155 @@ private theorem relGetOrigExpr_eq_ssGet_buildSubstMap (rel : EExprRel) (x : Var)
       simp only [relGetOrigExpr, List.find?, buildSubstMap, List.filterMap, hbeq]
       exact ih
 
+/-- If `b.mapVarsRel rel = some origCond`, then `b.eval σ_t = origCond.eval σ_o`
+    when the store relation holds through `buildSubstMap`. -/
+private theorem BoolExpr.eval_mapVarsRel (b origCond : BoolExpr)
+    (rel : EExprRel) (σ_t σ_o : Store)
+    (hmap : b.mapVarsRel rel = some origCond)
+    (hcons : ∀ x, σ_t x = (ssGet (buildSubstMap rel) x).eval σ_o) :
+    b.eval σ_t = origCond.eval σ_o := by
+  induction b generalizing origCond with
+  | cmp op x y =>
+    simp only [BoolExpr.mapVarsRel] at hmap
+    cases hx : relGetOrigExpr rel x <;> simp [hx] at hmap
+    case var x' =>
+      cases hy : relGetOrigExpr rel y <;> simp [hy] at hmap
+      case var y' =>
+        rw [← hmap]
+        simp [BoolExpr.eval]
+        have hsx : ssGet (buildSubstMap rel) x = Expr.var x' := by
+          rw [← relGetOrigExpr_eq_ssGet_buildSubstMap]; exact hx
+        have hsy : ssGet (buildSubstMap rel) y = Expr.var y' := by
+          rw [← relGetOrigExpr_eq_ssGet_buildSubstMap]; exact hy
+        rw [hcons x, hsx, hcons y, hsy]; simp [Expr.eval]
+  | cmpLit op x n =>
+    simp only [BoolExpr.mapVarsRel] at hmap
+    cases hx : relGetOrigExpr rel x <;> simp [hx] at hmap
+    case var x' =>
+      rw [← hmap]
+      simp [BoolExpr.eval]
+      have hsx : ssGet (buildSubstMap rel) x = Expr.var x' := by
+        rw [← relGetOrigExpr_eq_ssGet_buildSubstMap]; exact hx
+      rw [hcons x, hsx]; simp [Expr.eval]
+  | not e ih =>
+    simp only [BoolExpr.mapVarsRel, Option.map] at hmap
+    cases he : e.mapVarsRel rel <;> simp [he] at hmap
+    case some e' =>
+      rw [← hmap]; simp [BoolExpr.eval, ih e' he]
+  | and a b iha ihb =>
+    simp only [BoolExpr.mapVarsRel] at hmap
+    cases ha : a.mapVarsRel rel <;> simp [ha] at hmap
+    case some a' =>
+      cases hb : b.mapVarsRel rel <;> simp [hb] at hmap
+      case some b' =>
+        rw [← hmap]; simp [BoolExpr.eval, iha a' ha, ihb b' hb]
+  | or a b iha ihb =>
+    simp only [BoolExpr.mapVarsRel] at hmap
+    cases ha : a.mapVarsRel rel <;> simp [ha] at hmap
+    case some a' =>
+      cases hb : b.mapVarsRel rel <;> simp [hb] at hmap
+      case some b' =>
+        rw [← hmap]; simp [BoolExpr.eval, iha a' ha, ihb b' hb]
+
 /-- Branch direction info from the transformed program's ifgoto instruction.
-    For `ifgoto (.var x) l` with `l ≠ pc + 1`, returns `some (x, pc' == l)` indicating
-    whether the branch was taken.  Only fires for `BoolExpr.var` conditions. -/
-@[reducible] private def transBranchInfo (instr : TAC) (pc_t pc_t' : Label) : Option (Var × Bool) :=
+    For `ifgoto b l` with `l ≠ pc + 1`, returns `some (b, pc' == l)` indicating
+    the condition and whether the branch was taken. -/
+@[reducible] private def transBranchInfo (instr : TAC) (pc_t pc_t' : Label) : Option (BoolExpr × Bool) :=
   match instr with
-  | .ifgoto b l =>
-    match b.asVar with
-    | some x => if !(l == pc_t + 1) then some (x, pc_t' == l) else none
-    | none => none
+  | .ifgoto b l => if !(l == pc_t + 1) then some (b, pc_t' == l) else none
   | _ => none
 
 /-- Compute branchInfo from an instruction and an expression relation.
-    Only fires for `BoolExpr.var` conditions. -/
+    Maps the condition's variables through the relation. -/
 @[reducible] private def branchInfoWithRel (instr : TAC) (rel : EExprRel) (pc_t pc_t' : Label)
-    : Option (Var × Bool) :=
+    : Option (BoolExpr × Bool) :=
   match instr with
   | .ifgoto b l =>
-    match b.asVar with
-    | some x =>
-      match relGetOrigExpr rel x with
-      | .var origX => if !(l == pc_t + 1) then some (origX, pc_t' == l) else none
-      | _ => none
+    match b.mapVarsRel rel with
+    | some origCond => if !(l == pc_t + 1) then some (origCond, pc_t' == l) else none
     | none => none
   | _ => none
 
 /-- With empty relation, branchInfoWithRel equals transBranchInfo. -/
 private theorem branchInfoWithRel_nil (instr : TAC) (pc_t pc_t' : Label) :
     branchInfoWithRel instr ([] : EExprRel) pc_t pc_t' = transBranchInfo instr pc_t pc_t' := by
-  cases instr <;> simp [branchInfoWithRel, transBranchInfo, relGetOrigExpr, List.find?]
+  cases instr with
+  | ifgoto b l =>
+    simp only [branchInfoWithRel, transBranchInfo]
+    -- With empty relation, mapVarsRel returns some b (identity mapping)
+    suffices h : b.mapVarsRel ([] : EExprRel) = some b by simp [h]
+    induction b with
+    | cmp op x y => simp [BoolExpr.mapVarsRel, relGetOrigExpr, List.find?]
+    | cmpLit op x n => simp [BoolExpr.mapVarsRel, relGetOrigExpr, List.find?]
+    | not e ih => simp [BoolExpr.mapVarsRel, ih, Option.map]
+    | and a b iha ihb => simp [BoolExpr.mapVarsRel, iha, ihb]
+    | or a b iha ihb => simp [BoolExpr.mapVarsRel, iha, ihb]
+  | _ => simp [branchInfoWithRel, transBranchInfo]
 
-/-- When the branchInfo computed from `instr` and `pc_t'` says `some (xv, taken)`,
-    we can derive the branch condition from any step. -/
+/-- When `transBranchInfo` returns `some (cond, taken)`,
+    we can derive `cond.eval σ = taken` from any step. -/
 private theorem branchInfo_of_step {prog : Prog} {pc pc' : Label} {σ σ' : Store}
     {instr : TAC} (hinstr : prog[pc]? = some instr)
     (hstep : Step prog (Cfg.run pc σ) (Cfg.run pc' σ'))
-    {xv : Var} {taken : Bool}
-    (hbi : transBranchInfo instr pc pc' = some (xv, taken)) :
-    if taken then σ xv ≠ 0 else σ xv = 0 := by
+    {cond : BoolExpr} {taken : Bool}
+    (hbi : transBranchInfo instr pc pc' = some (cond, taken)) :
+    cond.eval σ = taken := by
   cases instr with
   | ifgoto b l =>
-    -- transBranchInfo has match b.asVar with | some x => ... | none => none
     simp only [transBranchInfo] at hbi
-    cases hav : b.asVar with
-    | none => simp [hav] at hbi
-    | some xvar =>
-      simp only [hav] at hbi
-      have hbeq := BoolExpr.asVar_eq hav  -- b = .var xvar
-      subst hbeq  -- replace b with .var xvar everywhere
-      by_cases hguard : (!(l == pc + 1))
-      · simp only [hguard, ↓reduceIte, Option.some.injEq, Prod.mk.injEq] at hbi
-        obtain ⟨rfl, rfl⟩ := hbi
-        -- xv = xvar, taken = (pc' == l)
-        cases hstep with
-        | iftrue h heval =>
-          have heq := Option.some.inj (hinstr.symm.trans h)
-          simp only [TAC.ifgoto.injEq] at heq
-          obtain ⟨rfl, rfl⟩ := heq
-          have : σ xvar ≠ 0 := BoolExpr.var_eval_true heval
-          simp [this]
-        | iffall h heval =>
-          have heq := Option.some.inj (hinstr.symm.trans h)
-          simp only [TAC.ifgoto.injEq] at heq
-          obtain ⟨rfl, rfl⟩ := heq
-          have : ¬(l = pc + 1) := by simpa using hguard
-          have : ¬(pc + 1 = l) := fun h => this h.symm
-          have hσ : σ xvar = 0 := BoolExpr.var_eval_false heval
-          simp [beq_eq_false_iff_ne.mpr this, hσ]
-        | const h => exact absurd (hinstr.symm.trans h) (by simp)
-        | copy h => exact absurd (hinstr.symm.trans h) (by simp)
-        | binop h => exact absurd (hinstr.symm.trans h) (by simp)
-        | goto h => exact absurd (hinstr.symm.trans h) (by simp)
-      · simp [hguard] at hbi
+    by_cases hguard : (!(l == pc + 1))
+    · simp only [hguard, ↓reduceIte, Option.some.injEq, Prod.mk.injEq] at hbi
+      obtain ⟨rfl, rfl⟩ := hbi
+      -- cond = b, taken = (pc' == l)
+      cases hstep with
+      | iftrue h heval =>
+        have heq := Option.some.inj (hinstr.symm.trans h)
+        simp only [TAC.ifgoto.injEq] at heq
+        obtain ⟨rfl, rfl⟩ := heq
+        simp [heval]
+      | iffall h heval =>
+        have heq := Option.some.inj (hinstr.symm.trans h)
+        simp only [TAC.ifgoto.injEq] at heq
+        obtain ⟨rfl, rfl⟩ := heq
+        have : ¬(l = pc + 1) := by simpa using hguard
+        have : ¬(pc + 1 = l) := fun h => this h.symm
+        simp [beq_eq_false_iff_ne.mpr this, heval]
+      | const h => exact absurd (hinstr.symm.trans h) (by simp)
+      | copy h => exact absurd (hinstr.symm.trans h) (by simp)
+      | binop h => exact absurd (hinstr.symm.trans h) (by simp)
+      | goto h => exact absurd (hinstr.symm.trans h) (by simp)
+    · simp [hguard] at hbi
   | _ => simp [transBranchInfo] at hbi
 
-/-- When `branchInfoWithRel` returns `some (origX, taken)`, a step on the
-    transformed program transfers the branch condition to the original variable
-    via the store relation. Only fires when `relGetOrigExpr rel x = .var origX`. -/
+/-- When `branchInfoWithRel` returns `some (origCond, taken)`, a step on the
+    transformed program implies `origCond.eval σ_o = taken`
+    via the store relation and `eval_mapVarsRel`. -/
 private theorem branchInfo_of_step_with_rel {prog : Prog} {pc pc' : Label} {σ_t σ_t' : Store}
     {instr : TAC} (hinstr : prog[pc]? = some instr)
     (hstep : Step prog (Cfg.run pc σ_t) (Cfg.run pc' σ_t'))
     {rel : EExprRel} {σ_o : Store}
     (hcons : ∀ x, σ_t x = (ssGet (buildSubstMap rel) x).eval σ_o)
-    {origX : Var} {taken : Bool}
-    (hbi : branchInfoWithRel instr rel pc pc' = some (origX, taken)) :
-    if taken then σ_o origX ≠ 0 else σ_o origX = 0 := by
+    {origCond : BoolExpr} {taken : Bool}
+    (hbi : branchInfoWithRel instr rel pc pc' = some (origCond, taken)) :
+    origCond.eval σ_o = taken := by
   cases instr with
   | ifgoto b l =>
     simp only [branchInfoWithRel] at hbi
-    -- Case split on b.asVar
-    cases hav : b.asVar with
-    | none => simp [hav] at hbi
-    | some xvar =>
-      simp only [hav] at hbi
-      have hbeq := BoolExpr.asVar_eq hav  -- b = .var xvar
-      subst hbeq  -- replace b with .var xvar
-      -- Case split on relGetOrigExpr rel xvar
-      cases hrel : relGetOrigExpr rel xvar with
-      | var v =>
-        simp only [hrel] at hbi
-        by_cases hguard : (!(l == pc + 1))
-        · simp only [hguard, ↓reduceIte, Option.some.injEq, Prod.mk.injEq] at hbi
-          obtain ⟨rfl, rfl⟩ := hbi
-          -- origX = v, taken = (pc' == l)
-          have hss : ssGet (buildSubstMap rel) xvar = Expr.var v := by
-            rw [← relGetOrigExpr_eq_ssGet_buildSubstMap]; exact hrel
-          have hσ_eq : σ_t xvar = σ_o v := by rw [hcons xvar, hss]; simp [Expr.eval]
-          -- Use branchInfo_of_step to get branch condition on σ_t xvar
-          have htbi : transBranchInfo (.ifgoto (.var xvar) l) pc pc' = some (xvar, pc' == l) := by
-            simp [transBranchInfo, BoolExpr.asVar, hguard]
-          have hbranch := branchInfo_of_step hinstr hstep htbi
-          -- Transfer from σ_t xvar to σ_o v
-          rw [← hσ_eq]; exact hbranch
-        · simp [hguard] at hbi
-      | lit _ => simp [hrel] at hbi
-      | bin _ _ _ => simp [hrel] at hbi
+    cases hmap : b.mapVarsRel rel with
+    | none => simp [hmap] at hbi
+    | some origCond' =>
+      simp only [hmap] at hbi
+      by_cases hguard : (!(l == pc + 1))
+      · simp only [hguard, ↓reduceIte, Option.some.injEq, Prod.mk.injEq] at hbi
+        obtain ⟨rfl, rfl⟩ := hbi
+        -- Use transBranchInfo to get b.eval σ_t = taken
+        have htbi : transBranchInfo (.ifgoto b l) pc pc' = some (b, pc' == l) := by
+          simp [transBranchInfo, hguard]
+        have hbranch := branchInfo_of_step hinstr hstep htbi
+        -- Transfer via eval_mapVarsRel: b.eval σ_t = origCond'.eval σ_o
+        have heval := BoolExpr.eval_mapVarsRel b origCond' rel σ_t σ_o hmap hcons
+        rw [← heval]; exact hbranch
+      · simp [hguard] at hbi
   | _ => simp [branchInfoWithRel] at hbi
 
 /-- Soundness of checkTransitionRelProp from the Bool checks.
@@ -966,10 +1024,10 @@ private theorem transRel_sound (dc : ECertificate) (pc_t pc_t' : Label)
   -- hcons : eRelToStoreRel dtc.rel σ_o σ_t, i.e. ∀ x, σ_t x = (ssGet (buildSubstMap dtc.rel) x).eval σ_o
   change ∀ x, σ_t x = (ssGet (buildSubstMap dtc.rel) x).eval σ_o at hcons
   -- Branch info transfers through the relation
-  have hbranch_orig : ∀ x taken,
-      branchInfoWithRel instr dtc.rel pc_t pc_t' = some (x, taken) →
-      if taken then σ_o x ≠ 0 else σ_o x = 0 :=
-    fun x taken hbi => branchInfo_of_step_with_rel hinstr hstep hcons hbi
+  have hbranch_orig : ∀ cond taken,
+      branchInfoWithRel instr dtc.rel pc_t pc_t' = some (cond, taken) →
+      cond.eval σ_o = taken :=
+    fun cond taken hbi => branchInfo_of_step_with_rel hinstr hstep hcons hbi
   -- Execute original path from σ_o
   obtain ⟨σ_o', horig_steps, horig_repr⟩ := execPath_sound dc.orig
     (dc.inv_orig.getD dic.pc_orig ([] : EInv)) σ_o

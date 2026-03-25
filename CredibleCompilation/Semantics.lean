@@ -73,59 +73,36 @@ def CmpOp.eval : CmpOp → Val → Val → Bool
 
 /-- Boolean expressions for conditional branches. -/
 inductive BoolExpr where
-  | var : Var → BoolExpr                    -- x ≠ 0 (backward compatible)
-  | cmp : CmpOp → Var → Var → BoolExpr     -- x op y
-  | not : BoolExpr → BoolExpr
-  | and : BoolExpr → BoolExpr → BoolExpr
-  | or  : BoolExpr → BoolExpr → BoolExpr
+  | cmp    : CmpOp → Var → Var → BoolExpr     -- x op y
+  | cmpLit : CmpOp → Var → Val → BoolExpr     -- x op n (variable vs literal)
+  | not    : BoolExpr → BoolExpr
+  | and    : BoolExpr → BoolExpr → BoolExpr
+  | or     : BoolExpr → BoolExpr → BoolExpr
   deriving Repr, DecidableEq
 
 def BoolExpr.eval (σ : Store) : BoolExpr → Bool
-  | .var x     => σ x != 0
-  | .cmp op x y => op.eval (σ x) (σ y)
-  | .not e     => !e.eval σ
-  | .and a b   => a.eval σ && b.eval σ
-  | .or a b    => a.eval σ || b.eval σ
+  | .cmp op x y    => op.eval (σ x) (σ y)
+  | .cmpLit op x n => op.eval (σ x) n
+  | .not e         => !e.eval σ
+  | .and a b       => a.eval σ && b.eval σ
+  | .or a b        => a.eval σ || b.eval σ
 
 theorem BoolExpr.eval_congr (cond : BoolExpr) (σ τ : Store)
     (hagree : ∀ y, σ y = τ y) : cond.eval σ = cond.eval τ := by
   induction cond with
-  | var x => simp [BoolExpr.eval, hagree]
   | cmp op x y => simp [BoolExpr.eval, hagree]
+  | cmpLit op x n => simp [BoolExpr.eval, hagree]
   | not e ih => simp [BoolExpr.eval, ih]
   | and a b iha ihb => simp [BoolExpr.eval, iha, ihb]
   | or a b iha ihb => simp [BoolExpr.eval, iha, ihb]
 
 /-- Collect all variable names from a boolean expression. -/
 def BoolExpr.vars : BoolExpr → List Var
-  | .var x     => [x]
-  | .cmp _ x y => [x, y]
-  | .not e     => e.vars
-  | .and a b   => a.vars ++ b.vars
-  | .or a b    => a.vars ++ b.vars
-
-/-- Extract the single variable from a `BoolExpr.var`, if applicable. -/
-def BoolExpr.asVar : BoolExpr → Option Var
-  | .var x => some x
-  | _      => none
-
-theorem BoolExpr.asVar_eq {b : BoolExpr} {x : Var} (h : b.asVar = some x) :
-    b = .var x := by
-  cases b with
-  | var v => simp [asVar] at h; subst h; rfl
-  | _ => simp [asVar] at h
-
-theorem BoolExpr.var_eval_true {σ : Store} {x : Var}
-    (h : BoolExpr.eval σ (.var x) = true) : σ x ≠ 0 := by
-  intro heq; simp [BoolExpr.eval, heq] at h
-
-theorem BoolExpr.var_eval_false {σ : Store} {x : Var}
-    (h : BoolExpr.eval σ (.var x) = false) : σ x = 0 := by
-  simp only [BoolExpr.eval] at h
-  -- h : (σ x != 0) = false, i.e. !(σ x == 0) = false
-  have h2 : (σ x == 0) = true := by
-    cases hb : (σ x == 0) <;> simp_all [bne]
-  exact beq_iff_eq.mp h2
+  | .cmp _ x y    => [x, y]
+  | .cmpLit _ x _ => [x]
+  | .not e        => e.vars
+  | .and a b      => a.vars ++ b.vars
+  | .or a b       => a.vars ++ b.vars
 
 -- ============================================================
 -- § 3. Syntax – Three-Address Code instructions
@@ -325,7 +302,7 @@ theorem Step.progress (p : Prog) (pc : Nat) (σ : Store)
 --  4:  goto 0             -- loop back
 
 def sumProg : Prog := #[
-  .ifgoto (.var "n") 2,                -- 0
+  .ifgoto (.cmpLit .ne "n" 0) 2,       -- 0
   .halt,                               -- 1
   .binop  "acc" .add "acc" "n",        -- 2
   .binop  "n"   .sub "n"   "one",      -- 3
@@ -339,7 +316,7 @@ def sumStore (n : Val) : Store :=
 
 -- ▸ One step from pc=0 with n=3: the conditional is taken, jump to pc=2.
 example : sumProg ⊩ Cfg.run 0 (sumStore 3) ⟶ Cfg.run 2 (sumStore 3) :=
-  .iftrue rfl (by simp [BoolExpr.eval, sumStore, Store.update])
+  .iftrue rfl (by native_decide)
 
 -- ▸ Step from pc=2: acc := acc + n fires; the updated store exists.
 example : ∃ σ', sumProg ⊩ Cfg.run 2 (sumStore 3) ⟶ Cfg.run 3 σ' :=

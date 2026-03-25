@@ -113,18 +113,35 @@ def Expr.isNonZeroLit : Expr → Bool
   | .lit _ => true
   | _      => false
 
+/-- Symbolically evaluate a BoolExpr under a symbolic store and invariant.
+    Returns `some true`/`some false` if the result can be determined, `none` otherwise. -/
+def BoolExpr.symEval (ss : SymStore) (inv : EInv) : BoolExpr → Option Bool
+  | .cmp op x y =>
+    match (ssGet ss x).simplify inv, (ssGet ss y).simplify inv with
+    | .lit a, .lit b => some (op.eval a b)
+    | _, _ => none
+  | .cmpLit op x n =>
+    match (ssGet ss x).simplify inv with
+    | .lit a => some (op.eval a n)
+    | _ => none
+  | .not e => e.symEval ss inv |>.map (!·)
+  | .and a b => match a.symEval ss inv, b.symEval ss inv with
+    | some a, some b => some (a && b)
+    | _, _ => none
+  | .or a b => match a.symEval ss inv, b.symEval ss inv with
+    | some a, some b => some (a || b)
+    | _, _ => none
+
 /-- Like `canReach`, but for `ifgoto` also verifies the branch direction
-    via the symbolic value of the condition variable under the invariant.
-    Only handles `BoolExpr.var x` for symbolic resolution.
+    via symbolic evaluation of the boolean condition under the invariant.
     Non-ifgoto instructions fall back to plain `canReach`. -/
 def canReachSym (ss : SymStore) (inv : EInv) (instr : TAC) (pc next : Label) : Bool :=
   match instr with
   | .ifgoto b l =>
-    match b.asVar with
-    | some x =>
-      let sv := (ssGet ss x).simplify inv
-      (next == l && sv.isNonZeroLit) || (next == pc + 1 && sv == Expr.lit 0)
-    | none => canReach instr pc next
+    match b.symEval ss inv with
+    | some true  => next == l
+    | some false => next == pc + 1
+    | none       => canReach instr pc next
   | _ => canReach instr pc next
 
 /-- Collect all variable names from both programs. -/
@@ -188,6 +205,25 @@ def relGetOrigExpr (rel : EExprRel) (v : Var) : Expr :=
   match rel.find? (fun p => p.2 == .var v) with
   | some (e_o, _) => e_o
   | none => .var v
+
+/-- Map variables in a BoolExpr through the expression relation.
+    Only succeeds if every variable maps to a single variable (`.var v`). -/
+def BoolExpr.mapVarsRel (rel : EExprRel) : BoolExpr → Option BoolExpr
+  | .cmp op x y =>
+    match relGetOrigExpr rel x, relGetOrigExpr rel y with
+    | .var x', .var y' => some (.cmp op x' y')
+    | _, _ => none
+  | .cmpLit op x n =>
+    match relGetOrigExpr rel x with
+    | .var x' => some (.cmpLit op x' n)
+    | _ => none
+  | .not e => e.mapVarsRel rel |>.map .not
+  | .and a b => match a.mapVarsRel rel, b.mapVarsRel rel with
+    | some a', some b' => some (.and a' b')
+    | _, _ => none
+  | .or a b => match a.mapVarsRel rel, b.mapVarsRel rel with
+    | some a', some b' => some (.or a' b')
+    | _, _ => none
 
 /-- Build a substitution map from pre-relation pairs of the form `(e_o, .var v)`.
     Maps transformed variable `v` to original expression `e_o`. -/
@@ -282,30 +318,27 @@ def checkHaltObservableExec (cert : ECertificate) : Bool :=
         ssGet (buildSubstMap ic.rel) v == .var v
     | _ => true
 
-/-- Compute the next PC from an instruction, using symbolic branch analysis for ifgoto. -/
+/-- Compute the next PC from an instruction, using symbolic evaluation for ifgoto. -/
 def computeNextPC (instr : TAC) (pc : Label) (ss : SymStore) (inv : EInv) : Option Label :=
   match instr with
   | .const _ _ | .copy _ _ | .binop _ _ _ _ => some (pc + 1)
   | .goto l => some l
   | .ifgoto b l =>
-    match b.asVar with
-    | some x =>
-      let sv := (ssGet ss x).simplify inv
-      if sv.isNonZeroLit then some l
-      else if sv == .lit 0 then some (pc + 1)
-      else none
-    | none => none
+    match b.symEval ss inv with
+    | some true  => some l
+    | some false => some (pc + 1)
+    | none       => none
   | .halt => none
 
 /-- Verify that the original path is structurally valid:
     at each PC, the instruction's successor matches the next label.
-    `branchInfo` provides the condition variable and branch direction from the
+    `branchInfo` provides the mapped boolean condition and branch direction from the
     transformed instruction's ifgoto, used as a fallback when symbolic analysis
-    of the original ifgoto is inconclusive (both programs check the same variable
-    and stores agree via identity varmap). Only applies to the first step. -/
+    of the original ifgoto is inconclusive (both programs check the same condition
+    and stores agree via the expression relation). Only applies to the first step. -/
 def checkOrigPath (orig : Prog) (ss : SymStore) (inv : EInv)
     (pc : Label) (labels : List Label) (pc_next : Label)
-    (branchInfo : Option (Var × Bool) := none) : Bool :=
+    (branchInfo : Option (BoolExpr × Bool) := none) : Bool :=
   match labels with
   | [] => pc == pc_next
   | nextPC :: rest =>
@@ -314,13 +347,11 @@ def checkOrigPath (orig : Prog) (ss : SymStore) (inv : EInv)
       let pcOk := match computeNextPC instr pc ss inv with
         | some pc' => pc' == nextPC
         | none =>
-          -- Fallback: if the transformed ifgoto checks the same variable,
-          -- use its branch direction (stores agree via identity varmap)
+          -- Fallback: if the original ifgoto has the same condition (mapped through
+          -- the relation), use the branch direction from the transformed side
           match branchInfo, instr with
-          | some (xv, true),  .ifgoto b l =>
-            match b.asVar with | some x => x == xv && nextPC == l | none => false
-          | some (xv, false), .ifgoto b _ =>
-            match b.asVar with | some x => x == xv && nextPC == pc + 1 | none => false
+          | some (origCond, true),  .ifgoto b l => b == origCond && nextPC == l
+          | some (origCond, false), .ifgoto b _ => b == origCond && nextPC == pc + 1
           | _, _ => false
       pcOk &&
       checkOrigPath orig (execSymbolic ss instr) inv nextPC rest pc_next none
@@ -356,16 +387,13 @@ def checkAllTransitionsExec (cert : ECertificate) : Bool :=
         (successors instr pc_t).all fun pc_t' =>
           let ic' := cert.instrCerts.getD pc_t' default
           -- For ifgoto: pass branch direction to checkOrigPath.
-          -- Map the condition variable through the relation to orig space.
+          -- Map the condition's variables through the relation to orig space.
           -- Guard: l ≠ pc+1 ensures pc_t' disambiguates taken vs fallthrough.
           let branchInfo := match instr with
             | .ifgoto b l =>
-              match b.asVar with
-              | some x =>
-                match relGetOrigExpr ic.rel x with
-                | .var origX =>
-                  if !(l == pc_t + 1) then some (origX, pc_t' == l) else none
-                | _ => none
+              match b.mapVarsRel ic.rel with
+              | some origCond =>
+                if !(l == pc_t + 1) then some (origCond, pc_t' == l) else none
               | none => none
             | _ => none
           ic.transitions.any fun tc =>

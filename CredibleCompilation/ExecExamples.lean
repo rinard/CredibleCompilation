@@ -239,7 +239,7 @@ namespace DCE
 
 def cert : ECertificate :=
   { orig  := #[.const "x" 1,            -- 0
-               .ifgoto (.var "x") 3,     -- 1: always taken
+               .ifgoto (.cmpLit .ne "x" 0) 3,     -- 1: always taken
                .halt,                    -- 2: dead
                .const "y" 5,            -- 3
                .halt]                    -- 4
@@ -301,7 +301,7 @@ def cert : ECertificate :=
   { orig := #[
       .const "one" 1,              -- 0
       .binop "t" .mul "a" "b",    -- 1: t := a * b
-      .ifgoto (.var "n") 4,       -- 2: loop head
+      .ifgoto (.cmpLit .ne "n" 0) 4,       -- 2: loop head
       .halt,                       -- 3
       .binop "s" .add "s" "t",    -- 4: loop body
       .binop "t" .mul "a" "b",    -- 5: redundant recomputation
@@ -310,7 +310,7 @@ def cert : ECertificate :=
     trans := #[
       .const "one" 1,              -- 0
       .binop "t" .mul "a" "b",    -- 1: t := a * b
-      .ifgoto (.var "n") 4,       -- 2: loop head
+      .ifgoto (.cmpLit .ne "n" 0) 4,       -- 2: loop head
       .halt,                       -- 3
       .binop "s" .add "s" "t",    -- 4: loop body
       .binop "n" .sub "n" "one",  -- 5: n--  (redundant t:=a*b removed)
@@ -398,7 +398,7 @@ def cert : ECertificate :=
       .const "one" 1,              -- 0
       .const "k" 100,              -- 1
       .binop "rem" .sub "k" "i",  -- 2: loop head — recompute rem
-      .ifgoto (.var "rem") 5,      -- 3
+      .ifgoto (.cmpLit .ne "rem" 0) 5,      -- 3
       .halt,                       -- 4
       .binop "i" .add "i" "one",  -- 5: i++
       .goto 2 ]                    -- 6: back to recomputation
@@ -406,7 +406,7 @@ def cert : ECertificate :=
       .const "one" 1,              -- 0
       .const "k" 100,              -- 1
       .binop "rem" .sub "k" "i",  -- 2: initial rem (same)
-      .ifgoto (.var "rem") 5,      -- 3: loop head
+      .ifgoto (.cmpLit .ne "rem" 0) 5,      -- 3: loop head
       .halt,                       -- 4
       .binop "i" .add "i" "one",  -- 5: i++
       .binop "rem" .sub "rem" "one", -- 6: IVE — countdown
