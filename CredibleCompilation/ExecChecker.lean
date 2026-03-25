@@ -36,11 +36,15 @@ def lookupExpr (inv : EInv) (v : Var) : Option Expr :=
 /-- Reassociate sub-expressions involving literals after simplification.
     Normalizes patterns like `(n - x) - m → (n - m) - x` and
     `n - (x + m) → (n - m) - x` so that the checker can verify
-    induction variable elimination (countdown vs recomputation). -/
+    induction variable elimination (countdown vs recomputation).
+    Also normalizes `(n - x) + m → (n + m) - x` and `n - (x - m) → (n + m) - x`
+    for additive induction variable elimination. -/
 def Expr.reassoc : BinOp → Expr → Expr → Expr
+  | .add, .bin .sub (.lit na) x, .lit nb => .bin .sub (.lit (na + nb)) x
   | .sub, .bin .sub (.lit na) x, .lit nb => .bin .sub (.lit (na - nb)) x
   | .sub, .lit na, .bin .add x (.lit nb) => .bin .sub (.lit (na - nb)) x
   | .sub, .lit na, .bin .add (.lit nb) x => .bin .sub (.lit (na - nb)) x
+  | .sub, .lit na, .bin .sub x (.lit nb) => .bin .sub (.lit (na + nb)) x
   | op, a, b => .bin op a b
 
 /-- Simplify an `Expr` by substituting known variable expressions and constant-folding.
@@ -379,6 +383,16 @@ def checkNonterminationExec (cert : ECertificate) : Bool :=
       | none => false
     | none => true
 
+/-- **Condition 6**: The transformed program is non-empty and every successor
+    PC is in bounds.  This ensures the transformed program never gets stuck
+    (PC out of bounds is the only cause of stuck states). -/
+def checkSuccessorsInBounds (cert : ECertificate) : Bool :=
+  cert.trans.size > 0 &&
+  (List.range cert.trans.size).all fun pc =>
+    match cert.trans[pc]? with
+    | some instr => (successors instr pc).all (· < cert.trans.size)
+    | none => true
+
 -- ============================================================
 -- § 7. Main checker
 -- ============================================================
@@ -392,7 +406,8 @@ def checkCertificateExec (cert : ECertificate) : Bool :=
   checkAllTransitionsExec cert &&
   checkHaltCorrespondenceExec cert &&
   checkHaltObservableExec cert &&
-  checkNonterminationExec cert
+  checkNonterminationExec cert &&
+  checkSuccessorsInBounds cert
 
 /-- Verbose check: returns the result of each individual condition. -/
 def checkCertificateVerboseExec (cert : ECertificate) : List (String × Bool) :=
@@ -403,5 +418,6 @@ def checkCertificateVerboseExec (cert : ECertificate) : List (String × Bool) :=
     ("all_transitions",       checkAllTransitionsExec cert),
     ("halt_correspondence",   checkHaltCorrespondenceExec cert),
     ("halt_observable",       checkHaltObservableExec cert),
-    ("nontermination",        checkNonterminationExec cert) ]
+    ("nontermination",        checkNonterminationExec cert),
+    ("successors_in_bounds",  checkSuccessorsInBounds cert) ]
 

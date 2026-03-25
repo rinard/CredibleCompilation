@@ -13,6 +13,8 @@ def main : IO Unit := do
     ("Example 7 (const prop+CSE+DCE)", checkCertificateExec EExample7.cert),
     ("Example 8 (goto elimination)", checkCertificateExec EExample8.cert),
     ("Example 9 (IV elimination)", checkCertificateExec EExample9.cert),
+    ("Example 10 (CSE temp→expr)", checkCertificateExec EExample10.cert),
+    ("Example 11 (IVE k=100-rem)", checkCertificateExec EExample11.cert),
     ("Bad Example (buggy y:=3≠5)", checkCertificateExec EBadExample.cert)
   ]
   for (name, result) in examples do

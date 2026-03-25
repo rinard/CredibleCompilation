@@ -572,3 +572,212 @@ def cert : ECertificate :=
 #eval! checkCertificateVerboseExec cert
 
 end EExample9
+
+/-! ### Example 10: CSE with temporary variable mapped to an expression
+
+  Original:
+    0: a := x + y
+    1: b := x + y
+    2: halt
+
+  Transformed (CSE into temporary):
+    0: t := x + y    -- extract common subexpression into temp
+    1: a := t
+    2: b := t
+    3: halt
+
+  The temporary `t` in the transformed program does not exist in the original.
+  The expression relation `(x+y, t)` maps transformed variable `t` to the
+  *expression* `x+y` in the original — something the old variable-map framework
+  could not express.
+
+  At halt, only `a` and `b` are observable; `t` is not.
+  Trans step 0 is a zero-step original transition (orig stays at pc 0)
+  that establishes the `t = x+y` relation, with a decreasing measure to
+  guarantee termination.
+-/
+namespace EExample10
+
+-- The key relation: transformed variable `t` equals original expression `x+y`
+private def tRel : EExprRel := [(.bin .add (.var "x") (.var "y"), .var "t")]
+-- At halt: observable identity + temp mapping (temp not observable)
+private def haltRel : EExprRel := obsRel ["a", "b"] ++ tRel
+
+def cert : ECertificate :=
+  { orig  := #[.binop "a" .add "x" "y",
+               .binop "b" .add "x" "y",
+               .halt]
+    trans := #[.binop "t" .add "x" "y",    -- 0: extract CSE into temp
+               .copy "a" "t",               -- 1: a gets temp
+               .copy "b" "t",               -- 2: b gets temp
+               .halt]                        -- 3
+    inv_orig  := #[[], [], []]
+    inv_trans := #[[], [], [], []]
+    observable := ["a", "b"]
+    instrCerts := #[
+      -- Trans 0→1: orig stays at 0 (zero-step), establishes t = x+y
+      { pc_orig := 0, rel := [],
+        transitions := [{ origLabels := [], rel_next := tRel }] },
+      -- Trans 1→2: orig 0→1 (a := x+y), t = x+y carries through
+      { pc_orig := 0, rel := tRel,
+        transitions := [{ origLabels := [1], rel := tRel, rel_next := tRel }] },
+      -- Trans 2→3: orig 1→2 (b := x+y), post-rel adds observable identity
+      { pc_orig := 1, rel := tRel,
+        transitions := [{ origLabels := [2], rel := tRel, rel_next := haltRel }] },
+      -- Halt: orig pc 2 is also halt
+      { pc_orig := 2, rel := haltRel, transitions := [] } ]
+    haltCerts := #[hc 0, hc 0, hc 0, hc 2]
+    measure := #[1, 0, 0, 0] }   -- measure decreases at the zero-step
+
+#eval! checkCertificateExec cert              -- true
+#eval! checkCertificateVerboseExec cert
+
+end EExample10
+
+/-! ### Example 11: Induction variable elimination (variable removed from transformed program)
+
+  Computes `j = 0 + 1 + 2 + … + 99` using a loop counter `rem` counting down
+  from 100.  The original program recomputes `k := hundred − rem` (counting up
+  from 0) each iteration; the transformed replaces this with an incremental
+  `k := k + one`.
+
+  Original (10 instructions):
+    0: one := 1;  1: hundred := 100;  2: rem := hundred
+    3: k := hundred − rem             ← initial k (= 0); also recomputes each iter
+    4: if rem goto 6;  5: halt        ← j observable
+    6: j := j + k
+    7: rem := rem − one
+    8: k := hundred − rem             ← recompute k for next iteration
+    9: goto 4
+
+  Transformed (10 instructions):
+    0: one := 1;  1: hundred := 100;  2: rem := hundred
+    3: k := 0                         ← same initial value, different instruction
+    4: if rem goto 6;  5: halt
+    6: j := j + k
+    7: k := k + one                   ← IVE: increment instead of recompute
+    8: rem := rem − one
+    9: goto 4
+
+  The expression relation at the loop head maps transformed `k` to original
+  expression `hundred − rem`:
+    `(hundred − rem, k)` — meaning `k_trans = (hundred − rem).eval(σ_orig)`
+
+  After `rem--` but before `k` is updated, `k` is "stale": the relation shifts
+  to `(99 − rem, k)` (i.e., `k = (hundred − rem) − 1` with hundred=100).
+  The new reassoc rules verify that `(100 − rem) + 1 = 101 − rem = 100 − (rem − 1)`.
+
+  The original invariant `k = hundred − rem` (at pcs where it holds) lets the
+  checker equate orig-side `.var "k"` with `hundred − rem`, matching the
+  trans-side relation substitution.
+-/
+namespace EExample11
+
+-- Loop-head relation: k_trans = (hundred - rem)_orig
+private def loopRel : EExprRel :=
+  [(.bin .sub (.var "hundred") (.var "rem"), .var "k")]
+-- Mid-loop relation (after k++, before rem--): k = 101 - rem
+private def midRel : EExprRel :=
+  [(.bin .sub (.lit 101) (.var "rem"), .var "k")]
+
+-- Invariants
+private def inv_init : EInv := [("one", .lit 1)]
+private def inv_setup : EInv := [("one", .lit 1), ("hundred", .lit 100)]
+-- At init pc 3 only: rem is known to be 100
+private def inv_init_rem : EInv :=
+  [("one", .lit 1), ("hundred", .lit 100), ("rem", .lit 100)]
+-- Loop invariant: one=1, hundred=100
+private def inv_loop : EInv := [("one", .lit 1), ("hundred", .lit 100)]
+-- Loop invariant where k = hundred - rem is also known
+-- Note: use `.lit 100` not `.var "hundred"` because `simplify` does not
+-- recursively resolve variables returned by invariant lookup.
+private def inv_loop_k : EInv :=
+  [("one", .lit 1), ("hundred", .lit 100),
+   ("k", .bin .sub (.lit 100) (.var "rem"))]
+
+def cert : ECertificate :=
+  { orig := #[
+      .const "one" 1,                 -- 0
+      .const "hundred" 100,           -- 1
+      .copy "rem" "hundred",          -- 2: rem := 100
+      .binop "k" .sub "hundred" "rem",-- 3: k := 100 - rem = 0 (init)
+      .ifgoto "rem" 6,                -- 4: loop head
+      .halt,                          -- 5
+      .binop "j" .add "j" "k",        -- 6: j += k
+      .binop "rem" .sub "rem" "one",  -- 7: rem--
+      .binop "k" .sub "hundred" "rem",-- 8: k := 100 - rem (recompute)
+      .goto 4 ]                        -- 9
+    trans := #[
+      .const "one" 1,                 -- 0
+      .const "hundred" 100,           -- 1
+      .copy "rem" "hundred",          -- 2: rem := 100
+      .const "k" 0,                   -- 3: k := 0
+      .ifgoto "rem" 6,                -- 4: loop head
+      .halt,                          -- 5
+      .binop "j" .add "j" "k",        -- 6: j += k
+      .binop "k" .add "k" "one",     -- 7: k++ (IVE)
+      .binop "rem" .sub "rem" "one",  -- 8: rem--
+      .goto 4 ]                        -- 9
+    inv_orig := #[
+      [],                              -- 0
+      inv_init,                        -- 1
+      inv_setup,                       -- 2
+      inv_init_rem,                    -- 3: rem=100 known (init only)
+      inv_loop_k,                      -- 4: loop head, k = hundred - rem
+      inv_loop_k,                      -- 5: halt
+      inv_loop_k,                      -- 6: j := j + k
+      inv_loop_k,                      -- 7: rem--, k still valid
+      inv_loop,                        -- 8: k stale (rem decremented)
+      inv_loop_k ]                     -- 9: k recomputed
+    inv_trans := #[
+      [],                              -- 0
+      inv_init,                        -- 1
+      inv_setup,                       -- 2
+      inv_setup,                       -- 3
+      inv_loop,                        -- 4: loop head
+      inv_loop,                        -- 5: halt
+      inv_loop,                        -- 6
+      inv_loop,                        -- 7
+      inv_loop,                        -- 8
+      inv_loop ]                       -- 9
+    observable := ["j"]
+    instrCerts := #[
+      -- Init (trans 0–2 same as orig 0–2)
+      ic 0 ([tc [1]]),                              -- trans 0→1 : orig 0→1
+      ic 1 ([tc [2]]),                              -- trans 1→2 : orig 1→2
+      ic 2 ([tc [3]]),                              -- trans 2→3 : orig 2→3
+      -- Trans 3 (k:=0): orig 3 (k:=hundred-rem) → 4.  Establishes loopRel.
+      { pc_orig := 3, rel := [],
+        transitions := [{ origLabels := [4], rel_next := loopRel }] },
+      -- Loop head (trans 4, ifgoto): orig 4
+      { pc_orig := 4, rel := loopRel,
+        transitions := [
+          -- Taken → 6: orig 4→6
+          { origLabels := [6], rel := loopRel, rel_next := loopRel },
+          -- Fallthrough → 5: orig 4→5
+          { origLabels := [5], rel := loopRel, rel_next := loopRel }
+        ] },
+      -- Halt (trans 5, orig 5)
+      { pc_orig := 5, rel := loopRel, transitions := [] },
+      -- Trans 6 (j:=j+k): orig 6 (j:=j+k) → 7.  Same instruction.
+      { pc_orig := 6, rel := loopRel,
+        transitions := [{ origLabels := [7], rel := loopRel, rel_next := loopRel }] },
+      -- Trans 7 (k:=k+one): zero-step at orig 7.  IVE: advances k proactively.
+      -- Pre: loopRel (k = hundred-rem).  Post: midRel (k = 101-rem).
+      { pc_orig := 7, rel := loopRel,
+        transitions := [{ origLabels := [], rel := loopRel, rel_next := midRel }] },
+      -- Trans 8 (rem:=rem-one): orig 7→8→9→4 (rem--, k:=hundred-rem, goto, loop head).
+      -- Pre: midRel (k = 101-rem).  Post: loopRel (k = hundred-rem with new rem).
+      { pc_orig := 7, rel := midRel,
+        transitions := [{ origLabels := [8, 9, 4], rel := midRel, rel_next := loopRel }] },
+      -- Trans 9 (goto 4): zero-step at orig 4 (loop head).
+      { pc_orig := 4, rel := loopRel,
+        transitions := [{ origLabels := [], rel := loopRel, rel_next := loopRel }] }
+    ]
+    haltCerts := #[hc 0, hc 0, hc 0, hc 0, hc 0, hc 5, hc 0, hc 0, hc 0, hc 0]
+    measure := #[0, 0, 0, 0, 0, 0, 0, 2, 1, 1] }
+
+#eval! checkCertificateExec cert              -- true
+#eval! checkCertificateVerboseExec cert
+
+end EExample11

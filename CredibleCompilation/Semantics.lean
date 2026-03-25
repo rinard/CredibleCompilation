@@ -222,7 +222,28 @@ theorem Step.store_congr {p : Prog} {pc : Nat} {σ τ : Store} {c : Cfg}
   | halt   h => exact ⟨_, .halt h⟩
 
 -- ============================================================
--- § 9. Example program:  acc := 1 + 2 + … + n
+-- § 9. Progress and successor lemmas
+-- ============================================================
+
+/-- **Progress**: if the instruction at `pc` exists, a step is always possible.
+    This means the only way to get stuck is if `pc` is out of bounds. -/
+theorem Step.progress (p : Prog) (pc : Nat) (σ : Store)
+    (hinb : pc < p.size) :
+    ∃ c', Step p (Cfg.run pc σ) c' := by
+  have hinstr : p[pc]? = some p[pc] := Array.getElem?_eq_getElem hinb
+  match hp : p[pc] with
+  | .const x n      => exact ⟨_, .const (hp ▸ hinstr)⟩
+  | .copy x y       => exact ⟨_, .copy (hp ▸ hinstr)⟩
+  | .binop x op y z => exact ⟨_, .binop (hp ▸ hinstr)⟩
+  | .goto l         => exact ⟨_, .goto (hp ▸ hinstr)⟩
+  | .ifgoto x l     =>
+    by_cases hx : σ x = 0
+    · exact ⟨_, .iffall (hp ▸ hinstr) hx⟩
+    · exact ⟨_, .iftrue (hp ▸ hinstr) hx⟩
+  | .halt           => exact ⟨_, .halt (hp ▸ hinstr)⟩
+
+-- ============================================================
+-- § 10. Example program:  acc := 1 + 2 + … + n
 -- ============================================================
 --
 --  Variables:  "n"   – loop counter (counts down to 0)

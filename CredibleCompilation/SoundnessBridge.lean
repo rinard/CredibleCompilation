@@ -132,6 +132,10 @@ private theorem Expr.reassoc_sound (op : BinOp) (a b : Expr) (σ : Store) :
     (Expr.reassoc op a b).eval σ = (Expr.bin op a b).eval σ := by
   unfold Expr.reassoc
   split
+  · -- (na - x) + nb → (na + nb) - x
+    rename_i na x nb
+    simp only [Expr.eval, BinOp.eval]
+    ring
   · -- (na - x) - nb → (na - nb) - x
     rename_i na x nb
     simp only [Expr.eval, BinOp.eval]
@@ -140,6 +144,10 @@ private theorem Expr.reassoc_sound (op : BinOp) (a b : Expr) (σ : Store) :
     simp only [Expr.eval, BinOp.eval]
     ring
   · rename_i na nb x
+    simp only [Expr.eval, BinOp.eval]
+    ring
+  · -- na - (x - nb) → (na + nb) - x
+    rename_i na x nb
     simp only [Expr.eval, BinOp.eval]
     ring
   · rfl
@@ -1207,10 +1215,11 @@ private theorem and_true_of_and_eq_true {a b : Bool} (h : (a && b) = true) :
 theorem soundness_bridge (dc : ECertificate)
     (h : checkCertificateExec dc = true) :
     PCertificateValid (toPCertificate dc) (toPMeasure dc) := by
-  -- checkCertificateExec is: c1 && c2 && c2c && c3 && c4 && c5 && c6 && c7
+  -- checkCertificateExec is: c1 && c2 && c2c && c3 && c4 && c5 && c6 && c7 && c8
   -- && is left-associative, so decompose from right to left
   unfold checkCertificateExec at h
-  have ⟨h17, h8⟩ := and_true_of_and_eq_true h
+  have ⟨h18, _h9⟩ := and_true_of_and_eq_true h    -- _h9 = checkSuccessorsInBounds
+  have ⟨h17, h8⟩ := and_true_of_and_eq_true h18
   have ⟨h16, h7⟩ := and_true_of_and_eq_true h17
   have ⟨h15, h6⟩ := and_true_of_and_eq_true h16
   have ⟨h14, h5⟩ := and_true_of_and_eq_true h15
@@ -1280,6 +1289,43 @@ redundant assignment removal).
 -- § 11. End-to-end theorem
 -- ============================================================
 
+/-- **Condition 6 soundness**: If `checkSuccessorsInBounds` passes, then
+    the transformed program is step-closed in bounds. -/
+theorem checkSuccessorsInBounds_sound (dc : ECertificate)
+    (h : checkSuccessorsInBounds dc = true) :
+    StepClosedInBounds dc.trans := by
+  simp only [checkSuccessorsInBounds, Bool.and_eq_true, decide_eq_true_eq,
+    List.all_eq_true, List.mem_range, Bool.decide_and] at h
+  obtain ⟨hpos, hall⟩ := h
+  constructor
+  · exact hpos
+  · intro pc pc' σ σ' hpc hstep
+    -- From hstep, extract which instruction is at pc and where pc' comes from
+    cases hstep with
+    | const hi =>
+      have := hall pc hpc; simp [hi, successors, List.all_eq_true] at this; exact this
+    | copy hi =>
+      have := hall pc hpc; simp [hi, successors, List.all_eq_true] at this; exact this
+    | binop hi =>
+      have := hall pc hpc; simp [hi, successors, List.all_eq_true] at this; exact this
+    | goto hi =>
+      have := hall pc hpc; simp [hi, successors, List.all_eq_true] at this; exact this
+    | iftrue hi _ =>
+      have := hall pc hpc; simp [hi, successors, List.all_eq_true] at this; exact this.1
+    | iffall hi _ =>
+      have := hall pc hpc; simp [hi, successors, List.all_eq_true] at this; exact this.2
+
+/-- **Totality**: If the executable checker accepts, the transformed
+    program has a behavior for every initial store. -/
+theorem trans_has_behavior (dc : ECertificate)
+    (h : checkCertificateExec dc = true)
+    (σ₀ : Store) :
+    ∃ b, program_behavior dc.trans σ₀ b := by
+  unfold checkCertificateExec at h
+  -- Extract checkSuccessorsInBounds from the rightmost conjunct
+  have ⟨_, hbounds⟩ := and_true_of_and_eq_true h
+  exact has_behavior dc.trans σ₀ (checkSuccessorsInBounds_sound dc hbounds)
+
 /-- **End-to-end correctness**: If the executable checker accepts,
     then every behavior of the transformed program has a corresponding
     behavior in the original program (with observable equivalence at halt).
@@ -1307,3 +1353,27 @@ theorem exec_checker_correct (dc : ECertificate)
     obtain ⟨g, hg, hg0⟩ := soundness_diverge
       (toPCertificate dc) (toPMeasure dc) (soundness_bridge dc h) f σ₀ hinf hf0
     exact ⟨.diverges, ⟨g, hg, hg0⟩, trivial⟩
+
+/-- **Complete end-to-end**: checker accepts → every initial store has a behavior
+    in the transformed program, and that behavior is matched by the original. -/
+theorem exec_checker_total (dc : ECertificate)
+    (h : checkCertificateExec dc = true)
+    (σ₀ : Store) :
+    ∃ b, program_behavior dc.trans σ₀ b ∧
+      ∃ b', program_behavior dc.orig σ₀ b' ∧
+        match b, b' with
+        | .halts σ_t, .halts σ_o => ∀ v ∈ dc.observable, σ_t v = σ_o v
+        | .diverges, .diverges => True
+        | _, _ => False := by
+  obtain ⟨b, hb⟩ := trans_has_behavior dc h σ₀
+  have hvalid := soundness_bridge dc h
+  cases b with
+  | halts σ_t =>
+    obtain ⟨σ_o', ho, hobs⟩ := soundness_halt
+      (toPCertificate dc) (toPMeasure dc) hvalid σ₀ σ_t hb
+    exact ⟨.halts σ_t, hb, .halts σ_o', ho, hobs⟩
+  | diverges =>
+    obtain ⟨f, hinf, hf0⟩ := hb
+    obtain ⟨g, hg, hg0⟩ := soundness_diverge
+      (toPCertificate dc) (toPMeasure dc) hvalid f σ₀ hinf hf0
+    exact ⟨.diverges, ⟨f, hinf, hf0⟩, .diverges, ⟨g, hg, hg0⟩, trivial⟩

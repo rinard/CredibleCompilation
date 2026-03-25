@@ -644,6 +644,61 @@ def program_behavior (p : Prog) (σ₀ : Store) (b : Behavior) : Prop :=
   | .halts σ'  => haltsWithResult p 0 σ₀ σ'
   | .diverges  => ∃ f : Nat → Cfg, IsInfiniteExec p f ∧ f 0 = Cfg.run 0 σ₀
 
+-- ============================================================
+-- § 10a. Totality: bounds-closed programs always have a behavior
+-- ============================================================
+
+/-- A step from an in-bounds PC to a run-config stays in-bounds.
+    This is the Prop-level version of the executable `checkSuccessorsInBounds`. -/
+def StepClosedInBounds (p : Prog) : Prop :=
+  p.size > 0 ∧
+  ∀ pc pc' : Nat, ∀ σ σ' : Store,
+    pc < p.size → (p ⊩ Cfg.run pc σ ⟶ Cfg.run pc' σ') → pc' < p.size
+
+/-- Convert StepsN to Steps. -/
+private theorem StepsN_to_Steps' {p : Prog} {c c' : Cfg} {n : Nat}
+    (h : StepsN p c c' n) : p ⊩ c ⟶* c' := by
+  induction n generalizing c with
+  | zero => exact h ▸ .refl
+  | succ n ih =>
+    obtain ⟨c'', hs, hn⟩ := h
+    exact .step hs (ih hn)
+
+/-- **Totality**: A step-closed program always has a behavior
+    (halts or diverges). -/
+theorem has_behavior (p : Prog) (σ₀ : Store)
+    (hclosed : StepClosedInBounds p) :
+    ∃ b, program_behavior p σ₀ b := by
+  -- Either the program reaches halt at some finite step, or it never does.
+  by_cases h : ∃ n σ', StepsN p (Cfg.run 0 σ₀) (Cfg.halt σ') n
+  · -- Case: halts
+    obtain ⟨n, σ', hn⟩ := h
+    exact ⟨.halts σ', StepsN_to_Steps' hn⟩
+  · -- Case: diverges — the program never reaches halt
+    -- For all n, ∃ in-bounds run-config reachable in n steps
+    have h_run : ∀ n, ∃ pc σ, StepsN p (Cfg.run 0 σ₀) (Cfg.run pc σ) n ∧ pc < p.size := by
+      intro n; induction n with
+      | zero => exact ⟨0, σ₀, rfl, hclosed.1⟩
+      | succ n ih =>
+        obtain ⟨pc, σ, hn, hpc⟩ := ih
+        obtain ⟨c', hstep⟩ := Step.progress p pc σ hpc
+        match c', hstep with
+        | .halt σ', hstep =>
+          exact absurd ⟨n + 1, σ', StepsN_extend hn hstep⟩ h
+        | .run pc' σ', hstep =>
+          exact ⟨pc', σ', StepsN_extend hn hstep, hclosed.2 pc pc' σ σ' hpc hstep⟩
+    -- Build the infinite execution using Classical.choice + determinism
+    have g_spec : ∀ n, ∃ c, StepsN p (Cfg.run 0 σ₀) c n ∧ ∃ pc σ, c = Cfg.run pc σ := by
+      intro n; obtain ⟨pc, σ, hn, _⟩ := h_run n; exact ⟨_, hn, pc, σ, rfl⟩
+    let g : Nat → Cfg := fun n => (g_spec n).choose
+    have g_stepsN : ∀ n, StepsN p (Cfg.run 0 σ₀) (g n) n :=
+      fun n => (g_spec n).choose_spec.1
+    refine ⟨.diverges, g, ⟨⟨σ₀, ?_⟩, fun n => ?_⟩, ?_⟩
+    · exact (g_stepsN 0).symm
+    · obtain ⟨c'', h_prefix, h_last⟩ := StepsN_split_last (g_stepsN (n + 1))
+      exact StepsN_det (g_stepsN n) h_prefix ▸ h_last
+    · exact (g_stepsN 0).symm
+
 /-- **Main Theorem**: If the certificate is valid, then for every initial
     store, every behavior of the transformed program has a corresponding
     behavior in the original program (with observable equivalence at halt). -/
