@@ -373,6 +373,17 @@ def computeNextPC (instr : TAC) (pc : Label) (ss : SymStore) (inv : EInv) : Opti
     | none       => none
   | .halt => none
 
+/-- Check that a binop instruction is safe to execute: for `div`, the
+    symbolic denominator must simplify to a non-zero literal under the invariant.
+    All other operations are unconditionally safe. -/
+def checkBinopSafe (instr : TAC) (ss : SymStore) (inv : EInv) : Bool :=
+  match instr with
+  | .binop _ .div _ z =>
+    match (ssGet ss z).simplify inv with
+    | .lit n => n != 0
+    | _ => false
+  | _ => true
+
 /-- Verify that the original path is structurally valid:
     at each PC, the instruction's successor matches the next label.
     `branchInfo` provides the mapped boolean condition and branch direction from the
@@ -396,7 +407,7 @@ def checkOrigPath (orig : Prog) (ss : SymStore) (inv : EInv)
           | some (origCond, true),  .ifgoto b l => b == origCond && nextPC == l
           | some (origCond, false), .ifgoto b _ => b == origCond && nextPC == pc + 1
           | _, _ => false
-      pcOk &&
+      pcOk && checkBinopSafe instr ss inv &&
       checkOrigPath orig (execSymbolic ss instr) inv nextPC rest pc_next none
     | none => false
 
@@ -480,6 +491,20 @@ def checkSuccessorsInBounds (cert : ECertificate) : Bool :=
 -- § 7. Main checker
 -- ============================================================
 
+/-- Condition 9 (div preservation): for every `div` in the transformed
+    program, the original at the mapped PC also has a `div` and the
+    expression relation maps the denominators to the same variable. -/
+def checkDivPreservationExec (cert : ECertificate) : Bool :=
+  (List.range cert.trans.size).all fun pc_t =>
+    match cert.trans[pc_t]? with
+    | some (.binop _ .div _ z) =>
+      let ic := cert.instrCerts.getD pc_t default
+      match cert.orig[ic.pc_orig]? with
+      | some (.binop _ .div _ z') =>
+        ssGet (buildSubstMap ic.rel) z == .var z'
+      | _ => false
+    | _ => true
+
 /-- Check all certificate conditions. Returns `true` iff the certificate is valid. -/
 def checkCertificateExec (cert : ECertificate) : Bool :=
   checkStartCorrespondenceExec cert &&
@@ -490,6 +515,7 @@ def checkCertificateExec (cert : ECertificate) : Bool :=
   checkHaltCorrespondenceExec cert &&
   checkHaltObservableExec cert &&
   checkNonterminationExec cert &&
+  checkDivPreservationExec cert &&
   checkSuccessorsInBounds cert
 
 /-- Verbose check: returns the result of each individual condition. -/
@@ -502,6 +528,7 @@ def checkCertificateVerboseExec (cert : ECertificate) : List (String × Bool) :=
     ("halt_correspondence",   checkHaltCorrespondenceExec cert),
     ("halt_observable",       checkHaltObservableExec cert),
     ("nontermination",        checkNonterminationExec cert),
+    ("div_preservation",      checkDivPreservationExec cert),
     ("successors_in_bounds",  checkSuccessorsInBounds cert) ]
 
 /-- Observable output of a configuration with respect to an executable certificate.

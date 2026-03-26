@@ -221,6 +221,12 @@ theorem nonterm_ok : checkNonterminationProp cert := by
 theorem start_inv_ok : checkInvariantsAtStartProp cert :=
   ⟨fun σ => by simp [cert, inv], fun σ => by simp [cert, inv]⟩
 
+theorem stuck_pres_ok : checkStuckPreservationProp cert := by
+  intro pc_t σ_t σ_o hpc _ _ _ hobs
+  exfalso
+  have : pc_t < 4 := by rw [show cert.trans.size = 4 from rfl] at hpc; exact hpc
+  interval_cases pc_t <;> dsimp [observe, cert, transProg] at hobs <;> exact Observation.noConfusion hobs
+
 theorem valid : PCertificateValid cert :=
   { start_corr    := start_ok
     start_inv     := start_inv_ok
@@ -229,6 +235,7 @@ theorem valid : PCertificateValid cert :=
     halt_corr     := halt_corr_ok
     halt_obs      := halt_obs_ok
     nonterm       := nonterm_ok
+    stuck_pres    := stuck_pres_ok
     step_closed   := checkStepClosed_sound (by native_decide) }
 
 end Example1
@@ -368,7 +375,7 @@ theorem transitions_ok : checkAllTransitionsProp cert := by
         | binop h' =>
           simp_all
           refine ⟨σ_o_["c" ↦ BinOp.add.eval (σ_o_ "a") (σ_o_ "d")],
-            Steps.single (.binop (by native_decide)), ?_⟩
+            Steps.single (.binop (by native_decide) trivial), ?_⟩
           simp [idStoreRel]; funext v; simp [Store.update]; split <;> simp_all
         | _ => simp_all
     | _ => simp_all
@@ -396,6 +403,12 @@ theorem nonterm_ok : checkNonterminationProp cert := by
 theorem start_inv_ok : checkInvariantsAtStartProp cert :=
   ⟨fun σ => by simp [cert, inv], fun σ => by simp [cert, inv]⟩
 
+theorem stuck_pres_ok : checkStuckPreservationProp cert := by
+  intro pc_t σ_t σ_o hpc _ _ _ hobs
+  exfalso
+  have : pc_t < 3 := by rw [show cert.trans.size = 3 from rfl] at hpc; exact hpc
+  interval_cases pc_t <;> dsimp [observe, cert, transProg] at hobs <;> exact Observation.noConfusion hobs
+
 theorem valid : PCertificateValid cert :=
   { start_corr    := start_ok
     start_inv     := start_inv_ok
@@ -404,6 +417,7 @@ theorem valid : PCertificateValid cert :=
     halt_corr     := halt_corr_ok
     halt_obs      := halt_obs_ok
     nonterm       := nonterm_ok
+    stuck_pres    := stuck_pres_ok
     step_closed   := checkStepClosed_sound (by native_decide) }
 
 end Example2
@@ -535,7 +549,7 @@ theorem transitions_ok : checkAllTransitionsProp cert := by
         | binop h' =>
           simp_all
           exact ⟨σ_o_["a" ↦ BinOp.add.eval (σ_o_ "x") (σ_o_ "y")],
-            Steps.single (.binop (by native_decide)), rfl⟩
+            Steps.single (.binop (by native_decide) trivial), rfl⟩
         | _ => simp_all
     | _ => simp_all
   · -- pc_t = 1: copy "b" "a" (trans) vs binop "b" .add "x" "y" (orig)
@@ -551,7 +565,7 @@ theorem transitions_ok : checkAllTransitionsProp cert := by
           -- orig step: binop "b" .add "x" "y", σ_o'("b") = x+y
           -- trans step: copy "b" "a", σ_t'("b") = a = x+y (by invariant)
           refine ⟨σ_o_["b" ↦ BinOp.add.eval (σ_o_ "x") (σ_o_ "y")],
-            Steps.single (.binop (by native_decide)), ?_⟩
+            Steps.single (.binop (by native_decide) trivial), ?_⟩
           simp [idStoreRel]; funext v; simp [Store.update, BinOp.eval]
         | _ => simp_all
     | _ => simp_all
@@ -565,7 +579,7 @@ theorem transitions_ok : checkAllTransitionsProp cert := by
         | binop h' =>
           simp_all
           exact ⟨σ_o_["c" ↦ BinOp.add.eval (σ_o_ "a") (σ_o_ "b")],
-            Steps.single (.binop (by native_decide)), rfl⟩
+            Steps.single (.binop (by native_decide) trivial), rfl⟩
         | _ => simp_all
     | _ => simp_all
   · -- pc_t = 3: halt
@@ -593,6 +607,12 @@ theorem nonterm_ok : checkNonterminationProp cert := by
 theorem start_inv_ok : checkInvariantsAtStartProp cert :=
   ⟨fun σ => by simp [cert, inv], fun σ => by simp [cert, inv]⟩
 
+theorem stuck_pres_ok : checkStuckPreservationProp cert := by
+  intro pc_t σ_t σ_o hpc _ _ _ hobs
+  exfalso
+  have : pc_t < 4 := by rw [show cert.trans.size = 4 from rfl] at hpc; exact hpc
+  interval_cases pc_t <;> dsimp [observe, cert, transProg] at hobs <;> exact Observation.noConfusion hobs
+
 theorem valid : PCertificateValid cert :=
   { start_corr    := start_ok
     start_inv     := start_inv_ok
@@ -601,6 +621,7 @@ theorem valid : PCertificateValid cert :=
     halt_corr     := halt_corr_ok
     halt_obs      := halt_obs_ok
     nonterm       := nonterm_ok
+    stuck_pres    := stuck_pres_ok
     step_closed   := checkStepClosed_sound (by native_decide) }
 
 end Example3
@@ -705,7 +726,7 @@ theorem transitions_fail : ¬ checkAllTransitionsProp cert := by
 
 /-- Therefore, no valid certificate exists for this buggy transformation. -/
 theorem no_valid_cert : ¬ PCertificateValid cert := by
-  intro ⟨_, _, _, htrans, _, _, _, _⟩
+  intro ⟨_, _, _, htrans, _, _, _, _, _⟩
   exact transitions_fail htrans
 
 end PBadExample

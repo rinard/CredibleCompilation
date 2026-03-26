@@ -52,12 +52,22 @@ notation:max σ "[" x " ↦ " v "]" => Store.update σ x v
 -- § 2. Binary operators
 -- ============================================================
 
-inductive BinOp | add | sub | mul deriving Repr, DecidableEq
+inductive BinOp | add | sub | mul | div deriving Repr, DecidableEq
 
 def BinOp.eval : BinOp → Val → Val → Val
   | .add, a, b => a + b
   | .sub, a, b => a - b
   | .mul, a, b => a * b
+  | .div, a, b => a / b
+
+/-- An operation is safe if it will not cause the program to get stuck.
+    Only `div` can fault — when the divisor is zero. -/
+def BinOp.safe : BinOp → Val → Val → Prop
+  | .div, _, b => b ≠ 0
+  | _, _, _    => True
+
+instance {op : BinOp} {a b : Val} : Decidable (op.safe a b) := by
+  unfold BinOp.safe; cases op <;> exact inferInstance
 
 -- ============================================================
 -- § 2a. Expressions over stores
@@ -180,7 +190,7 @@ inductive Step (p : Prog) : Cfg → Cfg → Prop where
   | copy   : p[pc]? = some (.copy x y) →
       Step p (.run pc σ) (.run (pc + 1) (σ[x ↦ σ y]))
 
-  | binop  : p[pc]? = some (.binop x op y z) →
+  | binop  : p[pc]? = some (.binop x op y z) → op.safe (σ y) (σ z) →
       Step p (.run pc σ) (.run (pc + 1) (σ[x ↦ op.eval (σ y) (σ z)]))
 
   | goto   : p[pc]? = some (.goto l) →
@@ -214,7 +224,7 @@ theorem Step.mem_successors {p : Prog} {pc pc' : Nat} {σ σ' : Store}
   cases hstep with
   | const h    => exact ⟨_, h, by simp [TAC.successors]⟩
   | copy h     => exact ⟨_, h, by simp [TAC.successors]⟩
-  | binop h    => exact ⟨_, h, by simp [TAC.successors]⟩
+  | binop h _  => exact ⟨_, h, by simp [TAC.successors]⟩
   | goto h     => exact ⟨_, h, by simp [TAC.successors]⟩
   | iftrue h _ => exact ⟨_, h, by simp [TAC.successors]⟩
   | iffall h _ => exact ⟨_, h, by simp [TAC.successors]⟩
@@ -328,7 +338,11 @@ theorem Step.store_congr {p : Prog} {pc : Nat} {σ τ : Store} {c : Cfg}
   cases hσ with
   | const  h => exact ⟨_, .const h⟩
   | copy   h => exact ⟨_, .copy h⟩
-  | binop  h => exact ⟨_, .binop h⟩
+  | binop h hs =>
+    rename_i x op y z
+    have hs' : op.safe (τ y) (τ z) := by
+      unfold BinOp.safe at hs ⊢; cases op <;> simp_all
+    exact ⟨_, .binop h hs'⟩
   | goto   h => exact ⟨_, .goto h⟩
   | iftrue h hne => exact ⟨_, .iftrue h (BoolExpr.eval_congr _ σ τ hagree ▸ hne)⟩
   | iffall h heq => exact ⟨_, .iffall h (BoolExpr.eval_congr _ σ τ hagree ▸ heq)⟩
@@ -338,16 +352,18 @@ theorem Step.store_congr {p : Prog} {pc : Nat} {σ τ : Store} {c : Cfg}
 -- § 9. Progress and successor lemmas
 -- ============================================================
 
-/-- **Progress**: if the instruction at `pc` exists, a step is always possible.
-    This means the only way to get stuck is if `pc` is out of bounds. -/
+/-- **Progress**: if the instruction at `pc` exists and all binary
+    operations at `pc` are safe, a step is possible.  The only ways
+    to get stuck are: PC out of bounds, or division by zero. -/
 theorem Step.progress (p : Prog) (pc : Nat) (σ : Store)
-    (hinb : pc < p.size) :
+    (hinb : pc < p.size)
+    (hsafe : ∀ x op y z, p[pc] = .binop x op y z → op.safe (σ y) (σ z)) :
     ∃ c', Step p (Cfg.run pc σ) c' := by
   have hinstr : p[pc]? = some p[pc] := Array.getElem?_eq_getElem hinb
   match hp : p[pc] with
   | .const x n      => exact ⟨_, .const (hp ▸ hinstr)⟩
   | .copy x y       => exact ⟨_, .copy (hp ▸ hinstr)⟩
-  | .binop x op y z => exact ⟨_, .binop (hp ▸ hinstr)⟩
+  | .binop x op y z => exact ⟨_, .binop (hp ▸ hinstr) (hsafe x op y z hp)⟩
   | .goto l         => exact ⟨_, .goto (hp ▸ hinstr)⟩
   | .ifgoto b l     =>
     by_cases hb : b.eval σ = true
@@ -367,6 +383,22 @@ inductive Observation where
   | stuck   : Observation
   | nothing : Observation
   deriving Repr, DecidableEq
+
+/-- Observe a configuration against a program and list of observable variables.
+    - `Cfg.halt σ` or `Cfg.run pc σ` at a halt instruction → `halt` with variable–value pairs
+    - `Cfg.run pc σ` at a non-halt, safe instruction → `nothing`
+    - `Cfg.run pc σ` at a division by zero → `stuck`
+    - `Cfg.run pc σ` with `pc` out of bounds → `stuck` -/
+def observe (p : Prog) (obs : List Var) (c : Cfg) : Observation :=
+  match c with
+  | .halt σ => Observation.halt (obs.map fun v => (v, σ v))
+  | .run pc σ =>
+    match p[pc]? with
+    | some .halt => Observation.halt (obs.map fun v => (v, σ v))
+    | some (.binop _ op y z) =>
+      if op.safe (σ y) (σ z) then Observation.nothing else Observation.stuck
+    | some _     => Observation.nothing
+    | none       => Observation.stuck
 
 -- ============================================================
 -- § 11. Example program:  acc := 1 + 2 + … + n
@@ -401,4 +433,4 @@ example : sumProg ⊩ Cfg.run 0 (sumStore 3) ⟶ Cfg.run 2 (sumStore 3) :=
 
 -- ▸ Step from pc=2: acc := acc + n fires; the updated store exists.
 example : ∃ σ', sumProg ⊩ Cfg.run 2 (sumStore 3) ⟶ Cfg.run 3 σ' :=
-  ⟨_, .binop rfl⟩
+  ⟨_, .binop rfl trivial⟩
