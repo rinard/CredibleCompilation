@@ -4,6 +4,7 @@ import CredibleCompilation.CSEOptExamples
 import CredibleCompilation.DCEOptExamples
 import CredibleCompilation.LICMOptExamples
 import CredibleCompilation.PeepholeOptExamples
+import CredibleCompilation.WhileExamples
 
 def main : IO Unit := do
   IO.println "=== Credible Compilation Certificate Checker ==="
@@ -67,6 +68,19 @@ def main : IO Unit := do
   let peepCert := PeepholeOptExamples.licmCert
   let status := if checkCertificateExec peepCert then "PASS" else "FAIL"
   IO.println s!"  LICM cleanup ({PeepholeOptExamples.licmProg.size} → {peepCert.trans.size} instrs): {status}"
+  IO.println ""
+  IO.println "--- While language (source → TAC → optimize → check) ---"
+  let whileCerts : List (String × ECertificate) := [
+    ("Sum 1..n", WhileSum.cert),
+    ("Factorial", WhileFactorial.cert),
+    ("Max of two", WhileMax.cert),
+    ("Constant expression", WhileConstExpr.cert),
+    ("Absolute value", WhileAbsVal.cert),
+    ("Nested loops", WhileNested.cert)
+  ]
+  for (name, cert) in whileCerts do
+    let status := if checkCertificateExec cert then "PASS" else "FAIL"
+    IO.println s!"  {name} ({cert.orig.size} → {cert.trans.size} instrs): {status}"
   IO.println ""
   IO.println "--- Verbose: Bad Example ---"
   for (name, result) in checkCertificateVerboseExec BadExample.cert do

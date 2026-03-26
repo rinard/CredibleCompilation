@@ -1,0 +1,191 @@
+import CredibleCompilation.WhileLang
+import CredibleCompilation.ExecChecker
+import CredibleCompilation.ConstPropOpt
+
+/-!
+# While Language — End-to-end Examples
+
+Demonstrates the full pipeline: source program → compile to TAC →
+optimize → certificate check.
+-/
+
+open SExpr SBool Stmt
+
+-- ============================================================
+-- § 1. Sum 1..n
+-- ============================================================
+
+namespace WhileSum
+
+/-- `s := 0; i := 1; while (i <= n) { s := s + i; i := i + 1 }` -/
+def prog : Stmt :=
+  assign "s" (lit 0) ;;
+  assign "i" (lit 1) ;;
+  loop (cmp .le (var "i") (var "n"))
+    (assign "s" (bin .add (var "s") (var "i")) ;;
+     assign "i" (bin .add (var "i") (lit 1)))
+
+def observable : List Var := ["s"]
+def tac : Prog := compile prog
+
+-- Compile and verify
+#eval tac.toList
+#eval do let σ ← Stmt.interp 1000 (fun v => if v == "n" then 10 else 0) prog; return σ "s"
+
+-- Optimize with constant propagation, then check
+def cert := ConstPropOpt.optimize tac observable
+#eval checkCertificateExec cert
+#eval checkCertificateVerboseExec cert
+
+end WhileSum
+
+-- ============================================================
+-- § 2. Factorial
+-- ============================================================
+
+namespace WhileFactorial
+
+/-- `r := 1; while (n != 0) { r := r * n; n := n - 1 }` -/
+def prog : Stmt :=
+  assign "r" (lit 1) ;;
+  loop (cmp .ne (var "n") (lit 0))
+    (assign "r" (bin .mul (var "r") (var "n")) ;;
+     assign "n" (bin .sub (var "n") (lit 1)))
+
+def observable : List Var := ["r"]
+def tac : Prog := compile prog
+
+#eval tac.toList
+#eval do let σ ← Stmt.interp 1000 (fun v => if v == "n" then 5 else 0) prog; return σ "r"
+
+def cert := ConstPropOpt.optimize tac observable
+#eval checkCertificateExec cert
+#eval checkCertificateVerboseExec cert
+
+end WhileFactorial
+
+-- ============================================================
+-- § 3. Max of two values
+-- ============================================================
+
+namespace WhileMax
+
+/-- `if (a < b) then m := b else m := a` -/
+def prog : Stmt :=
+  ite (cmp .lt (var "a") (var "b"))
+    (assign "m" (var "b"))
+    (assign "m" (var "a"))
+
+def observable : List Var := ["m"]
+def tac : Prog := compile prog
+
+#eval tac.toList
+#eval do let σ ← Stmt.interp 100 (fun v => if v == "a" then 3 else if v == "b" then 7 else 0) prog; return σ "m"
+
+def cert := ConstPropOpt.optimize tac observable
+#eval checkCertificateExec cert
+#eval checkCertificateVerboseExec cert
+
+end WhileMax
+
+-- ============================================================
+-- § 4. Constant expression (optimization target)
+-- ============================================================
+
+namespace WhileConstExpr
+
+/-- `x := 2 + 3; y := x * 4` — all constant, should fold completely. -/
+def prog : Stmt :=
+  assign "x" (bin .add (lit 2) (lit 3)) ;;
+  assign "y" (bin .mul (var "x") (lit 4))
+
+def observable : List Var := ["y"]
+def tac : Prog := compile prog
+
+#eval tac.toList
+#eval do let σ ← Stmt.interp 100 (fun _ => 0) prog; return σ "y"
+
+-- Constant propagation should fold this aggressively
+def cert := ConstPropOpt.optimize tac observable
+#eval cert.trans.toList
+#eval checkCertificateExec cert
+#eval checkCertificateVerboseExec cert
+
+end WhileConstExpr
+
+-- ============================================================
+-- § 5. Common subexpression (CSE target)
+-- ============================================================
+
+namespace WhileAbsVal
+
+/-- `if (x < 0) then r := 0 - x else r := x` — absolute value. -/
+def prog : Stmt :=
+  ite (cmp .lt (var "x") (lit 0))
+    (assign "r" (bin .sub (lit 0) (var "x")))
+    (assign "r" (var "x"))
+
+def observable : List Var := ["r"]
+def tac : Prog := compile prog
+
+#eval tac.toList
+
+def cert := ConstPropOpt.optimize tac observable
+#eval checkCertificateExec cert
+#eval checkCertificateVerboseExec cert
+
+end WhileAbsVal
+
+-- ============================================================
+-- § 6. Nested loop (stress test)
+-- ============================================================
+
+namespace WhileNested
+
+/-- `s := 0; i := 0;
+    while (i < n) {
+      j := 0;
+      while (j < n) { s := s + 1; j := j + 1 };
+      i := i + 1
+    }` -/
+def prog : Stmt :=
+  assign "s" (lit 0) ;;
+  assign "i" (lit 0) ;;
+  loop (cmp .lt (var "i") (var "n"))
+    (assign "j" (lit 0) ;;
+     loop (cmp .lt (var "j") (var "n"))
+       (assign "s" (bin .add (var "s") (lit 1)) ;;
+        assign "j" (bin .add (var "j") (lit 1))) ;;
+     assign "i" (bin .add (var "i") (lit 1)))
+
+def observable : List Var := ["s"]
+def tac : Prog := compile prog
+
+#eval tac.toList
+#eval do let σ ← Stmt.interp 10000 (fun v => if v == "n" then 3 else 0) prog; return σ "s"
+
+def cert := ConstPropOpt.optimize tac observable
+#eval checkCertificateExec cert
+#eval checkCertificateVerboseExec cert
+
+end WhileNested
+
+-- ============================================================
+-- § 7. Division example (stuck on div-by-zero)
+-- ============================================================
+
+namespace WhileDiv
+
+/-- `q := a / b` — gets stuck if b = 0. -/
+def prog : Stmt :=
+  assign "q" (bin .div (var "a") (var "b"))
+
+def observable : List Var := ["q"]
+def tac : Prog := compile prog
+
+#eval tac.toList
+
+def cert := ConstPropOpt.optimize tac observable
+#eval checkCertificateExec cert
+
+end WhileDiv

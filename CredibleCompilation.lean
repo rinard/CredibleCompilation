@@ -14,3 +14,7 @@ import CredibleCompilation.LICMOpt
 import CredibleCompilation.LICMOptExamples
 import CredibleCompilation.PeepholeOpt
 import CredibleCompilation.PeepholeOptExamples
+import CredibleCompilation.WhileLang
+import CredibleCompilation.WhileExamples
+import CredibleCompilation.CompilerCorrectness
+import CredibleCompilation.RefCompiler
