@@ -51,6 +51,7 @@ def Expr.reassoc : BinOp → Expr → Expr → Expr
     After folding, applies `reassoc` to normalize sub/add patterns involving literals. -/
 def Expr.simplify (inv : EInv) : Expr → Expr
   | .lit n => .lit n
+  | .blit b => .blit b
   | .var v => match lookupExpr inv v with
     | some e => e
     | none   => .var v
@@ -79,7 +80,9 @@ def ssSet (ss : SymStore) (x : Var) (e : Expr) : SymStore :=
     Expressions in the resulting store reference the *initial* variable values. -/
 def execSymbolic (ss : SymStore) (instr : TAC) : SymStore :=
   match instr with
-  | .const x n      => ssSet ss x (.lit n)
+  | .const x (.int n)  => ssSet ss x (.lit n)
+  | .const x (.bool b) => ssSet ss x (.blit b)
+  | .boolop x _     => ssSet ss x (.var x)  -- conservative: treat as identity
   | .copy x y       => ssSet ss x (ssGet ss y)
   | .binop x op y z => ssSet ss x (.bin op (ssGet ss y) (ssGet ss z))
   | _               => ss
@@ -99,7 +102,7 @@ def execPath (orig : Prog) (ss : SymStore) (pc : Label) : List Label → SymStor
 
 def successors (instr : TAC) (pc : Label) : List Label :=
   match instr with
-  | .const _ _ | .copy _ _ | .binop _ _ _ _ => [pc + 1]
+  | .const _ _ | .copy _ _ | .binop _ _ _ _ | .boolop _ _ => [pc + 1]
   | .goto l        => [l]
   | .ifgoto _ l    => [l, pc + 1]
   | .halt          => []
@@ -111,11 +114,16 @@ def canReach (instr : TAC) (pc next : Label) : Bool :=
 def Expr.isNonZeroLit : Expr → Bool
   | .lit 0 => false
   | .lit _ => true
+  | .blit true => true
   | _      => false
 
 /-- Symbolically evaluate a BoolExpr under a symbolic store and invariant.
     Returns `some true`/`some false` if the result can be determined, `none` otherwise. -/
 def BoolExpr.symEval (ss : SymStore) (inv : EInv) : BoolExpr → Option Bool
+  | .bvar x =>
+    match (ssGet ss x).simplify inv with
+    | .blit b => some b
+    | _ => none
   | .cmp op x y =>
     match (ssGet ss x).simplify inv, (ssGet ss y).simplify inv with
     | .lit a, .lit b => some (op.eval a b)
@@ -209,6 +217,10 @@ def relGetOrigExpr (rel : EExprRel) (v : Var) : Expr :=
 /-- Map variables in a BoolExpr through the expression relation.
     Only succeeds if every variable maps to a single variable (`.var v`). -/
 def BoolExpr.mapVarsRel (rel : EExprRel) : BoolExpr → Option BoolExpr
+  | .bvar x =>
+    match relGetOrigExpr rel x with
+    | .var x' => some (.bvar x')
+    | _ => none
   | .cmp op x y =>
     match relGetOrigExpr rel x, relGetOrigExpr rel y with
     | .var x', .var y' => some (.cmp op x' y')
@@ -255,7 +267,7 @@ def buildInstrCerts1to1 (trans : Prog) : Array EInstrCert :=
   let arr := (List.range trans.size).map fun i =>
     match trans[i]? with
     | some .halt => { pc_orig := i, transitions := ([] : List ETransCorr) }
-    | some (.const _ _) | some (.copy _ _) | some (.binop _ _ _ _) =>
+    | some (.const _ _) | some (.copy _ _) | some (.binop _ _ _ _) | some (.boolop _ _) =>
       { pc_orig := i, transitions := [{ origLabels := [i + 1] }] }
     | some (.goto l) =>
       { pc_orig := i, transitions := [{ origLabels := [l] }] }
@@ -311,6 +323,7 @@ def checkRelAtStartExec (cert : ECertificate) : Bool :=
 /-- Substitute each variable in an expression with its symbolic post-value. -/
 def Expr.substSym (ss : SymStore) : Expr → Expr
   | .lit n      => .lit n
+  | .blit b     => .blit b
   | .var v      => ssGet ss v
   | .bin op a b => .bin op (a.substSym ss) (b.substSym ss)
 
@@ -364,7 +377,7 @@ def checkHaltObservableExec (cert : ECertificate) : Bool :=
 /-- Compute the next PC from an instruction, using symbolic evaluation for ifgoto. -/
 def computeNextPC (instr : TAC) (pc : Label) (ss : SymStore) (inv : EInv) : Option Label :=
   match instr with
-  | .const _ _ | .copy _ _ | .binop _ _ _ _ => some (pc + 1)
+  | .const _ _ | .copy _ _ | .binop _ _ _ _ | .boolop _ _ => some (pc + 1)
   | .goto l => some l
   | .ifgoto b l =>
     match b.symEval ss inv with

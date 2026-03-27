@@ -4,8 +4,11 @@
 Following Winskel, "The Formal Semantics of Programming Languages."
 
 We define a simple imperative language in three-address code (TAC) form,
-with scalar (integer) variables, and give it a small-step structural
+with typed (integer and boolean) variables, and give it a small-step structural
 operational semantics.  Big-step termination and basic metatheory follow.
+
+A static type system ensures well-typed programs cannot get stuck from
+type errors — the only stuck condition is division by zero.
 
 Note: Lean reserves `⊢`, so we use `⊩` as the program-turnstile.
 -/
@@ -15,31 +18,80 @@ Note: Lean reserves `⊢`, so we use `⊩` as the program-turnstile.
 -- ============================================================
 
 abbrev Var   := String
-abbrev Val   := Int
 abbrev Label := Nat        -- program counter / jump target
 
-/-- A store (state) maps every variable to an integer value. -/
-def Store := Var → Val
+/-- Runtime values: either an integer or a boolean. -/
+inductive Value where
+  | int  : Int → Value
+  | bool : Bool → Value
+  deriving Repr, DecidableEq, Inhabited
+
+/-- Variable types. -/
+inductive VarTy where
+  | int | bool
+  deriving Repr, DecidableEq
+
+namespace Value
+
+def toInt : Value → Int
+  | .int n  => n
+  | .bool _ => 0
+
+def toBool : Value → Bool
+  | .bool b => b
+  | .int _  => false
+
+def typeOf : Value → VarTy
+  | .int _  => .int
+  | .bool _ => .bool
+
+theorem int_of_typeOf_int {v : Value} (h : v.typeOf = .int) : ∃ n, v = .int n := by
+  cases v with
+  | int n => exact ⟨n, rfl⟩
+  | bool _ => simp [typeOf] at h
+
+theorem bool_of_typeOf_bool {v : Value} (h : v.typeOf = .bool) : ∃ b, v = .bool b := by
+  cases v with
+  | int _ => simp [typeOf] at h
+  | bool b => exact ⟨b, rfl⟩
+
+@[simp] theorem toInt_int (n : Int) : (Value.int n).toInt = n := rfl
+@[simp] theorem toBool_bool (b : Bool) : (Value.bool b).toBool = b := rfl
+@[simp] theorem typeOf_int (n : Int) : (Value.int n).typeOf = .int := rfl
+@[simp] theorem typeOf_bool (b : Bool) : (Value.bool b).typeOf = .bool := rfl
+
+end Value
+
+/-- A store (state) maps every variable to a typed value. -/
+def Store := Var → Value
+
+/-- A typing context assigns a type to every variable. -/
+abbrev TyCtx := Var → VarTy
+
+/-- A store is well-typed w.r.t. a typing context if every variable's
+    runtime value matches its declared type. -/
+def TypedStore (Γ : TyCtx) (σ : Store) : Prop :=
+  ∀ x, (σ x).typeOf = Γ x
 
 namespace Store
 
-def init : Store := fun _ => 0
+def init : Store := fun _ => .int 0
 
 /-- Functional update  σ[x ↦ v] -/
-def update (σ : Store) (x : Var) (v : Val) : Store :=
+def update (σ : Store) (x : Var) (v : Value) : Store :=
   fun y => if y == x then v else σ y
 
-theorem update_self (σ : Store) (x : Var) (v : Val) :
+theorem update_self (σ : Store) (x : Var) (v : Value) :
     σ.update x v x = v := by simp [update]
 
-theorem update_other (σ : Store) (x y : Var) (v : Val) (h : y ≠ x) :
+theorem update_other (σ : Store) (x y : Var) (v : Value) (h : y ≠ x) :
     σ.update x v y = σ y := by simp only [update, beq_iff_eq, if_neg h]
 
-theorem update_shadow (σ : Store) (x : Var) (u v : Val) :
+theorem update_shadow (σ : Store) (x : Var) (u v : Value) :
     (σ.update x u).update x v = σ.update x v := by
   funext y; simp [update]; split <;> simp_all
 
-theorem update_comm (σ : Store) (x y : Var) (u v : Val) (h : x ≠ y) :
+theorem update_comm (σ : Store) (x y : Var) (u v : Value) (h : x ≠ y) :
     (σ.update x u).update y v = (σ.update y v).update x u := by
   funext z; simp [update]; split <;> split <;> simp_all [Ne.symm]
 
@@ -49,12 +101,28 @@ end Store
 notation:max σ "[" x " ↦ " v "]" => Store.update σ x v
 
 -- ============================================================
+-- § 1a. TypedStore lemmas
+-- ============================================================
+
+theorem TypedStore.init (Γ : TyCtx) (h : ∀ x, Γ x = .int) :
+    TypedStore Γ Store.init := by
+  intro x; simp [Store.init, Value.typeOf, h]
+
+theorem TypedStore.update_typed {Γ : TyCtx} {σ : Store} {x : Var} {v : Value}
+    (hts : TypedStore Γ σ) (hv : v.typeOf = Γ x) :
+    TypedStore Γ (σ[x ↦ v]) := by
+  intro y; simp only [Store.update]
+  split
+  · next h => rw [beq_iff_eq] at h; rw [h]; exact hv
+  · exact hts y
+
+-- ============================================================
 -- § 2. Binary operators
 -- ============================================================
 
 inductive BinOp | add | sub | mul | div deriving Repr, DecidableEq
 
-def BinOp.eval : BinOp → Val → Val → Val
+def BinOp.eval : BinOp → Int → Int → Int
   | .add, a, b => a + b
   | .sub, a, b => a - b
   | .mul, a, b => a * b
@@ -62,11 +130,11 @@ def BinOp.eval : BinOp → Val → Val → Val
 
 /-- An operation is safe if it will not cause the program to get stuck.
     Only `div` can fault — when the divisor is zero. -/
-def BinOp.safe : BinOp → Val → Val → Prop
+def BinOp.safe : BinOp → Int → Int → Prop
   | .div, _, b => b ≠ 0
   | _, _, _    => True
 
-instance {op : BinOp} {a b : Val} : Decidable (op.safe a b) := by
+instance {op : BinOp} {a b : Int} : Decidable (op.safe a b) := by
   unfold BinOp.safe; cases op <;> exact inferInstance
 
 -- ============================================================
@@ -76,15 +144,17 @@ instance {op : BinOp} {a b : Val} : Decidable (op.safe a b) := by
 /-- Expressions that can be evaluated in a store. Used to describe
     how transformed-program variables map to original-program values. -/
 inductive Expr where
-  | lit  : Val → Expr
+  | lit  : Int → Expr
+  | blit : Bool → Expr
   | var  : Var → Expr
   | bin  : BinOp → Expr → Expr → Expr
   deriving Repr, DecidableEq
 
-def Expr.eval (σ : Store) : Expr → Val
-  | .lit n       => n
+def Expr.eval (σ : Store) : Expr → Value
+  | .lit n       => .int n
+  | .blit b      => .bool b
   | .var x       => σ x
-  | .bin op a b  => op.eval (a.eval σ) (b.eval σ)
+  | .bin op a b  => .int (op.eval (a.eval σ).toInt (b.eval σ).toInt)
 
 -- ============================================================
 -- § 2b. Comparison operators and boolean expressions
@@ -92,7 +162,7 @@ def Expr.eval (σ : Store) : Expr → Val
 
 inductive CmpOp | eq | ne | lt | le deriving Repr, DecidableEq
 
-def CmpOp.eval : CmpOp → Val → Val → Bool
+def CmpOp.eval : CmpOp → Int → Int → Bool
   | .eq, a, b => a == b
   | .ne, a, b => a != b
   | .lt, a, b => decide (a < b)
@@ -100,16 +170,20 @@ def CmpOp.eval : CmpOp → Val → Val → Bool
 
 /-- Boolean expressions for conditional branches. -/
 inductive BoolExpr where
-  | cmp    : CmpOp → Var → Var → BoolExpr     -- x op y
-  | cmpLit : CmpOp → Var → Val → BoolExpr     -- x op n (variable vs literal)
+  | bvar   : Var → BoolExpr                    -- read a boolean variable
+  | cmp    : CmpOp → Var → Var → BoolExpr     -- x op y (integer comparison)
+  | cmpLit : CmpOp → Var → Int → BoolExpr     -- x op n (variable vs literal)
   | not    : BoolExpr → BoolExpr
   | and    : BoolExpr → BoolExpr → BoolExpr
   | or     : BoolExpr → BoolExpr → BoolExpr
   deriving Repr, DecidableEq
 
+/-- Evaluate a boolean expression. Uses `.toInt`/`.toBool` extractors;
+    under well-typedness the extractors are faithful. -/
 def BoolExpr.eval (σ : Store) : BoolExpr → Bool
-  | .cmp op x y    => op.eval (σ x) (σ y)
-  | .cmpLit op x n => op.eval (σ x) n
+  | .bvar x       => (σ x).toBool
+  | .cmp op x y   => op.eval (σ x).toInt (σ y).toInt
+  | .cmpLit op x n => op.eval (σ x).toInt n
   | .not e         => !e.eval σ
   | .and a b       => a.eval σ && b.eval σ
   | .or a b        => a.eval σ || b.eval σ
@@ -117,6 +191,7 @@ def BoolExpr.eval (σ : Store) : BoolExpr → Bool
 theorem BoolExpr.eval_congr (cond : BoolExpr) (σ τ : Store)
     (hagree : ∀ y, σ y = τ y) : cond.eval σ = cond.eval τ := by
   induction cond with
+  | bvar x => simp [BoolExpr.eval, hagree]
   | cmp op x y => simp [BoolExpr.eval, hagree]
   | cmpLit op x n => simp [BoolExpr.eval, hagree]
   | not e ih => simp [BoolExpr.eval, ih]
@@ -125,6 +200,7 @@ theorem BoolExpr.eval_congr (cond : BoolExpr) (σ τ : Store)
 
 /-- Collect all variable names from a boolean expression. -/
 def BoolExpr.vars : BoolExpr → List Var
+  | .bvar x       => [x]
   | .cmp _ x y    => [x, y]
   | .cmpLit _ x _ => [x]
   | .not e        => e.vars
@@ -140,24 +216,57 @@ TAC instructions.  A **program** is an `Array TAC`; the program counter
 is a `Nat` index into that array.
 
 ```
-x := n          -- assign constant
+x := v          -- assign constant (integer or boolean)
 x := y          -- copy
-x := y ⊕ z     -- binary operation  (⊕ ∈ {+, -, *})
+x := y ⊕ z     -- binary operation  (⊕ ∈ {+, -, *, /})
+x := bexpr      -- evaluate boolean expression and store result
 goto l          -- unconditional jump
 if cond goto l  -- conditional jump (branch if cond is true, else fall through)
 halt            -- normal termination
 ```
 -/
 inductive TAC where
-  | const  : Var → Val → TAC                  -- x := n
-  | copy   : Var → Var → TAC                  -- x := y
-  | binop  : Var → BinOp → Var → Var → TAC   -- x := y ⊕ z
-  | goto   : Label → TAC                      -- goto l
-  | ifgoto : BoolExpr → Label → TAC           -- if cond then goto l
+  | const  : Var → Value → TAC                 -- x := v
+  | copy   : Var → Var → TAC                   -- x := y
+  | binop  : Var → BinOp → Var → Var → TAC    -- x := y ⊕ z
+  | boolop : Var → BoolExpr → TAC              -- x := bexpr
+  | goto   : Label → TAC                       -- goto l
+  | ifgoto : BoolExpr → Label → TAC            -- if cond then goto l
   | halt   : TAC
   deriving Repr, DecidableEq
 
 abbrev Prog := Array TAC
+
+-- ============================================================
+-- § 3a. Type system definitions
+-- ============================================================
+
+/-- Well-typedness for boolean expressions. -/
+inductive WellTypedBoolExpr (Γ : TyCtx) : BoolExpr → Prop where
+  | bvar   : Γ x = .bool → WellTypedBoolExpr Γ (.bvar x)
+  | cmp    : Γ x = .int → Γ y = .int → WellTypedBoolExpr Γ (.cmp op x y)
+  | cmpLit : Γ x = .int → WellTypedBoolExpr Γ (.cmpLit op x n)
+  | not    : WellTypedBoolExpr Γ b → WellTypedBoolExpr Γ (.not b)
+  | and    : WellTypedBoolExpr Γ a → WellTypedBoolExpr Γ b →
+      WellTypedBoolExpr Γ (.and a b)
+  | or     : WellTypedBoolExpr Γ a → WellTypedBoolExpr Γ b →
+      WellTypedBoolExpr Γ (.or a b)
+
+/-- Well-typedness for a single TAC instruction. -/
+inductive WellTypedInstr (Γ : TyCtx) : TAC → Prop where
+  | const  : v.typeOf = Γ x → WellTypedInstr Γ (.const x v)
+  | copy   : Γ x = Γ y → WellTypedInstr Γ (.copy x y)
+  | binop  : Γ x = .int → Γ y = .int → Γ z = .int →
+      WellTypedInstr Γ (.binop x op y z)
+  | boolop : Γ x = .bool → WellTypedBoolExpr Γ be →
+      WellTypedInstr Γ (.boolop x be)
+  | goto   : WellTypedInstr Γ (.goto l)
+  | ifgoto : WellTypedBoolExpr Γ b → WellTypedInstr Γ (.ifgoto b l)
+  | halt   : WellTypedInstr Γ .halt
+
+/-- A program is well-typed if every instruction is well-typed. -/
+def WellTypedProg (Γ : TyCtx) (p : Prog) : Prop :=
+  ∀ i, (h : i < p.size) → WellTypedInstr Γ p[i]
 
 -- ============================================================
 -- § 4. Machine configurations
@@ -181,17 +290,24 @@ inductive Cfg where
 
 One execution step of program `p`.  Each constructor reads the instruction
 at the current program counter and produces the next configuration.
+
+The `binop` constructor requires explicit integer extraction — type errors
+make the constructor inapplicable, causing the configuration to be stuck.
 -/
 inductive Step (p : Prog) : Cfg → Cfg → Prop where
 
-  | const  : p[pc]? = some (.const x n) →
-      Step p (.run pc σ) (.run (pc + 1) (σ[x ↦ n]))
+  | const  : p[pc]? = some (.const x v) →
+      Step p (.run pc σ) (.run (pc + 1) (σ[x ↦ v]))
 
   | copy   : p[pc]? = some (.copy x y) →
       Step p (.run pc σ) (.run (pc + 1) (σ[x ↦ σ y]))
 
-  | binop  : p[pc]? = some (.binop x op y z) → op.safe (σ y) (σ z) →
-      Step p (.run pc σ) (.run (pc + 1) (σ[x ↦ op.eval (σ y) (σ z)]))
+  | binop  {a b : Int} : p[pc]? = some (.binop x op y z) →
+      σ y = .int a → σ z = .int b → op.safe a b →
+      Step p (.run pc σ) (.run (pc + 1) (σ[x ↦ .int (op.eval a b)]))
+
+  | boolop : p[pc]? = some (.boolop x be) →
+      Step p (.run pc σ) (.run (pc + 1) (σ[x ↦ .bool (be.eval σ)]))
 
   | goto   : p[pc]? = some (.goto l) →
       Step p (.run pc σ) (.run l σ)
@@ -211,7 +327,7 @@ notation:50 p " ⊩ " c " ⟶ " c' => Step p c c'
 /-- Successor PCs of a TAC instruction (for bounds checking). -/
 def TAC.successors (instr : TAC) (pc : Label) : List Label :=
   match instr with
-  | .const _ _ | .copy _ _ | .binop _ _ _ _ => [pc + 1]
+  | .const _ _ | .copy _ _ | .binop _ _ _ _ | .boolop _ _ => [pc + 1]
   | .goto l        => [l]
   | .ifgoto _ l    => [l, pc + 1]
   | .halt          => []
@@ -222,12 +338,13 @@ theorem Step.mem_successors {p : Prog} {pc pc' : Nat} {σ σ' : Store}
     (hstep : p ⊩ Cfg.run pc σ ⟶ Cfg.run pc' σ') :
     ∃ instr, p[pc]? = some instr ∧ pc' ∈ instr.successors pc := by
   cases hstep with
-  | const h    => exact ⟨_, h, by simp [TAC.successors]⟩
-  | copy h     => exact ⟨_, h, by simp [TAC.successors]⟩
-  | binop h _  => exact ⟨_, h, by simp [TAC.successors]⟩
-  | goto h     => exact ⟨_, h, by simp [TAC.successors]⟩
-  | iftrue h _ => exact ⟨_, h, by simp [TAC.successors]⟩
-  | iffall h _ => exact ⟨_, h, by simp [TAC.successors]⟩
+  | const h        => exact ⟨_, h, by simp [TAC.successors]⟩
+  | copy h         => exact ⟨_, h, by simp [TAC.successors]⟩
+  | binop h _ _ _  => exact ⟨_, h, by simp [TAC.successors]⟩
+  | boolop h       => exact ⟨_, h, by simp [TAC.successors]⟩
+  | goto h         => exact ⟨_, h, by simp [TAC.successors]⟩
+  | iftrue h _     => exact ⟨_, h, by simp [TAC.successors]⟩
+  | iffall h _     => exact ⟨_, h, by simp [TAC.successors]⟩
 
 /-- A step from an in-bounds PC to a run-config stays in-bounds.
     This is the Prop-level condition for totality. -/
@@ -296,7 +413,7 @@ def haltsWithResult (p : Prog) (pc : Nat) (σ σ' : Store) : Prop :=
 /-- The small-step relation is **deterministic**. -/
 theorem Step.deterministic {p : Prog} {c c₁ c₂ : Cfg}
     (h₁ : p ⊩ c ⟶ c₁) (h₂ : p ⊩ c ⟶ c₂) : c₁ = c₂ := by
-  cases h₁ <;> cases h₂ <;> simp_all
+  cases h₁ <;> cases h₂ <;> simp_all [Value.int.injEq]
 
 /-- A halted configuration admits no further steps. -/
 theorem Step.no_step_from_halt {p : Prog} {σ : Store} {c : Cfg} :
@@ -308,7 +425,6 @@ theorem Step.no_step_from_halt {p : Prog} {σ : Store} {c : Cfg} :
 private theorem steps_det {p : Prog} {c c₁ c₂ : Cfg}
     (h₁ : p ⊩ c ⟶* c₁) (h₂ : p ⊩ c ⟶* c₂)
     (hn₁ : ∀ d, ¬ p ⊩ c₁ ⟶ d) (hn₂ : ∀ d, ¬ p ⊩ c₂ ⟶ d) : c₁ = c₂ := by
-  -- Both endpoints are free variables, so induction is valid.
   induction h₁ generalizing c₂ with
   | refl =>
     cases h₂ with
@@ -338,11 +454,11 @@ theorem Step.store_congr {p : Prog} {pc : Nat} {σ τ : Store} {c : Cfg}
   cases hσ with
   | const  h => exact ⟨_, .const h⟩
   | copy   h => exact ⟨_, .copy h⟩
-  | binop h hs =>
-    rename_i x op y z
-    have hs' : op.safe (τ y) (τ z) := by
-      unfold BinOp.safe at hs ⊢; cases op <;> simp_all
-    exact ⟨_, .binop h hs'⟩
+  | binop h hy hz hs =>
+    refine ⟨_, .binop h ?_ ?_ hs⟩
+    · rw [← hagree]; exact hy
+    · rw [← hagree]; exact hz
+  | boolop h => exact ⟨_, .boolop h⟩
   | goto   h => exact ⟨_, .goto h⟩
   | iftrue h hne => exact ⟨_, .iftrue h (BoolExpr.eval_congr _ σ τ hagree ▸ hne)⟩
   | iffall h heq => exact ⟨_, .iffall h (BoolExpr.eval_congr _ σ τ hagree ▸ heq)⟩
@@ -352,24 +468,42 @@ theorem Step.store_congr {p : Prog} {pc : Nat} {σ τ : Store} {c : Cfg}
 -- § 9. Progress and successor lemmas
 -- ============================================================
 
-/-- **Progress**: if the instruction at `pc` exists and all binary
-    operations at `pc` are safe, a step is possible.  The only ways
-    to get stuck are: PC out of bounds, or division by zero. -/
-theorem Step.progress (p : Prog) (pc : Nat) (σ : Store)
+/-- Helper: extract instruction identity from array lookup. -/
+private theorem instr_eq_of_lookup {p : Prog} {pc : Nat} {instr : TAC}
+    (hpc : pc < p.size) (h : p[pc]? = some instr) : p[pc] = instr :=
+  Option.some.inj ((Array.getElem?_eq_getElem hpc).symm.trans h)
+
+/-- **Progress**: if the instruction at `pc` exists, the program is
+    well-typed, the store is well-typed, and all binary operations at
+    `pc` are division-safe, then a step is possible.
+
+    The only ways to get stuck are: PC out of bounds, type mismatch
+    in a binop (ruled out by well-typedness), or division by zero. -/
+theorem Step.progress (p : Prog) (pc : Nat) (σ : Store) (Γ : TyCtx)
     (hinb : pc < p.size)
-    (hsafe : ∀ x op y z, p[pc] = .binop x op y z → op.safe (σ y) (σ z)) :
+    (hwtp : WellTypedProg Γ p) (hts : TypedStore Γ σ)
+    (hsafe : ∀ x op y z, p[pc] = .binop x op y z → op.safe (σ y).toInt (σ z).toInt) :
     ∃ c', Step p (Cfg.run pc σ) c' := by
   have hinstr : p[pc]? = some p[pc] := Array.getElem?_eq_getElem hinb
+  have hwti := hwtp pc hinb
   match hp : p[pc] with
-  | .const x n      => exact ⟨_, .const (hp ▸ hinstr)⟩
-  | .copy x y       => exact ⟨_, .copy (hp ▸ hinstr)⟩
-  | .binop x op y z => exact ⟨_, .binop (hp ▸ hinstr) (hsafe x op y z hp)⟩
-  | .goto l         => exact ⟨_, .goto (hp ▸ hinstr)⟩
-  | .ifgoto b l     =>
+  | .const x v     => exact ⟨_, .const (hp ▸ hinstr)⟩
+  | .copy x y      => exact ⟨_, .copy (hp ▸ hinstr)⟩
+  | .binop x op y z =>
+    rw [hp] at hwti; cases hwti with
+    | binop _ hy hz =>
+      obtain ⟨a, ha⟩ : ∃ n, σ y = .int n := Value.int_of_typeOf_int (by rw [hts y]; exact hy)
+      obtain ⟨b, hb⟩ : ∃ n, σ z = .int n := Value.int_of_typeOf_int (by rw [hts z]; exact hz)
+      have hs := hsafe x op y z hp
+      rw [ha, hb] at hs; simp [Value.toInt] at hs
+      exact ⟨_, .binop (hp ▸ hinstr) ha hb hs⟩
+  | .boolop x be   => exact ⟨_, .boolop (hp ▸ hinstr)⟩
+  | .goto l        => exact ⟨_, .goto (hp ▸ hinstr)⟩
+  | .ifgoto b l    =>
     by_cases hb : b.eval σ = true
     · exact ⟨_, .iftrue (hp ▸ hinstr) hb⟩
     · exact ⟨_, .iffall (hp ▸ hinstr) (Bool.eq_false_iff.mpr hb)⟩
-  | .halt           => exact ⟨_, .halt (hp ▸ hinstr)⟩
+  | .halt          => exact ⟨_, .halt (hp ▸ hinstr)⟩
 
 -- ============================================================
 -- § 10. Observable output at a configuration
@@ -377,18 +511,14 @@ theorem Step.progress (p : Prog) (pc : Nat) (σ : Store)
 
 /-- An observation at a configuration: either the program halted (with
     observable variable–value pairs), the program is stuck (PC out of
-    bounds and not halted), or nothing observable happened yet. -/
+    bounds, type mismatch, or div-by-zero), or nothing observable happened yet. -/
 inductive Observation where
-  | halt    : List (Var × Val) → Observation
+  | halt    : List (Var × Value) → Observation
   | stuck   : Observation
   | nothing : Observation
   deriving Repr, DecidableEq
 
-/-- Observe a configuration against a program and list of observable variables.
-    - `Cfg.halt σ` or `Cfg.run pc σ` at a halt instruction → `halt` with variable–value pairs
-    - `Cfg.run pc σ` at a non-halt, safe instruction → `nothing`
-    - `Cfg.run pc σ` at a division by zero → `stuck`
-    - `Cfg.run pc σ` with `pc` out of bounds → `stuck` -/
+/-- Observe a configuration against a program and list of observable variables. -/
 def observe (p : Prog) (obs : List Var) (c : Cfg) : Observation :=
   match c with
   | .halt σ => Observation.halt (obs.map fun v => (v, σ v))
@@ -396,19 +526,120 @@ def observe (p : Prog) (obs : List Var) (c : Cfg) : Observation :=
     match p[pc]? with
     | some .halt => Observation.halt (obs.map fun v => (v, σ v))
     | some (.binop _ op y z) =>
-      if op.safe (σ y) (σ z) then Observation.nothing else Observation.stuck
+      match σ y, σ z with
+      | .int a, .int b => if op.safe a b then Observation.nothing else Observation.stuck
+      | _, _ => Observation.stuck
     | some _     => Observation.nothing
     | none       => Observation.stuck
 
 -- ============================================================
--- § 11. Example program:  acc := 1 + 2 + … + n
+-- § 11. Decidable type checking
+-- ============================================================
+
+def checkWellTypedBoolExpr (Γ : TyCtx) : BoolExpr → Bool
+  | .bvar x       => decide (Γ x = .bool)
+  | .cmp _ x y    => decide (Γ x = .int) && decide (Γ y = .int)
+  | .cmpLit _ x _ => decide (Γ x = .int)
+  | .not e        => checkWellTypedBoolExpr Γ e
+  | .and a b      => checkWellTypedBoolExpr Γ a && checkWellTypedBoolExpr Γ b
+  | .or a b       => checkWellTypedBoolExpr Γ a && checkWellTypedBoolExpr Γ b
+
+def checkWellTypedInstr (Γ : TyCtx) : TAC → Bool
+  | .const x v     => decide (v.typeOf = Γ x)
+  | .copy x y      => decide (Γ x = Γ y)
+  | .binop x _ y z => decide (Γ x = .int) && decide (Γ y = .int) && decide (Γ z = .int)
+  | .boolop x be   => decide (Γ x = .bool) && checkWellTypedBoolExpr Γ be
+  | .goto _        => true
+  | .ifgoto b _    => checkWellTypedBoolExpr Γ b
+  | .halt          => true
+
+theorem checkWellTypedBoolExpr_sound {Γ : TyCtx} {b : BoolExpr}
+    (h : checkWellTypedBoolExpr Γ b = true) : WellTypedBoolExpr Γ b := by
+  induction b with
+  | bvar x =>
+    simp [checkWellTypedBoolExpr, decide_eq_true_eq] at h
+    exact .bvar h
+  | cmp op x y =>
+    simp [checkWellTypedBoolExpr, Bool.and_eq_true, decide_eq_true_eq] at h
+    exact .cmp h.1 h.2
+  | cmpLit op x n =>
+    simp [checkWellTypedBoolExpr, decide_eq_true_eq] at h
+    exact .cmpLit h
+  | not e ih =>
+    simp [checkWellTypedBoolExpr] at h; exact .not (ih h)
+  | and a b iha ihb =>
+    simp [checkWellTypedBoolExpr, Bool.and_eq_true] at h
+    exact .and (iha h.1) (ihb h.2)
+  | or a b iha ihb =>
+    simp [checkWellTypedBoolExpr, Bool.and_eq_true] at h
+    exact .or (iha h.1) (ihb h.2)
+
+theorem checkWellTypedInstr_sound {Γ : TyCtx} {instr : TAC}
+    (h : checkWellTypedInstr Γ instr = true) : WellTypedInstr Γ instr := by
+  cases instr with
+  | const x v =>
+    simp [checkWellTypedInstr, decide_eq_true_eq] at h; exact .const h
+  | copy x y =>
+    simp [checkWellTypedInstr, decide_eq_true_eq] at h; exact .copy h
+  | binop x op y z =>
+    simp [checkWellTypedInstr, Bool.and_eq_true, decide_eq_true_eq] at h
+    exact .binop h.1.1 h.1.2 h.2
+  | boolop x be =>
+    simp [checkWellTypedInstr, Bool.and_eq_true, decide_eq_true_eq] at h
+    exact .boolop h.1 (checkWellTypedBoolExpr_sound h.2)
+  | goto l => exact .goto
+  | ifgoto b l =>
+    simp [checkWellTypedInstr] at h
+    exact .ifgoto (checkWellTypedBoolExpr_sound h)
+  | halt => exact .halt
+
+-- ============================================================
+-- § 11a. Type preservation
+-- ============================================================
+
+/-- **Type preservation**: a well-typed program with a well-typed store
+    preserves the typed-store invariant after any step to a run config. -/
+theorem type_preservation {Γ : TyCtx} {p : Prog} {pc pc' : Nat} {σ σ' : Store}
+    (hwtp : WellTypedProg Γ p) (hts : TypedStore Γ σ)
+    (hpc : pc < p.size)
+    (hstep : p ⊩ Cfg.run pc σ ⟶ Cfg.run pc' σ') :
+    TypedStore Γ σ' := by
+  have hwti := hwtp pc hpc
+  cases hstep with
+  | const h =>
+    have := instr_eq_of_lookup hpc h
+    rw [this] at hwti
+    match hwti with
+    | .const hv => exact TypedStore.update_typed hts hv
+  | copy h =>
+    have := instr_eq_of_lookup hpc h
+    rw [this] at hwti
+    match hwti with
+    | .copy hxy => exact TypedStore.update_typed hts (by rw [hts]; exact hxy.symm)
+  | binop h _ _ _ =>
+    have := instr_eq_of_lookup hpc h
+    rw [this] at hwti
+    match hwti with
+    | .binop hx _ _ => exact TypedStore.update_typed hts (by simp [Value.typeOf]; exact hx.symm)
+  | boolop h =>
+    have := instr_eq_of_lookup hpc h
+    rw [this] at hwti
+    match hwti with
+    | .boolop hx _ => exact TypedStore.update_typed hts (by simp [Value.typeOf]; exact hx.symm)
+  | goto _ => exact hts
+  | iftrue _ _ => exact hts
+  | iffall _ _ => exact hts
+
+
+-- ============================================================
+-- § 12. Example program:  acc := 1 + 2 + … + n
 -- ============================================================
 --
 --  Variables:  "n"   – loop counter (counts down to 0)
 --              "acc" – accumulator
 --              "one" – constant 1 stored in a register
 --
---  0:  if n goto 2        -- branch if n ≠ 0
+--  0:  if n != 0 goto 2  -- branch if n ≠ 0
 --  1:  halt               -- n = 0  ⟹  acc = Σ 1..N
 --  2:  acc := acc + n     -- accumulate current n
 --  3:  n   := n - one     -- decrement
@@ -422,10 +653,10 @@ def sumProg : Prog := #[
   .goto   0                            -- 4
 ]
 
-def sumStore (n : Val) : Store :=
-  Store.init |>.update "n"   n
-             |>.update "acc" 0
-             |>.update "one" 1
+def sumStore (n : Int) : Store :=
+  Store.init |>.update "n"   (.int n)
+             |>.update "acc" (.int 0)
+             |>.update "one" (.int 1)
 
 -- ▸ One step from pc=0 with n=3: the conditional is taken, jump to pc=2.
 example : sumProg ⊩ Cfg.run 0 (sumStore 3) ⟶ Cfg.run 2 (sumStore 3) :=
@@ -433,4 +664,4 @@ example : sumProg ⊩ Cfg.run 0 (sumStore 3) ⟶ Cfg.run 2 (sumStore 3) :=
 
 -- ▸ Step from pc=2: acc := acc + n fires; the updated store exists.
 example : ∃ σ', sumProg ⊩ Cfg.run 2 (sumStore 3) ⟶ Cfg.run 3 σ' :=
-  ⟨_, .binop rfl trivial⟩
+  ⟨_, .binop rfl rfl rfl trivial⟩

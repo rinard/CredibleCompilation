@@ -279,7 +279,8 @@ theorem inv_preserved_steps {inv : PInvariantMap} {p : Prog}
       | step s _ => exact absurd s Step.no_step_from_halt
     | const h => exact ih _ _ rfl (hpres _ _ hinv _ _ (.const h)) _ _ hc'
     | copy h => exact ih _ _ rfl (hpres _ _ hinv _ _ (.copy h)) _ _ hc'
-    | binop h hs => exact ih _ _ rfl (hpres _ _ hinv _ _ (.binop h hs)) _ _ hc'
+    | binop h hy hz hs => exact ih _ _ rfl (hpres _ _ hinv _ _ (.binop h hy hz hs)) _ _ hc'
+    | boolop h => exact ih _ _ rfl (hpres _ _ hinv _ _ (.boolop h)) _ _ hc'
     | goto h => exact ih _ _ rfl (hpres _ _ hinv _ _ (.goto h)) _ _ hc'
     | iftrue h hne => exact ih _ _ rfl (hpres _ _ hinv _ _ (.iftrue h hne)) _ _ hc'
     | iffall h heq => exact ih _ _ rfl (hpres _ _ hinv _ _ (.iffall h heq)) _ _ hc'
@@ -367,8 +368,12 @@ theorem soundness_halt
       obtain ⟨pc_o', σ_o', horig, hsim'⟩ := step_sim hvalid hsim (.copy h)
       obtain ⟨σ_o'', hfinal, hobs⟩ := ih hc' _ _ pc_o' σ_o' rfl hsim'
       exact ⟨σ_o'', Steps.trans horig hfinal, hobs⟩
-    | binop h hs =>
-      obtain ⟨pc_o', σ_o', horig, hsim'⟩ := step_sim hvalid hsim (.binop h hs)
+    | binop h hy hz hs =>
+      obtain ⟨pc_o', σ_o', horig, hsim'⟩ := step_sim hvalid hsim (.binop h hy hz hs)
+      obtain ⟨σ_o'', hfinal, hobs⟩ := ih hc' _ _ pc_o' σ_o' rfl hsim'
+      exact ⟨σ_o'', Steps.trans horig hfinal, hobs⟩
+    | boolop h =>
+      obtain ⟨pc_o', σ_o', horig, hsim'⟩ := step_sim hvalid hsim (.boolop h)
       obtain ⟨σ_o'', hfinal, hobs⟩ := ih hc' _ _ pc_o' σ_o' rfl hsim'
       exact ⟨σ_o'', Steps.trans horig hfinal, hobs⟩
     | goto h =>
@@ -800,8 +805,12 @@ theorem simulation_trace
       obtain ⟨pc_o', σ_o', horig, hsim'⟩ := step_sim hvalid hsim (.copy h)
       obtain ⟨pc_o'', σ_o'', hfinal, hsim''⟩ := ih _ _ pc_o' σ_o' rfl hsim' pc_t' σ_t' hc'
       exact ⟨pc_o'', σ_o'', Steps.trans horig hfinal, hsim''⟩
-    | binop h hs =>
-      obtain ⟨pc_o', σ_o', horig, hsim'⟩ := step_sim hvalid hsim (.binop h hs)
+    | binop h hy hz hs =>
+      obtain ⟨pc_o', σ_o', horig, hsim'⟩ := step_sim hvalid hsim (.binop h hy hz hs)
+      obtain ⟨pc_o'', σ_o'', hfinal, hsim''⟩ := ih _ _ pc_o' σ_o' rfl hsim' pc_t' σ_t' hc'
+      exact ⟨pc_o'', σ_o'', Steps.trans horig hfinal, hsim''⟩
+    | boolop h =>
+      obtain ⟨pc_o', σ_o', horig, hsim'⟩ := step_sim hvalid hsim (.boolop h)
       obtain ⟨pc_o'', σ_o'', hfinal, hsim''⟩ := ih _ _ pc_o' σ_o' rfl hsim' pc_t' σ_t' hc'
       exact ⟨pc_o'', σ_o'', Steps.trans horig hfinal, hsim''⟩
     | goto h =>
@@ -862,8 +871,11 @@ private theorem steps_run_in_bounds {p : Prog}
     | copy h =>
       have s : Step p (.run pc₁ σ₁) _ := .copy h
       exact ih _ _ rfl (hclosed.2 _ _ _ _ hpc s) _ _ hc'
-    | binop h hs =>
-      have s : Step p (.run pc₁ σ₁) _ := .binop h hs
+    | binop h hy hz hs =>
+      have s : Step p (.run pc₁ σ₁) _ := .binop h hy hz hs
+      exact ih _ _ rfl (hclosed.2 _ _ _ _ hpc s) _ _ hc'
+    | boolop h =>
+      have s : Step p (.run pc₁ σ₁) _ := .boolop h
       exact ih _ _ rfl (hclosed.2 _ _ _ _ hpc s) _ _ hc'
     | goto h =>
       have s : Step p (.run pc₁ σ₁) _ := .goto h
@@ -883,7 +895,7 @@ theorem halt_preservation
     (hvalid : PCertificateValid cert)
     (σ₀ : Store) (c_t : Cfg)
     (hreach : cert.trans ⊩ Cfg.run 0 σ₀ ⟶* c_t)
-    (pairs : List (Var × Val))
+    (pairs : List (Var × Value))
     (hobs : observe cert.trans cert.observable c_t = Observation.halt pairs) :
     ∃ c_o, (cert.orig ⊩ Cfg.run 0 σ₀ ⟶* c_o) ∧
       observe cert.orig cert.observable c_o = Observation.halt pairs := by
@@ -918,10 +930,9 @@ theorem halt_preservation
       exact ⟨Cfg.run pc_o σ_o, horig, hoobs ▸
         congrArg Observation.halt (obs_map_eq (fun v hv => (hobs_eq v hv).symm))⟩
     | binop x op y z =>
-      have htobs : observe cert.trans cert.observable (Cfg.run pc_t σ_t) =
-          if op.safe (σ_t y) (σ_t z) then Observation.nothing else Observation.stuck := by
-        simp only [observe, hinstr]
-      rw [htobs] at hobs; split at hobs <;> exact Observation.noConfusion hobs
+      simp only [observe, hinstr] at hobs
+      revert hobs; cases σ_t y <;> cases σ_t z <;> simp <;>
+        (try split) <;> intro h <;> exact Observation.noConfusion h
     | _ =>
       have htobs : observe cert.trans cert.observable (Cfg.run pc_t σ_t) =
           Observation.nothing := by simp only [observe, hinstr]
@@ -955,21 +966,12 @@ theorem stuck_preservation
         simp only [observe, hinstr]
       rw [this] at hobs; exact Observation.noConfusion hobs
     | binop x op y z =>
-      have htobs : observe cert.trans cert.observable (Cfg.run pc_t σ_t) =
-          if op.safe (σ_t y) (σ_t z) then Observation.nothing else Observation.stuck := by
-        simp only [observe, hinstr]
-      -- Save original observation before rewriting
-      have hobs_orig : observe cert.trans cert.observable (Cfg.run pc_t σ_t) =
-          Observation.stuck := hobs
-      rw [htobs] at hobs
-      split at hobs
-      · exact Observation.noConfusion hobs  -- nothing ≠ stuck
-      · -- Division by zero: use the stuck_pres certificate condition
-        obtain ⟨pc_o, σ_o, horig, hpc_eq, hrel, hinv_t, hinv_o⟩ :=
-          simulation_trace hvalid hreach
-        have h_orig_stuck := hvalid.stuck_pres pc_t σ_t σ_o hpc hrel hinv_t
-          (hpc_eq ▸ hinv_o) hobs_orig
-        exact ⟨Cfg.run pc_o σ_o, horig, hpc_eq ▸ h_orig_stuck⟩
+      -- Division by zero or type error: use the stuck_pres certificate condition
+      obtain ⟨pc_o, σ_o, horig, hpc_eq, hrel, hinv_t, hinv_o⟩ :=
+        simulation_trace hvalid hreach
+      have h_orig_stuck := hvalid.stuck_pres pc_t σ_t σ_o hpc hrel hinv_t
+        (hpc_eq ▸ hinv_o) hobs
+      exact ⟨Cfg.run pc_o σ_o, horig, hpc_eq ▸ h_orig_stuck⟩
     | _ =>
       have : observe cert.trans cert.observable (Cfg.run pc_t σ_t) =
           Observation.nothing := by simp only [observe, hinstr]

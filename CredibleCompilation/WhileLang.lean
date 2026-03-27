@@ -4,9 +4,10 @@ import CredibleCompilation.Semantics
 # While Language — Source Language and Compiler to TAC
 
 A simple structured imperative language with while loops, if/else,
-assignment, and sequencing. The compiler translates source programs
-to TAC (three-address code) programs suitable for optimization and
-certificate checking.
+assignment, and sequencing. Variables are typed: integer or boolean.
+
+The compiler translates source programs to TAC (three-address code)
+programs suitable for optimization and certificate checking.
 
 ## Design note
 
@@ -23,26 +24,28 @@ for writing programs.
 
 /-- Arithmetic expressions (tree-structured, unlike TAC operands). -/
 inductive SExpr where
-  | lit  : Val → SExpr
+  | lit  : Int → SExpr
   | var  : Var → SExpr
   | bin  : BinOp → SExpr → SExpr → SExpr
   deriving Repr
 
 /-- Boolean expressions over arithmetic sub-expressions. -/
 inductive SBool where
-  | cmp : CmpOp → SExpr → SExpr → SBool
-  | not : SBool → SBool
-  | and : SBool → SBool → SBool
-  | or  : SBool → SBool → SBool
+  | bvar : Var → SBool                          -- read a boolean variable
+  | cmp  : CmpOp → SExpr → SExpr → SBool
+  | not  : SBool → SBool
+  | and  : SBool → SBool → SBool
+  | or   : SBool → SBool → SBool
   deriving Repr
 
 /-- Statements. -/
 inductive Stmt where
-  | skip   : Stmt
-  | assign : Var → SExpr → Stmt
-  | seq    : Stmt → Stmt → Stmt
-  | ite    : SBool → Stmt → Stmt → Stmt   -- if-then-else
-  | loop   : SBool → Stmt → Stmt
+  | skip    : Stmt
+  | assign  : Var → SExpr → Stmt                -- integer assignment
+  | bassign : Var → SBool → Stmt                -- boolean assignment
+  | seq     : Stmt → Stmt → Stmt
+  | ite     : SBool → Stmt → Stmt → Stmt        -- if-then-else
+  | loop    : SBool → Stmt → Stmt
   deriving Repr
 
 -- Syntactic sugar
@@ -52,12 +55,16 @@ infixr:30 " ;; " => Stmt.seq
 -- § 2. Direct interpretation (for testing / specification)
 -- ============================================================
 
-def SExpr.eval (σ : Store) : SExpr → Val
+/-- Evaluate an arithmetic expression. Returns Int; reads integer
+    values from the store via `.toInt`. -/
+def SExpr.eval (σ : Store) : SExpr → Int
   | .lit n      => n
-  | .var x      => σ x
+  | .var x      => (σ x).toInt
   | .bin op a b => op.eval (a.eval σ) (b.eval σ)
 
+/-- Evaluate a boolean expression. -/
 def SBool.eval (σ : Store) : SBool → Bool
+  | .bvar x     => (σ x).toBool
   | .cmp op a b => op.eval (a.eval σ) (b.eval σ)
   | .not e      => !e.eval σ
   | .and a b    => a.eval σ && b.eval σ
@@ -65,9 +72,10 @@ def SBool.eval (σ : Store) : SBool → Bool
 
 /-- Interpret a statement directly, with a fuel bound to ensure termination. -/
 def Stmt.interp (fuel : Nat) (σ : Store) : Stmt → Option Store
-  | .skip       => some σ
-  | .assign x e => some (σ[x ↦ e.eval σ])
-  | .seq s1 s2  => do let σ' ← s1.interp fuel σ; s2.interp fuel σ'
+  | .skip        => some σ
+  | .assign x e  => some (σ[x ↦ .int (e.eval σ)])
+  | .bassign x b => some (σ[x ↦ .bool (b.eval σ)])
+  | .seq s1 s2   => do let σ' ← s1.interp fuel σ; s2.interp fuel σ'
   | .ite b s1 s2 =>
     if b.eval σ then s1.interp fuel σ else s2.interp fuel σ
   | .loop b body =>
@@ -122,7 +130,7 @@ def compileExpr (e : SExpr) : CompM Var := do
   match e with
   | .lit n =>
     let t ← freshVar
-    let _ ← emit (.const t n)
+    let _ ← emit (.const t (.int n))
     return t
   | .var x => return x
   | .bin op a b =>
@@ -136,6 +144,7 @@ def compileExpr (e : SExpr) : CompM Var := do
     (sub-expressions have been materialized into temporaries). -/
 def compileBool (b : SBool) : CompM BoolExpr := do
   match b with
+  | .bvar x => return .bvar x
   | .cmp op a b => do
     let va ← compileExpr a
     let vb ← compileExpr b
@@ -162,12 +171,15 @@ def compileStmt (s : Stmt) : CompM Unit := do
   | .skip => return ()
   | .assign x e =>
     match e with
-    | .lit n => let _ ← emit (.const x n)
+    | .lit n => let _ ← emit (.const x (.int n))
     | .var y => let _ ← emit (.copy x y)
     | .bin op a b =>
       let va ← compileExpr a
       let vb ← compileExpr b
       let _ ← emit (.binop x op va vb)
+  | .bassign x b =>
+    let be ← compileBool b
+    let _ ← emit (.boolop x be)
   | .seq s1 s2 =>
     compileStmt s1
     compileStmt s2
@@ -221,6 +233,7 @@ def SExpr.toString : SExpr → String
     s!"({a.toString} {opStr} {b.toString})"
 
 def SBool.toString : SBool → String
+  | .bvar x => x
   | .cmp op a b =>
     let opStr := match op with | .eq => "==" | .ne => "!=" | .lt => "<" | .le => "<="
     s!"({a.toString} {opStr} {b.toString})"
@@ -231,6 +244,7 @@ def SBool.toString : SBool → String
 def Stmt.toString : Stmt → String
   | .skip => "skip"
   | .assign x e => s!"{x} := {e.toString}"
+  | .bassign x b => s!"{x} := {b.toString}"
   | .seq s1 s2 => s!"{s1.toString};\n{s2.toString}"
   | .ite b s1 s2 => s!"if {b.toString} then\n  {s1.toString}\nelse\n  {s2.toString}"
   | .loop b body => s!"while {b.toString} do\n  {body.toString}"
