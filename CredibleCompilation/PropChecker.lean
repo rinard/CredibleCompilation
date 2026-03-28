@@ -119,8 +119,11 @@ def checkInvariantsPreservedProp (cert : PCertificate) : Prop :=
 /-- Condition 3b: Store relation is maintained across transitions.
     When the transformed program steps from `pc_t` to `pc_t'`,
     if the store relation holds before the step,
-    it holds after (with the next relation). -/
+    it holds after (with the next relation).
+    Requires the original store to be well-typed (`TypedStore Γ σ_o`)
+    so that binop operand int-witnesses can be derived. -/
 def checkTransitionRelProp
+    (Γ : TyCtx)
     (p_orig p_trans : Prog)
     (inv_orig : PInvariantMap) (inv_trans : PInvariantMap)
     (pc_t pc_t' : Label) (pc_o pc_o' : Label) (tc : PTransCorr)
@@ -129,6 +132,7 @@ def checkTransitionRelProp
     inv_trans pc_t σ_t →
     inv_orig pc_o σ_o →
     tc.storeRel σ_o σ_t →
+    TypedStore Γ σ_o →
     (p_trans ⊩ Cfg.run pc_t σ_t ⟶ Cfg.run pc_t' σ_t') →
     ∃ σ_o',
       (p_orig ⊩ Cfg.run pc_o σ_o ⟶* Cfg.run pc_o' σ_o') ∧
@@ -137,7 +141,7 @@ def checkTransitionRelProp
 /-- Condition 3: For each instruction in the transformed program,
     every transition has a corresponding sequence of transitions
     in the original program. -/
-def checkAllTransitionsProp (cert : PCertificate) : Prop :=
+def checkAllTransitionsProp (Γ : TyCtx) (cert : PCertificate) : Prop :=
   ∀ pc_t : Label,
     ∀ σ_t σ_t' : Store,
     ∀ pc_t' : Label,
@@ -147,7 +151,7 @@ def checkAllTransitionsProp (cert : PCertificate) : Prop :=
       ∃ tc ∈ ic.transitions,
         tc.storeRel = ic.storeRel ∧
         tc.storeRel_next = ic'.storeRel ∧
-        checkTransitionRelProp cert.orig cert.trans
+        checkTransitionRelProp Γ cert.orig cert.trans
           cert.inv_orig cert.inv_trans pc_t pc_t' ic.pc_orig ic'.pc_orig tc
 
 /-- Condition 4a: Each halt in the transformed program corresponds to
@@ -225,12 +229,15 @@ def checkNonterminationProp (cert : PCertificate) : Prop :=
 -- § 8. Complete certificate validity
 -- ============================================================
 
-/-- A certificate is valid if all checking conditions hold. -/
-structure PCertificateValid (cert : PCertificate) : Prop where
+/-- A certificate is valid if all checking conditions hold.
+    Parameterized by `Γ` (typing context) and requires `WellTypedProg Γ cert.orig`
+    so that binop operand int-witnesses can be derived during simulation. -/
+structure PCertificateValid (Γ : TyCtx) (cert : PCertificate) : Prop where
+  well_typed_orig : WellTypedProg Γ cert.orig
   start_corr      : checkStartCorrespondenceProp cert
   start_inv       : checkInvariantsAtStartProp cert
   inv_preserved   : checkInvariantsPreservedProp cert
-  transitions     : checkAllTransitionsProp cert
+  transitions     : checkAllTransitionsProp Γ cert
   halt_corr       : checkHaltCorrespondenceProp cert
   halt_obs        : checkHaltObservableProp cert
   nonterm         : checkNonterminationProp cert
@@ -243,14 +250,15 @@ structure PCertificateValid (cert : PCertificate) : Prop where
 
 /-- The simulation relation: transformed config at `(pc_t, σ_t)` is
     related to original config at `(pc_o, σ_o)` when the variable map
-    is consistent and invariants hold. -/
-def PSimRel (cert : PCertificate) (pc_t : Label) (σ_t : Store)
+    is consistent, invariants hold, and the original store is well-typed. -/
+def PSimRel (Γ : TyCtx) (cert : PCertificate) (pc_t : Label) (σ_t : Store)
     (pc_o : Label) (σ_o : Store) : Prop :=
   let ic := cert.instrCerts pc_t
   ic.pc_orig = pc_o ∧
   ic.storeRel σ_o σ_t ∧
   cert.inv_trans pc_t σ_t ∧
-  cert.inv_orig pc_o σ_o
+  cert.inv_orig pc_o σ_o ∧
+  TypedStore Γ σ_o
 
 /-- PInvariant preservation across multi-step execution. -/
 theorem inv_preserved_steps {inv : PInvariantMap} {p : Prog}
@@ -285,17 +293,67 @@ theorem inv_preserved_steps {inv : PInvariantMap} {p : Prog}
     | iftrue h hne => exact ih _ _ rfl (hpres _ _ hinv _ _ (.iftrue h hne)) _ _ hc'
     | iffall h heq => exact ih _ _ rfl (hpres _ _ hinv _ _ (.iffall h heq)) _ _ hc'
 
+/-- Bound from `getElem?` returning `some`. -/
+private theorem bound_of_getElem? {a : Array α} {i : Nat} {v : α}
+    (h : a[i]? = some v) : i < a.size := by
+  rw [getElem?_eq_some_iff] at h; exact h.1
+
+/-- Type preservation across multi-step execution. -/
+theorem type_preservation_steps {Γ : TyCtx} {p : Prog}
+    (hwtp : WellTypedProg Γ p)
+    {pc pc' : Label} {σ σ' : Store}
+    (hsteps : p ⊩ Cfg.run pc σ ⟶* Cfg.run pc' σ')
+    (hts : TypedStore Γ σ) :
+    TypedStore Γ σ' := by
+  suffices ∀ c c', Steps p c c' →
+      ∀ pc σ, c = Cfg.run pc σ → TypedStore Γ σ →
+      ∀ pc' σ', c' = Cfg.run pc' σ' → TypedStore Γ σ' from
+    this _ _ hsteps pc σ rfl hts pc' σ' rfl
+  intro c c' hsteps
+  induction hsteps with
+  | refl =>
+    intro pc σ hc hts pc' σ' hc'
+    rw [hc] at hc'; obtain ⟨rfl, rfl⟩ := Cfg.run.inj hc'; exact hts
+  | step hstep rest ih =>
+    intro pc σ hc hts pc' σ' hc'; subst hc
+    cases hstep with
+    | halt h =>
+      cases rest with
+      | refl => exact absurd hc' Cfg.noConfusion
+      | step s _ => exact absurd s Step.no_step_from_halt
+    | const h =>
+      exact ih _ _ rfl
+        (type_preservation hwtp hts (bound_of_getElem? h) (.const h)) _ _ hc'
+    | copy h =>
+      exact ih _ _ rfl
+        (type_preservation hwtp hts (bound_of_getElem? h) (.copy h)) _ _ hc'
+    | binop h hy hz hs =>
+      exact ih _ _ rfl
+        (type_preservation hwtp hts (bound_of_getElem? h) (.binop h hy hz hs)) _ _ hc'
+    | boolop h =>
+      exact ih _ _ rfl
+        (type_preservation hwtp hts (bound_of_getElem? h) (.boolop h)) _ _ hc'
+    | goto h =>
+      exact ih _ _ rfl
+        (type_preservation hwtp hts (bound_of_getElem? h) (.goto h)) _ _ hc'
+    | iftrue h hne =>
+      exact ih _ _ rfl
+        (type_preservation hwtp hts (bound_of_getElem? h) (.iftrue h hne)) _ _ hc'
+    | iffall h heq =>
+      exact ih _ _ rfl
+        (type_preservation hwtp hts (bound_of_getElem? h) (.iffall h heq)) _ _ hc'
+
 /-- Single-step simulation: a transformed step is matched by original steps,
     preserving the simulation relation. -/
-theorem step_sim {cert : PCertificate}
-    (hvalid : PCertificateValid cert)
+theorem step_sim {Γ : TyCtx} {cert : PCertificate}
+    (hvalid : PCertificateValid Γ cert)
     {pc_t : Label} {σ_t σ_t' : Store} {pc_o : Label} {σ_o : Store} {pc_t' : Label}
-    (hsim : PSimRel cert pc_t σ_t pc_o σ_o)
+    (hsim : PSimRel Γ cert pc_t σ_t pc_o σ_o)
     (hstep : cert.trans ⊩ Cfg.run pc_t σ_t ⟶ Cfg.run pc_t' σ_t') :
     ∃ pc_o' σ_o',
       (cert.orig ⊩ Cfg.run pc_o σ_o ⟶* Cfg.run pc_o' σ_o') ∧
-      PSimRel cert pc_t' σ_t' pc_o' σ_o' := by
-  obtain ⟨hpc_orig, hrel_cons, hinv_t, hinv_o⟩ := hsim
+      PSimRel Γ cert pc_t' σ_t' pc_o' σ_o' := by
+  obtain ⟨hpc_orig, hrel_cons, hinv_t, hinv_o, hts_o⟩ := hsim
   -- From checkAllTransitionsProp, get matching transition
   obtain ⟨tc, _, hrel1, hrel2, htrans⟩ :=
     hvalid.transitions pc_t σ_t σ_t' pc_t' hstep
@@ -305,33 +363,39 @@ theorem step_sim {cert : PCertificate}
   subst hpc_orig
   -- Transition relation gives original steps
   obtain ⟨σ_o', horig_steps, hrel_next⟩ :=
-    htrans σ_t σ_t' σ_o hinv_t hinv_o hrel_tc hstep
+    htrans σ_t σ_t' σ_o hinv_t hinv_o hrel_tc hts_o hstep
   -- Build the original steps from pc_o
   refine ⟨(cert.instrCerts pc_t').pc_orig, σ_o', horig_steps, ?_⟩
+  -- Type preservation across original steps
+  have hts_o' : TypedStore Γ σ_o' :=
+    type_preservation_steps hvalid.well_typed_orig horig_steps hts_o
   -- Establish PSimRel at new config
   exact ⟨rfl,
          hrel2 ▸ hrel_next,
          hvalid.inv_preserved.2 pc_t σ_t hinv_t pc_t' σ_t' hstep,
-         inv_preserved_steps hvalid.inv_preserved.1 horig_steps hinv_o⟩
+         inv_preserved_steps hvalid.inv_preserved.1 horig_steps hinv_o,
+         hts_o'⟩
 
 /-- Soundness for halting behaviors: if the certificate is valid and
     the transformed program halts, the original program also halts
     with the same observable values. -/
 theorem soundness_halt
+    {Γ : TyCtx}
     (cert : PCertificate)
-    (hvalid : PCertificateValid cert)
+    (hvalid : PCertificateValid Γ cert)
     (σ₀ σ_t' : Store)
+    (hts₀ : TypedStore Γ σ₀)
     (hexec : haltsWithResult cert.trans 0 σ₀ σ_t') :
     ∃ σ_o', haltsWithResult cert.orig 0 σ₀ σ_o' ∧
       ∀ v ∈ cert.observable, σ_t' v = σ_o' v := by
   -- Establish initial simulation relation
-  have hsim₀ : PSimRel cert 0 σ₀ 0 σ₀ :=
+  have hsim₀ : PSimRel Γ cert 0 σ₀ 0 σ₀ :=
     ⟨hvalid.start_corr.1, hvalid.start_corr.2 σ₀,
-     hvalid.start_inv.1 σ₀, hvalid.start_inv.2 σ₀⟩
+     hvalid.start_inv.1 σ₀, hvalid.start_inv.2 σ₀, hts₀⟩
   -- Main simulation: induction on the transformed execution trace
   suffices ∀ c c', Steps cert.trans c c' → c' = Cfg.halt σ_t' →
       ∀ pc_t σ_t pc_o σ_o, c = Cfg.run pc_t σ_t →
-        PSimRel cert pc_t σ_t pc_o σ_o →
+        PSimRel Γ cert pc_t σ_t pc_o σ_o →
         ∃ σ_o', (cert.orig ⊩ Cfg.run pc_o σ_o ⟶* Cfg.halt σ_o') ∧
           ∀ v ∈ cert.observable, σ_t' v = σ_o' v by
     obtain ⟨σ_o', hsteps, hobs⟩ :=
@@ -347,7 +411,7 @@ theorem soundness_halt
     cases hstep with
     | halt h =>
       -- Transformed program halts at pc_t
-      obtain ⟨hpc_orig, hrel_cons, _, _⟩ := hsim
+      obtain ⟨hpc_orig, hrel_cons, _, _, _⟩ := hsim
       -- Unify pc_o with (instrCerts pc_t).pc_orig
       have h_pc_eq : pc_o = (cert.instrCerts pc_t).pc_orig := hpc_orig.symm
       subst h_pc_eq
@@ -526,9 +590,11 @@ theorem StepsN_intermediate_run {p : Prog} {pc₀ : Label} {σ₀ : Store}
     and the transformed program diverges, the original program also
     diverges. -/
 theorem soundness_diverge
+    {Γ : TyCtx}
     (cert : PCertificate)
-    (hvalid : PCertificateValid cert)
+    (hvalid : PCertificateValid Γ cert)
     (f : Nat → Cfg) (σ₀ : Store)
+    (hts₀ : TypedStore Γ σ₀)
     (hinf : IsInfiniteExec cert.trans f)
     (hf0 : f 0 = Cfg.run 0 σ₀) :
     ∃ g : Nat → Cfg, IsInfiniteExec cert.orig g ∧ g 0 = Cfg.run 0 σ₀ := by
@@ -560,10 +626,10 @@ theorem soundness_diverge
   -- Progress: from any simulation state with μ-bound m, advance original ≥ 1 step
   have advance : ∀ (m n : Nat) (pc_o : Label) (σ_o : Store) (total : Nat),
       (∀ pc_t σ_t, f n = Cfg.run pc_t σ_t → cert.measure pc_t σ_t ≤ m) →
-      (∀ pc_t σ_t, f n = Cfg.run pc_t σ_t → PSimRel cert pc_t σ_t pc_o σ_o) →
+      (∀ pc_t σ_t, f n = Cfg.run pc_t σ_t → PSimRel Γ cert pc_t σ_t pc_o σ_o) →
       StepsN cert.orig (Cfg.run 0 σ₀) (Cfg.run pc_o σ_o) total →
       ∃ (n' : Nat) (pc_o' : Label) (σ_o' : Store) (total' : Nat),
-        (∀ pc_t σ_t, f n' = Cfg.run pc_t σ_t → PSimRel cert pc_t σ_t pc_o' σ_o') ∧
+        (∀ pc_t σ_t, f n' = Cfg.run pc_t σ_t → PSimRel Γ cert pc_t σ_t pc_o' σ_o') ∧
         StepsN cert.orig (Cfg.run 0 σ₀) (Cfg.run pc_o' σ_o') total' ∧
         total' ≥ total + 1 := by
     intro m; induction m with
@@ -583,7 +649,7 @@ theorem soundness_diverge
         obtain ⟨rfl, rfl⟩ := Cfg.run.inj hk
         have hpc_eq := hsim.1.trans hsim'.1.symm
         have hnt := hvalid.nonterm pc_t pc_t' σ_t σ_t' σ_o
-          hsim.2.2.1 (hsim.1 ▸ hsim.2.2.2) hsim.2.1 ⟨_, hstep, rfl⟩ hpc_eq
+          hsim.2.2.1 (hsim.1 ▸ hsim.2.2.2.1) hsim.2.1 ⟨_, hstep, rfl⟩ hpc_eq
         have := hmu pc_t σ_t hfn; omega
       | succ k' =>
         exact ⟨n + 1, pc_o', σ_o', total + (k' + 1),
@@ -605,7 +671,7 @@ theorem soundness_diverge
         obtain ⟨rfl, rfl⟩ := Cfg.run.inj hk
         have hpc_eq := hsim.1.trans hsim'.1.symm
         have hmu_dec := hvalid.nonterm pc_t pc_t' σ_t σ_t' σ_o
-          hsim.2.2.1 (hsim.1 ▸ hsim.2.2.2) hsim.2.1 ⟨_, hstep, rfl⟩ hpc_eq
+          hsim.2.2.1 (hsim.1 ▸ hsim.2.2.2.1) hsim.2.1 ⟨_, hstep, rfl⟩ hpc_eq
         have hmu_n := hmu pc_t σ_t hfn
         exact ih (n + 1) pc_o σ_o total
           (fun pc σ hf => by rw [hfn1] at hf; obtain ⟨rfl, rfl⟩ := Cfg.run.inj hf; omega)
@@ -617,7 +683,7 @@ theorem soundness_diverge
           StepsN_trans hsteps hk, by omega⟩
   -- For any N, find enough original steps via stronger induction carrying PSimRel
   suffices ∀ N, ∃ (n : Nat) (pc_o : Label) (σ_o : Store) (total : Nat),
-      (∀ pc_t σ_t, f n = Cfg.run pc_t σ_t → PSimRel cert pc_t σ_t pc_o σ_o) ∧
+      (∀ pc_t σ_t, f n = Cfg.run pc_t σ_t → PSimRel Γ cert pc_t σ_t pc_o σ_o) ∧
       StepsN cert.orig (Cfg.run 0 σ₀) (Cfg.run pc_o σ_o) total ∧ total ≥ N by
     intro N
     obtain ⟨_, _, _, total, _, hsteps, hge⟩ := this N
@@ -627,7 +693,7 @@ theorem soundness_diverge
     refine ⟨0, 0, σ₀, 0, ?_, rfl, Nat.zero_le _⟩
     intro pc_t σ_t hfn; rw [hf0] at hfn; obtain ⟨rfl, rfl⟩ := Cfg.run.inj hfn
     exact ⟨hvalid.start_corr.1, hvalid.start_corr.2 σ₀,
-           hvalid.start_inv.1 σ₀, hvalid.start_inv.2 σ₀⟩
+           hvalid.start_inv.1 σ₀, hvalid.start_inv.2 σ₀, hts₀⟩
   | succ N ih =>
     obtain ⟨n, pc_o, σ_o, total, hsim_fn, hsteps, hge⟩ := ih
     obtain ⟨pc_t, σ_t, hfn⟩ := hf_run n
@@ -719,9 +785,11 @@ theorem has_behavior (p : Prog) (σ₀ : Store)
     store, every behavior of the transformed program has a corresponding
     guarantee about the original program. -/
 theorem credible_compilation_soundness
+    {Γ : TyCtx}
     (cert : PCertificate)
-    (hvalid : PCertificateValid cert)
-    (σ₀ : Store) (b : Behavior)
+    (hvalid : PCertificateValid Γ cert)
+    (σ₀ : Store) (hts₀ : TypedStore Γ σ₀)
+    (b : Behavior)
     (htrans : program_behavior cert.trans σ₀ b) :
     match b with
     | .halts σ_t => ∃ σ_o, haltsWithResult cert.orig 0 σ₀ σ_o ∧
@@ -729,20 +797,21 @@ theorem credible_compilation_soundness
     | .stuck => True
     | .diverges => ∃ f, IsInfiniteExec cert.orig f ∧ f 0 = Cfg.run 0 σ₀ := by
   cases b with
-  | halts σ_t' => exact soundness_halt cert hvalid σ₀ σ_t' htrans
+  | halts σ_t' => exact soundness_halt cert hvalid σ₀ σ_t' hts₀ htrans
   | stuck => trivial
   | diverges =>
     obtain ⟨f, hinf, hf0⟩ := htrans
-    exact soundness_diverge cert hvalid f σ₀ hinf hf0
+    exact soundness_diverge cert hvalid f σ₀ hts₀ hinf hf0
 
 /-- **Total soundness**: If the certificate is valid and the transformed
     program is step-closed, then for every initial store there exists a
     behavior of the transformed program with a corresponding guarantee
     about the original program. -/
 theorem credible_compilation_total
+    {Γ : TyCtx}
     (cert : PCertificate)
-    (hvalid : PCertificateValid cert)
-    (σ₀ : Store) :
+    (hvalid : PCertificateValid Γ cert)
+    (σ₀ : Store) (hts₀ : TypedStore Γ σ₀) :
     ∃ b, program_behavior cert.trans σ₀ b ∧
       match b with
       | .halts σ_t => ∃ σ_o, haltsWithResult cert.orig 0 σ₀ σ_o ∧
@@ -752,11 +821,11 @@ theorem credible_compilation_total
   obtain ⟨b, hb⟩ := has_behavior cert.trans σ₀ hvalid.step_closed
   refine ⟨b, hb, ?_⟩
   cases b with
-  | halts σ_t => exact soundness_halt cert hvalid σ₀ σ_t hb
+  | halts σ_t => exact soundness_halt cert hvalid σ₀ σ_t hts₀ hb
   | stuck => trivial
   | diverges =>
     obtain ⟨f, hinf, hf0⟩ := hb
-    exact soundness_diverge cert hvalid f σ₀ hinf hf0
+    exact soundness_diverge cert hvalid f σ₀ hts₀ hinf hf0
 
 -- ============================================================
 -- § 11. Simulation trace for reachable run-configs
@@ -766,23 +835,24 @@ theorem credible_compilation_total
     program reaches a corresponding `Cfg.run pc_o σ_o` with the simulation
     relation preserved. -/
 theorem simulation_trace
-    {cert : PCertificate}
-    (hvalid : PCertificateValid cert)
-    {σ₀ : Store} {pc_t : Label} {σ_t : Store}
+    {Γ : TyCtx} {cert : PCertificate}
+    (hvalid : PCertificateValid Γ cert)
+    {σ₀ : Store} (hts₀ : TypedStore Γ σ₀)
+    {pc_t : Label} {σ_t : Store}
     (hreach : cert.trans ⊩ Cfg.run 0 σ₀ ⟶* Cfg.run pc_t σ_t) :
     ∃ pc_o σ_o,
       (cert.orig ⊩ Cfg.run 0 σ₀ ⟶* Cfg.run pc_o σ_o) ∧
-      PSimRel cert pc_t σ_t pc_o σ_o := by
-  have hsim₀ : PSimRel cert 0 σ₀ 0 σ₀ :=
+      PSimRel Γ cert pc_t σ_t pc_o σ_o := by
+  have hsim₀ : PSimRel Γ cert 0 σ₀ 0 σ₀ :=
     ⟨hvalid.start_corr.1, hvalid.start_corr.2 σ₀,
-     hvalid.start_inv.1 σ₀, hvalid.start_inv.2 σ₀⟩
+     hvalid.start_inv.1 σ₀, hvalid.start_inv.2 σ₀, hts₀⟩
   suffices ∀ c c', Steps cert.trans c c' →
       ∀ pc_t σ_t pc_o σ_o, c = Cfg.run pc_t σ_t →
-        PSimRel cert pc_t σ_t pc_o σ_o →
+        PSimRel Γ cert pc_t σ_t pc_o σ_o →
         ∀ pc_t' σ_t', c' = Cfg.run pc_t' σ_t' →
         ∃ pc_o' σ_o',
           (cert.orig ⊩ Cfg.run pc_o σ_o ⟶* Cfg.run pc_o' σ_o') ∧
-          PSimRel cert pc_t' σ_t' pc_o' σ_o' by
+          PSimRel Γ cert pc_t' σ_t' pc_o' σ_o' by
     exact this _ _ hreach 0 σ₀ 0 σ₀ rfl hsim₀ pc_t σ_t rfl
   intro c c' hsteps
   induction hsteps with
@@ -891,9 +961,11 @@ private theorem steps_run_in_bounds {p : Prog}
     program has an execution that halts, then the original program has an
     execution that halts with the same values for observable variables. -/
 theorem halt_preservation
+    {Γ : TyCtx}
     (cert : PCertificate)
-    (hvalid : PCertificateValid cert)
-    (σ₀ : Store) (c_t : Cfg)
+    (hvalid : PCertificateValid Γ cert)
+    (σ₀ : Store) (hts₀ : TypedStore Γ σ₀)
+    (c_t : Cfg)
     (hreach : cert.trans ⊩ Cfg.run 0 σ₀ ⟶* c_t)
     (pairs : List (Var × Value))
     (hobs : observe cert.trans cert.observable c_t = Observation.halt pairs) :
@@ -901,7 +973,7 @@ theorem halt_preservation
       observe cert.orig cert.observable c_o = Observation.halt pairs := by
   cases c_t with
   | halt σ_t =>
-    obtain ⟨σ_o, horig, hobs_eq⟩ := soundness_halt cert hvalid σ₀ σ_t hreach
+    obtain ⟨σ_o, horig, hobs_eq⟩ := soundness_halt cert hvalid σ₀ σ_t hts₀ hreach
     have htobs : observe cert.trans cert.observable (Cfg.halt σ_t) =
         Observation.halt (cert.observable.map fun v => (v, σ_t v)) := rfl
     have hoobs : observe cert.orig cert.observable (Cfg.halt σ_o) =
@@ -916,7 +988,7 @@ theorem halt_preservation
       ⟨cert.trans[pc_t], getElem?_eq_some_iff.mpr ⟨hpc, rfl⟩⟩
     cases instr with
     | halt =>
-      obtain ⟨pc_o, σ_o, horig, hpc_eq, hrel, _, _⟩ := simulation_trace hvalid hreach
+      obtain ⟨pc_o, σ_o, horig, hpc_eq, hrel, _, _, _⟩ := simulation_trace hvalid hts₀ hreach
       have horig_halt : cert.orig[pc_o]? = some TAC.halt := by
         rw [← hpc_eq]; exact hvalid.halt_corr pc_t hinstr
       have hobs_eq := hvalid.halt_obs pc_t σ_t σ_o hinstr hrel
@@ -944,9 +1016,11 @@ theorem halt_preservation
     (In practice, stuck is impossible for valid certificates because
     `StepClosedInBounds` ensures all reachable PCs are in bounds.) -/
 theorem stuck_preservation
+    {Γ : TyCtx}
     (cert : PCertificate)
-    (hvalid : PCertificateValid cert)
-    (σ₀ : Store) (c_t : Cfg)
+    (hvalid : PCertificateValid Γ cert)
+    (σ₀ : Store) (hts₀ : TypedStore Γ σ₀)
+    (c_t : Cfg)
     (hreach : cert.trans ⊩ Cfg.run 0 σ₀ ⟶* c_t)
     (hobs : observe cert.trans cert.observable c_t = Observation.stuck) :
     ∃ c_o, (cert.orig ⊩ Cfg.run 0 σ₀ ⟶* c_o) ∧
@@ -967,8 +1041,8 @@ theorem stuck_preservation
       rw [this] at hobs; exact Observation.noConfusion hobs
     | binop x op y z =>
       -- Division by zero or type error: use the stuck_pres certificate condition
-      obtain ⟨pc_o, σ_o, horig, hpc_eq, hrel, hinv_t, hinv_o⟩ :=
-        simulation_trace hvalid hreach
+      obtain ⟨pc_o, σ_o, horig, hpc_eq, hrel, hinv_t, hinv_o, _⟩ :=
+        simulation_trace hvalid hts₀ hreach
       have h_orig_stuck := hvalid.stuck_pres pc_t σ_t σ_o hpc hrel hinv_t
         (hpc_eq ▸ hinv_o) hobs
       exact ⟨Cfg.run pc_o σ_o, horig, hpc_eq ▸ h_orig_stuck⟩
@@ -981,13 +1055,14 @@ theorem stuck_preservation
     transformed program has an execution that diverges (infinite trace),
     then the original program has an execution that diverges. -/
 theorem diverge_preservation
+    {Γ : TyCtx}
     (cert : PCertificate)
-    (hvalid : PCertificateValid cert)
-    (f : Nat → Cfg) (σ₀ : Store)
+    (hvalid : PCertificateValid Γ cert)
+    (f : Nat → Cfg) (σ₀ : Store) (hts₀ : TypedStore Γ σ₀)
     (hinf : IsInfiniteExec cert.trans f)
     (hf0 : f 0 = Cfg.run 0 σ₀) :
     ∃ g : Nat → Cfg, IsInfiniteExec cert.orig g ∧ g 0 = Cfg.run 0 σ₀ :=
-  soundness_diverge cert hvalid f σ₀ hinf hf0
+  soundness_diverge cert hvalid f σ₀ hts₀ hinf hf0
 
 -- ============================================================
 -- § 13. Observable output at a configuration

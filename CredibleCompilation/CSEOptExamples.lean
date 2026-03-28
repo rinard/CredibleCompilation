@@ -86,7 +86,7 @@ def chainCert := optimize chainProg ("c" :: "d" :: [])
 
 def killProg : Prog := #[
   .binop "a" .add "x" "y",
-  .const "x" 42,
+  .const "x" (.int 42),
   .binop "b" .add "x" "y",
   .halt
 ]
@@ -139,8 +139,8 @@ def multiCert := optimize multiProg ("c" :: "d" :: [])
 -/
 
 def constProg : Prog := #[
-  .const "x" 5,
-  .const "y" 3,
+  .const "x" (.int 5),
+  .const "y" (.int 3),
   .binop "a" .add "x" "y",
   .binop "b" .mul "x" "y",
   .binop "c" .add "x" "y",

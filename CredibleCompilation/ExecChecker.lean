@@ -59,6 +59,12 @@ def Expr.simplify (inv : EInv) : Expr → Expr
     match a.simplify inv, b.simplify inv with
     | .lit na, .lit nb => .lit (op.eval na nb)
     | a', b'           => Expr.reassoc op a' b'
+  | .tobool e       => .tobool e
+  | .cmpE op a b    => .cmpE op a b
+  | .cmpLitE op a n => .cmpLitE op a n
+  | .notE e         => .notE e
+  | .andE a b       => .andE a b
+  | .orE a b        => .orE a b
 
 -- ============================================================
 -- § 3. Symbolic execution
@@ -76,13 +82,23 @@ def ssGet (ss : SymStore) (v : Var) : Expr :=
 def ssSet (ss : SymStore) (x : Var) (e : Expr) : SymStore :=
   (x, e) :: ss.filter (fun p => !(p.1 == x))
 
+/-- Convert a BoolExpr to a symbolic Expr by replacing each variable reference
+    with its symbolic expression from the store. -/
+def BoolExpr.toSymExpr (ss : SymStore) : BoolExpr → Expr
+  | .bvar x        => .tobool (ssGet ss x)
+  | .cmp op x y    => .cmpE op (ssGet ss x) (ssGet ss y)
+  | .cmpLit op x n => .cmpLitE op (ssGet ss x) n
+  | .not e         => .notE (e.toSymExpr ss)
+  | .and a b       => .andE (a.toSymExpr ss) (b.toSymExpr ss)
+  | .or a b        => .orE (a.toSymExpr ss) (b.toSymExpr ss)
+
 /-- Symbolically execute one TAC instruction.
     Expressions in the resulting store reference the *initial* variable values. -/
 def execSymbolic (ss : SymStore) (instr : TAC) : SymStore :=
   match instr with
   | .const x (.int n)  => ssSet ss x (.lit n)
   | .const x (.bool b) => ssSet ss x (.blit b)
-  | .boolop x _     => ssSet ss x (.var x)  -- conservative: treat as identity
+  | .boolop x be    => ssSet ss x (be.toSymExpr ss)
   | .copy x y       => ssSet ss x (ssGet ss y)
   | .binop x op y z => ssSet ss x (.bin op (ssGet ss y) (ssGet ss z))
   | _               => ss
@@ -115,7 +131,8 @@ def Expr.isNonZeroLit : Expr → Bool
   | .lit 0 => false
   | .lit _ => true
   | .blit true => true
-  | _      => false
+  | .blit false | .var _ | .bin _ _ _ => false
+  | .tobool _ | .cmpE _ _ _ | .cmpLitE _ _ _ | .notE _ | .andE _ _ | .orE _ _ => false
 
 /-- Symbolically evaluate a BoolExpr under a symbolic store and invariant.
     Returns `some true`/`some false` if the result can be determined, `none` otherwise. -/
@@ -159,6 +176,7 @@ def collectAllVars (p1 p2 : Prog) : List Var :=
     | .const x _     => [x]
     | .copy x y      => [x, y]
     | .binop x _ y z => [x, y, z]
+    | .boolop x _    => [x]
     | .ifgoto b _    => b.vars
     | _              => []
   let go (p : Prog) := p.toList.foldl (fun acc i => acc ++ extract i) ([] : List Var)
@@ -326,6 +344,12 @@ def Expr.substSym (ss : SymStore) : Expr → Expr
   | .blit b     => .blit b
   | .var v      => ssGet ss v
   | .bin op a b => .bin op (a.substSym ss) (b.substSym ss)
+  | .tobool e       => .tobool (e.substSym ss)
+  | .cmpE op a b    => .cmpE op (a.substSym ss) (b.substSym ss)
+  | .cmpLitE op a n => .cmpLitE op (a.substSym ss) n
+  | .notE e         => .notE (e.substSym ss)
+  | .andE a b       => .andE (a.substSym ss) (b.substSym ss)
+  | .orE a b        => .orE (a.substSym ss) (b.substSym ss)
 
 /-- Check that a single invariant atom `(x, e)` is preserved by an instruction.
     Uses symbolic execution: the post-value of `x` and the post-value of `e`
@@ -504,16 +528,20 @@ def checkSuccessorsInBounds (cert : ECertificate) : Bool :=
 -- § 7. Main checker
 -- ============================================================
 
-/-- Condition 9 (div preservation): for every `div` in the transformed
-    program, the original at the mapped PC also has a `div` and the
-    expression relation maps the denominators to the same variable. -/
+/-- Condition 9 (stuck preservation for binop): for every `binop` in the
+    transformed program, the original at the mapped PC also has a `binop`
+    with the same operator, and both operands are related through the
+    expression relation. This ensures type errors and div-by-zero on the
+    transformed side also occur on the original side. -/
 def checkDivPreservationExec (cert : ECertificate) : Bool :=
   (List.range cert.trans.size).all fun pc_t =>
     match cert.trans[pc_t]? with
-    | some (.binop _ .div _ z) =>
+    | some (.binop _ op y z) =>
       let ic := cert.instrCerts.getD pc_t default
       match cert.orig[ic.pc_orig]? with
-      | some (.binop _ .div _ z') =>
+      | some (.binop _ op' y' z') =>
+        op == op' &&
+        ssGet (buildSubstMap ic.rel) y == .var y' &&
         ssGet (buildSubstMap ic.rel) z == .var z'
       | _ => false
     | _ => true

@@ -37,7 +37,7 @@ namespace PeepholeOptExamples
 -/
 
 def licmProg : Prog := #[
-  .const "one" 1,
+  .const "one" (.int 1),
   .binop "t" .mul "a" "b",
   .ifgoto (.cmpLit .ne "n" 0) 4,
   .halt,
@@ -70,9 +70,9 @@ def licmCert := optimize licmProg ("s" :: [])
 -/
 
 def selfCopyProg : Prog := #[
-  .const "x" 5,
+  .const "x" (.int 5),
   .copy "x" "x",
-  .const "y" 3,
+  .const "y" (.int 3),
   .halt
 ]
 
@@ -101,11 +101,11 @@ def selfCopyCert := optimize selfCopyProg ("x" :: "y" :: [])
 -/
 
 def chainNopProg : Prog := #[
-  .const "x" 1,
+  .const "x" (.int 1),
   .goto 2,
   .goto 3,
   .goto 4,
-  .const "y" 2,
+  .const "y" (.int 2),
   .halt
 ]
 
@@ -129,8 +129,8 @@ def chainNopCert := optimize chainNopProg ("x" :: "y" :: [])
 -/
 
 def noChangeProg : Prog := #[
-  .const "x" 5,
-  .const "y" 3,
+  .const "x" (.int 5),
+  .const "y" (.int 3),
   .binop "z" .add "x" "y",
   .halt
 ]
@@ -160,10 +160,10 @@ def noChangeCert := optimize noChangeProg ("z" :: [])
 -/
 
 def gotoToNopProg : Prog := #[
-  .const "x" 1,
+  .const "x" (.int 1),
   .goto 3,
   .goto 3,
-  .const "y" 2,
+  .const "y" (.int 2),
   .halt
 ]
 
@@ -192,7 +192,7 @@ def gotoToNopCert := optimize gotoToNopProg ("x" :: "y" :: [])
 def ifgotoNopProg : Prog := #[
   .ifgoto (.cmpLit .lt "x" 10) 3,
   .goto 2,
-  .const "a" 1,
+  .const "a" (.int 1),
   .halt
 ]
 
@@ -211,7 +211,7 @@ def ifgotoNopCert := optimize ifgotoNopProg ("a" :: [])
 -/
 
 def e2eProg : Prog := #[
-  .const "one" 1,
+  .const "one" (.int 1),
   .binop "t" .mul "a" "b",
   .ifgoto (.cmpLit .ne "n" 0) 4,
   .halt,

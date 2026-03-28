@@ -72,6 +72,7 @@ def transformInstr (prog : Prog) (consts : Array (Option ConstPropOpt.ConstMap))
   | some (.const x n)      => .const x n
   | some (.copy x y)       => .copy x y
   | some (.binop x op y z) => .binop x op y z
+  | some (.boolop x b)     => .boolop x b
   | some .halt             => .halt
   | some (.goto l)         => .goto (revMap.getD l 0)
   | some (.ifgoto b l) =>
@@ -123,7 +124,7 @@ def buildInstrCerts (origMap : Array Nat) (trans : Prog) : Array EInstrCert :=
     match trans[i]? with
     | some .halt =>
       { pc_orig := origPC, transitions := ([] : List ETransCorr) }
-    | some (.const _ _) | some (.copy _ _) | some (.binop _ _ _ _) =>
+    | some (.const _ _) | some (.copy _ _) | some (.binop _ _ _ _) | some (.boolop _ _) =>
       let nextOrigPC := origMap.getD (i + 1) 0
       { pc_orig := origPC, transitions := [{ origLabels := (nextOrigPC :: []) }] }
     | some (.goto l) =>

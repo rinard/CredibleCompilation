@@ -29,7 +29,7 @@ namespace LICMOptExamples
 -/
 
 def classicProg : Prog := #[
-  .const "one" 1,
+  .const "one" (.int 1),
   .binop "t" .mul "a" "b",
   .ifgoto (.cmpLit .ne "n" 0) 4,
   .halt,

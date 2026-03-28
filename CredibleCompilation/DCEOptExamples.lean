@@ -30,10 +30,10 @@ namespace DCEOptExamples
 -/
 
 def deadBranchProg : Prog := #[
-  .const "x" 1,
+  .const "x" (.int 1),
   .ifgoto (.cmpLit .ne "x" 0) 3,
   .halt,
-  .const "y" 5,
+  .const "y" (.int 5),
   .halt
 ]
 
@@ -63,11 +63,11 @@ def deadBranchCert := optimize deadBranchProg ("y" :: [])
 -/
 
 def deadFallthroughProg : Prog := #[
-  .const "x" 0,
+  .const "x" (.int 0),
   .ifgoto (.cmpLit .ne "x" 0) 4,
-  .const "y" 42,
+  .const "y" (.int 42),
   .halt,
-  .const "z" 99,
+  .const "z" (.int 99),
   .halt
 ]
 
@@ -97,10 +97,10 @@ def deadFallthroughCert := optimize deadFallthroughProg ("y" :: [])
 
 def gotoSkipProg : Prog := #[
   .goto 4,
-  .const "a" 1,
-  .const "b" 2,
+  .const "a" (.int 1),
+  .const "b" (.int 2),
   .halt,
-  .const "c" 3,
+  .const "c" (.int 3),
   .halt
 ]
 
@@ -124,8 +124,8 @@ def gotoSkipCert := optimize gotoSkipProg ("c" :: [])
 -/
 
 def noDeadProg : Prog := #[
-  .const "x" 5,
-  .const "y" 3,
+  .const "x" (.int 5),
+  .const "y" (.int 3),
   .binop "z" .add "x" "y",
   .halt
 ]
@@ -158,10 +158,10 @@ def noDeadCert := optimize noDeadProg ("z" :: [])
 -/
 
 def deadExitProg : Prog := #[
-  .const "n" 1,
+  .const "n" (.int 1),
   .ifgoto (.cmpLit .ne "n" 0) 3,
   .halt,
-  .const "y" 5,
+  .const "y" (.int 5),
   .goto 6,
   .halt,
   .halt
@@ -190,9 +190,9 @@ def deadExitCert := optimize deadExitProg ("y" :: [])
 
 def liveBranchProg : Prog := #[
   .ifgoto (.cmpLit .lt "x" 10) 3,
-  .const "a" 1,
+  .const "a" (.int 1),
   .halt,
-  .const "b" 2,
+  .const "b" (.int 2),
   .halt
 ]
 
@@ -227,14 +227,14 @@ def liveBranchCert := optimize liveBranchProg ("a" :: "b" :: [])
 -/
 
 def cascadeProg : Prog := #[
-  .const "x" 1,
+  .const "x" (.int 1),
   .ifgoto (.cmpLit .ne "x" 0) 5,
-  .const "a" 10,
-  .const "b" 20,
+  .const "a" (.int 10),
+  .const "b" (.int 20),
   .halt,
-  .const "y" 0,
+  .const "y" (.int 0),
   .ifgoto (.cmpLit .ne "y" 0) 8,
-  .const "c" 30,
+  .const "c" (.int 30),
   .halt
 ]
 

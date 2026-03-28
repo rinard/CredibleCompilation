@@ -30,7 +30,7 @@ def tac : Prog := compile prog
 
 -- Compile and verify
 #eval tac.toList
-#eval do let σ ← Stmt.interp 1000 (fun v => if v == "n" then 10 else 0) prog; return σ "s"
+#eval do let σ ← Stmt.interp 1000 (fun v => if v == "n" then .int 10 else .int 0) prog; return σ "s"
 
 -- Optimize with constant propagation, then check
 def cert := ConstPropOpt.optimize tac observable
@@ -56,7 +56,7 @@ def observable : List Var := ["r"]
 def tac : Prog := compile prog
 
 #eval tac.toList
-#eval do let σ ← Stmt.interp 1000 (fun v => if v == "n" then 5 else 0) prog; return σ "r"
+#eval do let σ ← Stmt.interp 1000 (fun v => if v == "n" then .int 5 else .int 0) prog; return σ "r"
 
 def cert := ConstPropOpt.optimize tac observable
 #eval checkCertificateExec cert
@@ -80,7 +80,7 @@ def observable : List Var := ["m"]
 def tac : Prog := compile prog
 
 #eval tac.toList
-#eval do let σ ← Stmt.interp 100 (fun v => if v == "a" then 3 else if v == "b" then 7 else 0) prog; return σ "m"
+#eval do let σ ← Stmt.interp 100 (fun v => if v == "a" then .int 3 else if v == "b" then .int 7 else .int 0) prog; return σ "m"
 
 def cert := ConstPropOpt.optimize tac observable
 #eval checkCertificateExec cert
@@ -103,7 +103,7 @@ def observable : List Var := ["y"]
 def tac : Prog := compile prog
 
 #eval tac.toList
-#eval do let σ ← Stmt.interp 100 (fun _ => 0) prog; return σ "y"
+#eval do let σ ← Stmt.interp 100 (fun _ => .int 0) prog; return σ "y"
 
 -- Constant propagation should fold this aggressively
 def cert := ConstPropOpt.optimize tac observable
@@ -162,7 +162,7 @@ def observable : List Var := ["s"]
 def tac : Prog := compile prog
 
 #eval tac.toList
-#eval do let σ ← Stmt.interp 10000 (fun v => if v == "n" then 3 else 0) prog; return σ "s"
+#eval do let σ ← Stmt.interp 10000 (fun v => if v == "n" then .int 3 else .int 0) prog; return σ "s"
 
 def cert := ConstPropOpt.optimize tac observable
 #eval checkCertificateExec cert

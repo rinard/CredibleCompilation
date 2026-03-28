@@ -22,12 +22,12 @@ namespace ConstPropOpt
 -- ============================================================
 
 /-- Map from variables to their known constant values. No duplicate keys. -/
-abbrev ConstMap := List (Var × Val)
+abbrev ConstMap := List (Var × Value)
 
-def cmLookup (cm : ConstMap) (v : Var) : Option Val :=
+def cmLookup (cm : ConstMap) (v : Var) : Option Value :=
   (cm.find? (fun p => p.1 == v)).map Prod.snd
 
-def cmSet (cm : ConstMap) (x : Var) (n : Val) : ConstMap :=
+def cmSet (cm : ConstMap) (x : Var) (n : Value) : ConstMap :=
   (x, n) :: cm.filter (fun p => !(p.1 == x))
 
 def cmRemove (cm : ConstMap) (x : Var) : ConstMap :=
@@ -47,13 +47,17 @@ def cmBeq (a b : ConstMap) : Bool :=
 -- ============================================================
 
 def evalBoolConst (cm : ConstMap) : BoolExpr → Option Bool
+  | .bvar x =>
+    match cmLookup cm x with
+    | some (.bool b) => some b
+    | _ => none
   | .cmp op x y =>
     match cmLookup cm x, cmLookup cm y with
-    | some a, some b => some (op.eval a b)
+    | some (.int a), some (.int b) => some (op.eval a b)
     | _, _ => none
   | .cmpLit op x n =>
     match cmLookup cm x with
-    | some a => some (op.eval a n)
+    | some (.int a) => some (op.eval a n)
     | _ => none
   | .not e => evalBoolConst cm e |>.map (!·)
   | .and a b => match evalBoolConst cm a, evalBoolConst cm b with
@@ -77,8 +81,9 @@ def transfer (cm : ConstMap) (instr : TAC) : ConstMap :=
     | none   => cmRemove cm x
   | .binop x op y z =>
     match cmLookup cm y, cmLookup cm z with
-    | some a, some b => cmSet cm x (op.eval a b)
+    | some (.int a), some (.int b) => cmSet cm x (.int (op.eval a b))
     | _, _           => cmRemove cm x
+  | .boolop x _ => cmRemove cm x
   | _ => cm
 
 -- ============================================================
@@ -136,7 +141,7 @@ def transformInstr (cm : ConstMap) (instr : TAC) (pc : Nat) : TAC :=
     | none   => instr
   | .binop x op y z =>
     match cmLookup cm y, cmLookup cm z with
-    | some a, some b => .const x (op.eval a b)
+    | some (.int a), some (.int b) => .const x (.int (op.eval a b))
     | _, _           => instr
   | .ifgoto b l =>
     match evalBoolConst cm b with
@@ -160,7 +165,7 @@ def transformProg (prog : Prog) (consts : Array (Option ConstMap)) : Prog :=
 
 /-- Convert a ConstMap to an EInv (invariant). -/
 def constMapToInv (cm : ConstMap) : EInv :=
-  cm.map fun (v, n) => (v, .lit n)
+  cm.map fun (v, val) => (v, match val with | .int n => .lit n | .bool b => .blit b)
 
 /-- Build the invariant arrays. Both programs share the same invariants
     since the transformation preserves all variable values. -/

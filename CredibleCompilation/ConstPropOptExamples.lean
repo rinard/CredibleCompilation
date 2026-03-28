@@ -29,7 +29,7 @@ namespace ConstPropOptExamples
 -/
 
 def simpleProg : Prog := #[
-  .const "x" 7,
+  .const "x" (.int 7),
   .copy "y" "x",
   .copy "z" "y",
   .halt
@@ -54,8 +54,8 @@ def simpleCert := optimize simpleProg ("z" :: [])
 -/
 
 def foldProg : Prog := #[
-  .const "a" 5,
-  .const "b" 3,
+  .const "a" (.int 5),
+  .const "b" (.int 3),
   .binop "c" .add "a" "b",
   .binop "d" .mul "c" "b",
   .halt
@@ -81,7 +81,7 @@ def foldCert := optimize foldProg ("d" :: [])
 -/
 
 def partialProg : Prog := #[
-  .const "a" 10,
+  .const "a" (.int 10),
   .binop "b" .add "a" "x",
   .copy "c" "a",
   .halt
@@ -108,10 +108,10 @@ def partialCert := optimize partialProg ("b" :: "c" :: [])
 -/
 
 def branchProg : Prog := #[
-  .const "x" 1,
+  .const "x" (.int 1),
   .ifgoto (.cmpLit .ne "x" 0) 3,
   .halt,
-  .const "y" 5,
+  .const "y" (.int 5),
   .halt
 ]
 
@@ -135,9 +135,9 @@ def branchCert := optimize branchProg ("y" :: [])
 -/
 
 def fallProg : Prog := #[
-  .const "x" 0,
+  .const "x" (.int 0),
   .ifgoto (.cmpLit .ne "x" 0) 3,
-  .const "y" 42,
+  .const "y" (.int 42),
   .halt
 ]
 
@@ -165,9 +165,9 @@ def fallCert := optimize fallProg ("y" :: [])
 -/
 
 def loopProg : Prog := #[
-  .const "one" 1,
-  .const "n" 10,
-  .const "i" 0,
+  .const "one" (.int 1),
+  .const "n" (.int 10),
+  .const "i" (.int 0),
   .ifgoto (.cmp .lt "i" "n") 5,
   .halt,
   .binop "i" .add "i" "one",
@@ -194,7 +194,7 @@ def loopCert := optimize loopProg ("i" :: [])
 -/
 
 def chainProg : Prog := #[
-  .const "x" 100,
+  .const "x" (.int 100),
   .copy "y" "x",
   .copy "z" "y",
   .binop "w" .add "x" "z",

@@ -63,8 +63,8 @@ private abbrev hc (pc : Label) : EHaltCert := { pc_orig := pc }
 namespace ConstProp
 
 def cert : ECertificate :=
-  { orig  := #[.const "x" 7, .copy "y" "x", .copy "z" "y", .halt]
-    trans := #[.const "x" 7, .const "y" 7, .const "z" 7, .halt]
+  { orig  := #[.const "x" (.int 7), .copy "y" "x", .copy "z" "y", .halt]
+    trans := #[.const "x" (.int 7), .const "y" (.int 7), .const "z" (.int 7), .halt]
     inv_orig  := #[[], [("x", .lit 7)], [("x", .lit 7), ("y", .lit 7)],
                        [("x", .lit 7), ("y", .lit 7)]]
     inv_trans := #[[], [("x", .lit 7)], [("x", .lit 7), ("y", .lit 7)],
@@ -195,8 +195,8 @@ end CSE
 namespace BadExample
 
 def cert : ECertificate :=
-  { orig  := #[.const "x" 5, .copy "y" "x", .halt]
-    trans := #[.const "x" 5, .const "y" 3, .halt]
+  { orig  := #[.const "x" (.int 5), .copy "y" "x", .halt]
+    trans := #[.const "x" (.int 5), .const "y" (.int 3), .halt]
     inv_orig  := #[[], [("x", .lit 5)], [("x", .lit 5)]]
     inv_trans := #[[], [("x", .lit 5)], [("x", .lit 5)]]
     observable := ["y"]
@@ -238,13 +238,13 @@ end BadExample
 namespace DCE
 
 def cert : ECertificate :=
-  { orig  := #[.const "x" 1,            -- 0
+  { orig  := #[.const "x" (.int 1),            -- 0
                .ifgoto (.cmpLit .ne "x" 0) 3,     -- 1: always taken
                .halt,                    -- 2: dead
-               .const "y" 5,            -- 3
+               .const "y" (.int 5),            -- 3
                .halt]                    -- 4
-    trans := #[.const "x" 1,            -- 0
-               .const "y" 5,            -- 1: branch + dead code removed
+    trans := #[.const "x" (.int 1),            -- 0
+               .const "y" (.int 5),            -- 1: branch + dead code removed
                .halt]                    -- 2
     inv_orig  := #[[], [("x", .lit 1)], [("x", .lit 1)],
                       [("x", .lit 1)], [("x", .lit 1)]]
@@ -299,7 +299,7 @@ private def inv_loop : EInv :=
 
 def cert : ECertificate :=
   { orig := #[
-      .const "one" 1,              -- 0
+      .const "one" (.int 1),              -- 0
       .binop "t" .mul "a" "b",    -- 1: t := a * b
       .ifgoto (.cmpLit .ne "n" 0) 4,       -- 2: loop head
       .halt,                       -- 3
@@ -308,7 +308,7 @@ def cert : ECertificate :=
       .binop "n" .sub "n" "one",  -- 6: n--
       .goto 2 ]                    -- 7
     trans := #[
-      .const "one" 1,              -- 0
+      .const "one" (.int 1),              -- 0
       .binop "t" .mul "a" "b",    -- 1: t := a * b
       .ifgoto (.cmpLit .ne "n" 0) 4,       -- 2: loop head
       .halt,                       -- 3
@@ -395,16 +395,16 @@ private def inv_post_inc : EInv :=
 
 def cert : ECertificate :=
   { orig := #[
-      .const "one" 1,              -- 0
-      .const "k" 100,              -- 1
+      .const "one" (.int 1),              -- 0
+      .const "k" (.int 100),              -- 1
       .binop "rem" .sub "k" "i",  -- 2: loop head — recompute rem
       .ifgoto (.cmpLit .ne "rem" 0) 5,      -- 3
       .halt,                       -- 4
       .binop "i" .add "i" "one",  -- 5: i++
       .goto 2 ]                    -- 6: back to recomputation
     trans := #[
-      .const "one" 1,              -- 0
-      .const "k" 100,              -- 1
+      .const "one" (.int 1),              -- 0
+      .const "k" (.int 100),              -- 1
       .binop "rem" .sub "k" "i",  -- 2: initial rem (same)
       .ifgoto (.cmpLit .ne "rem" 0) 5,      -- 3: loop head
       .halt,                       -- 4
@@ -502,11 +502,11 @@ private abbrev icRel (pc : Label) (r : EExprRel) (trans : List ETransCorr) : EIn
 
 def cert : ECertificate :=
   { orig := #[
-      .const "one" 1,                          -- 0
-      .const "four" 4,                         -- 1
-      .const "n" 500,                          -- 2
-      .const "i" 0,                            -- 3
-      .const "j" 1,                            -- 4
+      .const "one" (.int 1),                          -- 0
+      .const "four" (.int 4),                         -- 1
+      .const "n" (.int 500),                          -- 2
+      .const "i" (.int 0),                            -- 3
+      .const "j" (.int 1),                            -- 4
       .binop "t1" .mul "n" "four",             -- 5: t1 = 2000
       .binop "limit" .add "t1" "one",          -- 6: limit = 2001
       .ifgoto (.cmp .lt "j" "limit") 9,        -- 7: loop test
@@ -515,13 +515,13 @@ def cert : ECertificate :=
       .binop "j" .add "j" "four",              -- 10: j += 4
       .goto 7 ]                                -- 11: loop back
     trans := #[
-      .const "one" 1,                          -- 0
-      .const "four" 4,                         -- 1
-      .const "n" 500,                          -- 2
-      .const "i" 0,                            -- 3: dead code (mirrors orig)
-      .const "j" 1,                            -- 4
-      .const "t1" 2000,                        -- 5: constant-folded
-      .const "limit" 2001,                     -- 6: constant-folded
+      .const "one" (.int 1),                          -- 0
+      .const "four" (.int 4),                         -- 1
+      .const "n" (.int 500),                          -- 2
+      .const "i" (.int 0),                            -- 3: dead code (mirrors orig)
+      .const "j" (.int 1),                            -- 4
+      .const "t1" (.int 2000),                        -- 5: constant-folded
+      .const "limit" (.int 2001),                     -- 6: constant-folded
       .ifgoto (.cmp .lt "j" "limit") 9,        -- 7: loop test
       .halt,                                   -- 8
       .binop "j" .add "j" "four",              -- 9: j += 4 (no i update!)

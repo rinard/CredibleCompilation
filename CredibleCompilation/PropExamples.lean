@@ -34,6 +34,19 @@ theorem bound_of_getElem? {a : Array α} {i : Nat} {v : α}
     (h : a[i]? = some v) : i < a.size := by
   rw [getElem?_eq_some_iff] at h; exact h.1
 
+/-- All-int typing context for examples that only use integer values. -/
+def allIntCtx : TyCtx := fun _ => .int
+
+/-- Any store of all-int values is well-typed under `allIntCtx`. -/
+theorem allIntCtx_typed_of_all_int {σ : Store}
+    (h : ∀ x, ∃ n, σ x = .int n) : TypedStore allIntCtx σ := by
+  intro x; obtain ⟨n, hn⟩ := h x; rw [hn]; rfl
+
+/-- WellTypedProg for a program where all instructions are int-typed. -/
+private theorem allIntCtx_wtp_by_decide {p : Prog}
+    (h : ∀ i, (hi : i < p.size) → WellTypedInstr allIntCtx p[i]) :
+    WellTypedProg allIntCtx p := h
+
 -- ============================================================
 -- § 1. Constant propagation (chain)
 -- ============================================================
@@ -50,22 +63,22 @@ theorem bound_of_getElem? {a : Array α} {i : Nat} {v : α}
 namespace Example1
 
 def origProg : Prog := #[
-  .const "x" 7,       -- 0
+  .const "x" (.int 7),       -- 0
   .copy  "y" "x",     -- 1
   .copy  "z" "y",     -- 2
   .halt                -- 3
 ]
 
 def transProg : Prog := #[
-  .const "x" 7,       -- 0
-  .const "y" 7,       -- 1
-  .const "z" 7,       -- 2
+  .const "x" (.int 7),       -- 0
+  .const "y" (.int 7),       -- 1
+  .const "z" (.int 7),       -- 2
   .halt                -- 3
 ]
 
 def inv : PInvariantMap := fun pc σ =>
-  (if pc ≥ 1 then σ "x" = 7 else True) ∧
-  (if pc ≥ 2 then σ "y" = 7 else True)
+  (if pc ≥ 1 then σ "x" = .int 7 else True) ∧
+  (if pc ≥ 2 then σ "y" = .int 7 else True)
 
 def cert : PCertificate :=
   { orig       := origProg
@@ -104,7 +117,8 @@ theorem inv_ok : checkInvariantsPreservedProp cert := by
       | goto h => exact bound_of_getElem? h
       | iftrue h _ => exact bound_of_getElem? h
       | iffall h _ => exact bound_of_getElem? h
-    have : cert.orig[0]? = some (.const "x" 7) := by native_decide
+      | boolop h => exact bound_of_getElem? h
+    have : cert.orig[0]? = some (.const "x" (.int 7)) := by native_decide
     have : cert.orig[1]? = some (.copy "y" "x") := by native_decide
     have : cert.orig[2]? = some (.copy "z" "y") := by native_decide
     have : cert.orig[3]? = some .halt := by native_decide
@@ -120,9 +134,10 @@ theorem inv_ok : checkInvariantsPreservedProp cert := by
       | goto h => exact bound_of_getElem? h
       | iftrue h _ => exact bound_of_getElem? h
       | iffall h _ => exact bound_of_getElem? h
-    have : cert.trans[0]? = some (.const "x" 7) := by native_decide
-    have : cert.trans[1]? = some (.const "y" 7) := by native_decide
-    have : cert.trans[2]? = some (.const "z" 7) := by native_decide
+      | boolop h => exact bound_of_getElem? h
+    have : cert.trans[0]? = some (.const "x" (.int 7)) := by native_decide
+    have : cert.trans[1]? = some (.const "y" (.int 7)) := by native_decide
+    have : cert.trans[2]? = some (.const "z" (.int 7)) := by native_decide
     have : cert.trans[3]? = some .halt := by native_decide
     change pc < 4 at hlt
     interval_cases pc <;> cases hstep <;> simp_all [Store.update]
@@ -140,7 +155,7 @@ theorem halt_obs_ok : checkHaltObservableProp cert := by
   interval_cases pc_t <;> simp_all [transProg]
   simp [idStoreRel] at hvm; subst hvm; rfl
 
-theorem transitions_ok : checkAllTransitionsProp cert := by
+theorem transitions_ok : checkAllTransitionsProp allIntCtx cert := by
   intro pc_t σ_t σ_t' pc_t' hstep
   have hlt : pc_t < cert.trans.size := by
     cases hstep with
@@ -150,29 +165,30 @@ theorem transitions_ok : checkAllTransitionsProp cert := by
     | goto h => exact bound_of_getElem? h
     | iftrue h _ => exact bound_of_getElem? h
     | iffall h _ => exact bound_of_getElem? h
+    | boolop h => exact bound_of_getElem? h
   change pc_t < 4 at hlt
-  have ct0 : cert.trans[0]? = some (.const "x" 7) := by native_decide
-  have ct1 : cert.trans[1]? = some (.const "y" 7) := by native_decide
-  have ct2 : cert.trans[2]? = some (.const "z" 7) := by native_decide
+  have ct0 : cert.trans[0]? = some (.const "x" (.int 7)) := by native_decide
+  have ct1 : cert.trans[1]? = some (.const "y" (.int 7)) := by native_decide
+  have ct2 : cert.trans[2]? = some (.const "z" (.int 7)) := by native_decide
   have ct3 : cert.trans[3]? = some .halt := by native_decide
   interval_cases pc_t
   · -- pc_t = 0: const "x" 7
     cases hstep with
     | const h =>
       refine ⟨⟨[1], idStoreRel, idStoreRel⟩, List.Mem.head _, rfl, rfl, ?_⟩
-      · intro σ_t_ σ_t'_ σ_o_ _ _ hvm hstep'
+      · intro σ_t_ σ_t'_ σ_o_ _ _ hvm _ hstep'
         simp [idStoreRel] at hvm; subst hvm
         cases hstep' with
         | const h' =>
           simp_all
-          exact ⟨σ_o_["x" ↦ 7], Steps.single (.const (by native_decide)), rfl⟩
+          exact ⟨σ_o_["x" ↦ .int 7], Steps.single (.const (by native_decide)), rfl⟩
         | _ => simp_all
     | _ => simp_all
   · -- pc_t = 1: const "y" 7 (trans) vs copy "y" "x" (orig)
     cases hstep with
     | const h =>
       refine ⟨⟨[2], idStoreRel, idStoreRel⟩, List.Mem.head _, rfl, rfl, ?_⟩
-      · intro σ_t_ σ_t'_ σ_o_ _ hinv_o hvm hstep'
+      · intro σ_t_ σ_t'_ σ_o_ _ hinv_o hvm _ hstep'
         simp [idStoreRel] at hvm; subst hvm
         simp [cert, inv] at hinv_o
         cases hstep' with
@@ -186,7 +202,7 @@ theorem transitions_ok : checkAllTransitionsProp cert := by
     cases hstep with
     | const h =>
       refine ⟨⟨[3], idStoreRel, idStoreRel⟩, List.Mem.head _, rfl, rfl, ?_⟩
-      · intro σ_t_ σ_t'_ σ_o_ _ hinv_o hvm hstep'
+      · intro σ_t_ σ_t'_ σ_o_ _ hinv_o hvm _ hstep'
         simp [idStoreRel] at hvm; subst hvm
         simp [cert, inv] at hinv_o
         cases hstep' with
@@ -210,10 +226,11 @@ theorem nonterm_ok : checkNonterminationProp cert := by
     | goto h => exact bound_of_getElem? h
     | iftrue h _ => exact bound_of_getElem? h
     | iffall h _ => exact bound_of_getElem? h
+    | boolop h => exact bound_of_getElem? h
   change pc_t < 4 at hlt
-  have : cert.trans[0]? = some (.const "x" 7) := by native_decide
-  have : cert.trans[1]? = some (.const "y" 7) := by native_decide
-  have : cert.trans[2]? = some (.const "z" 7) := by native_decide
+  have : cert.trans[0]? = some (.const "x" (.int 7)) := by native_decide
+  have : cert.trans[1]? = some (.const "y" (.int 7)) := by native_decide
+  have : cert.trans[2]? = some (.const "z" (.int 7)) := by native_decide
   have : cert.trans[3]? = some .halt := by native_decide
   interval_cases pc_t <;> cases hstep <;> simp_all <;>
     (simp [cert] at horig_eq)
@@ -227,8 +244,11 @@ theorem stuck_pres_ok : checkStuckPreservationProp cert := by
   have : pc_t < 4 := by rw [show cert.trans.size = 4 from rfl] at hpc; exact hpc
   interval_cases pc_t <;> dsimp [observe, cert, transProg] at hobs <;> exact Observation.noConfusion hobs
 
-theorem valid : PCertificateValid cert :=
-  { start_corr    := start_ok
+theorem valid : PCertificateValid allIntCtx cert :=
+  { well_typed_orig := by
+      intro i hi; simp [cert, origProg] at hi ⊢
+      change i < 4 at hi; interval_cases i <;> constructor <;> rfl
+    start_corr    := start_ok
     start_inv     := start_inv_ok
     inv_preserved := inv_ok
     transitions   := transitions_ok
@@ -304,6 +324,7 @@ theorem inv_ok : checkInvariantsPreservedProp cert := by
       | goto h => exact bound_of_getElem? h
       | iftrue h _ => exact bound_of_getElem? h
       | iffall h _ => exact bound_of_getElem? h
+      | boolop h => exact bound_of_getElem? h
     have : cert.orig[0]? = some (.copy "a" "b") := by native_decide
     have : cert.orig[1]? = some (.binop "c" .add "a" "d") := by native_decide
     have : cert.orig[2]? = some .halt := by native_decide
@@ -318,6 +339,7 @@ theorem inv_ok : checkInvariantsPreservedProp cert := by
       | goto h => exact bound_of_getElem? h
       | iftrue h _ => exact bound_of_getElem? h
       | iffall h _ => exact bound_of_getElem? h
+      | boolop h => exact bound_of_getElem? h
     have : cert.trans[0]? = some (.copy "a" "b") := by native_decide
     have : cert.trans[1]? = some (.binop "c" .add "b" "d") := by native_decide
     have : cert.trans[2]? = some .halt := by native_decide
@@ -337,7 +359,7 @@ theorem halt_obs_ok : checkHaltObservableProp cert := by
   interval_cases pc_t <;> simp_all [transProg]
   simp [idStoreRel] at hvm; subst hvm; rfl
 
-theorem transitions_ok : checkAllTransitionsProp cert := by
+theorem transitions_ok : checkAllTransitionsProp allIntCtx cert := by
   intro pc_t σ_t σ_t' pc_t' hstep
   have hlt : pc_t < cert.trans.size := by
     cases hstep with
@@ -347,6 +369,7 @@ theorem transitions_ok : checkAllTransitionsProp cert := by
     | goto h => exact bound_of_getElem? h
     | iftrue h _ => exact bound_of_getElem? h
     | iffall h _ => exact bound_of_getElem? h
+    | boolop h => exact bound_of_getElem? h
   change pc_t < 3 at hlt
   have ct0 : cert.trans[0]? = some (.copy "a" "b") := by native_decide
   have ct1 : cert.trans[1]? = some (.binop "c" .add "b" "d") := by native_decide
@@ -356,7 +379,7 @@ theorem transitions_ok : checkAllTransitionsProp cert := by
     cases hstep with
     | copy h =>
       refine ⟨⟨[1], idStoreRel, idStoreRel⟩, List.Mem.head _, rfl, rfl, ?_⟩
-      · intro σ_t_ σ_t'_ σ_o_ _ _ hvm hstep'
+      · intro σ_t_ σ_t'_ σ_o_ _ _ hvm _ hstep'
         simp [idStoreRel] at hvm; subst hvm
         cases hstep' with
         | copy h' =>
@@ -366,19 +389,37 @@ theorem transitions_ok : checkAllTransitionsProp cert := by
     | _ => simp_all
   · -- pc_t = 1: binop "c" .add "b" "d" (trans) vs binop "c" .add "a" "d" (orig)
     cases hstep with
-    | binop h =>
+    | binop h _ _ _ =>
       refine ⟨⟨[2], idStoreRel, idStoreRel⟩, List.Mem.head _, rfl, rfl, ?_⟩
-      · intro σ_t_ σ_t'_ σ_o_ _ hinv_o hvm hstep'
+      · intro σ_t_ σ_t'_ σ_o_ _ hinv_o hvm _ hstep'
         simp [idStoreRel] at hvm; subst hvm
         simp [cert, inv] at hinv_o
+        -- hstep' : cert.trans ⊩ Cfg.run 1 σ_o_ ⟶ Cfg.run 2 σ_t'_
+        -- hinv_o : σ_o_ "a" = σ_o_ "b"
         cases hstep' with
-        | binop h' =>
+        | binop h' hb hd hsafe =>
+          -- h' : cert.trans[1]? = some (.binop "c" .add y✝ z✝)
+          -- hb : σ_o_ y✝ = .int av,  hd : σ_o_ z✝ = .int dv
+          -- simp_all unifies y✝ = "b", z✝ = "d" via ct1
+          rename_i av dv
           simp_all
-          refine ⟨σ_o_["c" ↦ BinOp.add.eval (σ_o_ "a") (σ_o_ "d")],
-            Steps.single (.binop (by native_decide) trivial), ?_⟩
-          simp [idStoreRel]; funext v; simp [Store.update]; split <;> simp_all
-        | _ => simp_all
-    | _ => simp_all
+          -- Now hinv_o : σ_o_ "a" = σ_o_ "b", hb : σ_o_ "b" = Value.int av,
+          --     hd : σ_o_ "d" = Value.int dv
+          have ha : σ_o_ "a" = Value.int av := by rw [hinv_o]
+          exact ⟨σ_o_["c" ↦ Value.int (BinOp.add.eval av dv)],
+                  Steps.single (Step.binop (by native_decide) ha hd hsafe), rfl⟩
+        | const h' => simp_all
+        | copy h' => simp_all
+        | boolop h' => simp_all
+        | goto h' => simp_all
+        | iftrue h' _ => simp_all
+        | iffall h' _ => simp_all
+    | const h => simp_all
+    | copy h => simp_all
+    | boolop h => simp_all
+    | goto h => simp_all
+    | iftrue h _ => simp_all
+    | iffall h _ => simp_all
   · -- pc_t = 2: halt
     cases hstep <;> simp_all
 
@@ -393,6 +434,7 @@ theorem nonterm_ok : checkNonterminationProp cert := by
     | goto h => exact bound_of_getElem? h
     | iftrue h _ => exact bound_of_getElem? h
     | iffall h _ => exact bound_of_getElem? h
+    | boolop h => exact bound_of_getElem? h
   change pc_t < 3 at hlt
   have : cert.trans[0]? = some (.copy "a" "b") := by native_decide
   have : cert.trans[1]? = some (.binop "c" .add "b" "d") := by native_decide
@@ -404,13 +446,32 @@ theorem start_inv_ok : checkInvariantsAtStartProp cert :=
   ⟨fun σ => by simp [cert, inv], fun σ => by simp [cert, inv]⟩
 
 theorem stuck_pres_ok : checkStuckPreservationProp cert := by
-  intro pc_t σ_t σ_o hpc _ _ _ hobs
-  exfalso
-  have : pc_t < 3 := by rw [show cert.trans.size = 3 from rfl] at hpc; exact hpc
-  interval_cases pc_t <;> dsimp [observe, cert, transProg] at hobs <;> exact Observation.noConfusion hobs
+  intro pc_t σ_t σ_o hpc hrel hinv_t hinv_o hobs
+  have hlt : pc_t < 3 := by rw [show cert.trans.size = 3 from rfl] at hpc; exact hpc
+  interval_cases pc_t
+  · -- pc_t = 0: copy "a" "b" → observe = nothing, not stuck
+    simp [observe, cert, transProg] at hobs
+  · -- pc_t = 1: binop "c" .add "b" "d"
+    simp only [cert] at hrel hinv_o
+    simp only [idStoreRel] at hrel; subst hrel
+    simp only [inv, show (1 : Nat) ≥ 1 from le_refl _, ite_true] at hinv_o
+    -- hinv_o : σ_o "a" = σ_o "b"
+    -- Unfold observe and reduce the array lookups by native_decide
+    simp only [observe, cert, transProg, origProg] at hobs ⊢
+    -- Both hobs and goal now contain `#[...][1]?`; use norm_num/simp to evaluate
+    simp only [show (#[TAC.copy "a" "b", TAC.binop "c" BinOp.add "b" "d",
+        TAC.halt] : Array TAC)[1]? = some (.binop "c" .add "b" "d") from by native_decide] at hobs
+    simp only [show (#[TAC.copy "a" "b", TAC.binop "c" BinOp.add "a" "d",
+        TAC.halt] : Array TAC)[1]? = some (.binop "c" .add "a" "d") from by native_decide]
+    rw [hinv_o]; exact hobs
+  · -- pc_t = 2: halt → observe = halt observation, not stuck
+    simp [observe, cert, transProg] at hobs
 
-theorem valid : PCertificateValid cert :=
-  { start_corr    := start_ok
+theorem valid : PCertificateValid allIntCtx cert :=
+  { well_typed_orig := by
+      intro i hi; simp [cert, origProg] at hi ⊢
+      change i < 3 at hi; interval_cases i <;> constructor <;> rfl
+    start_corr    := start_ok
     start_inv     := start_inv_ok
     inv_preserved := inv_ok
     transitions   := transitions_ok
@@ -450,7 +511,11 @@ def transProg : Prog := #[
 ]
 
 def inv : PInvariantMap := fun pc σ =>
-  if pc ≥ 1 then σ "a" = σ "x" + σ "y" else True
+  if pc ≥ 1 then
+    (∃ xv : Int, σ "x" = .int xv) ∧
+    (∃ yv : Int, σ "y" = .int yv) ∧
+    σ "a" = .int ((σ "x").toInt + (σ "y").toInt)
+  else True
 
 def cert : PCertificate :=
   { orig       := origProg
@@ -488,6 +553,7 @@ theorem inv_ok : checkInvariantsPreservedProp cert := by
       | goto h => exact bound_of_getElem? h
       | iftrue h _ => exact bound_of_getElem? h
       | iffall h _ => exact bound_of_getElem? h
+      | boolop h => exact bound_of_getElem? h
     have : cert.orig[0]? = some (.binop "a" .add "x" "y") := by native_decide
     have : cert.orig[1]? = some (.binop "b" .add "x" "y") := by native_decide
     have : cert.orig[2]? = some (.binop "c" .add "a" "b") := by native_decide
@@ -503,6 +569,7 @@ theorem inv_ok : checkInvariantsPreservedProp cert := by
       | goto h => exact bound_of_getElem? h
       | iftrue h _ => exact bound_of_getElem? h
       | iffall h _ => exact bound_of_getElem? h
+      | boolop h => exact bound_of_getElem? h
     have : cert.trans[0]? = some (.binop "a" .add "x" "y") := by native_decide
     have : cert.trans[1]? = some (.copy "b" "a") := by native_decide
     have : cert.trans[2]? = some (.binop "c" .add "a" "b") := by native_decide
@@ -523,66 +590,85 @@ theorem halt_obs_ok : checkHaltObservableProp cert := by
   interval_cases pc_t <;> simp_all [transProg]
   simp [idStoreRel] at hvm; subst hvm; rfl
 
-theorem transitions_ok : checkAllTransitionsProp cert := by
+theorem transitions_ok : checkAllTransitionsProp allIntCtx cert := by
   intro pc_t σ_t σ_t' pc_t' hstep
   have hlt : pc_t < cert.trans.size := by
     cases hstep with
     | const h => exact bound_of_getElem? h
     | copy h => exact bound_of_getElem? h
-    | binop h => exact bound_of_getElem? h
+    | binop h _ _ _ => exact bound_of_getElem? h
     | goto h => exact bound_of_getElem? h
     | iftrue h _ => exact bound_of_getElem? h
     | iffall h _ => exact bound_of_getElem? h
+    | boolop h => exact bound_of_getElem? h
   change pc_t < 4 at hlt
   have ct0 : cert.trans[0]? = some (.binop "a" .add "x" "y") := by native_decide
   have ct1 : cert.trans[1]? = some (.copy "b" "a") := by native_decide
   have ct2 : cert.trans[2]? = some (.binop "c" .add "a" "b") := by native_decide
   have ct3 : cert.trans[3]? = some .halt := by native_decide
   interval_cases pc_t
-  · -- pc_t = 0: binop "a" .add "x" "y" (same in both)
+  · -- pc_t = 0: trans and orig both do binop "a" .add "x" "y"
     cases hstep with
-    | binop h =>
+    | binop h _ _ _ =>
       refine ⟨⟨[1], idStoreRel, idStoreRel⟩, List.Mem.head _, rfl, rfl, ?_⟩
-      · intro σ_t_ σ_t'_ σ_o_ _ _ hvm hstep'
-        simp [idStoreRel] at hvm; subst hvm
-        cases hstep' with
-        | binop h' =>
-          simp_all
-          exact ⟨σ_o_["a" ↦ BinOp.add.eval (σ_o_ "x") (σ_o_ "y")],
-            Steps.single (.binop (by native_decide) trivial), rfl⟩
-        | _ => simp_all
-    | _ => simp_all
-  · -- pc_t = 1: copy "b" "a" (trans) vs binop "b" .add "x" "y" (orig)
+      intro σ_t_ σ_t'_ σ_o_ _ _ hvm _ hstep'
+      simp only [idStoreRel] at hvm; subst hvm
+      -- hstep' : cert.trans ⊩ run 0 σ_o_ ⟶ run 1 σ_t'_
+      cases hstep' with
+      | binop h' hx' hy' hsafe' =>
+        -- hx' : σ_o_ y✝ = .int xv,  hy' : σ_o_ z✝ = .int yv  (abstract var names)
+        -- simp_all resolves y✝="x", z✝="y" from ct0/h'
+        simp_all
+        -- After simp_all: hx' : σ_o_ "x" = .int ?, hy' : σ_o_ "y" = .int ?
+        -- The goal: ∃ σ_o', orig ⊩ run 0 σ_o_ ⟶* run 1 σ_o' ∧ idStoreRel σ_o' σ_t'_
+        have co0 : cert.orig[0]? = some (.binop "a" .add "x" "y") := by native_decide
+        exact ⟨σ_o_["a" ↦ Value.int (BinOp.add.eval _ _)],
+               Steps.single (Step.binop co0 hx' hy' hsafe'), rfl⟩
+      | const h' => simp_all | copy h' => simp_all | boolop h' => simp_all
+      | goto h' => simp_all | iftrue h' _ => simp_all | iffall h' _ => simp_all
+    | const h => simp_all | copy h => simp_all | boolop h => simp_all
+    | goto h => simp_all | iftrue h _ => simp_all | iffall h _ => simp_all
+  · -- pc_t = 1: trans does copy "b" "a", orig does binop "b" .add "x" "y"
+    -- inv at pc≥1 gives: σ "x"=.int xv, σ "y"=.int yv, σ "a"=.int (xv+yv)
     cases hstep with
     | copy h =>
       refine ⟨⟨[2], idStoreRel, idStoreRel⟩, List.Mem.head _, rfl, rfl, ?_⟩
-      · intro σ_t_ σ_t'_ σ_o_ _ hinv_o hvm hstep'
-        simp [idStoreRel] at hvm; subst hvm
-        simp [cert, inv] at hinv_o
-        cases hstep' with
-        | copy h' =>
-          simp_all
-          -- orig step: binop "b" .add "x" "y", σ_o'("b") = x+y
-          -- trans step: copy "b" "a", σ_t'("b") = a = x+y (by invariant)
-          refine ⟨σ_o_["b" ↦ BinOp.add.eval (σ_o_ "x") (σ_o_ "y")],
-            Steps.single (.binop (by native_decide) trivial), ?_⟩
-          simp [idStoreRel]; funext v; simp [Store.update, BinOp.eval]
-        | _ => simp_all
-    | _ => simp_all
-  · -- pc_t = 2: binop "c" .add "a" "b" (same in both)
+      intro σ_t_ σ_t'_ σ_o_ _ hinv_o hvm _ hstep'
+      simp only [idStoreRel] at hvm; subst hvm
+      simp only [cert, inv, show (1 : Nat) ≥ 1 from le_refl _, ite_true] at hinv_o
+      obtain ⟨⟨xv, hxv⟩, ⟨yv, hyv⟩, ha⟩ := hinv_o
+      -- hstep' : cert.trans ⊩ run 1 σ_o_ ⟶ run 2 σ_t'_  (a copy step)
+      cases hstep' with
+      | copy h' =>
+        -- h' resolves to cert.trans[1]? = some (copy "b" "a"); σ_t'_ = σ_o_["b"↦σ_o_ "a"]
+        simp_all
+        -- After simp_all: ha : σ_o_ "a" = .int (xv+yv), σ_t'_ eliminated
+        have co1 : cert.orig[1]? = some (.binop "b" .add "x" "y") := by native_decide
+        -- Construct orig step: binop "b" add "x" "y"  (need σ "x", σ "y" = .int)
+        refine ⟨σ_o_["b" ↦ Value.int (BinOp.add.eval xv yv)],
+                Steps.single (Step.binop co1 hxv hyv (by simp [BinOp.safe])), ?_⟩
+        simp [idStoreRel, BinOp.eval]
+      | binop h' _ _ _ => simp_all | const h' => simp_all | boolop h' => simp_all
+      | goto h' => simp_all | iftrue h' _ => simp_all | iffall h' _ => simp_all
+    | const h => simp_all | binop h _ _ _ => simp_all | boolop h => simp_all
+    | goto h => simp_all | iftrue h _ => simp_all | iffall h _ => simp_all
+  · -- pc_t = 2: trans and orig both do binop "c" .add "a" "b"
     cases hstep with
-    | binop h =>
+    | binop h _ _ _ =>
       refine ⟨⟨[3], idStoreRel, idStoreRel⟩, List.Mem.head _, rfl, rfl, ?_⟩
-      · intro σ_t_ σ_t'_ σ_o_ _ _ hvm hstep'
-        simp [idStoreRel] at hvm; subst hvm
-        cases hstep' with
-        | binop h' =>
-          simp_all
-          exact ⟨σ_o_["c" ↦ BinOp.add.eval (σ_o_ "a") (σ_o_ "b")],
-            Steps.single (.binop (by native_decide) trivial), rfl⟩
-        | _ => simp_all
-    | _ => simp_all
-  · -- pc_t = 3: halt
+      intro σ_t_ σ_t'_ σ_o_ _ _ hvm _ hstep'
+      simp only [idStoreRel] at hvm; subst hvm
+      cases hstep' with
+      | binop h' ha' hb' hsafe' =>
+        simp_all
+        have co2 : cert.orig[2]? = some (.binop "c" .add "a" "b") := by native_decide
+        exact ⟨σ_o_["c" ↦ Value.int (BinOp.add.eval _ _)],
+               Steps.single (Step.binop co2 ha' hb' hsafe'), rfl⟩
+      | const h' => simp_all | copy h' => simp_all | boolop h' => simp_all
+      | goto h' => simp_all | iftrue h' _ => simp_all | iffall h' _ => simp_all
+    | const h => simp_all | copy h => simp_all | boolop h => simp_all
+    | goto h => simp_all | iftrue h _ => simp_all | iffall h _ => simp_all
+  · -- pc_t = 3: halt — no transitions
     cases hstep <;> simp_all
 
 theorem nonterm_ok : checkNonterminationProp cert := by
@@ -596,6 +682,7 @@ theorem nonterm_ok : checkNonterminationProp cert := by
     | goto h => exact bound_of_getElem? h
     | iftrue h _ => exact bound_of_getElem? h
     | iffall h _ => exact bound_of_getElem? h
+    | boolop h => exact bound_of_getElem? h
   change pc_t < 4 at hlt
   have : cert.trans[0]? = some (.binop "a" .add "x" "y") := by native_decide
   have : cert.trans[1]? = some (.copy "b" "a") := by native_decide
@@ -608,13 +695,45 @@ theorem start_inv_ok : checkInvariantsAtStartProp cert :=
   ⟨fun σ => by simp [cert, inv], fun σ => by simp [cert, inv]⟩
 
 theorem stuck_pres_ok : checkStuckPreservationProp cert := by
-  intro pc_t σ_t σ_o hpc _ _ _ hobs
-  exfalso
-  have : pc_t < 4 := by rw [show cert.trans.size = 4 from rfl] at hpc; exact hpc
-  interval_cases pc_t <;> dsimp [observe, cert, transProg] at hobs <;> exact Observation.noConfusion hobs
+  intro pc_t σ_t σ_o hpc hrel hinv_t hinv_o hobs
+  have hlt : pc_t < 4 := by rw [show cert.trans.size = 4 from rfl] at hpc; exact hpc
+  -- Concrete array lookup facts
+  have ht0 : transProg[0]? = some (.binop "a" .add "x" "y") := by native_decide
+  have ht1 : transProg[1]? = some (.copy "b" "a") := by native_decide
+  have ht2 : transProg[2]? = some (.binop "c" .add "a" "b") := by native_decide
+  have ho0 : origProg[0]? = some (.binop "a" .add "x" "y") := by native_decide
+  have ho2 : origProg[2]? = some (.binop "c" .add "a" "b") := by native_decide
+  -- After interval_cases, `simp only [observe, cert, transProg/origProg]` unfolds
+  -- the definitions but leaves array literal indexing like `#[...][pc]?` unreduced.
+  -- We use `simp only` with `getElem?`-reducing lemmas, then handle each case.
+  -- Reduce the concrete array lookups used inside `observe`
+  have ht0r : transProg[0]? = some (.binop "a" .add "x" "y") := by native_decide
+  have ht1r : transProg[1]? = some (.copy "b" "a") := by native_decide
+  have ht2r : transProg[2]? = some (.binop "c" .add "a" "b") := by native_decide
+  have ht3r : transProg[3]? = some .halt := by native_decide
+  have ho0r : origProg[0]? = some (.binop "a" .add "x" "y") := by native_decide
+  have ho2r : origProg[2]? = some (.binop "c" .add "a" "b") := by native_decide
+  interval_cases pc_t
+  · -- pc_t = 0: trans and orig both have binop "a" .add "x" "y"; observe is identical
+    simp only [cert] at hrel; simp only [idStoreRel] at hrel; subst hrel
+    simp only [observe, cert] at hobs ⊢
+    rw [ht0r] at hobs; rw [ho0r]; exact hobs
+  · -- pc_t = 1: trans has copy "b" "a"; observe = nothing, contradiction with stuck
+    simp only [observe, cert] at hobs
+    rw [ht1r] at hobs; exact absurd hobs (by simp)
+  · -- pc_t = 2: trans and orig both have binop "c" .add "a" "b"; observe is identical
+    simp only [cert] at hrel; simp only [idStoreRel] at hrel; subst hrel
+    simp only [observe, cert] at hobs ⊢
+    rw [ht2r] at hobs; rw [ho2r]; exact hobs
+  · -- pc_t = 3: halt; observe = halt observation, not stuck
+    simp only [observe, cert] at hobs
+    rw [ht3r] at hobs; exact absurd hobs (by simp)
 
-theorem valid : PCertificateValid cert :=
-  { start_corr    := start_ok
+theorem valid : PCertificateValid allIntCtx cert :=
+  { well_typed_orig := by
+      intro i hi; simp [cert, origProg] at hi ⊢
+      change i < 4 at hi; interval_cases i <;> constructor <;> rfl
+    start_corr    := start_ok
     start_inv     := start_inv_ok
     inv_preserved := inv_ok
     transitions   := transitions_ok
@@ -643,19 +762,19 @@ end Example3
 namespace PBadExample
 
 def origProg : Prog := #[
-  .const "x" 5,       -- 0
+  .const "x" (.int 5),       -- 0
   .copy  "y" "x",     -- 1
   .halt                -- 2
 ]
 
 def transProg : Prog := #[
-  .const "x" 5,       -- 0
-  .const "y" 3,       -- 1  ← BUG: should be 5
+  .const "x" (.int 5),       -- 0
+  .const "y" (.int 3),       -- 1  ← BUG: should be 5
   .halt                -- 2
 ]
 
 def inv : PInvariantMap := fun pc σ =>
-  if pc ≥ 1 then σ "x" = 5 else True
+  if pc ≥ 1 then σ "x" = .int 5 else True
 
 def cert : PCertificate :=
   { orig       := origProg
@@ -681,12 +800,12 @@ def cert : PCertificate :=
     The transformed program sets y := 3, but the original sets y := x = 5.
     With identity variable maps, we'd need σ_t'("y") = σ_o'("y"),
     but 3 ≠ 5. -/
-theorem transitions_fail : ¬ checkAllTransitionsProp cert := by
+theorem transitions_fail : ¬ checkAllTransitionsProp allIntCtx cert := by
   intro h
-  let σ₀ : Store := fun v => if v == "x" then 5 else 0
-  have hstep : Step cert.trans (.run 1 σ₀) (.run 2 (σ₀["y" ↦ 3])) :=
+  let σ₀ : Store := fun v => if v == "x" then .int 5 else .int 0
+  have hstep : Step cert.trans (.run 1 σ₀) (.run 2 (σ₀["y" ↦ .int 3])) :=
     .const (by native_decide)
-  obtain ⟨tc, _, hvm_eq, hvmn_eq, hcheck⟩ := h 1 σ₀ (σ₀["y" ↦ 3]) 2 hstep
+  obtain ⟨tc, _, hvm_eq, hvmn_eq, hcheck⟩ := h 1 σ₀ (σ₀["y" ↦ .int 3]) 2 hstep
   simp [cert] at hvm_eq hvmn_eq
   have hinv_t : cert.inv_trans 1 σ₀ := by simp [cert, inv, σ₀]
   have hinv_o : cert.inv_orig 1 σ₀ := by simp [cert, inv, σ₀]
@@ -694,9 +813,11 @@ theorem transitions_fail : ¬ checkAllTransitionsProp cert := by
   have hpc1 : (cert.instrCerts 1).pc_orig = 1 := by simp [cert]
   have hpc2 : (cert.instrCerts 2).pc_orig = 2 := by simp [cert]
   rw [hpc1, hpc2] at hcheck
-  obtain ⟨σ_o', hsteps, hcons'⟩ := hcheck σ₀ (σ₀["y" ↦ 3]) σ₀ hinv_t hinv_o hcons
+  have hts : TypedStore allIntCtx σ₀ := by
+    intro x; simp [σ₀, allIntCtx]; split <;> rfl
+  obtain ⟨σ_o', hsteps, hcons'⟩ := hcheck σ₀ (σ₀["y" ↦ .int 3]) σ₀ hinv_t hinv_o hcons hts
     (.const (by native_decide))
-  have heq : 3 = σ_o' "y" := by
+  have heq : Value.int 3 = σ_o' "y" := by
     have := hcons'; rw [hvmn_eq] at this; simp [idStoreRel] at this
     rw [this]; simp [Store.update]
   have ho1 : cert.orig[1]? = some (.copy "y" "x") := by native_decide
@@ -723,10 +844,11 @@ theorem transitions_fail : ¬ checkAllTransitionsProp cert := by
     | goto h => exact absurd (ho1.symm.trans h) (by simp)
     | iftrue h _ => exact absurd (ho1.symm.trans h) (by simp)
     | iffall h _ => exact absurd (ho1.symm.trans h) (by simp)
+    | boolop h => exact absurd (ho1.symm.trans h) (by simp)
 
 /-- Therefore, no valid certificate exists for this buggy transformation. -/
-theorem no_valid_cert : ¬ PCertificateValid cert := by
-  intro ⟨_, _, _, htrans, _, _, _, _, _⟩
+theorem no_valid_cert : ¬ PCertificateValid allIntCtx cert := by
+  intro ⟨_, _, _, _, htrans, _, _, _, _, _⟩
   exact transitions_fail htrans
 
 end PBadExample

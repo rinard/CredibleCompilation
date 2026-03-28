@@ -138,26 +138,7 @@ instance {op : BinOp} {a b : Int} : Decidable (op.safe a b) := by
   unfold BinOp.safe; cases op <;> exact inferInstance
 
 -- ============================================================
--- § 2a. Expressions over stores
--- ============================================================
-
-/-- Expressions that can be evaluated in a store. Used to describe
-    how transformed-program variables map to original-program values. -/
-inductive Expr where
-  | lit  : Int → Expr
-  | blit : Bool → Expr
-  | var  : Var → Expr
-  | bin  : BinOp → Expr → Expr → Expr
-  deriving Repr, DecidableEq
-
-def Expr.eval (σ : Store) : Expr → Value
-  | .lit n       => .int n
-  | .blit b      => .bool b
-  | .var x       => σ x
-  | .bin op a b  => .int (op.eval (a.eval σ).toInt (b.eval σ).toInt)
-
--- ============================================================
--- § 2b. Comparison operators and boolean expressions
+-- § 2a. Comparison operators
 -- ============================================================
 
 inductive CmpOp | eq | ne | lt | le deriving Repr, DecidableEq
@@ -167,6 +148,42 @@ def CmpOp.eval : CmpOp → Int → Int → Bool
   | .ne, a, b => a != b
   | .lt, a, b => decide (a < b)
   | .le, a, b => decide (a ≤ b)
+
+-- ============================================================
+-- § 2b. Expressions over stores
+-- ============================================================
+
+/-- Expressions that can be evaluated in a store. Used to describe
+    how transformed-program variables map to original-program values. -/
+inductive Expr where
+  | lit    : Int → Expr
+  | blit   : Bool → Expr
+  | var    : Var → Expr
+  | bin    : BinOp → Expr → Expr → Expr
+  -- Symbolic boolean expression constructors (for tracking boolop results)
+  | tobool  : Expr → Expr                  -- .bool (e.eval σ).toBool
+  | cmpE    : CmpOp → Expr → Expr → Expr  -- .bool (op.eval (a.eval σ).toInt (b.eval σ).toInt)
+  | cmpLitE : CmpOp → Expr → Int → Expr   -- .bool (op.eval (a.eval σ).toInt n)
+  | notE    : Expr → Expr                  -- .bool (!(e.eval σ).toBool)
+  | andE    : Expr → Expr → Expr           -- .bool ((a.eval σ).toBool && (b.eval σ).toBool)
+  | orE     : Expr → Expr → Expr           -- .bool ((a.eval σ).toBool || (b.eval σ).toBool)
+  deriving Repr, DecidableEq
+
+def Expr.eval (σ : Store) : Expr → Value
+  | .lit n          => .int n
+  | .blit b         => .bool b
+  | .var x          => σ x
+  | .bin op a b     => .int (op.eval (a.eval σ).toInt (b.eval σ).toInt)
+  | .tobool e       => .bool (e.eval σ).toBool
+  | .cmpE op a b    => .bool (op.eval (a.eval σ).toInt (b.eval σ).toInt)
+  | .cmpLitE op a n => .bool (op.eval (a.eval σ).toInt n)
+  | .notE e         => .bool (!(e.eval σ).toBool)
+  | .andE a b       => .bool ((a.eval σ).toBool && (b.eval σ).toBool)
+  | .orE a b        => .bool ((a.eval σ).toBool || (b.eval σ).toBool)
+
+-- ============================================================
+-- § 2c. Boolean expressions
+-- ============================================================
 
 /-- Boolean expressions for conditional branches. -/
 inductive BoolExpr where
