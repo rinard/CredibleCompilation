@@ -83,6 +83,7 @@ def inv : PInvariantMap := fun pc σ =>
 def cert : PCertificate :=
   { orig       := origProg
     trans      := transProg
+    tyCtx      := allIntCtx
     inv_orig   := inv
     inv_trans  := inv
     observable := ["z"]
@@ -155,7 +156,7 @@ theorem halt_obs_ok : checkHaltObservableProp cert := by
   interval_cases pc_t <;> simp_all [transProg]
   simp [idStoreRel] at hvm; subst hvm; rfl
 
-theorem transitions_ok : checkAllTransitionsProp allIntCtx cert := by
+theorem transitions_ok : checkAllTransitionsProp cert.tyCtx cert := by
   intro pc_t σ_t σ_t' pc_t' hstep
   have hlt : pc_t < cert.trans.size := by
     cases hstep with
@@ -238,15 +239,18 @@ theorem nonterm_ok : checkNonterminationProp cert := by
 theorem start_inv_ok : checkInvariantsAtStartProp cert :=
   ⟨fun σ => by simp [cert, inv], fun σ => by simp [cert, inv]⟩
 
-theorem stuck_pres_ok : checkStuckPreservationProp cert := by
-  intro pc_t σ_t σ_o hpc _ _ _ hobs
-  exfalso
+theorem error_pres_ok : checkErrorPreservationProp cert := by
+  intro pc_t σ_t σ_o hpc _ _ _ herr
+  -- No binop instructions in transProg, so Step.error is impossible
   have : pc_t < 4 := by rw [show cert.trans.size = 4 from rfl] at hpc; exact hpc
-  interval_cases pc_t <;> dsimp [observe, cert, transProg] at hobs <;> exact Observation.noConfusion hobs
+  interval_cases pc_t <;> cases herr <;> simp_all [cert, transProg]
 
-theorem valid : PCertificateValid allIntCtx cert :=
+theorem valid : PCertificateValid cert :=
   { well_typed_orig := by
       intro i hi; simp [cert, origProg] at hi ⊢
+      change i < 4 at hi; interval_cases i <;> constructor <;> rfl
+    well_typed_trans := by
+      intro i hi; simp [cert, transProg] at hi ⊢
       change i < 4 at hi; interval_cases i <;> constructor <;> rfl
     start_corr    := start_ok
     start_inv     := start_inv_ok
@@ -255,7 +259,7 @@ theorem valid : PCertificateValid allIntCtx cert :=
     halt_corr     := halt_corr_ok
     halt_obs      := halt_obs_ok
     nonterm       := nonterm_ok
-    stuck_pres    := stuck_pres_ok
+    error_pres    := error_pres_ok
     step_closed   := checkStepClosed_sound (by native_decide) }
 
 end Example1
@@ -293,6 +297,7 @@ def inv : PInvariantMap := fun pc σ =>
 def cert : PCertificate :=
   { orig       := origProg
     trans      := transProg
+    tyCtx      := allIntCtx
     inv_orig   := inv
     inv_trans  := inv
     observable := ["c"]
@@ -359,7 +364,7 @@ theorem halt_obs_ok : checkHaltObservableProp cert := by
   interval_cases pc_t <;> simp_all [transProg]
   simp [idStoreRel] at hvm; subst hvm; rfl
 
-theorem transitions_ok : checkAllTransitionsProp allIntCtx cert := by
+theorem transitions_ok : checkAllTransitionsProp cert.tyCtx cert := by
   intro pc_t σ_t σ_t' pc_t' hstep
   have hlt : pc_t < cert.trans.size := by
     cases hstep with
@@ -445,31 +450,24 @@ theorem nonterm_ok : checkNonterminationProp cert := by
 theorem start_inv_ok : checkInvariantsAtStartProp cert :=
   ⟨fun σ => by simp [cert, inv], fun σ => by simp [cert, inv]⟩
 
-theorem stuck_pres_ok : checkStuckPreservationProp cert := by
-  intro pc_t σ_t σ_o hpc hrel hinv_t hinv_o hobs
+theorem error_pres_ok : checkErrorPreservationProp cert := by
+  intro pc_t σ_t σ_o hpc _ _ _ herr
   have hlt : pc_t < 3 := by rw [show cert.trans.size = 3 from rfl] at hpc; exact hpc
+  have h0 : cert.trans[0]? = some (.copy "a" "b") := by native_decide
+  have h1 : cert.trans[1]? = some (.binop "c" .add "b" "d") := by native_decide
+  have h2 : cert.trans[2]? = some .halt := by native_decide
   interval_cases pc_t
-  · -- pc_t = 0: copy "a" "b" → observe = nothing, not stuck
-    simp [observe, cert, transProg] at hobs
-  · -- pc_t = 1: binop "c" .add "b" "d"
-    simp only [cert] at hrel hinv_o
-    simp only [idStoreRel] at hrel; subst hrel
-    simp only [inv, show (1 : Nat) ≥ 1 from le_refl _, ite_true] at hinv_o
-    -- hinv_o : σ_o "a" = σ_o "b"
-    -- Unfold observe and reduce the array lookups by native_decide
-    simp only [observe, cert, transProg, origProg] at hobs ⊢
-    -- Both hobs and goal now contain `#[...][1]?`; use norm_num/simp to evaluate
-    simp only [show (#[TAC.copy "a" "b", TAC.binop "c" BinOp.add "b" "d",
-        TAC.halt] : Array TAC)[1]? = some (.binop "c" .add "b" "d") from by native_decide] at hobs
-    simp only [show (#[TAC.copy "a" "b", TAC.binop "c" BinOp.add "a" "d",
-        TAC.halt] : Array TAC)[1]? = some (.binop "c" .add "a" "d") from by native_decide]
-    rw [hinv_o]; exact hobs
-  · -- pc_t = 2: halt → observe = halt observation, not stuck
-    simp [observe, cert, transProg] at hobs
+  · cases herr with | error hi _ _ _ => rw [h0] at hi; simp at hi
+  · cases herr with | error hi _ _ hunsafe =>
+      rw [h1] at hi; obtain ⟨-, rfl, -, -⟩ := hi; exact absurd trivial hunsafe
+  · cases herr with | error hi _ _ _ => rw [h2] at hi; simp at hi
 
-theorem valid : PCertificateValid allIntCtx cert :=
+theorem valid : PCertificateValid cert :=
   { well_typed_orig := by
       intro i hi; simp [cert, origProg] at hi ⊢
+      change i < 3 at hi; interval_cases i <;> constructor <;> rfl
+    well_typed_trans := by
+      intro i hi; simp [cert, transProg] at hi ⊢
       change i < 3 at hi; interval_cases i <;> constructor <;> rfl
     start_corr    := start_ok
     start_inv     := start_inv_ok
@@ -478,7 +476,7 @@ theorem valid : PCertificateValid allIntCtx cert :=
     halt_corr     := halt_corr_ok
     halt_obs      := halt_obs_ok
     nonterm       := nonterm_ok
-    stuck_pres    := stuck_pres_ok
+    error_pres    := error_pres_ok
     step_closed   := checkStepClosed_sound (by native_decide) }
 
 end Example2
@@ -520,6 +518,7 @@ def inv : PInvariantMap := fun pc σ =>
 def cert : PCertificate :=
   { orig       := origProg
     trans      := transProg
+    tyCtx      := allIntCtx
     inv_orig   := inv
     inv_trans  := inv
     observable := ["c"]
@@ -590,7 +589,7 @@ theorem halt_obs_ok : checkHaltObservableProp cert := by
   interval_cases pc_t <;> simp_all [transProg]
   simp [idStoreRel] at hvm; subst hvm; rfl
 
-theorem transitions_ok : checkAllTransitionsProp allIntCtx cert := by
+theorem transitions_ok : checkAllTransitionsProp cert.tyCtx cert := by
   intro pc_t σ_t σ_t' pc_t' hstep
   have hlt : pc_t < cert.trans.size := by
     cases hstep with
@@ -694,44 +693,27 @@ theorem nonterm_ok : checkNonterminationProp cert := by
 theorem start_inv_ok : checkInvariantsAtStartProp cert :=
   ⟨fun σ => by simp [cert, inv], fun σ => by simp [cert, inv]⟩
 
-theorem stuck_pres_ok : checkStuckPreservationProp cert := by
-  intro pc_t σ_t σ_o hpc hrel hinv_t hinv_o hobs
+theorem error_pres_ok : checkErrorPreservationProp cert := by
+  intro pc_t σ_t σ_o hpc _ _ _ herr
   have hlt : pc_t < 4 := by rw [show cert.trans.size = 4 from rfl] at hpc; exact hpc
-  -- Concrete array lookup facts
-  have ht0 : transProg[0]? = some (.binop "a" .add "x" "y") := by native_decide
-  have ht1 : transProg[1]? = some (.copy "b" "a") := by native_decide
-  have ht2 : transProg[2]? = some (.binop "c" .add "a" "b") := by native_decide
-  have ho0 : origProg[0]? = some (.binop "a" .add "x" "y") := by native_decide
-  have ho2 : origProg[2]? = some (.binop "c" .add "a" "b") := by native_decide
-  -- After interval_cases, `simp only [observe, cert, transProg/origProg]` unfolds
-  -- the definitions but leaves array literal indexing like `#[...][pc]?` unreduced.
-  -- We use `simp only` with `getElem?`-reducing lemmas, then handle each case.
-  -- Reduce the concrete array lookups used inside `observe`
-  have ht0r : transProg[0]? = some (.binop "a" .add "x" "y") := by native_decide
-  have ht1r : transProg[1]? = some (.copy "b" "a") := by native_decide
-  have ht2r : transProg[2]? = some (.binop "c" .add "a" "b") := by native_decide
-  have ht3r : transProg[3]? = some .halt := by native_decide
-  have ho0r : origProg[0]? = some (.binop "a" .add "x" "y") := by native_decide
-  have ho2r : origProg[2]? = some (.binop "c" .add "a" "b") := by native_decide
+  have h0 : cert.trans[0]? = some (.binop "a" .add "x" "y") := by native_decide
+  have h1 : cert.trans[1]? = some (.copy "b" "a") := by native_decide
+  have h2 : cert.trans[2]? = some (.binop "c" .add "a" "b") := by native_decide
+  have h3 : cert.trans[3]? = some .halt := by native_decide
   interval_cases pc_t
-  · -- pc_t = 0: trans and orig both have binop "a" .add "x" "y"; observe is identical
-    simp only [cert] at hrel; simp only [idStoreRel] at hrel; subst hrel
-    simp only [observe, cert] at hobs ⊢
-    rw [ht0r] at hobs; rw [ho0r]; exact hobs
-  · -- pc_t = 1: trans has copy "b" "a"; observe = nothing, contradiction with stuck
-    simp only [observe, cert] at hobs
-    rw [ht1r] at hobs; exact absurd hobs (by simp)
-  · -- pc_t = 2: trans and orig both have binop "c" .add "a" "b"; observe is identical
-    simp only [cert] at hrel; simp only [idStoreRel] at hrel; subst hrel
-    simp only [observe, cert] at hobs ⊢
-    rw [ht2r] at hobs; rw [ho2r]; exact hobs
-  · -- pc_t = 3: halt; observe = halt observation, not stuck
-    simp only [observe, cert] at hobs
-    rw [ht3r] at hobs; exact absurd hobs (by simp)
+  · cases herr with | error hi _ _ hunsafe =>
+      rw [h0] at hi; obtain ⟨-, rfl, -, -⟩ := hi; exact absurd trivial hunsafe
+  · cases herr with | error hi _ _ _ => rw [h1] at hi; simp at hi
+  · cases herr with | error hi _ _ hunsafe =>
+      rw [h2] at hi; obtain ⟨-, rfl, -, -⟩ := hi; exact absurd trivial hunsafe
+  · cases herr with | error hi _ _ _ => rw [h3] at hi; simp at hi
 
-theorem valid : PCertificateValid allIntCtx cert :=
+theorem valid : PCertificateValid cert :=
   { well_typed_orig := by
       intro i hi; simp [cert, origProg] at hi ⊢
+      change i < 4 at hi; interval_cases i <;> constructor <;> rfl
+    well_typed_trans := by
+      intro i hi; simp [cert, transProg] at hi ⊢
       change i < 4 at hi; interval_cases i <;> constructor <;> rfl
     start_corr    := start_ok
     start_inv     := start_inv_ok
@@ -740,7 +722,7 @@ theorem valid : PCertificateValid allIntCtx cert :=
     halt_corr     := halt_corr_ok
     halt_obs      := halt_obs_ok
     nonterm       := nonterm_ok
-    stuck_pres    := stuck_pres_ok
+    error_pres    := error_pres_ok
     step_closed   := checkStepClosed_sound (by native_decide) }
 
 end Example3
@@ -779,6 +761,7 @@ def inv : PInvariantMap := fun pc σ =>
 def cert : PCertificate :=
   { orig       := origProg
     trans      := transProg
+    tyCtx      := allIntCtx
     inv_orig   := inv
     inv_trans  := inv
     observable := ["y"]
@@ -800,7 +783,7 @@ def cert : PCertificate :=
     The transformed program sets y := 3, but the original sets y := x = 5.
     With identity variable maps, we'd need σ_t'("y") = σ_o'("y"),
     but 3 ≠ 5. -/
-theorem transitions_fail : ¬ checkAllTransitionsProp allIntCtx cert := by
+theorem transitions_fail : ¬ checkAllTransitionsProp cert.tyCtx cert := by
   intro h
   let σ₀ : Store := fun v => if v == "x" then .int 5 else .int 0
   have hstep : Step cert.trans (.run 1 σ₀) (.run 2 (σ₀["y" ↦ .int 3])) :=
@@ -845,10 +828,11 @@ theorem transitions_fail : ¬ checkAllTransitionsProp allIntCtx cert := by
     | iftrue h _ => exact absurd (ho1.symm.trans h) (by simp)
     | iffall h _ => exact absurd (ho1.symm.trans h) (by simp)
     | boolop h => exact absurd (ho1.symm.trans h) (by simp)
+    | error h => exact absurd (ho1.symm.trans h) (by simp)
 
 /-- Therefore, no valid certificate exists for this buggy transformation. -/
-theorem no_valid_cert : ¬ PCertificateValid allIntCtx cert := by
-  intro ⟨_, _, _, _, htrans, _, _, _, _, _⟩
+theorem no_valid_cert : ¬ PCertificateValid cert := by
+  intro ⟨_, _, _, _, _, htrans, _, _, _, _, _⟩
   exact transitions_fail htrans
 
 end PBadExample

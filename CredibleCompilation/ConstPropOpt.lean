@@ -189,6 +189,7 @@ def optimize (prog : Prog) (observable : List Var) : ECertificate :=
   let haltCerts := _root_.buildHaltCerts instrCerts trans
   { orig := prog
     trans := trans
+    tyCtx := fun _ => VarTy.int
     inv_orig := inv
     inv_trans := inv
     observable := observable

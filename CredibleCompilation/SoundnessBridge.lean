@@ -74,6 +74,7 @@ def eRelToStoreRel (rel : EExprRel) : PStoreRel :=
 def toPCertificate (dc : ECertificate) : PCertificate :=
   { orig       := dc.orig
     trans      := dc.trans
+    tyCtx      := dc.tyCtx
     inv_orig   := fun l => (dc.inv_orig.getD l ([] : EInv)).toProp
     inv_trans  := fun l => (dc.inv_trans.getD l ([] : EInv)).toProp
     observable := dc.observable
@@ -1194,7 +1195,7 @@ private theorem branchInfo_of_step_with_rel {prog : Prog} {pc pc' : Label} {σ_t
     produces steps reaching the target with store relation preserved.
     Supports non-trivial expression relations. -/
 private theorem transRel_sound (dc : ECertificate)
-    (Γ : TyCtx) (hwtp : WellTypedProg Γ dc.orig)
+    (hwtp : WellTypedProg dc.tyCtx dc.orig)
     (pc_t pc_t' : Label)
     (dic : EInstrCert) (dtc : ETransCorr) (instr : TAC)
     (pc_o' : Label)
@@ -1206,7 +1207,7 @@ private theorem transRel_sound (dc : ECertificate)
       dc.orig dic.pc_orig dtc.origLabels instr
       (dc.inv_orig.getD dic.pc_orig ([] : EInv))
       dtc.rel dtc.rel_next (collectAllVars dc.orig dc.trans) = true) :
-    checkTransitionRelProp Γ dc.orig dc.trans
+    checkTransitionRelProp dc.tyCtx dc.orig dc.trans
       (fun l => (dc.inv_orig.getD l ([] : EInv)).toProp)
       (fun l => (dc.inv_trans.getD l ([] : EInv)).toProp)
       pc_t pc_t' dic.pc_orig pc_o'
@@ -1226,7 +1227,7 @@ private theorem transRel_sound (dc : ECertificate)
     (dc.inv_orig.getD dic.pc_orig ([] : EInv)) σ_o
     dic.pc_orig dtc.origLabels pc_o'
     (branchInfoWithRel instr dtc.rel pc_t pc_t')
-    Γ hwtp hts_o (ssGet_nil σ_o) hinv_o hpath hbranch_orig
+    dc.tyCtx hwtp hts_o (ssGet_nil σ_o) hinv_o hpath hbranch_orig
   -- Prove store relation holds at the target: eRelToStoreRel dtc.rel_next σ_o' σ_t'
   refine ⟨σ_o', horig_steps, ?_⟩
   -- Goal: ∀ v, σ_t' v = (ssGet (buildSubstMap dtc.rel_next) v).eval σ_o'
@@ -1379,9 +1380,9 @@ private theorem array_getD_of_getElem? {α : Type} {arr : Array α} {n : Nat} {v
 
 /-- **Condition 3**: checkAllTransitionsExec → checkAllTransitionsProp -/
 theorem checkAllTransitionsExec_sound (dc : ECertificate)
-    (Γ : TyCtx) (hwtp : WellTypedProg Γ dc.orig)
+    (hwtp : WellTypedProg dc.tyCtx dc.orig)
     (h : checkAllTransitionsExec dc = true) :
-    checkAllTransitionsProp Γ (toPCertificate dc) := by
+    checkAllTransitionsProp dc.tyCtx (toPCertificate dc) := by
   intro pc_t σ_t σ_t' pc_t' hstep
   obtain ⟨instr, hinstr⟩ := step_run_instr hstep
   have hne_halt : instr ≠ .halt := by
@@ -1416,7 +1417,7 @@ theorem checkAllTransitionsExec_sound (dc : ECertificate)
         (branchInfoWithRel instr dtc.rel pc_t pc_t') = true := by
       rw [hrel_eq]; exact hpath
     simp only [toPCertificate, hgetD]
-    exact transRel_sound dc Γ hwtp pc_t pc_t' dic dtc instr
+    exact transRel_sound dc hwtp pc_t pc_t' dic dtc instr
       ((dc.instrCerts.getD pc_t' default).pc_orig)
       hinstr hpath' hrelcheck
 
@@ -1498,11 +1499,11 @@ theorem checkNonterminationExec_sound (dc : ECertificate)
 -- § 8b. Div-preservation soundness
 -- ============================================================
 
-/-- If `checkDivPreservationExec` passes, then `checkStuckPreservationProp` holds. -/
+/-- If `checkDivPreservationExec` passes, then `checkErrorPreservationProp` holds. -/
 theorem checkDivPreservationExec_sound (dc : ECertificate)
     (h : checkDivPreservationExec dc = true) :
-    checkStuckPreservationProp (toPCertificate dc) := by
-  intro pc_t σ_t σ_o hpc hrel hinv_t hinv_o hobs
+    checkErrorPreservationProp (toPCertificate dc) := by
+  intro pc_t σ_t σ_o hpc hrel hinv_t hinv_o herr_step
   -- Extract the check result for this specific pc_t
   have hmem : pc_t ∈ List.range dc.trans.size := List.mem_range.mpr hpc
   have hcheck := (List.all_eq_true.mp h) pc_t hmem
@@ -1510,29 +1511,21 @@ theorem checkDivPreservationExec_sound (dc : ECertificate)
   obtain ⟨instr, hinstr⟩ : ∃ instr, dc.trans[pc_t]? = some instr :=
     ⟨dc.trans[pc_t], getElem?_eq_some_iff.mpr ⟨hpc, rfl⟩⟩
   -- Simplify toPCertificate in goal and hypotheses
-  simp only [toPCertificate] at hobs hrel ⊢
+  simp only [toPCertificate] at herr_step hrel ⊢
   set dic := dc.instrCerts.getD pc_t default with hdic_def
-  -- hobs: observe on trans side is stuck
-  -- Unfold observe on the trans side
-  simp only [observe, hinstr] at hobs
-  -- Rewrite hcheck with hinstr so we see the match result
-  simp only [hinstr] at hcheck
-  -- Case split on the transformed instruction
-  cases instr with
-  | halt => simp at hobs
-  | const _ _ | copy _ _ | boolop _ _ | goto _ | ifgoto _ _ => simp at hobs
-  | binop x op y z =>
-    -- For binop, observe is stuck when operands aren't both ints or op is unsafe
-    -- The strengthened checker verifies: orig has same op, both operands related
-    -- Reduce the let binding in the checker
-    simp only [] at hcheck
+  -- herr_step: Step dc.trans (Cfg.run pc_t σ_t) (Cfg.error σ_t)
+  -- Step.error requires: trans[pc_t]? = some (.binop x op y z), σ_t y = .int a,
+  --   σ_t z = .int b, ¬ op.safe a b
+  cases herr_step with
+  | error hinstr_binop hya hzb hunsafe =>
+    rename_i x op y z a b
+    simp only [hinstr_binop] at hcheck
     generalize horig : dc.orig[dic.pc_orig]? = orig_opt at hcheck
     cases orig_opt with
     | none => simp at hcheck
     | some orig_instr =>
       cases orig_instr with
       | binop x' op' y' z' =>
-        -- hcheck: op == op' && ssGet ... y == .var y' && ssGet ... z == .var z'
         simp only [Bool.and_eq_true, beq_iff_eq] at hcheck
         obtain ⟨⟨hop, hrel_y_eq⟩, hrel_z_eq⟩ := hcheck
         subst hop
@@ -1541,29 +1534,11 @@ theorem checkDivPreservationExec_sound (dc : ECertificate)
           have := hrel y; rw [hrel_y_eq, Expr.eval] at this; exact this
         have hrel_z : σ_t z = σ_o z' := by
           have := hrel z; rw [hrel_z_eq, Expr.eval] at this; exact this
-        -- Case split on σ_t y, σ_t z to determine why trans is stuck
-        cases hvy : σ_t y <;> cases hvz : σ_t z <;> simp [hvy, hvz] at hobs
-        · -- Both ints, op unsafe (only possible for div)
-          rename_i a b
-          have hy' : σ_o y' = .int a := by rw [← hrel_y, hvy]
-          have hz' : σ_o z' = .int b := by rw [← hrel_z, hvz]
-          simp only [observe, horig, hy', hz', hobs]
-          simp
-        · -- σ_t y = .int, σ_t z = .bool
-          rename_i a b
-          have hy' : σ_o y' = .int a := by rw [← hrel_y, hvy]
-          have hz' : σ_o z' = .bool b := by rw [← hrel_z, hvz]
-          simp only [observe, horig, hy', hz']
-        · -- σ_t y = .bool, σ_t z = .int
-          rename_i a b
-          have hy' : σ_o y' = .bool a := by rw [← hrel_y, hvy]
-          have hz' : σ_o z' = .int b := by rw [← hrel_z, hvz]
-          simp only [observe, horig, hy', hz']
-        · -- σ_t y = .bool, σ_t z = .bool
-          rename_i a b
-          have hy' : σ_o y' = .bool a := by rw [← hrel_y, hvy]
-          have hz' : σ_o z' = .bool b := by rw [← hrel_z, hvz]
-          simp only [observe, horig, hy', hz']
+        -- Transfer to original side
+        have hy' : σ_o y' = .int a := by rw [← hrel_y, hya]
+        have hz' : σ_o z' = .int b := by rw [← hrel_z, hzb]
+        -- Construct Step.error on the original side
+        exact ⟨σ_o, Steps.step (Step.error horig hy' hz' hunsafe) .refl⟩
       | _ => simp at hcheck
 
 -- ============================================================
@@ -1608,21 +1583,23 @@ theorem checkSuccessorsInBounds_sound (dc : ECertificate)
     | iffall hi _ =>
       have := hall pc hpc; simp [hi, successors] at this; exact this.2
 
-theorem soundness_bridge (Γ : TyCtx)
-    (dc : ECertificate) (hwtp : WellTypedProg Γ dc.orig) (h : checkCertificateExec dc = true) :
-    PCertificateValid Γ (toPCertificate dc) := by
-  -- checkCertificateExec is: c1 && c2 && c2c && c3 && c4 && c5 && c6 && c7 && c8_div && c9
+theorem soundness_bridge
+    (dc : ECertificate) (h : checkCertificateExec dc = true) :
+    PCertificateValid (toPCertificate dc) := by
+  -- checkCertificateExec is: wt_orig && wt_trans && c1 && c2 && c3 && c4 && c5 && c6 && c7 && c8_div && c9
   -- && is left-associative, so decompose from right to left
   unfold checkCertificateExec at h
-  have ⟨h19, h10⟩ := and_true_of_and_eq_true h     -- h10 = checkSuccessorsInBounds
-  have ⟨h18, h9⟩  := and_true_of_and_eq_true h19   -- h9  = checkDivPreservationExec
-  have ⟨h17, h8⟩  := and_true_of_and_eq_true h18
-  have ⟨h16, h7⟩  := and_true_of_and_eq_true h17
-  have ⟨h15, h6⟩  := and_true_of_and_eq_true h16
-  have ⟨h14, h5⟩  := and_true_of_and_eq_true h15
-  have ⟨h13, h4⟩  := and_true_of_and_eq_true h14
-  have ⟨h12, h3⟩  := and_true_of_and_eq_true h13
-  have ⟨h1, h2⟩   := and_true_of_and_eq_true h12
+  have ⟨h21, h10⟩ := and_true_of_and_eq_true h     -- h10 = checkSuccessorsInBounds
+  have ⟨h20, h9⟩  := and_true_of_and_eq_true h21   -- h9  = checkDivPreservationExec
+  have ⟨h19, h8⟩  := and_true_of_and_eq_true h20
+  have ⟨h18, h7⟩  := and_true_of_and_eq_true h19
+  have ⟨h17, h6⟩  := and_true_of_and_eq_true h18
+  have ⟨h16, h5⟩  := and_true_of_and_eq_true h17
+  have ⟨h15, h4⟩  := and_true_of_and_eq_true h16
+  have ⟨h14, h3⟩  := and_true_of_and_eq_true h15
+  have ⟨h13, h2⟩  := and_true_of_and_eq_true h14
+  have ⟨h12, h1⟩  := and_true_of_and_eq_true h13
+  have ⟨hwt_orig, hwt_trans⟩ := and_true_of_and_eq_true h12
   -- Derive rel=[] at start from checkRelAtStartExec (h3)
   have hrel0 : (dc.instrCerts.getD 0 default).rel = [] := by
     revert h3; simp only [checkRelAtStartExec]
@@ -1630,15 +1607,16 @@ theorem soundness_bridge (Γ : TyCtx)
     | nil => intro; rfl
     | cons => simp [List.isEmpty]
   exact {
-    well_typed_orig := by simp [toPCertificate]; exact hwtp
+    well_typed_orig  := by simp [toPCertificate]; exact checkWellTypedProg_sound hwt_orig
+    well_typed_trans := by simp [toPCertificate]; exact checkWellTypedProg_sound hwt_trans
     start_corr    := checkStartCorrespondenceExec_sound dc h1 hrel0
     start_inv     := checkInvariantsAtStartExec_sound dc h2
     inv_preserved := checkInvariantsPreservedExec_sound dc h4
-    transitions   := checkAllTransitionsExec_sound dc Γ hwtp h5
+    transitions   := checkAllTransitionsExec_sound dc (checkWellTypedProg_sound hwt_orig) h5
     halt_corr     := checkHaltCorrespondenceExec_sound dc h6
     halt_obs      := checkHaltObservableExec_sound dc h7
     nonterm       := checkNonterminationExec_sound dc h8
-    stuck_pres    := checkDivPreservationExec_sound dc h9
+    error_pres    := checkDivPreservationExec_sound dc h9
     step_closed   := checkSuccessorsInBounds_sound dc h10
   }
 
@@ -1690,65 +1668,14 @@ redundant assignment removal).
 -- ============================================================
 
 
-/-- **Totality**: If the executable checker accepts, the transformed
-    program has a behavior for every initial store. -/
-theorem trans_has_behavior (Γ : TyCtx)
-    (dc : ECertificate) (hwtp : WellTypedProg Γ dc.orig) (h : checkCertificateExec dc = true)
-    (σ₀ : Store) :
+/-- **Totality**: If the executable checker accepts, the transformed program
+    has a behavior for every well-typed initial store. -/
+theorem trans_has_behavior
+    (dc : ECertificate) (h : checkCertificateExec dc = true)
+    (σ₀ : Store) (hts₀ : TypedStore dc.tyCtx σ₀) :
     ∃ b, program_behavior dc.trans σ₀ b :=
-  has_behavior dc.trans σ₀ (soundness_bridge Γ dc hwtp h).step_closed
-
-/-- If no step exists from a run config, then `observe` returns `stuck`. -/
-private theorem no_step_stuck_observe {p : Prog} {obs : List Var} {pc : Nat} {σ : Store}
-    (hnostep : ¬ ∃ c', Step p (Cfg.run pc σ) c') :
-    observe p obs (Cfg.run pc σ) = Observation.stuck := by
-  simp only [observe]
-  match h : p[pc]? with
-  | none => rfl
-  | some .halt => exact absurd ⟨_, Step.halt h⟩ hnostep
-  | some (.const x n) => exact absurd ⟨_, Step.const h⟩ hnostep
-  | some (.copy x y) => exact absurd ⟨_, Step.copy h⟩ hnostep
-  | some (.boolop x be) => exact absurd ⟨_, Step.boolop h⟩ hnostep
-  | some (.binop x op y z) =>
-    -- observe pattern-matches on σ y, σ z; split on both being .int or not
-    simp only [observe, h]
-    -- bring σ y and σ z into scope as named values
-    cases hy : σ y with
-    | int a =>
-      cases hz : σ z with
-      | int m =>
-        -- σ y = .int a, σ z = .int m
-        -- if op.safe a m, a step would exist (contradiction with hnostep)
-        by_cases hs : op.safe a m
-        · exact absurd ⟨_, Step.binop h hy hz hs⟩ hnostep
-        · simp [hs]
-      | bool _ =>
-        -- σ z = .bool _: observe returns stuck directly
-        simp
-    | bool _ =>
-      -- σ y = .bool _: observe returns stuck directly
-      simp
-  | some (.goto l) => exact absurd ⟨_, Step.goto h⟩ hnostep
-  | some (.ifgoto b l) =>
-    by_cases hcond : b.eval σ = true
-    · exact absurd ⟨_, Step.iftrue h hcond⟩ hnostep
-    · have : b.eval σ = false := Bool.eq_false_iff.mpr (by simp_all)
-      exact absurd ⟨_, Step.iffall h this⟩ hnostep
-
-/-- If `observe` returns `stuck`, then no step exists. -/
-private theorem stuck_observe_no_step {p : Prog} {obs : List Var} {pc : Nat} {σ : Store}
-    (hobs : observe p obs (Cfg.run pc σ) = Observation.stuck) :
-    ¬ ∃ c', Step p (Cfg.run pc σ) c' := by
-  intro ⟨c', hstep⟩
-  cases hstep with
-  | halt h => simp [observe, h] at hobs
-  | const h => simp [observe, h] at hobs
-  | copy h => simp [observe, h] at hobs
-  | boolop h => simp [observe, h] at hobs
-  | binop h ha hb hs => simp [observe, h, ha, hb, hs] at hobs
-  | goto h => simp [observe, h] at hobs
-  | iftrue h _ => simp [observe, h] at hobs
-  | iffall h _ => simp [observe, h] at hobs
+  has_behavior dc.trans σ₀ dc.tyCtx (soundness_bridge dc h).well_typed_trans hts₀
+    (soundness_bridge dc h).step_closed
 
 /-- **End-to-end correctness**: If the executable checker accepts,
     then every behavior of the transformed program has a corresponding
@@ -1757,66 +1684,56 @@ private theorem stuck_observe_no_step {p : Prog} {obs : List Var} {pc : Nat} {σ
     This is the composition of `soundness_bridge` and
     `credible_compilation_soundness` — the complete pipeline from
     `checkCertificateExec dc = true` to semantic preservation. -/
-theorem exec_checker_correct (Γ : TyCtx)
-    (dc : ECertificate) (hwtp : WellTypedProg Γ dc.orig) (h : checkCertificateExec dc = true)
-    (σ₀ : Store) (hts₀ : TypedStore Γ σ₀) (b : Behavior)
+theorem exec_checker_correct
+    (dc : ECertificate) (h : checkCertificateExec dc = true)
+    (σ₀ : Store) (hts₀ : TypedStore dc.tyCtx σ₀) (b : Behavior)
     (htrans : program_behavior dc.trans σ₀ b) :
     ∃ b', program_behavior dc.orig σ₀ b' ∧
       match b, b' with
       | .halts σ_t, .halts σ_o =>
           ∀ v ∈ dc.observable, σ_t v = σ_o v
-      | .stuck, .stuck => True
+      | .errors _, .errors _ => True
       | .diverges, .diverges => True
       | _, _ => False := by
+  have hvalid := soundness_bridge dc h
   cases b with
   | halts σ_t' =>
     obtain ⟨σ_o', ho, hobs⟩ := soundness_halt
-      (toPCertificate dc) (soundness_bridge Γ dc hwtp h) σ₀ σ_t' hts₀ htrans
+      (toPCertificate dc) hvalid σ₀ σ_t' hts₀ htrans
     exact ⟨.halts σ_o', ho, hobs⟩
-  | stuck =>
-    obtain ⟨pc_t, σ_t, hreach, hnostep⟩ := htrans
-    have hobs_t := @no_step_stuck_observe _ dc.observable _ _ hnostep
-    obtain ⟨c_o, hreach_o, hobs_o⟩ := stuck_preservation
-      (toPCertificate dc) (soundness_bridge Γ dc hwtp h) σ₀ hts₀ _ hreach hobs_t
-    cases c_o with
-    | halt σ_o => simp [observe] at hobs_o
-    | run pc_o σ_o =>
-      exact ⟨.stuck, ⟨pc_o, σ_o, hreach_o, stuck_observe_no_step hobs_o⟩, trivial⟩
+  | errors σ_e =>
+    obtain ⟨σ_o', ho⟩ := error_preservation
+      (toPCertificate dc) hvalid σ₀ hts₀ htrans
+    exact ⟨.errors σ_o', ho, trivial⟩
   | diverges =>
     obtain ⟨f, hinf, hf0⟩ := htrans
     obtain ⟨g, hg, hg0⟩ := soundness_diverge
-      (toPCertificate dc) (soundness_bridge Γ dc hwtp h) f σ₀ hts₀ hinf hf0
+      (toPCertificate dc) hvalid f σ₀ hts₀ hinf hf0
     exact ⟨.diverges, ⟨g, hg, hg0⟩, trivial⟩
 
 /-- **Complete end-to-end**: checker accepts → every initial store has a behavior
     in the transformed program, and that behavior is matched by the original. -/
-theorem exec_checker_total (Γ : TyCtx)
-    (dc : ECertificate) (hwtp : WellTypedProg Γ dc.orig) (h : checkCertificateExec dc = true)
-    (σ₀ : Store) (hts₀ : TypedStore Γ σ₀) :
+theorem exec_checker_total
+    (dc : ECertificate) (h : checkCertificateExec dc = true)
+    (σ₀ : Store) (hts₀ : TypedStore dc.tyCtx σ₀) :
     ∃ b, program_behavior dc.trans σ₀ b ∧
       ∃ b', program_behavior dc.orig σ₀ b' ∧
         match b, b' with
         | .halts σ_t, .halts σ_o => ∀ v ∈ dc.observable, σ_t v = σ_o v
-        | .stuck, .stuck => True
+        | .errors _, .errors _ => True
         | .diverges, .diverges => True
         | _, _ => False := by
-  obtain ⟨b, hb⟩ := trans_has_behavior Γ dc hwtp h σ₀
-  have hvalid := soundness_bridge Γ dc hwtp h
+  obtain ⟨b, hb⟩ := trans_has_behavior dc h σ₀ hts₀
+  have hvalid := soundness_bridge dc h
   cases b with
   | halts σ_t =>
     obtain ⟨σ_o', ho, hobs⟩ := soundness_halt
       (toPCertificate dc) hvalid σ₀ σ_t hts₀ hb
     exact ⟨.halts σ_t, hb, .halts σ_o', ho, hobs⟩
-  | stuck =>
-    obtain ⟨pc_t, σ_t, hreach, hnostep⟩ := hb
-    have hobs_t := @no_step_stuck_observe _ dc.observable _ _ hnostep
-    obtain ⟨c_o, hreach_o, hobs_o⟩ := stuck_preservation
-      (toPCertificate dc) hvalid σ₀ hts₀ _ hreach hobs_t
-    cases c_o with
-    | halt σ_o => simp [observe] at hobs_o
-    | run pc_o σ_o =>
-      exact ⟨.stuck, ⟨pc_t, σ_t, hreach, hnostep⟩, .stuck,
-        ⟨pc_o, σ_o, hreach_o, stuck_observe_no_step hobs_o⟩, trivial⟩
+  | errors σ_e =>
+    obtain ⟨σ_o', ho⟩ := error_preservation
+      (toPCertificate dc) hvalid σ₀ hts₀ hb
+    exact ⟨.errors σ_e, hb, .errors σ_o', ho, trivial⟩
   | diverges =>
     obtain ⟨f, hinf, hf0⟩ := hb
     obtain ⟨g, hg, hg0⟩ := soundness_diverge
@@ -1830,32 +1747,30 @@ theorem exec_checker_total (Γ : TyCtx)
 /-- **Halt preservation (executable)**: If the executable checker accepts and
     the transformed program halts, the original halts with the same
     observable values. -/
-theorem exec_halt_preservation (Γ : TyCtx)
-    (dc : ECertificate) (hwtp : WellTypedProg Γ dc.orig) (h : checkCertificateExec dc = true)
-    (σ₀ σ_t' : Store) (hts₀ : TypedStore Γ σ₀)
+theorem exec_halt_preservation
+    (dc : ECertificate) (h : checkCertificateExec dc = true)
+    (σ₀ σ_t' : Store) (hts₀ : TypedStore dc.tyCtx σ₀)
     (hexec : haltsWithResult dc.trans 0 σ₀ σ_t') :
     ∃ σ_o', haltsWithResult dc.orig 0 σ₀ σ_o' ∧
       ∀ v ∈ dc.observable, σ_t' v = σ_o' v :=
-  soundness_halt (toPCertificate dc) (soundness_bridge Γ dc hwtp h) σ₀ σ_t' hts₀ hexec
+  soundness_halt (toPCertificate dc) (soundness_bridge dc h) σ₀ σ_t' hts₀ hexec
 
-/-- **Stuck preservation (executable)**: If the executable checker accepts and
-    the transformed program gets stuck (e.g. div-by-zero), the original
-    program also gets stuck. -/
-theorem exec_stuck_preservation (Γ : TyCtx)
-    (dc : ECertificate) (hwtp : WellTypedProg Γ dc.orig) (h : checkCertificateExec dc = true)
-    (σ₀ : Store) (hts₀ : TypedStore Γ σ₀) (c_t : Cfg)
-    (hreach : dc.trans ⊩ Cfg.run 0 σ₀ ⟶* c_t)
-    (hobs : observe dc.trans dc.observable c_t = Observation.stuck) :
-    ∃ c_o, (dc.orig ⊩ Cfg.run 0 σ₀ ⟶* c_o) ∧
-      observe dc.orig dc.observable c_o = Observation.stuck :=
-  stuck_preservation (toPCertificate dc) (soundness_bridge Γ dc hwtp h) σ₀ hts₀ c_t hreach hobs
+/-- **Error preservation (executable)**: If the executable checker accepts and
+    the transformed program reaches an error state, the original
+    program also reaches an error state. -/
+theorem exec_error_preservation
+    (dc : ECertificate) (h : checkCertificateExec dc = true)
+    (σ₀ : Store) (hts₀ : TypedStore dc.tyCtx σ₀) {σ_e : Store}
+    (hreach : dc.trans ⊩ Cfg.run 0 σ₀ ⟶* Cfg.error σ_e) :
+    ∃ σ_o, dc.orig ⊩ Cfg.run 0 σ₀ ⟶* Cfg.error σ_o :=
+  error_preservation (toPCertificate dc) (soundness_bridge dc h) σ₀ hts₀ hreach
 
 /-- **Divergence preservation (executable)**: If the executable checker accepts
     and the transformed program diverges, the original program also diverges. -/
-theorem exec_diverge_preservation (Γ : TyCtx)
-    (dc : ECertificate) (hwtp : WellTypedProg Γ dc.orig) (h : checkCertificateExec dc = true)
-    (f : Nat → Cfg) (σ₀ : Store) (hts₀ : TypedStore Γ σ₀)
+theorem exec_diverge_preservation
+    (dc : ECertificate) (h : checkCertificateExec dc = true)
+    (f : Nat → Cfg) (σ₀ : Store) (hts₀ : TypedStore dc.tyCtx σ₀)
     (hinf : IsInfiniteExec dc.trans f)
     (hf0 : f 0 = Cfg.run 0 σ₀) :
     ∃ g : Nat → Cfg, IsInfiniteExec dc.orig g ∧ g 0 = Cfg.run 0 σ₀ :=
-  soundness_diverge (toPCertificate dc) (soundness_bridge Γ dc hwtp h) f σ₀ hts₀ hinf hf0
+  soundness_diverge (toPCertificate dc) (soundness_bridge dc h) f σ₀ hts₀ hinf hf0

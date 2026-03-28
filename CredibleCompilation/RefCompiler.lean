@@ -1200,36 +1200,26 @@ theorem Steps.stuck_det {p : Prog} {c c₁ c₂ : Cfg}
   | inl h => exact (Steps.stuck_terminal h hs₁).symm
   | inr h => exact Steps.stuck_terminal h hs₂
 
-/-- A `Cfg.run` stuck state and a `Cfg.halt` state from the same start
-    are contradictory (since halt is also stuck but `run ≠ halt`). -/
-theorem stuck_run_no_halt {p : Prog} {pc : Nat} {σ_start σ_stuck σ_halt : Store}
-    (h_run : p ⊩ Cfg.run 0 σ_start ⟶* Cfg.run pc σ_stuck)
-    (h_stuck : ∀ c, ¬ Step p (Cfg.run pc σ_stuck) c)
+/-- An error configuration and a halt from the same start are contradictory. -/
+theorem error_run_no_halt {p : Prog} {pc : Nat} {σ_start σ_err σ_halt : Store}
+    (h_run : p ⊩ Cfg.run 0 σ_start ⟶* Cfg.run pc σ_err)
+    (h_error : Step p (Cfg.run pc σ_err) (Cfg.error σ_err))
     (h_halt : haltsWithResult p 0 σ_start σ_halt) : False := by
-  have halt_stuck : ∀ d, ¬ Step p (Cfg.halt σ_halt) d := fun _ h => by cases h
-  have := Steps.stuck_det h_run h_halt h_stuck halt_stuck
+  have herr_reach : p ⊩ Cfg.run 0 σ_start ⟶* Cfg.error σ_err :=
+    Steps.trans h_run (Steps.step h_error Steps.refl)
+  have err_terminal : ∀ d, ¬ Step p (Cfg.error σ_err) d := fun _ h => Step.no_step_from_error h
+  have halt_terminal : ∀ d, ¬ Step p (Cfg.halt σ_halt) d := fun _ h => Step.no_step_from_halt h
+  have := Steps.stuck_det herr_reach h_halt err_terminal halt_terminal
   exact Cfg.noConfusion this
 
-/-- A binop instruction with an unsafe operation admits no step. -/
-theorem no_step_unsafe_binop {p : Prog} {pc : Nat} {σ : Store}
-    {x : Var} {op : BinOp} {y z : Var}
+/-- A binop instruction with an unsafe operation produces an error transition. -/
+theorem unsafe_binop_errors {p : Prog} {pc : Nat} {σ : Store}
+    {x : Var} {op : BinOp} {y z : Var} {a b : Int}
     (hinstr : p[pc]? = some (.binop x op y z))
-    (hunsafe : ¬ op.safe (σ y).toInt (σ z).toInt) :
-    ∀ c, ¬ Step p (Cfg.run pc σ) c := by
-  intro c hstep
-  cases hstep with
-  | binop h ha hb hsafe =>
-    simp [hinstr] at h
-    obtain ⟨rfl, rfl, rfl, rfl⟩ := h
-    rw [ha, hb] at hunsafe; simp [Value.toInt] at hunsafe
-    exact hunsafe hsafe
-  | const h => simp [hinstr] at h
-  | copy h => simp [hinstr] at h
-  | boolop h => simp [hinstr] at h
-  | goto h => simp [hinstr] at h
-  | iftrue h _ => simp [hinstr] at h
-  | iffall h _ => simp [hinstr] at h
-  | halt h => simp [hinstr] at h
+    (hy : σ y = .int a) (hz : σ z = .int b)
+    (hunsafe : ¬ op.safe a b) :
+    Step p (Cfg.run pc σ) (Cfg.error σ) :=
+  Step.error hinstr hy hz hunsafe
 
 -- ============================================================
 -- § 14. Expression and boolean stuck theorems
@@ -1244,7 +1234,7 @@ theorem refCompileExpr_stuck (e : SExpr) (offset nextTmp : Nat) (σ σ_tac : Sto
     (hagree : ∀ v, v.isTmp = false → σ_tac v = σ v)
     (hcode : CodeAt (refCompileExpr e offset nextTmp).1 p offset) :
     ∃ pc_s σ_s, FragExec p offset σ_tac pc_s σ_s ∧
-      (∀ c, ¬ Step p (Cfg.run pc_s σ_s) c) ∧
+      Step p (Cfg.run pc_s σ_s) (Cfg.error σ_s) ∧
       pc_s < offset + (refCompileExpr e offset nextTmp).1.length := by
   induction e generalizing offset nextTmp σ_tac with
   | lit n => simp [SExpr.divSafe] at hunsafe
@@ -1303,12 +1293,10 @@ theorem refCompileExpr_stuck (e : SExpr) (offset nextTmp : Nat) (σ σ_tac : Sto
             rw [heq, hprev_b k (by omega)]
         have hva : σ_b va = .int (a.eval σ) := by rw [hva_b, hval_a]
         have hvb : σ_b vb = .int (b.eval σ) := hval_b
-        -- Binop is stuck
-        have hunsafe_op : ¬ op.safe (σ_b va).toInt (σ_b vb).toInt := by
-          rw [hva, hvb]; simp [Value.toInt]; exact hop
+        -- Binop errors
         exact ⟨offset + codeA.length + codeB.length, σ_b,
           FragExec.trans' hexec_a hexec_b,
-          no_step_unsafe_binop hbinop hunsafe_op,
+          unsafe_binop_errors hbinop hva hvb hop,
           by simp [List.length_append]; omega⟩
       · -- b unsafe, a safe: execute a, then get stuck on b
         obtain ⟨σ_a, hexec_a, _, hntmp_a, hprev_a⟩ :=
@@ -1336,7 +1324,7 @@ theorem refCompileBool_stuck (sb : SBool) (offset nextTmp : Nat) (σ σ_tac : St
     (hagree : ∀ v, v.isTmp = false → σ_tac v = σ v)
     (hcode : CodeAt (refCompileBool sb offset nextTmp).1 p offset) :
     ∃ pc_s σ_s, FragExec p offset σ_tac pc_s σ_s ∧
-      (∀ c, ¬ Step p (Cfg.run pc_s σ_s) c) ∧
+      Step p (Cfg.run pc_s σ_s) (Cfg.error σ_s) ∧
       pc_s < offset + (refCompileBool sb offset nextTmp).1.length := by
   induction sb generalizing offset nextTmp σ_tac with
   | bvar x => exact absurd trivial hunsafe
@@ -1475,7 +1463,7 @@ theorem refCompileStmt_stuck (s : Stmt) (fuel : Nat) (σ σ' : Store)
     (hagree : ∀ v, v.isTmp = false → σ_tac v = σ v)
     (hcode : CodeAt (refCompileStmt s offset nextTmp).1 p offset) :
     ∃ pc_s σ_s, FragExec p offset σ_tac pc_s σ_s ∧
-      (∀ c, ¬ Step p (Cfg.run pc_s σ_s) c) ∧
+      Step p (Cfg.run pc_s σ_s) (Cfg.error σ_s) ∧
       pc_s < offset + (refCompileStmt s offset nextTmp).1.length := by
   induction s generalizing fuel σ σ' offset nextTmp p σ_tac with
   | skip => simp [Stmt.divSafe] at hunsafe
@@ -1530,11 +1518,9 @@ theorem refCompileStmt_stuck (s : Stmt) (fuel : Nat) (σ σ' : Store)
             · rw [hra] at hlt heq; simp at hlt heq; rw [heq, hprev_b k (by omega)]
           have hva : σ_b va = .int (a.eval σ) := by rw [hva_b, hval_a]
           have hvb : σ_b vb = .int (b.eval σ) := hval_b
-          have hunsafe_op : ¬ op.safe (σ_b va).toInt (σ_b vb).toInt := by
-            rw [hva, hvb]; simp [Value.toInt]; exact hop
           exact ⟨offset + codeA.length + codeB.length, σ_b,
             FragExec.trans' hexec_a hexec_b,
-            no_step_unsafe_binop hbinop hunsafe_op,
+            unsafe_binop_errors hbinop hva hvb hop,
             by simp [List.length_append]; omega⟩
         · -- b unsafe
           obtain ⟨σ_a, hexec_a, _, hntmp_a, _⟩ :=
@@ -1850,10 +1836,10 @@ theorem refCompile_stuck (s : Stmt) (fuel : Nat) (σ σ' : Store)
   have hcode : CodeAt (refCompileStmt s 0 0).1 (refCompile s) 0 := by
     intro i hi; unfold refCompile; simp only [List.getElem?_toArray, Nat.zero_add]
     exact List.getElem?_append_left hi
-  obtain ⟨pc_s, σ_s, hfrag, hstuck, _⟩ :=
+  obtain ⟨pc_s, σ_s, hfrag, herror, _⟩ :=
     refCompileStmt_stuck s fuel σ σ' 0 0 (refCompile s) σ hinterp htmpfree hunsafe hintv
       (fun _ _ => rfl) hcode
-  exact stuck_run_no_halt hfrag hstuck hhalt
+  exact error_run_no_halt hfrag herror hhalt
 
 -- ============================================================
 -- § 17. Step-indexed execution (RefStepsN)

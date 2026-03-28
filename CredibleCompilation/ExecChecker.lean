@@ -267,6 +267,7 @@ def buildSubstMap (rel : EExprRel) : SymStore :=
 structure ECertificate where
   orig       : Prog
   trans      : Prog
+  tyCtx      : TyCtx
   inv_orig   : Array EInv
   inv_trans  : Array EInv
   observable : List Var
@@ -515,8 +516,8 @@ def checkNonterminationExec (cert : ECertificate) : Bool :=
     | none => true
 
 /-- **Condition 6**: The transformed program is non-empty and every successor
-    PC is in bounds.  This ensures the transformed program never gets stuck
-    (PC out of bounds is the only cause of stuck states). -/
+    PC is in bounds.  This ensures the transformed program never reaches an
+    error state from an out-of-bounds PC. -/
 def checkSuccessorsInBounds (cert : ECertificate) : Bool :=
   cert.trans.size > 0 &&
   (List.range cert.trans.size).all fun pc =>
@@ -528,10 +529,10 @@ def checkSuccessorsInBounds (cert : ECertificate) : Bool :=
 -- § 7. Main checker
 -- ============================================================
 
-/-- Condition 9 (stuck preservation for binop): for every `binop` in the
+/-- Condition 9 (error preservation for binop): for every `binop` in the
     transformed program, the original at the mapped PC also has a `binop`
     with the same operator, and both operands are related through the
-    expression relation. This ensures type errors and div-by-zero on the
+    expression relation. This ensures div-by-zero errors on the
     transformed side also occur on the original side. -/
 def checkDivPreservationExec (cert : ECertificate) : Bool :=
   (List.range cert.trans.size).all fun pc_t =>
@@ -548,6 +549,8 @@ def checkDivPreservationExec (cert : ECertificate) : Bool :=
 
 /-- Check all certificate conditions. Returns `true` iff the certificate is valid. -/
 def checkCertificateExec (cert : ECertificate) : Bool :=
+  checkWellTypedProg cert.tyCtx cert.orig &&
+  checkWellTypedProg cert.tyCtx cert.trans &&
   checkStartCorrespondenceExec cert &&
   checkInvariantsAtStartExec cert &&
   checkRelAtStartExec cert &&
@@ -561,7 +564,9 @@ def checkCertificateExec (cert : ECertificate) : Bool :=
 
 /-- Verbose check: returns the result of each individual condition. -/
 def checkCertificateVerboseExec (cert : ECertificate) : List (String × Bool) :=
-  [ ("start_correspondence",  checkStartCorrespondenceExec cert),
+  [ ("well_typed_orig",       checkWellTypedProg cert.tyCtx cert.orig),
+    ("well_typed_trans",      checkWellTypedProg cert.tyCtx cert.trans),
+    ("start_correspondence",  checkStartCorrespondenceExec cert),
     ("invariants_at_start",   checkInvariantsAtStartExec cert),
     ("rel_at_start",          checkRelAtStartExec cert),
     ("invariants_preserved",  checkInvariantsPreservedExec cert),
@@ -574,14 +579,16 @@ def checkCertificateVerboseExec (cert : ECertificate) : List (String × Bool) :=
 
 /-- Observable output of a configuration with respect to an executable certificate.
     - If the current instruction is `halt`, returns `halt` with observable variable–value pairs.
-    - If the PC is out of bounds (stuck), returns `stuck`.
+    - If the configuration is an error, returns `error`.
+    - If the PC is out of bounds, returns `error`.
     - Otherwise returns `nothing`. -/
 def observeExec (cert : ECertificate) (c : Cfg) : Observation :=
   match c with
-  | .halt σ => Observation.halt (cert.observable.map fun v => (v, σ v))
+  | .halt σ  => Observation.halt (cert.observable.map fun v => (v, σ v))
+  | .error _ => Observation.error
   | .run pc σ =>
     match cert.trans[pc]? with
     | some .halt => Observation.halt (cert.observable.map fun v => (v, σ v))
     | some _     => Observation.nothing
-    | none       => Observation.stuck
+    | none       => Observation.error
 

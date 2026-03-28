@@ -293,10 +293,12 @@ def WellTypedProg (Γ : TyCtx) (p : Prog) : Prop :=
 A **configuration** is either:
 - `Cfg.run pc σ`  — about to execute instruction `pc` in store `σ`
 - `Cfg.halt σ`    — terminated with final store `σ`
+- `Cfg.error σ`   — runtime error (e.g. division by zero) with store `σ`
 -/
 inductive Cfg where
-  | run  : Nat → Store → Cfg
-  | halt : Store → Cfg
+  | run   : Nat → Store → Cfg
+  | halt  : Store → Cfg
+  | error : Store → Cfg
 
 -- ============================================================
 -- § 5. Small-step operational semantics   ⟶
@@ -337,6 +339,10 @@ inductive Step (p : Prog) : Cfg → Cfg → Prop where
 
   | halt   : p[pc]? = some .halt →
       Step p (.run pc σ) (.halt σ)
+
+  | error  {a b : Int} : p[pc]? = some (.binop x op y z) →
+      σ y = .int a → σ z = .int b → ¬ op.safe a b →
+      Step p (.run pc σ) (.error σ)
 
 -- p ⊩ c ⟶ c'   (⊩ avoids conflict with Lean's reserved ⊢)
 notation:50 p " ⊩ " c " ⟶ " c' => Step p c c'
@@ -430,11 +436,16 @@ def haltsWithResult (p : Prog) (pc : Nat) (σ σ' : Store) : Prop :=
 /-- The small-step relation is **deterministic**. -/
 theorem Step.deterministic {p : Prog} {c c₁ c₂ : Cfg}
     (h₁ : p ⊩ c ⟶ c₁) (h₂ : p ⊩ c ⟶ c₂) : c₁ = c₂ := by
-  cases h₁ <;> cases h₂ <;> simp_all [Value.int.injEq]
+  cases h₁ <;> cases h₂ <;> simp_all [Value.int.injEq] <;> (first | rfl | contradiction)
 
 /-- A halted configuration admits no further steps. -/
 theorem Step.no_step_from_halt {p : Prog} {σ : Store} {c : Cfg} :
     ¬ (p ⊩ Cfg.halt σ ⟶ c) :=
+  fun h => by cases h
+
+/-- An error configuration admits no further steps. -/
+theorem Step.no_step_from_error {p : Prog} {σ : Store} {c : Cfg} :
+    ¬ (p ⊩ Cfg.error σ ⟶ c) :=
   fun h => by cases h
 
 /-- Determinism of ⟶*: two sequences from the same config that both reach
@@ -480,6 +491,10 @@ theorem Step.store_congr {p : Prog} {pc : Nat} {σ τ : Store} {c : Cfg}
   | iftrue h hne => exact ⟨_, .iftrue h (BoolExpr.eval_congr _ σ τ hagree ▸ hne)⟩
   | iffall h heq => exact ⟨_, .iffall h (BoolExpr.eval_congr _ σ τ hagree ▸ heq)⟩
   | halt   h => exact ⟨_, .halt h⟩
+  | error h hy hz hs =>
+    refine ⟨_, .error h ?_ ?_ hs⟩
+    · rw [← hagree]; exact hy
+    · rw [← hagree]; exact hz
 
 -- ============================================================
 -- § 9. Progress and successor lemmas
@@ -491,15 +506,11 @@ private theorem instr_eq_of_lookup {p : Prog} {pc : Nat} {instr : TAC}
   Option.some.inj ((Array.getElem?_eq_getElem hpc).symm.trans h)
 
 /-- **Progress**: if the instruction at `pc` exists, the program is
-    well-typed, the store is well-typed, and all binary operations at
-    `pc` are division-safe, then a step is possible.
-
-    The only ways to get stuck are: PC out of bounds, type mismatch
-    in a binop (ruled out by well-typedness), or division by zero. -/
+    well-typed, and the store is well-typed, then a step is always possible.
+    Unsafe division produces a `Cfg.error` transition rather than getting stuck. -/
 theorem Step.progress (p : Prog) (pc : Nat) (σ : Store) (Γ : TyCtx)
     (hinb : pc < p.size)
-    (hwtp : WellTypedProg Γ p) (hts : TypedStore Γ σ)
-    (hsafe : ∀ x op y z, p[pc] = .binop x op y z → op.safe (σ y).toInt (σ z).toInt) :
+    (hwtp : WellTypedProg Γ p) (hts : TypedStore Γ σ) :
     ∃ c', Step p (Cfg.run pc σ) c' := by
   have hinstr : p[pc]? = some p[pc] := Array.getElem?_eq_getElem hinb
   have hwti := hwtp pc hinb
@@ -511,9 +522,9 @@ theorem Step.progress (p : Prog) (pc : Nat) (σ : Store) (Γ : TyCtx)
     | binop _ hy hz =>
       obtain ⟨a, ha⟩ : ∃ n, σ y = .int n := Value.int_of_typeOf_int (by rw [hts y]; exact hy)
       obtain ⟨b, hb⟩ : ∃ n, σ z = .int n := Value.int_of_typeOf_int (by rw [hts z]; exact hz)
-      have hs := hsafe x op y z hp
-      rw [ha, hb] at hs; simp [Value.toInt] at hs
-      exact ⟨_, .binop (hp ▸ hinstr) ha hb hs⟩
+      by_cases hs : op.safe a b
+      · exact ⟨_, .binop (hp ▸ hinstr) ha hb hs⟩
+      · exact ⟨_, .error (hp ▸ hinstr) ha hb hs⟩
   | .boolop x be   => exact ⟨_, .boolop (hp ▸ hinstr)⟩
   | .goto l        => exact ⟨_, .goto (hp ▸ hinstr)⟩
   | .ifgoto b l    =>
@@ -527,27 +538,24 @@ theorem Step.progress (p : Prog) (pc : Nat) (σ : Store) (Γ : TyCtx)
 -- ============================================================
 
 /-- An observation at a configuration: either the program halted (with
-    observable variable–value pairs), the program is stuck (PC out of
-    bounds, type mismatch, or div-by-zero), or nothing observable happened yet. -/
+    observable variable–value pairs), an error occurred (e.g. div-by-zero),
+    or nothing observable happened yet. -/
 inductive Observation where
   | halt    : List (Var × Value) → Observation
-  | stuck   : Observation
+  | error   : Observation
   | nothing : Observation
   deriving Repr, DecidableEq
 
 /-- Observe a configuration against a program and list of observable variables. -/
 def observe (p : Prog) (obs : List Var) (c : Cfg) : Observation :=
   match c with
-  | .halt σ => Observation.halt (obs.map fun v => (v, σ v))
+  | .halt σ  => Observation.halt (obs.map fun v => (v, σ v))
+  | .error _ => Observation.error
   | .run pc σ =>
     match p[pc]? with
     | some .halt => Observation.halt (obs.map fun v => (v, σ v))
-    | some (.binop _ op y z) =>
-      match σ y, σ z with
-      | .int a, .int b => if op.safe a b then Observation.nothing else Observation.stuck
-      | _, _ => Observation.stuck
     | some _     => Observation.nothing
-    | none       => Observation.stuck
+    | none       => Observation.error
 
 -- ============================================================
 -- § 11. Decidable type checking
@@ -609,6 +617,23 @@ theorem checkWellTypedInstr_sound {Γ : TyCtx} {instr : TAC}
     simp [checkWellTypedInstr] at h
     exact .ifgoto (checkWellTypedBoolExpr_sound h)
   | halt => exact .halt
+
+/-- Check that every instruction in a program is well-typed. -/
+def checkWellTypedProg (Γ : TyCtx) (p : Prog) : Bool :=
+  (List.range p.size).all fun i =>
+    match p[i]? with
+    | some instr => checkWellTypedInstr Γ instr
+    | none => true
+
+theorem checkWellTypedProg_sound {Γ : TyCtx} {p : Prog}
+    (h : checkWellTypedProg Γ p = true) : WellTypedProg Γ p := by
+  intro i hi
+  have hmem : i ∈ List.range p.size := List.mem_range.mpr hi
+  have hcheck := (List.all_eq_true.mp h) i hmem
+  have hsome : p[i]? = some p[i] := by
+    rw [Array.getElem?_eq_some_iff]; exact ⟨hi, rfl⟩
+  rw [hsome] at hcheck
+  exact checkWellTypedInstr_sound hcheck
 
 -- ============================================================
 -- § 11a. Type preservation

@@ -715,18 +715,16 @@ theorem compile_wellTyped (prog : Program) (h : prog.typeCheck = true) :
   exact allWTI_one .halt
 
 /-- **Corollary**: A type-checked program with a well-typed initial store
-    cannot get stuck from type errors. The only possible stuck state is
-    division by zero. This follows directly from `compile_wellTyped` and
-    the progress theorem (`Step.progress`). -/
+    always makes progress. The next configuration may be `run`, `halt`, or
+    `error` (for div-by-zero). This follows directly from `compile_wellTyped`
+    and the progress theorem (`Step.progress`). -/
 theorem no_type_stuck (prog : Program)
     (htc : prog.typeCheck = true)
     (σ : Store) (hts : TypedStore prog.tyCtx σ)
-    (pc : Nat) (hpc : pc < prog.compile.size)
-    (hsafe : ∀ x op y z, prog.compile[pc] = .binop x op y z →
-      op.safe (σ y).toInt (σ z).toInt) :
+    (pc : Nat) (hpc : pc < prog.compile.size) :
     ∃ c', Step prog.compile (Cfg.run pc σ) c' :=
   Step.progress prog.compile pc σ prog.tyCtx hpc
-    (prog.compile_wellTyped htc) hts hsafe
+    (prog.compile_wellTyped htc) hts
 
 -- ============================================================
 -- § 5g. Pretty-printing

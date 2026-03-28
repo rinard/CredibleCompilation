@@ -65,6 +65,7 @@ namespace ConstProp
 def cert : ECertificate :=
   { orig  := #[.const "x" (.int 7), .copy "y" "x", .copy "z" "y", .halt]
     trans := #[.const "x" (.int 7), .const "y" (.int 7), .const "z" (.int 7), .halt]
+    tyCtx := fun _ => VarTy.int
     inv_orig  := #[[], [("x", .lit 7)], [("x", .lit 7), ("y", .lit 7)],
                        [("x", .lit 7), ("y", .lit 7)]]
     inv_trans := #[[], [("x", .lit 7)], [("x", .lit 7), ("y", .lit 7)],
@@ -107,6 +108,7 @@ namespace CopyProp
 def cert : ECertificate :=
   { orig  := #[.copy "a" "b", .binop "c" .add "a" "d", .halt]
     trans := #[.copy "a" "b", .binop "c" .add "b" "d", .halt]
+    tyCtx := fun _ => VarTy.int
     inv_orig  := #[[], [("a", .var "b")], [("a", .var "b")]]
     inv_trans := #[[], [("a", .var "b")], [("a", .var "b")]]
     observable := ["c"]
@@ -153,6 +155,7 @@ def cert : ECertificate :=
                .copy "b" "a",
                .binop "c" .add "a" "b",
                .halt]
+    tyCtx := fun _ => VarTy.int
     inv_orig  := #[[], [("a", .bin .add (.var "x") (.var "y"))],
                       [("a", .bin .add (.var "x") (.var "y"))],
                       [("a", .bin .add (.var "x") (.var "y"))]]
@@ -197,6 +200,7 @@ namespace BadExample
 def cert : ECertificate :=
   { orig  := #[.const "x" (.int 5), .copy "y" "x", .halt]
     trans := #[.const "x" (.int 5), .const "y" (.int 3), .halt]
+    tyCtx := fun _ => VarTy.int
     inv_orig  := #[[], [("x", .lit 5)], [("x", .lit 5)]]
     inv_trans := #[[], [("x", .lit 5)], [("x", .lit 5)]]
     observable := ["y"]
@@ -246,6 +250,7 @@ def cert : ECertificate :=
     trans := #[.const "x" (.int 1),            -- 0
                .const "y" (.int 5),            -- 1: branch + dead code removed
                .halt]                    -- 2
+    tyCtx := fun _ => VarTy.int
     inv_orig  := #[[], [("x", .lit 1)], [("x", .lit 1)],
                       [("x", .lit 1)], [("x", .lit 1)]]
     inv_trans := #[[], [("x", .lit 1)], [("x", .lit 1)]]
@@ -315,6 +320,7 @@ def cert : ECertificate :=
       .binop "s" .add "s" "t",    -- 4: loop body
       .binop "n" .sub "n" "one",  -- 5: n--  (redundant t:=a*b removed)
       .goto 2 ]                    -- 6
+    tyCtx := fun _ => VarTy.int
     inv_orig := #[
       [],                          -- 0
       [("one", .lit 1)],          -- 1
@@ -411,6 +417,7 @@ def cert : ECertificate :=
       .binop "i" .add "i" "one",  -- 5: i++
       .binop "rem" .sub "rem" "one", -- 6: IVE — countdown
       .goto 3 ]                    -- 7: skip recomputation
+    tyCtx := fun _ => VarTy.int
     inv_orig := #[
       [],                          -- 0
       [("one", .lit 1)],          -- 1
@@ -526,6 +533,7 @@ def cert : ECertificate :=
       .halt,                                   -- 8
       .binop "j" .add "j" "four",              -- 9: j += 4 (no i update!)
       .goto 7 ]                                -- 10: loop back
+    tyCtx := fun _ => VarTy.int
     inv_orig := #[
       [],                                      -- 0
       inv_one,                                 -- 1
