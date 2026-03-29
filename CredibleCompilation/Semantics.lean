@@ -268,7 +268,54 @@ inductive TAC where
   | halt   : TAC
   deriving Repr, DecidableEq
 
-abbrev Prog := Array TAC
+/-- A program: TAC code together with its type context and observable variables. -/
+structure Prog where
+  code       : Array TAC
+  tyCtx      : TyCtx
+  observable : List Var
+
+instance : Repr Prog where
+  reprPrec p n := reprPrec p.code n
+
+instance : GetElem Prog Nat TAC (fun p i => i < p.code.size) where
+  getElem p i h := p.code[i]
+
+def Prog.size (p : Prog) : Nat := p.code.size
+
+@[simp] theorem Prog.getElem_eq (p : Prog) (i : Nat) (h : i < p.code.size) :
+    p[i] = p.code[i] := rfl
+
+@[simp] theorem Prog.size_eq (p : Prog) : p.size = p.code.size := rfl
+
+theorem Prog.getElem?_eq_getElem {p : Prog} {i : Nat} (h : i < p.size) :
+    p[i]? = some p[i] := by
+  have hlt : i < p.code.size := h
+  simp [getElem?, dif_pos hlt]
+
+theorem Prog.getElem?_none {p : Prog} {i : Nat} (h : ¬ i < p.size) :
+    p[i]? = none := by
+  simp [getElem?, show ¬ i < p.code.size from h]
+
+/-- Reduce `Prog` indexing to `Array` indexing. -/
+@[simp] theorem Prog.getElem?_code (p : Prog) (i : Nat) : p[i]? = p.code[i]? := by
+  by_cases h : i < p.code.size
+  · rw [Prog.getElem?_eq_getElem h, Array.getElem?_eq_getElem h]; rfl
+  · rw [Prog.getElem?_none h]
+    simp [getElem?, h]
+
+theorem Prog.getElem?_eq_some_iff {p : Prog} {i : Nat} {v : TAC} :
+    p[i]? = some v ↔ ∃ h : i < p.size, p[i] = v := by
+  constructor
+  · intro hsome
+    by_cases h : i < p.size
+    · rw [Prog.getElem?_eq_getElem h] at hsome
+      exact ⟨h, Option.some.inj hsome⟩
+    · rw [Prog.getElem?_none h] at hsome; exact absurd hsome (by simp)
+  · rintro ⟨h, rfl⟩; exact Prog.getElem?_eq_getElem h
+
+/-- Construct a Prog from just an array of instructions (default empty type context and observables). -/
+def Prog.ofCode (code : Array TAC) : Prog :=
+  ⟨code, fun _ => .int, []⟩
 
 -- ============================================================
 -- § 3a. Type system definitions
@@ -307,14 +354,16 @@ def WellTypedProg (Γ : TyCtx) (p : Prog) : Prop :=
 
 /--
 A **configuration** is either:
-- `Cfg.run pc σ`  — about to execute instruction `pc` in store `σ`
-- `Cfg.halt σ`    — terminated with final store `σ`
-- `Cfg.error σ`   — runtime error (e.g. division by zero) with store `σ`
+- `Cfg.run pc σ`       — about to execute instruction `pc` in store `σ`
+- `Cfg.halt σ`         — terminated with final store `σ`
+- `Cfg.error σ`        — runtime error (e.g. division by zero) with store `σ`
+- `Cfg.typeError σ`    — type error (e.g. binop on non-integer operands)
 -/
 inductive Cfg where
-  | run   : Nat → Store → Cfg
-  | halt  : Store → Cfg
-  | error : Store → Cfg
+  | run       : Nat → Store → Cfg
+  | halt      : Store → Cfg
+  | error     : Store → Cfg
+  | typeError : Store → Cfg
 
 -- ============================================================
 -- § 5. Small-step operational semantics   ⟶
@@ -326,8 +375,8 @@ inductive Cfg where
 One execution step of program `p`.  Each constructor reads the instruction
 at the current program counter and produces the next configuration.
 
-The `binop` constructor requires explicit integer extraction — type errors
-make the constructor inapplicable, causing the configuration to be stuck.
+The `binop` constructor requires explicit integer extraction.  If the
+operands are not both integers, `binop_typeError` fires instead.
 -/
 inductive Step (p : Prog) : Cfg → Cfg → Prop where
 
@@ -359,6 +408,10 @@ inductive Step (p : Prog) : Cfg → Cfg → Prop where
   | error  {a b : Int} : p[pc]? = some (.binop x op y z) →
       σ y = .int a → σ z = .int b → ¬ op.safe a b →
       Step p (.run pc σ) (.error σ)
+
+  | binop_typeError : p[pc]? = some (.binop x op y z) →
+      (σ y).typeOf ≠ .int ∨ (σ z).typeOf ≠ .int →
+      Step p (.run pc σ) (.typeError σ)
 
 -- p ⊩ c ⟶ c'   (⊩ avoids conflict with Lean's reserved ⊢)
 notation:50 p " ⊩ " c " ⟶ " c' => Step p c c'
@@ -452,7 +505,8 @@ def haltsWithResult (p : Prog) (pc : Nat) (σ σ' : Store) : Prop :=
 /-- The small-step relation is **deterministic**. -/
 theorem Step.deterministic {p : Prog} {c c₁ c₂ : Cfg}
     (h₁ : p ⊩ c ⟶ c₁) (h₂ : p ⊩ c ⟶ c₂) : c₁ = c₂ := by
-  cases h₁ <;> cases h₂ <;> simp_all [Value.int.injEq] <;> (first | rfl | contradiction)
+  cases h₁ <;> cases h₂ <;> simp_all [Value.int.injEq, Value.typeOf] <;>
+    (first | rfl | contradiction)
 
 /-- A halted configuration admits no further steps. -/
 theorem Step.no_step_from_halt {p : Prog} {σ : Store} {c : Cfg} :
@@ -462,6 +516,11 @@ theorem Step.no_step_from_halt {p : Prog} {σ : Store} {c : Cfg} :
 /-- An error configuration admits no further steps. -/
 theorem Step.no_step_from_error {p : Prog} {σ : Store} {c : Cfg} :
     ¬ (p ⊩ Cfg.error σ ⟶ c) :=
+  fun h => by cases h
+
+/-- A type-error configuration admits no further steps. -/
+theorem Step.no_step_from_typeError {p : Prog} {σ : Store} {c : Cfg} :
+    ¬ (p ⊩ Cfg.typeError σ ⟶ c) :=
   fun h => by cases h
 
 /-- Determinism of ⟶*: two sequences from the same config that both reach
@@ -511,6 +570,11 @@ theorem Step.store_congr {p : Prog} {pc : Nat} {σ τ : Store} {c : Cfg}
     refine ⟨_, .error h ?_ ?_ hs⟩
     · rw [← hagree]; exact hy
     · rw [← hagree]; exact hz
+  | binop_typeError h hne =>
+    refine ⟨_, .binop_typeError h ?_⟩
+    cases hne with
+    | inl hl => left; simp [Value.typeOf] at hl ⊢; rwa [← hagree]
+    | inr hr => right; simp [Value.typeOf] at hr ⊢; rwa [← hagree]
 
 -- ============================================================
 -- § 9. Progress and successor lemmas
@@ -519,7 +583,7 @@ theorem Step.store_congr {p : Prog} {pc : Nat} {σ τ : Store} {c : Cfg}
 /-- Helper: extract instruction identity from array lookup. -/
 private theorem instr_eq_of_lookup {p : Prog} {pc : Nat} {instr : TAC}
     (hpc : pc < p.size) (h : p[pc]? = some instr) : p[pc] = instr :=
-  Option.some.inj ((Array.getElem?_eq_getElem hpc).symm.trans h)
+  Option.some.inj ((Prog.getElem?_eq_getElem hpc).symm.trans h)
 
 /-- **Progress**: if the instruction at `pc` exists, the program is
     well-typed, and the store is well-typed, then a step is always possible.
@@ -528,7 +592,7 @@ theorem Step.progress (p : Prog) (pc : Nat) (σ : Store) (Γ : TyCtx)
     (hinb : pc < p.size)
     (hwtp : WellTypedProg Γ p) (hts : TypedStore Γ σ) :
     ∃ c', Step p (Cfg.run pc σ) c' := by
-  have hinstr : p[pc]? = some p[pc] := Array.getElem?_eq_getElem hinb
+  have hinstr : p[pc]? = some p[pc] := Prog.getElem?_eq_getElem hinb
   have hwti := hwtp pc hinb
   match hp : p[pc] with
   | .const x v     => exact ⟨_, .const (hp ▸ hinstr)⟩
@@ -565,8 +629,9 @@ inductive Observation where
 /-- Observe a configuration against a program and list of observable variables. -/
 def observe (p : Prog) (obs : List Var) (c : Cfg) : Observation :=
   match c with
-  | .halt σ  => Observation.halt (obs.map fun v => (v, σ v))
-  | .error _ => Observation.error
+  | .halt σ      => Observation.halt (obs.map fun v => (v, σ v))
+  | .error _     => Observation.error
+  | .typeError _ => Observation.error
   | .run pc σ =>
     match p[pc]? with
     | some .halt => Observation.halt (obs.map fun v => (v, σ v))
@@ -646,8 +711,7 @@ theorem checkWellTypedProg_sound {Γ : TyCtx} {p : Prog}
   intro i hi
   have hmem : i ∈ List.range p.size := List.mem_range.mpr hi
   have hcheck := (List.all_eq_true.mp h) i hmem
-  have hsome : p[i]? = some p[i] := by
-    rw [Array.getElem?_eq_some_iff]; exact ⟨hi, rfl⟩
+  have hsome : p[i]? = some p[i] := Prog.getElem?_eq_getElem hi
   rw [hsome] at hcheck
   exact checkWellTypedInstr_sound hcheck
 
@@ -703,12 +767,12 @@ theorem type_preservation {Γ : TyCtx} {p : Prog} {pc pc' : Nat} {σ σ' : Store
 --  3:  n   := n - one     -- decrement
 --  4:  goto 0             -- loop back
 
-def sumProg : Prog := #[
-  .ifgoto (.cmpLit .ne "n" 0) 2,       -- 0
-  .halt,                               -- 1
-  .binop  "acc" .add "acc" "n",        -- 2
-  .binop  "n"   .sub "n"   "one",      -- 3
-  .goto   0                            -- 4
+def sumProg : Prog := .ofCode #[
+  TAC.ifgoto (.cmpLit .ne "n" 0) 2,       -- 0
+  TAC.halt,                               -- 1
+  TAC.binop  "acc" .add "acc" "n",        -- 2
+  TAC.binop  "n"   .sub "n"   "one",      -- 3
+  TAC.goto   0                            -- 4
 ]
 
 def sumStore (n : Int) : Store :=

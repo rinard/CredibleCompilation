@@ -32,7 +32,7 @@ def prog : Program where
 
 -- Compile and run
 def tac : Prog := prog.compile
-#eval tac.toList
+#eval tac.code.toList
 #eval do let σ ← prog.interp 1000 (inputs := [("n", .int 10)]); return σ "s"
 
 end TypedSum

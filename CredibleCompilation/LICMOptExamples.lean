@@ -28,7 +28,7 @@ namespace LICMOptExamples
   Expected: pc 5 becomes `goto 6`
 -/
 
-def classicProg : Prog := #[
+def classicProg : Prog := .ofCode #[
   .const "one" (.int 1),
   .binop "t" .mul "a" "b",
   .ifgoto (.cmpLit .ne "n" 0) 4,
@@ -58,7 +58,7 @@ def classicCert := optimize classicProg ("s" :: [])
   Expected: no change
 -/
 
-def notRedundantProg : Prog := #[
+def notRedundantProg : Prog := .ofCode #[
   .binop "t" .mul "a" "b",
   .binop "a" .add "a" "t",
   .binop "t" .mul "a" "b",
@@ -90,7 +90,7 @@ def notRedundantCert := optimize notRedundantProg ("t" :: [])
   Expected: pcs 5 and 7 become goto
 -/
 
-def multiProg : Prog := #[
+def multiProg : Prog := .ofCode #[
   .binop "t1" .add "a" "b",
   .binop "t2" .mul "c" "d",
   .ifgoto (.cmpLit .ne "n" 0) 4,
@@ -122,7 +122,7 @@ def multiCert := optimize multiProg ("s" :: "r" :: [])
   Expected: pc 2 becomes goto 3
 -/
 
-def straightProg : Prog := #[
+def straightProg : Prog := .ofCode #[
   .binop "t" .add "x" "y",
   .binop "a" .add "t" "z",
   .binop "t" .add "x" "y",
@@ -148,7 +148,7 @@ def straightCert := optimize straightProg ("a" :: [])
   Expected: no change
 -/
 
-def uniqueProg : Prog := #[
+def uniqueProg : Prog := .ofCode #[
   .binop "a" .add "x" "y",
   .binop "b" .mul "x" "y",
   .binop "c" .add "a" "b",
@@ -175,7 +175,7 @@ def uniqueCert := optimize uniqueProg ("c" :: [])
   Expected: no change (conservative)
 -/
 
-def conservativeProg : Prog := #[
+def conservativeProg : Prog := .ofCode #[
   .binop "t" .add "a" "b",
   .binop "s" .add "t" "c",
   .binop "t" .add "a" "b",

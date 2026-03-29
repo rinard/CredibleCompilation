@@ -28,7 +28,7 @@ namespace ConstPropOptExamples
     3: halt
 -/
 
-def simpleProg : Prog := #[
+def simpleProg : Prog := .ofCode #[
   .const "x" (.int 7),
   .copy "y" "x",
   .copy "z" "y",
@@ -53,7 +53,7 @@ def simpleCert := optimize simpleProg ("z" :: [])
     4: halt
 -/
 
-def foldProg : Prog := #[
+def foldProg : Prog := .ofCode #[
   .const "a" (.int 5),
   .const "b" (.int 3),
   .binop "c" .add "a" "b",
@@ -80,7 +80,7 @@ def foldCert := optimize foldProg ("d" :: [])
   Expected: pc 1 unchanged, pc 2 becomes const "c" 10
 -/
 
-def partialProg : Prog := #[
+def partialProg : Prog := .ofCode #[
   .const "a" (.int 10),
   .binop "b" .add "a" "x",
   .copy "c" "a",
@@ -107,7 +107,7 @@ def partialCert := optimize partialProg ("b" :: "c" :: [])
   Expected: pc 1 becomes goto 3
 -/
 
-def branchProg : Prog := #[
+def branchProg : Prog := .ofCode #[
   .const "x" (.int 1),
   .ifgoto (.cmpLit .ne "x" 0) 3,
   .halt,
@@ -134,7 +134,7 @@ def branchCert := optimize branchProg ("y" :: [])
   Expected: pc 1 becomes goto 2
 -/
 
-def fallProg : Prog := #[
+def fallProg : Prog := .ofCode #[
   .const "x" (.int 0),
   .ifgoto (.cmpLit .ne "x" 0) 3,
   .const "y" (.int 42),
@@ -164,7 +164,7 @@ def fallCert := optimize fallProg ("y" :: [])
   the loop header), but the certificate should still verify.
 -/
 
-def loopProg : Prog := #[
+def loopProg : Prog := .ofCode #[
   .const "one" (.int 1),
   .const "n" (.int 10),
   .const "i" (.int 0),
@@ -193,7 +193,7 @@ def loopCert := optimize loopProg ("i" :: [])
     5: halt
 -/
 
-def chainProg : Prog := #[
+def chainProg : Prog := .ofCode #[
   .const "x" (.int 100),
   .copy "y" "x",
   .copy "z" "y",

@@ -71,13 +71,13 @@ def transformInstr (instr : TAC) (skipArr : Array Nat)
 /-- Build the compacted program. -/
 def transformProg (prog : Prog) (origMap : Array Nat)
     (skipArr : Array Nat) (revMap : Array Nat) : Prog :=
-  ((List.range origMap.size).map fun i =>
+  { code := ((List.range origMap.size).map fun i =>
     match origMap[i]? with
     | some pc =>
       match prog[pc]? with
       | some instr => transformInstr instr skipArr revMap
       | none => .halt
-    | none => .halt).toArray
+    | none => .halt).toArray, tyCtx := prog.tyCtx, observable := prog.observable }
 
 -- ============================================================
 -- § 5. Orig-path builder

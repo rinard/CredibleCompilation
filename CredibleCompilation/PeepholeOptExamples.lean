@@ -36,7 +36,7 @@ namespace PeepholeOptExamples
     6: goto 2
 -/
 
-def licmProg : Prog := #[
+def licmProg : Prog := .ofCode #[
   .const "one" (.int 1),
   .binop "t" .mul "a" "b",
   .ifgoto (.cmpLit .ne "n" 0) 4,
@@ -69,7 +69,7 @@ def licmCert := optimize licmProg ("s" :: [])
     2: halt
 -/
 
-def selfCopyProg : Prog := #[
+def selfCopyProg : Prog := .ofCode #[
   .const "x" (.int 5),
   .copy "x" "x",
   .const "y" (.int 3),
@@ -100,7 +100,7 @@ def selfCopyCert := optimize selfCopyProg ("x" :: "y" :: [])
     2: halt
 -/
 
-def chainNopProg : Prog := #[
+def chainNopProg : Prog := .ofCode #[
   .const "x" (.int 1),
   .goto 2,
   .goto 3,
@@ -128,7 +128,7 @@ def chainNopCert := optimize chainNopProg ("x" :: "y" :: [])
   Expected: unchanged
 -/
 
-def noChangeProg : Prog := #[
+def noChangeProg : Prog := .ofCode #[
   .const "x" (.int 5),
   .const "y" (.int 3),
   .binop "z" .add "x" "y",
@@ -159,7 +159,7 @@ def noChangeCert := optimize noChangeProg ("z" :: [])
     3: halt
 -/
 
-def gotoToNopProg : Prog := #[
+def gotoToNopProg : Prog := .ofCode #[
   .const "x" (.int 1),
   .goto 3,
   .goto 3,
@@ -189,7 +189,7 @@ def gotoToNopCert := optimize gotoToNopProg ("x" :: "y" :: [])
     2: halt
 -/
 
-def ifgotoNopProg : Prog := #[
+def ifgotoNopProg : Prog := .ofCode #[
   .ifgoto (.cmpLit .lt "x" 10) 3,
   .goto 2,
   .const "a" (.int 1),
@@ -210,7 +210,7 @@ def ifgotoNopCert := optimize ifgotoNopProg ("a" :: [])
     This demonstrates the optimizer pipeline.
 -/
 
-def e2eProg : Prog := #[
+def e2eProg : Prog := .ofCode #[
   .const "one" (.int 1),
   .binop "t" .mul "a" "b",
   .ifgoto (.cmpLit .ne "n" 0) 4,

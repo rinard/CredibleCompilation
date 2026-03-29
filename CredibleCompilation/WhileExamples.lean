@@ -29,7 +29,7 @@ def observable : List Var := ["s"]
 def tac : Prog := compile prog
 
 -- Compile and verify
-#eval tac.toList
+#eval tac.code.toList
 #eval do let σ ← Stmt.interp 1000 (fun v => if v == "n" then .int 10 else .int 0) prog; return σ "s"
 
 -- Optimize with constant propagation, then check
@@ -55,7 +55,7 @@ def prog : Stmt :=
 def observable : List Var := ["r"]
 def tac : Prog := compile prog
 
-#eval tac.toList
+#eval tac.code.toList
 #eval do let σ ← Stmt.interp 1000 (fun v => if v == "n" then .int 5 else .int 0) prog; return σ "r"
 
 def cert := ConstPropOpt.optimize tac observable
@@ -79,7 +79,7 @@ def prog : Stmt :=
 def observable : List Var := ["m"]
 def tac : Prog := compile prog
 
-#eval tac.toList
+#eval tac.code.toList
 #eval do let σ ← Stmt.interp 100 (fun v => if v == "a" then .int 3 else if v == "b" then .int 7 else .int 0) prog; return σ "m"
 
 def cert := ConstPropOpt.optimize tac observable
@@ -102,12 +102,12 @@ def prog : Stmt :=
 def observable : List Var := ["y"]
 def tac : Prog := compile prog
 
-#eval tac.toList
+#eval tac.code.toList
 #eval do let σ ← Stmt.interp 100 (fun _ => .int 0) prog; return σ "y"
 
 -- Constant propagation should fold this aggressively
 def cert := ConstPropOpt.optimize tac observable
-#eval cert.trans.toList
+#eval cert.trans.code.toList
 #eval checkCertificateExec cert
 #eval checkCertificateVerboseExec cert
 
@@ -128,7 +128,7 @@ def prog : Stmt :=
 def observable : List Var := ["r"]
 def tac : Prog := compile prog
 
-#eval tac.toList
+#eval tac.code.toList
 
 def cert := ConstPropOpt.optimize tac observable
 #eval checkCertificateExec cert
@@ -161,7 +161,7 @@ def prog : Stmt :=
 def observable : List Var := ["s"]
 def tac : Prog := compile prog
 
-#eval tac.toList
+#eval tac.code.toList
 #eval do let σ ← Stmt.interp 10000 (fun v => if v == "n" then .int 3 else .int 0) prog; return σ "s"
 
 def cert := ConstPropOpt.optimize tac observable
@@ -183,7 +183,7 @@ def prog : Stmt :=
 def observable : List Var := ["q"]
 def tac : Prog := compile prog
 
-#eval tac.toList
+#eval tac.code.toList
 
 def cert := ConstPropOpt.optimize tac observable
 #eval checkCertificateExec cert

@@ -180,7 +180,7 @@ def compileStmt (s : Stmt) (offset nextTmp : Nat) : List TAC × Nat :=
     Appends `halt` at the end. -/
 def compile (s : Stmt) : Prog :=
   let (code, _) := compileStmt s 0 0
-  (code ++ [TAC.halt]).toArray
+  .ofCode (code ++ [TAC.halt]).toArray
 
 -- ============================================================
 -- § 4. Pretty-printing
@@ -300,12 +300,10 @@ private def initCode (decls : List (Var × VarTy)) : List TAC :=
 def compile (prog : Program) : Prog :=
   let inits := initCode prog.decls
   let (body, _) := compileStmt prog.body inits.length 0
-  (inits ++ body ++ [TAC.halt]).toArray
+  { code := (inits ++ body ++ [TAC.halt]).toArray
+    tyCtx := prog.tyCtx
+    observable := prog.decls.map Prod.fst }
 
-/-- Safe compiler: rejects programs that fail the static type checker.
-    When `safeCompile prog = some p`, all correctness guarantees hold. -/
-def safeCompile (prog : Program) : Option Prog :=
-  if prog.typeCheck then some prog.compile else none
 
 -- ============================================================
 -- § 5c. Interpretation
@@ -472,7 +470,7 @@ theorem compile_initExec (prog : Program)
         simp only [hty, VarTy.defaultVal] at hval
         have hinst : prog.compile[k]? =
             some (.const (prog.decls[k]).1 (.int 0)) := by
-          simp only [Program.compile, List.getElem?_toArray]
+          simp only [Prog.getElem?_code, Program.compile, List.getElem?_toArray]
           rw [List.getElem?_append_left (by rw [List.length_append, initCode_length]; omega)]
           rw [List.getElem?_append_left (by rw [initCode_length]; omega)]
           simp only [initCode, List.getElem?_map, List.getElem?_eq_getElem hk_lt,
@@ -483,7 +481,7 @@ theorem compile_initExec (prog : Program)
         simp only [hty, VarTy.defaultVal] at hval
         have hinst : prog.compile[k]? =
             some (.const (prog.decls[k]).1 (.bool false)) := by
-          simp only [Program.compile, List.getElem?_toArray]
+          simp only [Prog.getElem?_code, Program.compile, List.getElem?_toArray]
           rw [List.getElem?_append_left (by rw [List.length_append, initCode_length]; omega)]
           rw [List.getElem?_append_left (by rw [initCode_length]; omega)]
           simp only [initCode, List.getElem?_map, List.getElem?_eq_getElem hk_lt,
@@ -497,7 +495,7 @@ theorem compile_body_getElem (prog : Program) (i : Nat)
     (hi : i < (compileStmt prog.body prog.decls.length 0).1.length) :
     prog.compile[prog.decls.length + i]? =
       (compileStmt prog.body prog.decls.length 0).1[i]? := by
-  simp only [Program.compile, List.getElem?_toArray]
+  simp only [Prog.getElem?_code, Program.compile, List.getElem?_toArray]
   rw [List.getElem?_append_left (by rw [List.length_append, initCode_length]; omega)]
   rw [List.getElem?_append_right (by rw [initCode_length]; omega)]
   simp [initCode_length]
@@ -506,7 +504,7 @@ theorem compile_body_getElem (prog : Program) (i : Nat)
 theorem compile_halt_getElem (prog : Program) :
     prog.compile[prog.decls.length +
       (compileStmt prog.body prog.decls.length 0).1.length]? = some .halt := by
-  simp only [Program.compile, List.getElem?_toArray]
+  simp only [Prog.getElem?_code, Program.compile, List.getElem?_toArray]
   rw [List.getElem?_append_right (by rw [List.length_append, initCode_length]; omega)]
   simp [List.length_append, initCode_length]
 
@@ -566,13 +564,14 @@ theorem allWTI_append3 {Γ : TyCtx} {l1 l2 l3 : List TAC}
     AllWTI Γ (l1 ++ l2 ++ l3) :=
   allWTI_append' (allWTI_append' h1 h2) h3
 
-theorem allWTI_toArray' {Γ : TyCtx} {l : List TAC}
-    (h : AllWTI Γ l) : WellTypedProg Γ l.toArray := by
+theorem allWTI_toArray' {Γ : TyCtx} {l : List TAC} {p : Prog}
+    (hcode : p.code = l.toArray)
+    (h : AllWTI Γ l) : WellTypedProg Γ p := by
   intro i hi
-  have hi' : i < l.length := by simp at hi; exact hi
+  have hi' : i < l.length := by rw [Prog.size, hcode] at hi; simp at hi; exact hi
   have hmem : l[i] ∈ l := List.getElem_mem hi'
-  show WellTypedInstr Γ l.toArray[i]
-  have : l.toArray[i] = l[i] := by simp [List.getElem_toArray]
+  show WellTypedInstr Γ p[i]
+  have : p[i] = l[i] := by simp [Prog.getElem_eq, hcode, List.getElem_toArray]
   rw [this]
   exact h _ hmem
 
@@ -830,11 +829,11 @@ theorem compile_wellTyped (prog : Program) (h : prog.typeCheck = true) :
     WellTypedProg prog.tyCtx prog.compile := by
   simp [typeCheck, Bool.and_eq_true] at h
   obtain ⟨⟨hnd, hnt⟩, hchk⟩ := h
-  simp only [Program.compile]
-  apply allWTI_toArray'
-  apply allWTI_append' (allWTI_append' (initCode_wt prog hnd)
-    (compileStmt_wt prog hnt prog.body hchk _ _))
-  exact allWTI_one .halt
+  have : prog.compile.code = (initCode prog.decls ++
+      (compileStmt prog.body (initCode prog.decls).length 0).1 ++ [TAC.halt]).toArray :=
+    by simp [Program.compile]
+  exact allWTI_toArray' this (allWTI_append3 (initCode_wt prog hnd)
+    (compileStmt_wt prog hnt prog.body hchk _ _) (allWTI_one .halt))
 
 /-- **Corollary**: A type-checked program with a well-typed initial store
     always makes progress. The next configuration may be `run`, `halt`, or
@@ -1002,17 +1001,18 @@ theorem compileStmt_allJumpsLe (s : Stmt) (offset nextTmp : Nat) :
 
 /-- Bridge: if all jump targets in `code` are ≤ `code.length`, then
     `(code ++ [halt]).toArray` is step-closed in bounds. -/
-private theorem stepClosed_of_allJumpsLe {code : List TAC}
+private theorem stepClosed_of_allJumpsLe {code : List TAC} {p : Prog}
+    (hcode : p.code = (code ++ [TAC.halt]).toArray)
     (hjumps : AllJumpsLe code.length code) :
-    StepClosedInBounds (code ++ [TAC.halt]).toArray := by
-  have hlen : (code ++ [TAC.halt]).toArray.size = code.length + 1 := by simp
+    StepClosedInBounds p := by
+  have hlen : p.size = code.length + 1 := by simp [Prog.size, hcode]
   constructor
   · omega
   · intro pc pc' σ σ' hpc hstep
     obtain ⟨instr, hinstr, hmem⟩ := Step.mem_successors hstep
     rw [hlen] at hpc ⊢
-    rw [show (code ++ [TAC.halt]).toArray[pc]? =
-      (code ++ [TAC.halt])[pc]? from by simp [List.getElem?_toArray]] at hinstr
+    rw [show p[pc]? = (code ++ [TAC.halt])[pc]? from by
+      simp [Prog.getElem?_code, hcode, List.getElem?_toArray]] at hinstr
     by_cases hlt : pc < code.length
     · -- Instruction is from `code`
       rw [List.getElem?_append_left hlt] at hinstr
@@ -1039,17 +1039,12 @@ private theorem stepClosed_of_allJumpsLe {code : List TAC}
     jump targets within bounds — no instruction can jump outside the program. -/
 theorem compile_stepClosed (prog : Program) (_h : prog.typeCheck = true) :
     StepClosedInBounds prog.compile := by
-  simp only [Program.compile]
-  -- prog.compile = (inits ++ body ++ [halt]).toArray
-  -- Rewrite as ((inits ++ body) ++ [halt]).toArray
-  rw [show initCode prog.decls ++ (compileStmt prog.body (initCode prog.decls).length 0).1 ++
-    [TAC.halt] = (initCode prog.decls ++
-    (compileStmt prog.body (initCode prog.decls).length 0).1) ++ [TAC.halt] from by
-    rw [List.append_assoc]]
-  apply stepClosed_of_allJumpsLe
-  simp only [List.length_append]
-  exact AllJumpsLe_append (AllJumpsLe_of_allSeq (initCode_allSeq prog.decls))
-    (compileStmt_allJumpsLe prog.body (initCode prog.decls).length 0)
+  apply stepClosed_of_allJumpsLe (code := initCode prog.decls ++
+    (compileStmt prog.body (initCode prog.decls).length 0).1)
+  · simp [Program.compile, List.append_assoc]
+  · simp only [List.length_append]
+    exact AllJumpsLe_append (AllJumpsLe_of_allSeq (initCode_allSeq prog.decls))
+      (compileStmt_allJumpsLe prog.body (initCode prog.decls).length 0)
 
 /-- **No-stuck guarantee**: A type-checked program always has a behavior —
     it either halts, errors (div-by-zero), or diverges. No execution can
@@ -1062,44 +1057,7 @@ theorem compile_has_behavior (prog : Program) (htc : prog.typeCheck = true)
     (prog.compile_wellTyped htc) hts₀ (prog.compile_stepClosed htc)
 
 -- ============================================================
--- § 5h. safeCompile correctness
--- ============================================================
-
-/-- safeCompile succeeds iff the program type-checks. -/
-theorem safeCompile_iff (prog : Program) :
-    (∃ p, prog.safeCompile = some p) ↔ prog.typeCheck = true := by
-  constructor
-  · rintro ⟨p, h⟩; simp [safeCompile] at h; exact h.1
-  · intro htc; exact ⟨prog.compile, by simp [safeCompile, htc]⟩
-
-private theorem safeCompile_tc {prog : Program} {p : Prog}
-    (h : prog.safeCompile = some p) : prog.typeCheck = true := by
-  simp [safeCompile] at h; exact h.1
-
-private theorem safeCompile_eq {prog : Program} {p : Prog}
-    (h : prog.safeCompile = some p) : p = prog.compile := by
-  simp [safeCompile] at h; exact h.2.symm
-
-/-- When safeCompile succeeds, the output is well-typed. -/
-theorem safeCompile_wellTyped {prog : Program} {p : Prog}
-    (h : prog.safeCompile = some p) : WellTypedProg prog.tyCtx p :=
-  safeCompile_eq h ▸ prog.compile_wellTyped (safeCompile_tc h)
-
-/-- When safeCompile succeeds, the output is step-closed in bounds. -/
-theorem safeCompile_stepClosed {prog : Program} {p : Prog}
-    (h : prog.safeCompile = some p) : StepClosedInBounds p :=
-  safeCompile_eq h ▸ prog.compile_stepClosed (safeCompile_tc h)
-
-/-- **Main theorem for safeCompile**: When compilation succeeds, the output
-    program always has a behavior — halt, error, or diverge. No stuck states. -/
-theorem safeCompile_has_behavior {prog : Program} {p : Prog}
-    (h : prog.safeCompile = some p)
-    (σ₀ : Store) (hts₀ : TypedStore prog.tyCtx σ₀) :
-    ∃ b, program_behavior p σ₀ b :=
-  safeCompile_eq h ▸ prog.compile_has_behavior (safeCompile_tc h) σ₀ hts₀
-
--- ============================================================
--- § 5i. Pretty-printing
+-- § 5h. Pretty-printing
 -- ============================================================
 
 private def tyToString : VarTy → String

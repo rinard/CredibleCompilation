@@ -63,8 +63,8 @@ private abbrev hc (pc : Label) : EHaltCert := { pc_orig := pc }
 namespace ConstProp
 
 def cert : ECertificate :=
-  { orig  := #[.const "x" (.int 7), .copy "y" "x", .copy "z" "y", .halt]
-    trans := #[.const "x" (.int 7), .const "y" (.int 7), .const "z" (.int 7), .halt]
+  { orig  := Prog.ofCode #[TAC.const "x" (.int 7), TAC.copy "y" "x", TAC.copy "z" "y", TAC.halt]
+    trans := Prog.ofCode #[TAC.const "x" (.int 7), TAC.const "y" (.int 7), TAC.const "z" (.int 7), TAC.halt]
     tyCtx := fun _ => VarTy.int
     inv_orig  := #[[], [("x", .lit 7)], [("x", .lit 7), ("y", .lit 7)],
                        [("x", .lit 7), ("y", .lit 7)]]
@@ -106,8 +106,8 @@ end ConstProp
 namespace CopyProp
 
 def cert : ECertificate :=
-  { orig  := #[.copy "a" "b", .binop "c" .add "a" "d", .halt]
-    trans := #[.copy "a" "b", .binop "c" .add "b" "d", .halt]
+  { orig  := Prog.ofCode #[TAC.copy "a" "b", TAC.binop "c" .add "a" "d", TAC.halt]
+    trans := Prog.ofCode #[TAC.copy "a" "b", TAC.binop "c" .add "b" "d", TAC.halt]
     tyCtx := fun _ => VarTy.int
     inv_orig  := #[[], [("a", .var "b")], [("a", .var "b")]]
     inv_trans := #[[], [("a", .var "b")], [("a", .var "b")]]
@@ -147,14 +147,14 @@ end CopyProp
 namespace CSE
 
 def cert : ECertificate :=
-  { orig  := #[.binop "a" .add "x" "y",
-               .binop "b" .add "x" "y",
-               .binop "c" .add "a" "b",
-               .halt]
-    trans := #[.binop "a" .add "x" "y",
-               .copy "b" "a",
-               .binop "c" .add "a" "b",
-               .halt]
+  { orig  := Prog.ofCode #[TAC.binop "a" .add "x" "y",
+               TAC.binop "b" .add "x" "y",
+               TAC.binop "c" .add "a" "b",
+               TAC.halt]
+    trans := Prog.ofCode #[TAC.binop "a" .add "x" "y",
+               TAC.copy "b" "a",
+               TAC.binop "c" .add "a" "b",
+               TAC.halt]
     tyCtx := fun _ => VarTy.int
     inv_orig  := #[[], [("a", .bin .add (.var "x") (.var "y"))],
                       [("a", .bin .add (.var "x") (.var "y"))],
@@ -198,8 +198,8 @@ end CSE
 namespace BadExample
 
 def cert : ECertificate :=
-  { orig  := #[.const "x" (.int 5), .copy "y" "x", .halt]
-    trans := #[.const "x" (.int 5), .const "y" (.int 3), .halt]
+  { orig  := Prog.ofCode #[TAC.const "x" (.int 5), TAC.copy "y" "x", TAC.halt]
+    trans := Prog.ofCode #[TAC.const "x" (.int 5), TAC.const "y" (.int 3), TAC.halt]
     tyCtx := fun _ => VarTy.int
     inv_orig  := #[[], [("x", .lit 5)], [("x", .lit 5)]]
     inv_trans := #[[], [("x", .lit 5)], [("x", .lit 5)]]
@@ -242,14 +242,14 @@ end BadExample
 namespace DCE
 
 def cert : ECertificate :=
-  { orig  := #[.const "x" (.int 1),            -- 0
-               .ifgoto (.cmpLit .ne "x" 0) 3,     -- 1: always taken
-               .halt,                    -- 2: dead
-               .const "y" (.int 5),            -- 3
-               .halt]                    -- 4
-    trans := #[.const "x" (.int 1),            -- 0
-               .const "y" (.int 5),            -- 1: branch + dead code removed
-               .halt]                    -- 2
+  { orig  := Prog.ofCode #[TAC.const "x" (.int 1),            -- 0
+               TAC.ifgoto (.cmpLit .ne "x" 0) 3,     -- 1: always taken
+               TAC.halt,                    -- 2: dead
+               TAC.const "y" (.int 5),            -- 3
+               TAC.halt]                    -- 4
+    trans := Prog.ofCode #[TAC.const "x" (.int 1),            -- 0
+               TAC.const "y" (.int 5),            -- 1: branch + dead code removed
+               TAC.halt]                    -- 2
     tyCtx := fun _ => VarTy.int
     inv_orig  := #[[], [("x", .lit 1)], [("x", .lit 1)],
                       [("x", .lit 1)], [("x", .lit 1)]]
@@ -303,23 +303,23 @@ private def inv_loop : EInv :=
   [("one", .lit 1), ("t", .bin .mul (.var "a") (.var "b"))]
 
 def cert : ECertificate :=
-  { orig := #[
-      .const "one" (.int 1),              -- 0
-      .binop "t" .mul "a" "b",    -- 1: t := a * b
-      .ifgoto (.cmpLit .ne "n" 0) 4,       -- 2: loop head
-      .halt,                       -- 3
-      .binop "s" .add "s" "t",    -- 4: loop body
-      .binop "t" .mul "a" "b",    -- 5: redundant recomputation
-      .binop "n" .sub "n" "one",  -- 6: n--
-      .goto 2 ]                    -- 7
-    trans := #[
-      .const "one" (.int 1),              -- 0
-      .binop "t" .mul "a" "b",    -- 1: t := a * b
-      .ifgoto (.cmpLit .ne "n" 0) 4,       -- 2: loop head
-      .halt,                       -- 3
-      .binop "s" .add "s" "t",    -- 4: loop body
-      .binop "n" .sub "n" "one",  -- 5: n--  (redundant t:=a*b removed)
-      .goto 2 ]                    -- 6
+  { orig := Prog.ofCode #[
+      TAC.const "one" (.int 1),              -- 0
+      TAC.binop "t" .mul "a" "b",    -- 1: t := a * b
+      TAC.ifgoto (.cmpLit .ne "n" 0) 4,       -- 2: loop head
+      TAC.halt,                       -- 3
+      TAC.binop "s" .add "s" "t",    -- 4: loop body
+      TAC.binop "t" .mul "a" "b",    -- 5: redundant recomputation
+      TAC.binop "n" .sub "n" "one",  -- 6: n--
+      TAC.goto 2 ]                    -- 7
+    trans := Prog.ofCode #[
+      TAC.const "one" (.int 1),              -- 0
+      TAC.binop "t" .mul "a" "b",    -- 1: t := a * b
+      TAC.ifgoto (.cmpLit .ne "n" 0) 4,       -- 2: loop head
+      TAC.halt,                       -- 3
+      TAC.binop "s" .add "s" "t",    -- 4: loop body
+      TAC.binop "n" .sub "n" "one",  -- 5: n--  (redundant t:=a*b removed)
+      TAC.goto 2 ]                    -- 6
     tyCtx := fun _ => VarTy.int
     inv_orig := #[
       [],                          -- 0
@@ -400,23 +400,23 @@ private def inv_post_inc : EInv :=
    ("rem", .bin .sub (.lit 101) (.var "i"))]
 
 def cert : ECertificate :=
-  { orig := #[
-      .const "one" (.int 1),              -- 0
-      .const "k" (.int 100),              -- 1
-      .binop "rem" .sub "k" "i",  -- 2: loop head — recompute rem
-      .ifgoto (.cmpLit .ne "rem" 0) 5,      -- 3
-      .halt,                       -- 4
-      .binop "i" .add "i" "one",  -- 5: i++
-      .goto 2 ]                    -- 6: back to recomputation
-    trans := #[
-      .const "one" (.int 1),              -- 0
-      .const "k" (.int 100),              -- 1
-      .binop "rem" .sub "k" "i",  -- 2: initial rem (same)
-      .ifgoto (.cmpLit .ne "rem" 0) 5,      -- 3: loop head
-      .halt,                       -- 4
-      .binop "i" .add "i" "one",  -- 5: i++
-      .binop "rem" .sub "rem" "one", -- 6: IVE — countdown
-      .goto 3 ]                    -- 7: skip recomputation
+  { orig := Prog.ofCode #[
+      TAC.const "one" (.int 1),              -- 0
+      TAC.const "k" (.int 100),              -- 1
+      TAC.binop "rem" .sub "k" "i",  -- 2: loop head — recompute rem
+      TAC.ifgoto (.cmpLit .ne "rem" 0) 5,      -- 3
+      TAC.halt,                       -- 4
+      TAC.binop "i" .add "i" "one",  -- 5: i++
+      TAC.goto 2 ]                    -- 6: back to recomputation
+    trans := Prog.ofCode #[
+      TAC.const "one" (.int 1),              -- 0
+      TAC.const "k" (.int 100),              -- 1
+      TAC.binop "rem" .sub "k" "i",  -- 2: initial rem (same)
+      TAC.ifgoto (.cmpLit .ne "rem" 0) 5,      -- 3: loop head
+      TAC.halt,                       -- 4
+      TAC.binop "i" .add "i" "one",  -- 5: i++
+      TAC.binop "rem" .sub "rem" "one", -- 6: IVE — countdown
+      TAC.goto 3 ]                    -- 7: skip recomputation
     tyCtx := fun _ => VarTy.int
     inv_orig := #[
       [],                          -- 0
@@ -508,31 +508,31 @@ private abbrev icRel (pc : Label) (r : EExprRel) (trans : List ETransCorr) : EIn
   { pc_orig := pc, rel := r, transitions := trans }
 
 def cert : ECertificate :=
-  { orig := #[
-      .const "one" (.int 1),                          -- 0
-      .const "four" (.int 4),                         -- 1
-      .const "n" (.int 500),                          -- 2
-      .const "i" (.int 0),                            -- 3
-      .const "j" (.int 1),                            -- 4
-      .binop "t1" .mul "n" "four",             -- 5: t1 = 2000
-      .binop "limit" .add "t1" "one",          -- 6: limit = 2001
-      .ifgoto (.cmp .lt "j" "limit") 9,        -- 7: loop test
-      .halt,                                   -- 8
-      .binop "i" .add "i" "one",               -- 9: i++
-      .binop "j" .add "j" "four",              -- 10: j += 4
-      .goto 7 ]                                -- 11: loop back
-    trans := #[
-      .const "one" (.int 1),                          -- 0
-      .const "four" (.int 4),                         -- 1
-      .const "n" (.int 500),                          -- 2
-      .const "i" (.int 0),                            -- 3: dead code (mirrors orig)
-      .const "j" (.int 1),                            -- 4
-      .const "t1" (.int 2000),                        -- 5: constant-folded
-      .const "limit" (.int 2001),                     -- 6: constant-folded
-      .ifgoto (.cmp .lt "j" "limit") 9,        -- 7: loop test
-      .halt,                                   -- 8
-      .binop "j" .add "j" "four",              -- 9: j += 4 (no i update!)
-      .goto 7 ]                                -- 10: loop back
+  { orig := Prog.ofCode #[
+      TAC.const "one" (.int 1),                          -- 0
+      TAC.const "four" (.int 4),                         -- 1
+      TAC.const "n" (.int 500),                          -- 2
+      TAC.const "i" (.int 0),                            -- 3
+      TAC.const "j" (.int 1),                            -- 4
+      TAC.binop "t1" .mul "n" "four",             -- 5: t1 = 2000
+      TAC.binop "limit" .add "t1" "one",          -- 6: limit = 2001
+      TAC.ifgoto (.cmp .lt "j" "limit") 9,        -- 7: loop test
+      TAC.halt,                                   -- 8
+      TAC.binop "i" .add "i" "one",               -- 9: i++
+      TAC.binop "j" .add "j" "four",              -- 10: j += 4
+      TAC.goto 7 ]                                -- 11: loop back
+    trans := Prog.ofCode #[
+      TAC.const "one" (.int 1),                          -- 0
+      TAC.const "four" (.int 4),                         -- 1
+      TAC.const "n" (.int 500),                          -- 2
+      TAC.const "i" (.int 0),                            -- 3: dead code (mirrors orig)
+      TAC.const "j" (.int 1),                            -- 4
+      TAC.const "t1" (.int 2000),                        -- 5: constant-folded
+      TAC.const "limit" (.int 2001),                     -- 6: constant-folded
+      TAC.ifgoto (.cmp .lt "j" "limit") 9,        -- 7: loop test
+      TAC.halt,                                   -- 8
+      TAC.binop "j" .add "j" "four",              -- 9: j += 4 (no i update!)
+      TAC.goto 7 ]                                -- 10: loop back
     tyCtx := fun _ => VarTy.int
     inv_orig := #[
       [],                                      -- 0

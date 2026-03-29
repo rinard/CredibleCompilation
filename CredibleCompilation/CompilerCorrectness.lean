@@ -19,8 +19,6 @@ verified compiler correctness proof.
 -- § 1. Variable classification
 -- ============================================================
 
--- Var.isTmp is now defined in WhileLang.lean
-
 def SExpr.freeVars : SExpr → List Var
   | .lit _ => []
   | .var x => [x]
@@ -90,12 +88,6 @@ theorem SBool.eval_tmpAgree (sb : SBool) (σ τ : Store)
     (htf : ∀ v ∈ sb.freeVars, v.isTmp = false) :
     sb.eval σ = sb.eval τ :=
   SBool.eval_agree sb σ τ (fun v hv => hagree v (htf v hv))
-
--- ============================================================
--- § 2a. String helpers
--- ============================================================
-
--- freshVar_isTmp is replaced by tmpName_isTmp_wt in WhileLang.lean
 
 -- ============================================================
 -- § 3. Interpreter congruence on tmp-free programs

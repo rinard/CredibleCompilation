@@ -18,10 +18,8 @@ preservation, which is the key invariant the monadic compiler proofs lacked.
 -- § 1. Temporary variable helpers
 -- ============================================================
 
--- tmpName is defined in WhileLang.lean
-
 -- -----------------------------------------------
--- Proving tmpName injective (no axiom)
+-- Proving tmpName injective
 -- -----------------------------------------------
 
 /-- Clean base-10 digit representation. -/
@@ -228,7 +226,7 @@ def refCompileStmt (s : Stmt) (offset nextTmp : Nat) : List TAC × Nat :=
 
 def refCompile (s : Stmt) : Prog :=
   let (code, _) := refCompileStmt s 0 0
-  (code ++ [TAC.halt]).toArray
+  .ofCode (code ++ [TAC.halt]).toArray
 
 -- ============================================================
 -- § 3. Code embedding predicate
@@ -1243,7 +1241,7 @@ theorem refCompile_correct (s : Stmt) (fuel : Nat) (σ σ' : Store)
       (∀ v, v.isTmp = false → σ_tac v = σ' v) := by
   -- Code embedding
   have hcode : CodeAt (refCompileStmt s 0 0).1 (refCompile s) 0 := by
-    intro i hi; unfold refCompile; simp only [List.getElem?_toArray, Nat.zero_add]
+    intro i hi; unfold refCompile; simp only [Prog.ofCode, Prog.getElem?_code, List.getElem?_toArray, Nat.zero_add]
     exact List.getElem?_append_left hi
   obtain ⟨σ_tac, hexec, hagree⟩ :=
     refCompileStmt_correct s fuel σ σ' 0 0 (refCompile s) σ
@@ -1251,7 +1249,7 @@ theorem refCompile_correct (s : Stmt) (fuel : Nat) (σ σ' : Store)
   simp only [Nat.zero_add] at hexec
   -- halt instruction at end
   have hhalt : (refCompile s)[(refCompileStmt s 0 0).1.length]? = some .halt := by
-    unfold refCompile; simp only [List.getElem?_toArray]
+    unfold refCompile; simp only [Prog.ofCode, Prog.getElem?_code, List.getElem?_toArray]
     rw [List.getElem?_append_right (by omega)]; simp
   exact ⟨σ_tac, FragExec.toHalt hexec hhalt, hagree⟩
 
@@ -1923,7 +1921,7 @@ theorem refCompile_stuck (s : Stmt) (fuel : Nat) (σ σ' : Store)
     ¬ ∃ σ_tac, haltsWithResult (refCompile s) 0 σ σ_tac := by
   intro ⟨σ_tac, hhalt⟩
   have hcode : CodeAt (refCompileStmt s 0 0).1 (refCompile s) 0 := by
-    intro i hi; unfold refCompile; simp only [List.getElem?_toArray, Nat.zero_add]
+    intro i hi; unfold refCompile; simp only [Prog.ofCode, Prog.getElem?_code, List.getElem?_toArray, Nat.zero_add]
     exact List.getElem?_append_left hi
   obtain ⟨pc_s, σ_s, hfrag, herror, _⟩ :=
     refCompileStmt_stuck s fuel σ σ' 0 0 (refCompile s) σ hinterp htmpfree hunsafe hintv
@@ -2191,7 +2189,7 @@ theorem refCompile_unsafe (s : Stmt) (fuel : Nat) (σ : Store)
     ¬ ∃ σ_tac, haltsWithResult (refCompile s) 0 σ σ_tac := by
   intro ⟨σ_tac, hhalt⟩
   have hcode : CodeAt (refCompileStmt s 0 0).1 (refCompile s) 0 := by
-    intro i hi; unfold refCompile; simp only [List.getElem?_toArray, Nat.zero_add]
+    intro i hi; unfold refCompile; simp only [Prog.ofCode, Prog.getElem?_code, List.getElem?_toArray, Nat.zero_add]
     exact List.getElem?_append_left hi
   obtain ⟨pc_s, σ_s, hfrag, herror, _⟩ :=
     refCompileStmt_unsafe s fuel σ 0 0 (refCompile s) σ
@@ -2903,7 +2901,7 @@ theorem refCompile_diverge (s : Stmt) (σ : Store)
     ¬ ∃ σ_tac, haltsWithResult (refCompile s) 0 σ σ_tac := by
   intro ⟨σ_tac, hhalt⟩
   have hcode : CodeAt (refCompileStmt s 0 0).1 (refCompile s) 0 := by
-    intro i hi; unfold refCompile; simp only [List.getElem?_toArray, Nat.zero_add]
+    intro i hi; unfold refCompile; simp only [Prog.ofCode, Prog.getElem?_code, List.getElem?_toArray, Nat.zero_add]
     exact List.getElem?_append_left hi
   have hunbounded := refCompileStmt_diverges s σ 0 0 (refCompile s) σ
     htmpfree hdiv hsafe hintv (fun _ _ => rfl) hcode
@@ -2945,94 +2943,12 @@ theorem compileStmt_eq_refCompileStmt (s : Stmt) (o t : Nat) :
   | loop _ _ ih =>
     simp only [compileStmt, refCompileStmt, compileBool_eq_refCompileBool, ih]
 
-/-- The WhileLang `compile` and RefCompiler `refCompile` produce identical TAC programs. -/
-theorem compile_eq_refCompile (s : Stmt) : compile s = refCompile s := by
-  simp only [compile, refCompile, compileStmt_eq_refCompileStmt]
-
 -- ============================================================
--- § 13. Unified behavioral equivalence for the statement compiler
+-- § 16. Refinement for Program.compile (with init code)
 -- ============================================================
 
-/-- **Halt preservation**: If the source program terminates safely,
-    the compiled TAC program halts with a matching store. -/
-theorem compile_halt (s : Stmt) (fuel : Nat) (σ σ' : Store)
-    (hinterp : s.interp fuel σ = some σ')
-    (htmpfree : s.tmpFree)
-    (hsafe : s.divSafe fuel σ)
-    (hintv : s.intTyped fuel σ) :
-    ∃ σ_tac, program_behavior (compile s) σ (.halts σ_tac) ∧
-      (∀ v, v.isTmp = false → σ_tac v = σ' v) := by
-  rw [compile_eq_refCompile]
-  exact refCompile_correct s fuel σ σ' hinterp htmpfree hsafe hintv
-
-/-- **Error preservation**: If the source program terminates but has an
-    unsafe division, the compiled TAC program does not halt (it errors). -/
-theorem compile_error (s : Stmt) (fuel : Nat) (σ σ' : Store)
-    (hinterp : s.interp fuel σ = some σ')
-    (htmpfree : s.tmpFree)
-    (hunsafe : ¬ s.divSafe fuel σ)
-    (hintv : s.intTyped fuel σ) :
-    ¬ ∃ σ_tac, haltsWithResult (compile s) 0 σ σ_tac := by
-  rw [compile_eq_refCompile]
-  exact refCompile_stuck s fuel σ σ' hinterp htmpfree hunsafe hintv
-
-/-- **Divergence preservation**: If the source program diverges (for all
-    fuel levels) while remaining safe and well-typed, the compiled TAC
-    program does not halt (it diverges). -/
-theorem compile_diverge (s : Stmt) (σ : Store)
-    (htmpfree : s.tmpFree)
-    (hdiv : ∀ fuel, s.interp fuel σ = none)
-    (hsafe : ∀ fuel, s.divSafe fuel σ)
-    (hintv : ∀ fuel, s.intTyped fuel σ) :
-    ¬ ∃ σ_tac, haltsWithResult (compile s) 0 σ σ_tac := by
-  rw [compile_eq_refCompile]
-  exact refCompile_diverge s σ htmpfree hdiv hsafe hintv
-
 -- ============================================================
--- § 14. Unified theorems with typeCheck as sole static precondition
--- ============================================================
-
-/-- **Halt preservation (typed)**: If a type-checked program's body terminates
-    safely under a well-typed store, the compiled TAC program halts with a
-    matching store. Only `typeCheck` (static) and `divSafe` (runtime) are needed. -/
-theorem typed_compile_halt (prog : Program) (fuel : Nat) (σ σ' : Store)
-    (htc : prog.typeCheck = true)
-    (hts : TypedStore prog.tyCtx σ)
-    (hinterp : prog.body.interp fuel σ = some σ')
-    (hsafe : prog.body.divSafe fuel σ) :
-    ∃ σ_tac, program_behavior (compile prog.body) σ (.halts σ_tac) ∧
-      (∀ v, v.isTmp = false → σ_tac v = σ' v) :=
-  compile_halt prog.body fuel σ σ' hinterp
-    (Program.typeCheck_tmpFree prog htc) hsafe
-    (Program.typeCheck_intTyped prog htc σ hts fuel)
-
-/-- **Error preservation (typed)**: If a type-checked program's body terminates
-    with an unsafe division, the compiled TAC program does not halt normally. -/
-theorem typed_compile_error (prog : Program) (fuel : Nat) (σ σ' : Store)
-    (htc : prog.typeCheck = true)
-    (hts : TypedStore prog.tyCtx σ)
-    (hinterp : prog.body.interp fuel σ = some σ')
-    (hunsafe : ¬ prog.body.divSafe fuel σ) :
-    ¬ ∃ σ_tac, haltsWithResult (compile prog.body) 0 σ σ_tac :=
-  compile_error prog.body fuel σ σ' hinterp
-    (Program.typeCheck_tmpFree prog htc) hunsafe
-    (Program.typeCheck_intTyped prog htc σ hts fuel)
-
-/-- **Divergence preservation (typed)**: If a type-checked program's body
-    diverges for all fuel levels under a well-typed store, the compiled TAC
-    program does not halt. -/
-theorem typed_compile_diverge (prog : Program) (σ : Store)
-    (htc : prog.typeCheck = true)
-    (hts : TypedStore prog.tyCtx σ)
-    (hdiv : ∀ fuel, prog.body.interp fuel σ = none)
-    (hsafe : ∀ fuel, prog.body.divSafe fuel σ) :
-    ¬ ∃ σ_tac, haltsWithResult (compile prog.body) 0 σ σ_tac :=
-  compile_diverge prog.body σ
-    (Program.typeCheck_tmpFree prog htc) hdiv hsafe
-    (fun fuel => Program.typeCheck_intTyped prog htc σ hts fuel)
-
--- ============================================================
--- § 15. Refinement: TAC behavior → source behavior
+-- § 13. Helpers for backward refinement
 -- ============================================================
 
 /-- Source interpreter returns `none` iff it doesn't return `some`. -/
@@ -3043,62 +2959,6 @@ private theorem interp_none_iff (s : Stmt) (fuel : Nat) (σ : Store) :
   · intro h; cases hq : s.interp fuel σ with
     | none => rfl
     | some σ' => exact absurd ⟨σ', hq⟩ h
-
-/-- If the source diverges with unsafe divisions, the compiled TAC program
-    still cannot halt — it errors on the first unsafe division encountered. -/
-private theorem diverge_unsafe_no_halt (s : Stmt) (σ : Store)
-    (htmpfree : s.tmpFree) (hintv : ∀ fuel, s.intTyped fuel σ)
-    (hdiv : ∀ fuel, s.interp fuel σ = none) :
-    ¬ ∃ σ_tac, haltsWithResult (compile s) 0 σ σ_tac := by
-  rw [compile_eq_refCompile]
-  by_cases hsafe : ∀ fuel, s.divSafe fuel σ
-  · exact refCompile_diverge s σ htmpfree hdiv hsafe hintv
-  · obtain ⟨fuel₀, hunsafe⟩ := Classical.not_forall.mp hsafe
-    exact refCompile_unsafe s fuel₀ σ htmpfree hunsafe (hintv fuel₀)
-
-/-- **Refinement (halt case)**: If the compiled TAC program halts, the source
-    program terminates with a store that agrees on all non-temporary variables.
-    This is the backward direction of compiler correctness — the compiler
-    does not invent behaviors the source doesn't have. -/
-theorem compile_halt_refinement (prog : Program)
-    (htc : prog.typeCheck = true) (σ₀ σ_tac : Store)
-    (hts₀ : TypedStore prog.tyCtx σ₀)
-    (hhalt : program_behavior (compile prog.body) σ₀ (.halts σ_tac)) :
-    ∃ fuel σ', prog.body.interp fuel σ₀ = some σ' ∧
-      ∀ v, v.isTmp = false → σ_tac v = σ' v := by
-  -- hhalt : haltsWithResult (compile prog.body) 0 σ₀ σ_tac
-  have htmpfree := Program.typeCheck_tmpFree prog htc
-  have hintv := fun fuel => Program.typeCheck_intTyped prog htc σ₀ hts₀ fuel
-  -- LEM: source either terminates or diverges
-  by_cases hterm : ∃ fuel σ', prog.body.interp fuel σ₀ = some σ'
-  · -- Source terminates
-    obtain ⟨fuel, σ', hinterp⟩ := hterm
-    -- LEM: safe or unsafe
-    by_cases hsafe : prog.body.divSafe fuel σ₀
-    · -- Safe termination → forward-halt gives matching TAC halt
-      obtain ⟨σ_tac', hhalt', hagree⟩ := typed_compile_halt prog fuel σ₀ σ' htc hts₀ hinterp hsafe
-      -- By determinism, σ_tac = σ_tac'
-      have : σ_tac = σ_tac' := haltsWithResult_unique hhalt hhalt'
-      subst this
-      exact ⟨fuel, σ', hinterp, hagree⟩
-    · -- Unsafe termination → forward-error says TAC doesn't halt
-      exact absurd ⟨σ_tac, hhalt⟩
-        (typed_compile_error prog fuel σ₀ σ' htc hts₀ hinterp hsafe)
-  · -- Source diverges
-    have hdiv : ∀ fuel, prog.body.interp fuel σ₀ = none :=
-      fun fuel => (interp_none_iff _ _ _).mpr (fun ⟨σ', h⟩ => hterm ⟨fuel, σ', h⟩)
-    -- TAC cannot halt when source diverges
-    by_cases hsafe_all : ∀ fuel, prog.body.divSafe fuel σ₀
-    · -- Safe divergence → forward-diverge
-      exact absurd ⟨σ_tac, hhalt⟩
-        (typed_compile_diverge prog σ₀ htc hts₀ hdiv hsafe_all)
-    · -- Unsafe divergence
-      exact absurd ⟨σ_tac, hhalt⟩
-        (diverge_unsafe_no_halt prog.body σ₀ htmpfree hintv hdiv)
-
--- ============================================================
--- § 15c. Behavior exclusion and backward refinement
--- ============================================================
 
 /-- No steps from error: error is a terminal configuration. -/
 private theorem RefStepsN.no_step_error {p : Prog} {n : Nat} {σ : Store} {c : Cfg}
@@ -3119,21 +2979,6 @@ theorem no_error_of_unbounded {p : Prog} {pc : Nat} {σ : Store}
   rw [hd] at hpref
   exact RefStepsN.no_step_error hpref
 
-/-- If `¬ s.divSafe fuel σ`, the compiled program reaches an error state. -/
-theorem compile_reaches_error (s : Stmt) (fuel : Nat) (σ : Store)
-    (htmpfree : s.tmpFree)
-    (hunsafe : ¬ s.divSafe fuel σ)
-    (hintv : s.intTyped fuel σ) :
-    ∃ σ_e, (compile s) ⊩ Cfg.run 0 σ ⟶* Cfg.error σ_e := by
-  rw [compile_eq_refCompile]
-  have hcode : CodeAt (refCompileStmt s 0 0).1 (refCompile s) 0 := by
-    intro i hi; unfold refCompile; simp only [List.getElem?_toArray, Nat.zero_add]
-    exact List.getElem?_append_left hi
-  obtain ⟨pc_s, σ_s, hfrag, herror, _⟩ :=
-    refCompileStmt_unsafe s fuel σ 0 0 (refCompile s) σ
-      htmpfree hunsafe hintv (fun _ _ => rfl) hcode
-  exact ⟨σ_s, Steps.trans hfrag (Steps.step herror Steps.refl)⟩
-
 /-- Extract `StepsN` from an `IsInfiniteExec`: the first `n` steps of an
     infinite execution give a deterministic `n`-step path. -/
 private theorem inf_exec_to_StepsN {p : Prog} {f : Nat → Cfg}
@@ -3143,99 +2988,8 @@ private theorem inf_exec_to_StepsN {p : Prog} {f : Nat → Cfg}
   | zero => rfl
   | succ n ih => exact StepsN_trans ih ⟨f (n + 1), hinf.2 n, rfl⟩
 
-/-- **Refinement (error case)**: If the compiled TAC program errors, the source
-    program has an unsafe division at some fuel level. -/
-theorem compile_error_refinement (prog : Program)
-    (htc : prog.typeCheck = true) (σ₀ σ_e : Store)
-    (hts₀ : TypedStore prog.tyCtx σ₀)
-    (herror : program_behavior (compile prog.body) σ₀ (.errors σ_e)) :
-    ∃ fuel, ¬ prog.body.divSafe fuel σ₀ := by
-  -- herror : (compile prog.body) ⊩ Cfg.run 0 σ₀ ⟶* Cfg.error σ_e
-  have htmpfree := Program.typeCheck_tmpFree prog htc
-  have hintv := fun fuel => Program.typeCheck_intTyped prog htc σ₀ hts₀ fuel
-  -- Contrapositive: if ∀ fuel, divSafe, we derive False
-  by_cases h : ∀ fuel, prog.body.divSafe fuel σ₀
-  · -- All fuel levels safe → derive contradiction
-    exfalso
-    by_cases hterm : ∃ fuel σ', prog.body.interp fuel σ₀ = some σ'
-    · -- Source terminates safely → TAC halts → contradicts error
-      obtain ⟨fuel, σ', hinterp⟩ := hterm
-      obtain ⟨σ_tac, hhalt, _⟩ :=
-        typed_compile_halt prog fuel σ₀ σ' htc hts₀ hinterp (h fuel)
-      have halt_terminal : ∀ d, ¬ Step (compile prog.body) (Cfg.halt σ_tac) d :=
-        fun _ h => Step.no_step_from_halt h
-      have err_terminal : ∀ d, ¬ Step (compile prog.body) (Cfg.error σ_e) d :=
-        fun _ h => Step.no_step_from_error h
-      exact Cfg.noConfusion (Steps.stuck_det hhalt herror halt_terminal err_terminal)
-    · -- Source diverges safely → unbounded execution → contradicts error
-      have hdiv : ∀ fuel, prog.body.interp fuel σ₀ = none :=
-        fun fuel => (interp_none_iff _ _ _).mpr (fun ⟨σ', hq⟩ => hterm ⟨fuel, σ', hq⟩)
-      rw [compile_eq_refCompile] at herror
-      have hcode : CodeAt (refCompileStmt prog.body 0 0).1 (refCompile prog.body) 0 := by
-        intro i hi; unfold refCompile; simp only [List.getElem?_toArray, Nat.zero_add]
-        exact List.getElem?_append_left hi
-      have hunbounded := refCompileStmt_diverges prog.body σ₀ 0 0 (refCompile prog.body) σ₀
-        htmpfree hdiv h hintv (fun _ _ => rfl) hcode
-      exact no_error_of_unbounded hunbounded σ_e herror
-  · -- ¬(∀ fuel, divSafe) → ∃ fuel, ¬divSafe
-    exact Classical.not_forall.mp h
-
-/-- **Refinement (divergence case)**: If the compiled TAC program diverges
-    (infinite execution), the source program also diverges. -/
-theorem compile_diverge_refinement (prog : Program)
-    (htc : prog.typeCheck = true) (σ₀ : Store)
-    (hts₀ : TypedStore prog.tyCtx σ₀)
-    (hdiverge : program_behavior (compile prog.body) σ₀ .diverges) :
-    ∀ fuel, prog.body.interp fuel σ₀ = none := by
-  -- hdiverge : ∃ f, IsInfiniteExec (compile prog.body) f ∧ f 0 = Cfg.run 0 σ₀
-  obtain ⟨f, hinf, hf0⟩ := hdiverge
-  have htmpfree := Program.typeCheck_tmpFree prog htc
-  have hintv := fun fuel => Program.typeCheck_intTyped prog htc σ₀ hts₀ fuel
-  -- Helper: infinite exec yields StepsN from initial config
-  have inf_steps : ∀ n, StepsN (compile prog.body) (Cfg.run 0 σ₀) (f n) n :=
-    fun n => hf0 ▸ inf_exec_to_StepsN hinf n
-  intro fuel
-  by_cases hq : prog.body.interp fuel σ₀ = none
-  · exact hq
-  · exfalso
-    obtain ⟨σ', hinterp⟩ := Option.ne_none_iff_exists'.mp hq
-    by_cases hsafe : prog.body.divSafe fuel σ₀
-    · -- Safe termination → TAC halts → contradicts infinite exec
-      obtain ⟨σ_tac, hhalt, _⟩ :=
-        typed_compile_halt prog fuel σ₀ σ' htc hts₀ hinterp hsafe
-      obtain ⟨k, hk⟩ := Steps_to_StepsN hhalt
-      obtain ⟨pc_k, σ_k, hfk_eq⟩ := inf_exec_is_run hinf k
-      have := (StepsN_det hk (inf_steps k)).trans hfk_eq
-      exact Cfg.noConfusion this
-    · -- Unsafe termination → TAC reaches error → contradicts infinite exec
-      obtain ⟨σ_e, herr⟩ :=
-        compile_reaches_error prog.body fuel σ₀ htmpfree hsafe (hintv fuel)
-      obtain ⟨k, hk⟩ := Steps_to_StepsN herr
-      obtain ⟨pc_k, σ_k, hfk_eq⟩ := inf_exec_is_run hinf k
-      have := (StepsN_det hk (inf_steps k)).trans hfk_eq
-      exact Cfg.noConfusion this
-
-/-- **Full backward refinement**: For every behavior of the compiled TAC
-    program, the source program has a corresponding behavior.
-    - TAC halts with σ_tac → source terminates with agreeing σ'
-    - TAC errors → source has an unsafe division
-    - TAC diverges → source diverges -/
-theorem compile_refinement (prog : Program)
-    (htc : prog.typeCheck = true) (σ₀ : Store) (b : Behavior)
-    (hts₀ : TypedStore prog.tyCtx σ₀)
-    (hbeh : program_behavior (compile prog.body) σ₀ b) :
-    match b with
-    | .halts σ_tac => ∃ fuel σ', prog.body.interp fuel σ₀ = some σ' ∧
-        ∀ v, v.isTmp = false → σ_tac v = σ' v
-    | .errors _ => ∃ fuel, ¬ prog.body.divSafe fuel σ₀
-    | .diverges => ∀ fuel, prog.body.interp fuel σ₀ = none := by
-  cases b with
-  | halts σ_tac => exact compile_halt_refinement prog htc σ₀ σ_tac hts₀ hbeh
-  | errors σ_e => exact compile_error_refinement prog htc σ₀ σ_e hts₀ hbeh
-  | diverges => exact compile_diverge_refinement prog htc σ₀ hts₀ hbeh
-
 -- ============================================================
--- § 16. Refinement for Program.compile (with init code)
+-- § 14. Refinement for Program.compile (with init code)
 -- ============================================================
 
 /-- The body code from `compileStmt` (= `refCompileStmt`) is embedded in `prog.compile`

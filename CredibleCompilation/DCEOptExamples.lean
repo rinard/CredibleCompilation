@@ -29,7 +29,7 @@ namespace DCEOptExamples
     3: halt
 -/
 
-def deadBranchProg : Prog := #[
+def deadBranchProg : Prog := .ofCode #[
   .const "x" (.int 1),
   .ifgoto (.cmpLit .ne "x" 0) 3,
   .halt,
@@ -62,7 +62,7 @@ def deadBranchCert := optimize deadBranchProg ("y" :: [])
     3: halt
 -/
 
-def deadFallthroughProg : Prog := #[
+def deadFallthroughProg : Prog := .ofCode #[
   .const "x" (.int 0),
   .ifgoto (.cmpLit .ne "x" 0) 4,
   .const "y" (.int 42),
@@ -95,7 +95,7 @@ def deadFallthroughCert := optimize deadFallthroughProg ("y" :: [])
     2: halt
 -/
 
-def gotoSkipProg : Prog := #[
+def gotoSkipProg : Prog := .ofCode #[
   .goto 4,
   .const "a" (.int 1),
   .const "b" (.int 2),
@@ -123,7 +123,7 @@ def gotoSkipCert := optimize gotoSkipProg ("c" :: [])
   Expected: no change (all PCs reachable, no deterministic branches)
 -/
 
-def noDeadProg : Prog := #[
+def noDeadProg : Prog := .ofCode #[
   .const "x" (.int 5),
   .const "y" (.int 3),
   .binop "z" .add "x" "y",
@@ -157,7 +157,7 @@ def noDeadCert := optimize noDeadProg ("z" :: [])
     4: halt
 -/
 
-def deadExitProg : Prog := #[
+def deadExitProg : Prog := .ofCode #[
   .const "n" (.int 1),
   .ifgoto (.cmpLit .ne "n" 0) 3,
   .halt,
@@ -188,7 +188,7 @@ def deadExitCert := optimize deadExitProg ("y" :: [])
   (identity mapping since nothing is removed)
 -/
 
-def liveBranchProg : Prog := #[
+def liveBranchProg : Prog := .ofCode #[
   .ifgoto (.cmpLit .lt "x" 10) 3,
   .const "a" (.int 1),
   .halt,
@@ -226,7 +226,7 @@ def liveBranchCert := optimize liveBranchProg ("a" :: "b" :: [])
     5: halt
 -/
 
-def cascadeProg : Prog := #[
+def cascadeProg : Prog := .ofCode #[
   .const "x" (.int 1),
   .ifgoto (.cmpLit .ne "x" 0) 5,
   .const "a" (.int 10),

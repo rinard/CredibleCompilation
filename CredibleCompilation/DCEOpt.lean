@@ -92,7 +92,7 @@ def transformProg (prog : Prog) (consts : Array (Option ConstPropOpt.ConstMap))
     match origMap[i]? with
     | some pc => transformInstr prog consts revMap pc
     | none => .halt
-  arr.toArray
+  { code := arr.toArray, tyCtx := prog.tyCtx, observable := prog.observable }
 
 -- ============================================================
 -- § 5. Certificate generation

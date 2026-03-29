@@ -1,5 +1,4 @@
 import CredibleCompilation.ExecChecker
-import CredibleCompilation.PropExamples
 import Mathlib.Tactic
 
 /-!
@@ -635,23 +634,24 @@ private theorem mem_foldl_elem (xs : List TAC) (init : List Var)
 
 /-- If v ∈ instrVars of an instruction in p1, then v ∈ collectAllVars p1 p2. -/
 private theorem instrVars_sub_collectAllVars_left (p1 p2 : Prog) (instr : TAC)
-    (hmem : instr ∈ p1.toList) (v : Var) (hv : v ∈ instrVars instr) :
+    (hmem : instr ∈ p1.code.toList) (v : Var) (hv : v ∈ instrVars instr) :
     v ∈ collectAllVars p1 p2 := by
   unfold collectAllVars
   apply List.mem_append_left
-  exact mem_foldl_elem p1.toList ([] : List Var) hmem hv
+  exact mem_foldl_elem p1.code.toList ([] : List Var) hmem hv
 
 /-- If v ∈ instrVars of an instruction in p2, then v ∈ collectAllVars p1 p2. -/
 private theorem instrVars_sub_collectAllVars_right (p1 p2 : Prog) (instr : TAC)
-    (hmem : instr ∈ p2.toList) (v : Var) (hv : v ∈ instrVars instr) :
+    (hmem : instr ∈ p2.code.toList) (v : Var) (hv : v ∈ instrVars instr) :
     v ∈ collectAllVars p1 p2 := by
   unfold collectAllVars
   apply List.mem_append_right
-  exact mem_foldl_elem p2.toList ([] : List Var) hmem hv
+  exact mem_foldl_elem p2.code.toList ([] : List Var) hmem hv
 
 /-- Array getElem? to toList membership. -/
 private theorem getElem?_mem_toList {arr : Prog} {i : Nat} {x : TAC}
-    (h : arr[i]? = some x) : x ∈ arr.toList := by
+    (h : arr[i]? = some x) : x ∈ arr.code.toList := by
+  rw [Prog.getElem?_code] at h
   have hb := bound_of_getElem? h
   have heq := (Array.getElem?_eq_some_iff.mp h).2
   exact heq ▸ Array.getElem_mem_toList (h := hb)

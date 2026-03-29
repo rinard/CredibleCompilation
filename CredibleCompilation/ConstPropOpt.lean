@@ -157,7 +157,7 @@ def transformProg (prog : Prog) (consts : Array (Option ConstMap)) : Prog :=
     | some instr, some (some cm) => transformInstr cm instr i
     | some instr, _ => instr
     | none, _ => .halt  -- unreachable
-  arr.toArray
+  { code := arr.toArray, tyCtx := prog.tyCtx, observable := prog.observable }
 
 -- ============================================================
 -- § 6. Certificate generation

@@ -30,9 +30,6 @@ def defaultInstrCert : PInstrCert :=
 def defaultHaltCert : PHaltCert :=
   { pc_orig := 0, storeRel := idStoreRel }
 
-theorem bound_of_getElem? {a : Array α} {i : Nat} {v : α}
-    (h : a[i]? = some v) : i < a.size := by
-  rw [getElem?_eq_some_iff] at h; exact h.1
 
 /-- All-int typing context for examples that only use integer values. -/
 def allIntCtx : TyCtx := fun _ => .int
@@ -62,18 +59,18 @@ private theorem allIntCtx_wtp_by_decide {p : Prog}
 
 namespace Example1
 
-def origProg : Prog := #[
-  .const "x" (.int 7),       -- 0
-  .copy  "y" "x",     -- 1
-  .copy  "z" "y",     -- 2
-  .halt                -- 3
+def origProg : Prog := Prog.ofCode #[
+  TAC.const "x" (.int 7),       -- 0
+  TAC.copy  "y" "x",     -- 1
+  TAC.copy  "z" "y",     -- 2
+  TAC.halt                -- 3
 ]
 
-def transProg : Prog := #[
-  .const "x" (.int 7),       -- 0
-  .const "y" (.int 7),       -- 1
-  .const "z" (.int 7),       -- 2
-  .halt                -- 3
+def transProg : Prog := Prog.ofCode #[
+  TAC.const "x" (.int 7),       -- 0
+  TAC.const "y" (.int 7),       -- 1
+  TAC.const "z" (.int 7),       -- 2
+  TAC.halt                -- 3
 ]
 
 def inv : PInvariantMap := fun pc σ =>
@@ -146,14 +143,14 @@ theorem inv_ok : checkInvariantsPreservedProp cert := by
 theorem halt_corr_ok : checkHaltCorrespondenceProp cert := by
   intro pc_t h
   have hlt := bound_of_getElem? h; change pc_t < 4 at hlt
-  interval_cases pc_t <;> simp_all [cert, origProg, transProg]
+  interval_cases pc_t <;> simp_all [cert, origProg, transProg, Prog.ofCode]
 
 theorem halt_obs_ok : checkHaltObservableProp cert := by
   intro pc_t σ_t σ_o h
   change transProg[pc_t]? = some .halt at h
   have hlt := bound_of_getElem? h; change pc_t < 4 at hlt
   simp only [cert]; intro hvm v hv
-  interval_cases pc_t <;> simp_all [transProg]
+  interval_cases pc_t <;> simp_all [transProg, Prog.ofCode]
   simp [idStoreRel] at hvm; subst hvm; rfl
 
 theorem transitions_ok : checkAllTransitionsProp cert.tyCtx cert := by
@@ -243,14 +240,14 @@ theorem error_pres_ok : checkErrorPreservationProp cert := by
   intro pc_t σ_t σ_o hpc _ _ _ herr
   -- No binop instructions in transProg, so Step.error is impossible
   have : pc_t < 4 := by rw [show cert.trans.size = 4 from rfl] at hpc; exact hpc
-  interval_cases pc_t <;> cases herr <;> simp_all [cert, transProg]
+  interval_cases pc_t <;> cases herr <;> simp_all [cert, transProg, Prog.ofCode]
 
 theorem valid : PCertificateValid cert :=
   { well_typed_orig := by
-      intro i hi; simp [cert, origProg] at hi ⊢
+      intro i hi; simp [cert, origProg, Prog.ofCode] at hi ⊢
       change i < 4 at hi; interval_cases i <;> constructor <;> rfl
     well_typed_trans := by
-      intro i hi; simp [cert, transProg] at hi ⊢
+      intro i hi; simp [cert, transProg, Prog.ofCode] at hi ⊢
       change i < 4 at hi; interval_cases i <;> constructor <;> rfl
     start_corr    := start_ok
     start_inv     := start_inv_ok
@@ -278,16 +275,16 @@ end Example1
 
 namespace Example2
 
-def origProg : Prog := #[
-  .copy "a" "b",                 -- 0
-  .binop "c" .add "a" "d",      -- 1
-  .halt                          -- 2
+def origProg : Prog := Prog.ofCode #[
+  TAC.copy "a" "b",                 -- 0
+  TAC.binop "c" .add "a" "d",      -- 1
+  TAC.halt                          -- 2
 ]
 
-def transProg : Prog := #[
-  .copy "a" "b",                 -- 0
-  .binop "c" .add "b" "d",      -- 1 (replaced a with b)
-  .halt                          -- 2
+def transProg : Prog := Prog.ofCode #[
+  TAC.copy "a" "b",                 -- 0
+  TAC.binop "c" .add "b" "d",      -- 1 (replaced a with b)
+  TAC.halt                          -- 2
 ]
 
 /-- `a = b` at labels ≥ 1 (after the copy). -/
@@ -354,14 +351,14 @@ theorem inv_ok : checkInvariantsPreservedProp cert := by
 theorem halt_corr_ok : checkHaltCorrespondenceProp cert := by
   intro pc_t h
   have hlt := bound_of_getElem? h; change pc_t < 3 at hlt
-  interval_cases pc_t <;> simp_all [cert, origProg, transProg]
+  interval_cases pc_t <;> simp_all [cert, origProg, transProg, Prog.ofCode]
 
 theorem halt_obs_ok : checkHaltObservableProp cert := by
   intro pc_t σ_t σ_o h
   change transProg[pc_t]? = some .halt at h
   have hlt := bound_of_getElem? h; change pc_t < 3 at hlt
   simp only [cert]; intro hvm v hv
-  interval_cases pc_t <;> simp_all [transProg]
+  interval_cases pc_t <;> simp_all [transProg, Prog.ofCode]
   simp [idStoreRel] at hvm; subst hvm; rfl
 
 theorem transitions_ok : checkAllTransitionsProp cert.tyCtx cert := by
@@ -464,10 +461,10 @@ theorem error_pres_ok : checkErrorPreservationProp cert := by
 
 theorem valid : PCertificateValid cert :=
   { well_typed_orig := by
-      intro i hi; simp [cert, origProg] at hi ⊢
+      intro i hi; simp [cert, origProg, Prog.ofCode] at hi ⊢
       change i < 3 at hi; interval_cases i <;> constructor <;> rfl
     well_typed_trans := by
-      intro i hi; simp [cert, transProg] at hi ⊢
+      intro i hi; simp [cert, transProg, Prog.ofCode] at hi ⊢
       change i < 3 at hi; interval_cases i <;> constructor <;> rfl
     start_corr    := start_ok
     start_inv     := start_inv_ok
@@ -494,18 +491,18 @@ end Example2
 
 namespace Example3
 
-def origProg : Prog := #[
-  .binop "a" .add "x" "y",      -- 0
-  .binop "b" .add "x" "y",      -- 1
-  .binop "c" .add "a" "b",      -- 2
-  .halt                          -- 3
+def origProg : Prog := Prog.ofCode #[
+  TAC.binop "a" .add "x" "y",      -- 0
+  TAC.binop "b" .add "x" "y",      -- 1
+  TAC.binop "c" .add "a" "b",      -- 2
+  TAC.halt                          -- 3
 ]
 
-def transProg : Prog := #[
-  .binop "a" .add "x" "y",      -- 0
-  .copy  "b" "a",               -- 1 (CSE)
-  .binop "c" .add "a" "b",      -- 2
-  .halt                          -- 3
+def transProg : Prog := Prog.ofCode #[
+  TAC.binop "a" .add "x" "y",      -- 0
+  TAC.copy  "b" "a",               -- 1 (CSE)
+  TAC.binop "c" .add "a" "b",      -- 2
+  TAC.halt                          -- 3
 ]
 
 def inv : PInvariantMap := fun pc σ =>
@@ -579,14 +576,14 @@ theorem inv_ok : checkInvariantsPreservedProp cert := by
 theorem halt_corr_ok : checkHaltCorrespondenceProp cert := by
   intro pc_t h
   have hlt := bound_of_getElem? h; change pc_t < 4 at hlt
-  interval_cases pc_t <;> simp_all [cert, origProg, transProg]
+  interval_cases pc_t <;> simp_all [cert, origProg, transProg, Prog.ofCode]
 
 theorem halt_obs_ok : checkHaltObservableProp cert := by
   intro pc_t σ_t σ_o h
   change transProg[pc_t]? = some .halt at h
   have hlt := bound_of_getElem? h; change pc_t < 4 at hlt
   simp only [cert]; intro hvm v hv
-  interval_cases pc_t <;> simp_all [transProg]
+  interval_cases pc_t <;> simp_all [transProg, Prog.ofCode]
   simp [idStoreRel] at hvm; subst hvm; rfl
 
 theorem transitions_ok : checkAllTransitionsProp cert.tyCtx cert := by
@@ -710,10 +707,10 @@ theorem error_pres_ok : checkErrorPreservationProp cert := by
 
 theorem valid : PCertificateValid cert :=
   { well_typed_orig := by
-      intro i hi; simp [cert, origProg] at hi ⊢
+      intro i hi; simp [cert, origProg, Prog.ofCode] at hi ⊢
       change i < 4 at hi; interval_cases i <;> constructor <;> rfl
     well_typed_trans := by
-      intro i hi; simp [cert, transProg] at hi ⊢
+      intro i hi; simp [cert, transProg, Prog.ofCode] at hi ⊢
       change i < 4 at hi; interval_cases i <;> constructor <;> rfl
     start_corr    := start_ok
     start_inv     := start_inv_ok
@@ -743,16 +740,16 @@ end Example3
 
 namespace PBadExample
 
-def origProg : Prog := #[
-  .const "x" (.int 5),       -- 0
-  .copy  "y" "x",     -- 1
-  .halt                -- 2
+def origProg : Prog := Prog.ofCode #[
+  TAC.const "x" (.int 5),       -- 0
+  TAC.copy  "y" "x",     -- 1
+  TAC.halt                -- 2
 ]
 
-def transProg : Prog := #[
-  .const "x" (.int 5),       -- 0
-  .const "y" (.int 3),       -- 1  ← BUG: should be 5
-  .halt                -- 2
+def transProg : Prog := Prog.ofCode #[
+  TAC.const "x" (.int 5),       -- 0
+  TAC.const "y" (.int 3),       -- 1  ← BUG: should be 5
+  TAC.halt                -- 2
 ]
 
 def inv : PInvariantMap := fun pc σ =>
@@ -829,6 +826,7 @@ theorem transitions_fail : ¬ checkAllTransitionsProp cert.tyCtx cert := by
     | iffall h _ => exact absurd (ho1.symm.trans h) (by simp)
     | boolop h => exact absurd (ho1.symm.trans h) (by simp)
     | error h => exact absurd (ho1.symm.trans h) (by simp)
+    | binop_typeError h _ => exact absurd (ho1.symm.trans h) (by simp)
 
 /-- Therefore, no valid certificate exists for this buggy transformation. -/
 theorem no_valid_cert : ¬ PCertificateValid cert := by

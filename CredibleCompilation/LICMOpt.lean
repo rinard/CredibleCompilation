@@ -60,7 +60,7 @@ def transformProg (prog : Prog) (avails : Array (Option CSEOpt.AvailSet)) : Prog
       if isRedundant av instr then .goto (i + 1) else instr
     | some instr, _ => instr
     | none, _ => .halt
-  arr.toArray
+  { code := arr.toArray, tyCtx := prog.tyCtx, observable := prog.observable }
 
 -- ============================================================
 -- § 3. Certificate generation

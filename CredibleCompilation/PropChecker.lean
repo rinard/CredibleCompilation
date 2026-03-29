@@ -288,6 +288,10 @@ theorem inv_preserved_steps {inv : PInvariantMap} {p : Prog}
       cases rest with
       | refl => exact absurd hc' Cfg.noConfusion
       | step s _ => exact absurd s Step.no_step_from_error
+    | binop_typeError h _ =>
+      cases rest with
+      | refl => exact absurd hc' Cfg.noConfusion
+      | step s _ => exact absurd s Step.no_step_from_typeError
     | const h => exact ih _ _ rfl (hpres _ _ hinv _ _ (.const h)) _ _ hc'
     | copy h => exact ih _ _ rfl (hpres _ _ hinv _ _ (.copy h)) _ _ hc'
     | binop h hy hz hs => exact ih _ _ rfl (hpres _ _ hinv _ _ (.binop h hy hz hs)) _ _ hc'
@@ -297,7 +301,7 @@ theorem inv_preserved_steps {inv : PInvariantMap} {p : Prog}
     | iffall h heq => exact ih _ _ rfl (hpres _ _ hinv _ _ (.iffall h heq)) _ _ hc'
 
 /-- Bound from `getElem?` returning `some`. -/
-private theorem bound_of_getElem? {a : Array α} {i : Nat} {v : α}
+theorem bound_of_getElem? {a : Array α} {i : Nat} {v : α}
     (h : a[i]? = some v) : i < a.size := by
   rw [getElem?_eq_some_iff] at h; exact h.1
 
@@ -328,6 +332,10 @@ theorem type_preservation_steps {Γ : TyCtx} {p : Prog}
       cases rest with
       | refl => exact absurd hc' Cfg.noConfusion
       | step s _ => exact absurd s Step.no_step_from_error
+    | binop_typeError h _ =>
+      cases rest with
+      | refl => exact absurd hc' Cfg.noConfusion
+      | step s _ => exact absurd s Step.no_step_from_typeError
     | const h =>
       exact ih _ _ rfl
         (type_preservation hwtp hts (bound_of_getElem? h) (.const h)) _ _ hc'
@@ -434,6 +442,10 @@ theorem soundness_halt
       cases rest with
       | refl => exact absurd hc' Cfg.noConfusion
       | step s _ => exact absurd s Step.no_step_from_error
+    | binop_typeError h _ =>
+      cases rest with
+      | refl => exact absurd hc' Cfg.noConfusion
+      | step s _ => exact absurd s Step.no_step_from_typeError
     | const h =>
       obtain ⟨pc_o', σ_o', horig, hsim'⟩ := step_sim hvalid hsim (.const h)
       obtain ⟨σ_o'', hfinal, hobs⟩ := ih hc' _ _ pc_o' σ_o' rfl hsim'
@@ -555,6 +567,9 @@ theorem inf_exec_is_run {p : Prog} {f : Nat → Cfg}
   | error σ =>
     exfalso; have := hinf.2 n; rw [hfn] at this
     exact Step.no_step_from_error this
+  | typeError σ =>
+    exfalso; have := hinf.2 n; rw [hfn] at this
+    exact Step.no_step_from_typeError this
 
 /-- From an (n+1)-step execution that ends at Cfg.run, the n-th config
     is also Cfg.run and there's a step from it. -/
@@ -775,6 +790,19 @@ theorem has_behavior (p : Prog) (σ₀ : Store) (Γ : TyCtx)
             exact absurd ⟨n + 1, σ', StepsN_extend hn hstep⟩ h
           | .error σ', hstep =>
             exact absurd ⟨n + 1, σ', StepsN_extend hn hstep⟩ he
+          | .typeError σ', hstep =>
+            -- typeError unreachable: well-typed store means binop operands are int
+            exfalso
+            cases hstep with
+            | binop_typeError hinstr hne =>
+              have hwti := hwtp pc hpc
+              have := Option.some.inj ((Prog.getElem?_eq_getElem hpc).symm.trans hinstr)
+              rw [this] at hwti
+              cases hwti with
+              | binop _ hy hz =>
+                cases hne with
+                | inl hl => exact hl (by rw [hts]; exact hy)
+                | inr hr => exact hr (by rw [hts]; exact hz)
           | .run pc' σ', hstep =>
             exact ⟨pc', σ', StepsN_extend hn hstep, hclosed.2 pc pc' σ σ' hpc hstep,
               type_preservation hwtp hts hpc hstep⟩
@@ -834,6 +862,10 @@ theorem simulation_trace
       cases rest with
       | refl => exact absurd hc' Cfg.noConfusion
       | step s _ => exact absurd s Step.no_step_from_error
+    | binop_typeError h _ =>
+      cases rest with
+      | refl => exact absurd hc' Cfg.noConfusion
+      | step s _ => exact absurd s Step.no_step_from_typeError
     | const h =>
       obtain ⟨pc_o', σ_o', horig, hsim'⟩ := step_sim hvalid hsim (.const h)
       obtain ⟨pc_o'', σ_o'', hfinal, hsim''⟩ := ih _ _ pc_o' σ_o' rfl hsim' pc_t' σ_t' hc'
@@ -906,6 +938,10 @@ private theorem steps_run_in_bounds {p : Prog}
       cases rest with
       | refl => exact absurd hc' Cfg.noConfusion
       | step s _ => exact absurd s Step.no_step_from_error
+    | binop_typeError _ _ =>
+      cases rest with
+      | refl => exact absurd hc' Cfg.noConfusion
+      | step s _ => exact absurd s Step.no_step_from_typeError
     | const h =>
       have s : Step p (.run pc₁ σ₁) _ := .const h
       exact ih _ _ rfl (hclosed.2 _ _ _ _ hpc s) _ _ hc'
@@ -977,6 +1013,8 @@ theorem halt_preservation
       rw [htobs] at hobs; exact Observation.noConfusion hobs
   | error σ_t =>
     simp [observe] at hobs
+  | typeError σ_t =>
+    simp [observe] at hobs
 
 /-- Helper: decompose steps to error into steps to a run config followed by one error step. -/
 private theorem steps_to_error_decompose {p : Prog} {pc₀ : Nat} {σ₀ σ_e : Store}
@@ -1004,6 +1042,10 @@ private theorem steps_to_error_decompose {p : Prog} {pc₀ : Nat} {σ₀ σ_e : 
       cases rest with
       | refl => exact absurd hc' Cfg.noConfusion
       | step s _ => exact absurd s Step.no_step_from_halt
+    | binop_typeError hinstr _ =>
+      cases rest with
+      | refl => exact absurd hc' Cfg.noConfusion
+      | step s _ => exact absurd s Step.no_step_from_typeError
     | const hinstr =>
       obtain ⟨pc, σ, hreach, herr, heq⟩ := ih _ _ rfl hc'
       exact ⟨pc, σ, Steps.step (.const hinstr) hreach, herr, heq⟩
@@ -1118,6 +1160,7 @@ def observeProp (cert : PCertificate) (c : Cfg) : Observation :=
   match c with
   | .halt σ  => Observation.halt (cert.observable.map fun v => (v, σ v))
   | .error _ => Observation.error
+  | .typeError _ => Observation.error
   | .run pc σ =>
     match cert.trans[pc]? with
     | some .halt => Observation.halt (cert.observable.map fun v => (v, σ v))

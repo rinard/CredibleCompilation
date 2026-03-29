@@ -179,8 +179,8 @@ def collectAllVars (p1 p2 : Prog) : List Var :=
     | .boolop x _    => [x]
     | .ifgoto b _    => b.vars
     | _              => []
-  let go (p : Prog) := p.toList.foldl (fun acc i => acc ++ extract i) ([] : List Var)
-  go p1 ++ go p2
+  let go (code : Array TAC) := code.toList.foldl (fun acc i => acc ++ extract i) ([] : List Var)
+  go p1.code ++ go p2.code
 
 -- ============================================================
 -- § 5. Executable certificate types
@@ -584,9 +584,10 @@ def checkCertificateVerboseExec (cert : ECertificate) : List (String × Bool) :=
     - Otherwise returns `nothing`. -/
 def observeExec (cert : ECertificate) (c : Cfg) : Observation :=
   match c with
-  | .halt σ  => Observation.halt (cert.observable.map fun v => (v, σ v))
-  | .error _ => Observation.error
-  | .run pc σ =>
+  | .halt σ      => Observation.halt (cert.observable.map fun v => (v, σ v))
+  | .error _     => Observation.error
+  | .typeError _ => Observation.error
+  | .run pc σ    =>
     match cert.trans[pc]? with
     | some .halt => Observation.halt (cert.observable.map fun v => (v, σ v))
     | some _     => Observation.nothing
