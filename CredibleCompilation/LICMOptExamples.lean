@@ -28,18 +28,14 @@ namespace LICMOptExamples
   Expected: pc 5 becomes `goto 6`
 -/
 
-def classicProg : Prog := .ofCode #[
-  .const "one" (.int 1),
-  .binop "t" .mul "a" "b",
-  .ifgoto (.cmpLit .ne "n" 0) 4,
-  .halt,
-  .binop "s" .add "s" "t",
-  .binop "t" .mul "a" "b",
-  .binop "n" .sub "n" "one",
-  .goto 2
-]
+def classicProg : Prog :=
+  { code := #[.const "one" (.int 1), .binop "t" .mul "a" "b",
+              .ifgoto (.cmpLit .ne "n" 0) 4, .halt,
+              .binop "s" .add "s" "t", .binop "t" .mul "a" "b",
+              .binop "n" .sub "n" "one", .goto 2],
+    tyCtx := fun _ => .int, observable := ["s"] }
 
-def classicCert := optimize classicProg ("s" :: [])
+def classicCert := optimize classicProg
 
 #eval! classicCert.trans
 #eval! checkCertificateExec classicCert
@@ -58,14 +54,12 @@ def classicCert := optimize classicProg ("s" :: [])
   Expected: no change
 -/
 
-def notRedundantProg : Prog := .ofCode #[
-  .binop "t" .mul "a" "b",
-  .binop "a" .add "a" "t",
-  .binop "t" .mul "a" "b",
-  .halt
-]
+def notRedundantProg : Prog :=
+  { code := #[.binop "t" .mul "a" "b", .binop "a" .add "a" "t",
+              .binop "t" .mul "a" "b", .halt],
+    tyCtx := fun _ => .int, observable := ["t"] }
 
-def notRedundantCert := optimize notRedundantProg ("t" :: [])
+def notRedundantCert := optimize notRedundantProg
 
 #eval! notRedundantCert.trans
 #eval! checkCertificateExec notRedundantCert
@@ -90,20 +84,15 @@ def notRedundantCert := optimize notRedundantProg ("t" :: [])
   Expected: pcs 5 and 7 become goto
 -/
 
-def multiProg : Prog := .ofCode #[
-  .binop "t1" .add "a" "b",
-  .binop "t2" .mul "c" "d",
-  .ifgoto (.cmpLit .ne "n" 0) 4,
-  .halt,
-  .binop "s" .add "s" "t1",
-  .binop "t1" .add "a" "b",
-  .binop "r" .add "r" "t2",
-  .binop "t2" .mul "c" "d",
-  .binop "n" .sub "n" "t1",
-  .goto 2
-]
+def multiProg : Prog :=
+  { code := #[.binop "t1" .add "a" "b", .binop "t2" .mul "c" "d",
+              .ifgoto (.cmpLit .ne "n" 0) 4, .halt,
+              .binop "s" .add "s" "t1", .binop "t1" .add "a" "b",
+              .binop "r" .add "r" "t2", .binop "t2" .mul "c" "d",
+              .binop "n" .sub "n" "t1", .goto 2],
+    tyCtx := fun _ => .int, observable := ["s", "r"] }
 
-def multiCert := optimize multiProg ("s" :: "r" :: [])
+def multiCert := optimize multiProg
 
 #eval! multiCert.trans
 #eval! checkCertificateExec multiCert
@@ -122,14 +111,12 @@ def multiCert := optimize multiProg ("s" :: "r" :: [])
   Expected: pc 2 becomes goto 3
 -/
 
-def straightProg : Prog := .ofCode #[
-  .binop "t" .add "x" "y",
-  .binop "a" .add "t" "z",
-  .binop "t" .add "x" "y",
-  .halt
-]
+def straightProg : Prog :=
+  { code := #[.binop "t" .add "x" "y", .binop "a" .add "t" "z",
+              .binop "t" .add "x" "y", .halt],
+    tyCtx := fun _ => .int, observable := ["a"] }
 
-def straightCert := optimize straightProg ("a" :: [])
+def straightCert := optimize straightProg
 
 #eval! straightCert.trans
 #eval! checkCertificateExec straightCert
@@ -148,14 +135,12 @@ def straightCert := optimize straightProg ("a" :: [])
   Expected: no change
 -/
 
-def uniqueProg : Prog := .ofCode #[
-  .binop "a" .add "x" "y",
-  .binop "b" .mul "x" "y",
-  .binop "c" .add "a" "b",
-  .halt
-]
+def uniqueProg : Prog :=
+  { code := #[.binop "a" .add "x" "y", .binop "b" .mul "x" "y",
+              .binop "c" .add "a" "b", .halt],
+    tyCtx := fun _ => .int, observable := ["c"] }
 
-def uniqueCert := optimize uniqueProg ("c" :: [])
+def uniqueCert := optimize uniqueProg
 
 #eval! uniqueCert.trans
 #eval! checkCertificateExec uniqueCert
@@ -175,14 +160,12 @@ def uniqueCert := optimize uniqueProg ("c" :: [])
   Expected: no change (conservative)
 -/
 
-def conservativeProg : Prog := .ofCode #[
-  .binop "t" .add "a" "b",
-  .binop "s" .add "t" "c",
-  .binop "t" .add "a" "b",
-  .halt
-]
+def conservativeProg : Prog :=
+  { code := #[.binop "t" .add "a" "b", .binop "s" .add "t" "c",
+              .binop "t" .add "a" "b", .halt],
+    tyCtx := fun _ => .int, observable := ["s"] }
 
-def conservativeCert := optimize conservativeProg ("s" :: [])
+def conservativeCert := optimize conservativeProg
 
 #eval! conservativeCert.trans
 #eval! checkCertificateExec conservativeCert

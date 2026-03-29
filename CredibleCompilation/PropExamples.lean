@@ -59,12 +59,13 @@ private theorem allIntCtx_wtp_by_decide {p : Prog}
 
 namespace Example1
 
-def origProg : Prog := Prog.ofCode #[
-  TAC.const "x" (.int 7),       -- 0
-  TAC.copy  "y" "x",     -- 1
-  TAC.copy  "z" "y",     -- 2
-  TAC.halt                -- 3
-]
+def origProg : Prog :=
+  { code := #[
+      TAC.const "x" (.int 7),       -- 0
+      TAC.copy  "y" "x",     -- 1
+      TAC.copy  "z" "y",     -- 2
+      TAC.halt                -- 3
+    ], tyCtx := fun _ => .int, observable := ["z"] }
 
 def transProg : Prog := Prog.ofCode #[
   TAC.const "x" (.int 7),       -- 0
@@ -80,10 +81,8 @@ def inv : PInvariantMap := fun pc σ =>
 def cert : PCertificate :=
   { orig       := origProg
     trans      := transProg
-    tyCtx      := allIntCtx
     inv_orig   := inv
     inv_trans  := inv
-    observable := ["z"]
     instrCerts := (fun pc =>
       match pc with
       | 0 => { pc_orig := 0, storeRel := idStoreRel,
@@ -275,11 +274,12 @@ end Example1
 
 namespace Example2
 
-def origProg : Prog := Prog.ofCode #[
-  TAC.copy "a" "b",                 -- 0
-  TAC.binop "c" .add "a" "d",      -- 1
-  TAC.halt                          -- 2
-]
+def origProg : Prog :=
+  { code := #[
+      TAC.copy "a" "b",                 -- 0
+      TAC.binop "c" .add "a" "d",      -- 1
+      TAC.halt                          -- 2
+    ], tyCtx := fun _ => .int, observable := ["c"] }
 
 def transProg : Prog := Prog.ofCode #[
   TAC.copy "a" "b",                 -- 0
@@ -294,10 +294,8 @@ def inv : PInvariantMap := fun pc σ =>
 def cert : PCertificate :=
   { orig       := origProg
     trans      := transProg
-    tyCtx      := allIntCtx
     inv_orig   := inv
     inv_trans  := inv
-    observable := ["c"]
     instrCerts := (fun pc =>
       match pc with
       | 0 => { pc_orig := 0, storeRel := idStoreRel,
@@ -491,12 +489,13 @@ end Example2
 
 namespace Example3
 
-def origProg : Prog := Prog.ofCode #[
-  TAC.binop "a" .add "x" "y",      -- 0
-  TAC.binop "b" .add "x" "y",      -- 1
-  TAC.binop "c" .add "a" "b",      -- 2
-  TAC.halt                          -- 3
-]
+def origProg : Prog :=
+  { code := #[
+      TAC.binop "a" .add "x" "y",      -- 0
+      TAC.binop "b" .add "x" "y",      -- 1
+      TAC.binop "c" .add "a" "b",      -- 2
+      TAC.halt                          -- 3
+    ], tyCtx := fun _ => .int, observable := ["c"] }
 
 def transProg : Prog := Prog.ofCode #[
   TAC.binop "a" .add "x" "y",      -- 0
@@ -515,10 +514,8 @@ def inv : PInvariantMap := fun pc σ =>
 def cert : PCertificate :=
   { orig       := origProg
     trans      := transProg
-    tyCtx      := allIntCtx
     inv_orig   := inv
     inv_trans  := inv
-    observable := ["c"]
     instrCerts := (fun pc =>
       match pc with
       | 0 => { pc_orig := 0, storeRel := idStoreRel,
@@ -740,11 +737,12 @@ end Example3
 
 namespace PBadExample
 
-def origProg : Prog := Prog.ofCode #[
-  TAC.const "x" (.int 5),       -- 0
-  TAC.copy  "y" "x",     -- 1
-  TAC.halt                -- 2
-]
+def origProg : Prog :=
+  { code := #[
+      TAC.const "x" (.int 5),       -- 0
+      TAC.copy  "y" "x",     -- 1
+      TAC.halt                -- 2
+    ], tyCtx := fun _ => .int, observable := ["y"] }
 
 def transProg : Prog := Prog.ofCode #[
   TAC.const "x" (.int 5),       -- 0
@@ -758,10 +756,8 @@ def inv : PInvariantMap := fun pc σ =>
 def cert : PCertificate :=
   { orig       := origProg
     trans      := transProg
-    tyCtx      := allIntCtx
     inv_orig   := inv
     inv_trans  := inv
-    observable := ["y"]
     instrCerts := (fun pc =>
       match pc with
       | 0 => { pc_orig := 0, storeRel := idStoreRel,

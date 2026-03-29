@@ -26,13 +26,11 @@ namespace CSEOptExamples
     2: halt
 -/
 
-def simpleProg : Prog := .ofCode #[
-  .binop "a" .add "x" "y",
-  .binop "b" .add "x" "y",
-  .halt
-]
+def simpleProg : Prog :=
+  { code := #[.binop "a" .add "x" "y", .binop "b" .add "x" "y", .halt],
+    tyCtx := fun _ => .int, observable := ["b"] }
 
-def simpleCert := optimize simpleProg ("b" :: [])
+def simpleCert := optimize simpleProg
 
 #eval! simpleCert.trans
 #eval! checkCertificateExec simpleCert
@@ -57,15 +55,12 @@ def simpleCert := optimize simpleProg ("b" :: [])
     4: halt
 -/
 
-def chainProg : Prog := .ofCode #[
-  .binop "a" .add "x" "y",
-  .binop "b" .add "a" "z",
-  .binop "c" .add "x" "y",
-  .binop "d" .add "a" "z",
-  .halt
-]
+def chainProg : Prog :=
+  { code := #[.binop "a" .add "x" "y", .binop "b" .add "a" "z",
+              .binop "c" .add "x" "y", .binop "d" .add "a" "z", .halt],
+    tyCtx := fun _ => .int, observable := ["c", "d"] }
 
-def chainCert := optimize chainProg ("c" :: "d" :: [])
+def chainCert := optimize chainProg
 
 #eval! chainCert.trans
 #eval! checkCertificateExec chainCert
@@ -84,14 +79,12 @@ def chainCert := optimize chainProg ("c" :: "d" :: [])
   Expected: no optimization (expression killed)
 -/
 
-def killProg : Prog := .ofCode #[
-  .binop "a" .add "x" "y",
-  .const "x" (.int 42),
-  .binop "b" .add "x" "y",
-  .halt
-]
+def killProg : Prog :=
+  { code := #[.binop "a" .add "x" "y", .const "x" (.int 42),
+              .binop "b" .add "x" "y", .halt],
+    tyCtx := fun _ => .int, observable := ["b"] }
 
-def killCert := optimize killProg ("b" :: [])
+def killCert := optimize killProg
 
 #eval! killCert.trans   -- should be unchanged
 #eval! checkCertificateExec killCert
@@ -109,15 +102,12 @@ def killCert := optimize killProg ("b" :: [])
     4: halt
 -/
 
-def multiProg : Prog := .ofCode #[
-  .binop "a" .add "x" "y",
-  .binop "b" .mul "x" "y",
-  .binop "c" .add "x" "y",
-  .binop "d" .mul "x" "y",
-  .halt
-]
+def multiProg : Prog :=
+  { code := #[.binop "a" .add "x" "y", .binop "b" .mul "x" "y",
+              .binop "c" .add "x" "y", .binop "d" .mul "x" "y", .halt],
+    tyCtx := fun _ => .int, observable := ["c", "d"] }
 
-def multiCert := optimize multiProg ("c" :: "d" :: [])
+def multiCert := optimize multiProg
 
 #eval! multiCert.trans
 #eval! checkCertificateExec multiCert
@@ -138,16 +128,13 @@ def multiCert := optimize multiProg ("c" :: "d" :: [])
   Expected: pc 4 becomes copy c a
 -/
 
-def constProg : Prog := .ofCode #[
-  .const "x" (.int 5),
-  .const "y" (.int 3),
-  .binop "a" .add "x" "y",
-  .binop "b" .mul "x" "y",
-  .binop "c" .add "x" "y",
-  .halt
-]
+def constProg : Prog :=
+  { code := #[.const "x" (.int 5), .const "y" (.int 3),
+              .binop "a" .add "x" "y", .binop "b" .mul "x" "y",
+              .binop "c" .add "x" "y", .halt],
+    tyCtx := fun _ => .int, observable := ["c"] }
 
-def constCert := optimize constProg ("c" :: [])
+def constCert := optimize constProg
 
 #eval! constCert.trans
 #eval! checkCertificateExec constCert
@@ -168,15 +155,12 @@ def constCert := optimize constProg ("c" :: [])
   available through the loop back-edge.
 -/
 
-def loopProg : Prog := .ofCode #[
-  .binop "a" .add "x" "y",
-  .ifgoto (.cmpLit .lt "a" 100) 3,
-  .halt,
-  .binop "b" .add "x" "y",
-  .goto 1
-]
+def loopProg : Prog :=
+  { code := #[.binop "a" .add "x" "y", .ifgoto (.cmpLit .lt "a" 100) 3,
+              .halt, .binop "b" .add "x" "y", .goto 1],
+    tyCtx := fun _ => .int, observable := ["b"] }
 
-def loopCert := optimize loopProg ("b" :: [])
+def loopCert := optimize loopProg
 
 #eval! loopCert.trans
 #eval! checkCertificateExec loopCert
@@ -194,13 +178,11 @@ def loopCert := optimize loopProg ("b" :: [])
   Expected: no optimization (x was overwritten)
 -/
 
-def aliasProg : Prog := .ofCode #[
-  .binop "x" .add "x" "y",
-  .binop "a" .add "x" "y",
-  .halt
-]
+def aliasProg : Prog :=
+  { code := #[.binop "x" .add "x" "y", .binop "a" .add "x" "y", .halt],
+    tyCtx := fun _ => .int, observable := ["a"] }
 
-def aliasCert := optimize aliasProg ("a" :: [])
+def aliasCert := optimize aliasProg
 
 #eval! aliasCert.trans   -- should be unchanged
 #eval! checkCertificateExec aliasCert

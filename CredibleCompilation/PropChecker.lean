@@ -88,26 +88,29 @@ structure PHaltCert where
     with 0 original steps — eventually the original must also progress. -/
 def PTransMeasure := Label → Store → Nat
 
-/-- The full compilation certificate. -/
+/-- The full compilation certificate.
+    The type context and observable variables are derived from the original program. -/
 structure PCertificate where
   /-- Original program -/
   orig        : Prog
   /-- Transformed program -/
   trans       : Prog
-  /-- Type context for both programs -/
-  tyCtx       : TyCtx
   /-- Invariants for the original program -/
   inv_orig    : PInvariantMap
   /-- Invariants for the transformed program -/
   inv_trans   : PInvariantMap
-  /-- Observable variables (checked at halt for equivalence) -/
-  observable  : List Var
   /-- PCertificate entry for each label in the transformed program -/
   instrCerts  : Label → PInstrCert
   /-- PCertificate entry for halt instructions in the transformed program -/
   haltCerts   : Label → PHaltCert
   /-- Well-founded measure for non-termination (per transformed label and store). -/
   measure     : PTransMeasure
+
+/-- The type context for the certificate, derived from the original program. -/
+abbrev PCertificate.tyCtx (cert : PCertificate) : TyCtx := cert.orig.tyCtx
+
+/-- The observable variables for the certificate, derived from the original program. -/
+abbrev PCertificate.observable (cert : PCertificate) : List Var := cert.orig.observable
 
 -- ============================================================
 -- § 6. PCertificate checking conditions

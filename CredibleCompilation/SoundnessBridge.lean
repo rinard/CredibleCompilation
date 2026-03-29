@@ -73,10 +73,8 @@ def eRelToStoreRel (rel : EExprRel) : PStoreRel :=
 def toPCertificate (dc : ECertificate) : PCertificate :=
   { orig       := dc.orig
     trans      := dc.trans
-    tyCtx      := dc.tyCtx
     inv_orig   := fun l => (dc.inv_orig.getD l ([] : EInv)).toProp
     inv_trans  := fun l => (dc.inv_trans.getD l ([] : EInv)).toProp
-    observable := dc.observable
     instrCerts := fun l =>
       let dic := dc.instrCerts.getD l default
       { pc_orig    := dic.pc_orig
@@ -98,6 +96,14 @@ def toPCertificate (dc : ECertificate) : PCertificate :=
 
 @[simp] theorem toCertificate_trans (dc : ECertificate) :
     (toPCertificate dc).trans = dc.trans := rfl
+
+@[simp] theorem toCertificate_tyCtx (dc : ECertificate) :
+    (toPCertificate dc).tyCtx = dc.tyCtx := by
+  simp [PCertificate.tyCtx, ECertificate.tyCtx, toPCertificate]
+
+@[simp] theorem toCertificate_observable (dc : ECertificate) :
+    (toPCertificate dc).observable = dc.observable := by
+  simp [PCertificate.observable, ECertificate.observable, toPCertificate]
 
 -- ============================================================
 -- § 3. lookupExpr soundness

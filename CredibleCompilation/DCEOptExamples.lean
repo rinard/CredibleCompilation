@@ -29,15 +29,12 @@ namespace DCEOptExamples
     3: halt
 -/
 
-def deadBranchProg : Prog := .ofCode #[
-  .const "x" (.int 1),
-  .ifgoto (.cmpLit .ne "x" 0) 3,
-  .halt,
-  .const "y" (.int 5),
-  .halt
-]
+def deadBranchProg : Prog :=
+  { code := #[.const "x" (.int 1), .ifgoto (.cmpLit .ne "x" 0) 3, .halt,
+              .const "y" (.int 5), .halt],
+    tyCtx := fun _ => .int, observable := ["y"] }
 
-def deadBranchCert := optimize deadBranchProg ("y" :: [])
+def deadBranchCert := optimize deadBranchProg
 
 #eval! deadBranchCert.trans
 #eval! checkCertificateExec deadBranchCert
@@ -62,16 +59,12 @@ def deadBranchCert := optimize deadBranchProg ("y" :: [])
     3: halt
 -/
 
-def deadFallthroughProg : Prog := .ofCode #[
-  .const "x" (.int 0),
-  .ifgoto (.cmpLit .ne "x" 0) 4,
-  .const "y" (.int 42),
-  .halt,
-  .const "z" (.int 99),
-  .halt
-]
+def deadFallthroughProg : Prog :=
+  { code := #[.const "x" (.int 0), .ifgoto (.cmpLit .ne "x" 0) 4,
+              .const "y" (.int 42), .halt, .const "z" (.int 99), .halt],
+    tyCtx := fun _ => .int, observable := ["y"] }
 
-def deadFallthroughCert := optimize deadFallthroughProg ("y" :: [])
+def deadFallthroughCert := optimize deadFallthroughProg
 
 #eval! deadFallthroughCert.trans
 #eval! checkCertificateExec deadFallthroughCert
@@ -95,16 +88,12 @@ def deadFallthroughCert := optimize deadFallthroughProg ("y" :: [])
     2: halt
 -/
 
-def gotoSkipProg : Prog := .ofCode #[
-  .goto 4,
-  .const "a" (.int 1),
-  .const "b" (.int 2),
-  .halt,
-  .const "c" (.int 3),
-  .halt
-]
+def gotoSkipProg : Prog :=
+  { code := #[.goto 4, .const "a" (.int 1), .const "b" (.int 2), .halt,
+              .const "c" (.int 3), .halt],
+    tyCtx := fun _ => .int, observable := ["c"] }
 
-def gotoSkipCert := optimize gotoSkipProg ("c" :: [])
+def gotoSkipCert := optimize gotoSkipProg
 
 #eval! gotoSkipCert.trans
 #eval! checkCertificateExec gotoSkipCert
@@ -123,14 +112,12 @@ def gotoSkipCert := optimize gotoSkipProg ("c" :: [])
   Expected: no change (all PCs reachable, no deterministic branches)
 -/
 
-def noDeadProg : Prog := .ofCode #[
-  .const "x" (.int 5),
-  .const "y" (.int 3),
-  .binop "z" .add "x" "y",
-  .halt
-]
+def noDeadProg : Prog :=
+  { code := #[.const "x" (.int 5), .const "y" (.int 3),
+              .binop "z" .add "x" "y", .halt],
+    tyCtx := fun _ => .int, observable := ["z"] }
 
-def noDeadCert := optimize noDeadProg ("z" :: [])
+def noDeadCert := optimize noDeadProg
 
 #eval! noDeadCert.trans
 #eval! checkCertificateExec noDeadCert
@@ -157,17 +144,12 @@ def noDeadCert := optimize noDeadProg ("z" :: [])
     4: halt
 -/
 
-def deadExitProg : Prog := .ofCode #[
-  .const "n" (.int 1),
-  .ifgoto (.cmpLit .ne "n" 0) 3,
-  .halt,
-  .const "y" (.int 5),
-  .goto 6,
-  .halt,
-  .halt
-]
+def deadExitProg : Prog :=
+  { code := #[.const "n" (.int 1), .ifgoto (.cmpLit .ne "n" 0) 3, .halt,
+              .const "y" (.int 5), .goto 6, .halt, .halt],
+    tyCtx := fun _ => .int, observable := ["y"] }
 
-def deadExitCert := optimize deadExitProg ("y" :: [])
+def deadExitCert := optimize deadExitProg
 
 #eval! deadExitCert.trans
 #eval! checkCertificateExec deadExitCert
@@ -188,15 +170,12 @@ def deadExitCert := optimize deadExitProg ("y" :: [])
   (identity mapping since nothing is removed)
 -/
 
-def liveBranchProg : Prog := .ofCode #[
-  .ifgoto (.cmpLit .lt "x" 10) 3,
-  .const "a" (.int 1),
-  .halt,
-  .const "b" (.int 2),
-  .halt
-]
+def liveBranchProg : Prog :=
+  { code := #[.ifgoto (.cmpLit .lt "x" 10) 3, .const "a" (.int 1), .halt,
+              .const "b" (.int 2), .halt],
+    tyCtx := fun _ => .int, observable := ["a", "b"] }
 
-def liveBranchCert := optimize liveBranchProg ("a" :: "b" :: [])
+def liveBranchCert := optimize liveBranchProg
 
 #eval! liveBranchCert.trans
 #eval! checkCertificateExec liveBranchCert
@@ -226,19 +205,14 @@ def liveBranchCert := optimize liveBranchProg ("a" :: "b" :: [])
     5: halt
 -/
 
-def cascadeProg : Prog := .ofCode #[
-  .const "x" (.int 1),
-  .ifgoto (.cmpLit .ne "x" 0) 5,
-  .const "a" (.int 10),
-  .const "b" (.int 20),
-  .halt,
-  .const "y" (.int 0),
-  .ifgoto (.cmpLit .ne "y" 0) 8,
-  .const "c" (.int 30),
-  .halt
-]
+def cascadeProg : Prog :=
+  { code := #[.const "x" (.int 1), .ifgoto (.cmpLit .ne "x" 0) 5,
+              .const "a" (.int 10), .const "b" (.int 20), .halt,
+              .const "y" (.int 0), .ifgoto (.cmpLit .ne "y" 0) 8,
+              .const "c" (.int 30), .halt],
+    tyCtx := fun _ => .int, observable := ["c"] }
 
-def cascadeCert := optimize cascadeProg ("c" :: [])
+def cascadeCert := optimize cascadeProg
 
 #eval! cascadeCert.trans
 #eval! checkCertificateExec cascadeCert

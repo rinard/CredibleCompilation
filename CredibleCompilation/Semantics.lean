@@ -613,6 +613,23 @@ theorem Step.progress (p : Prog) (pc : Nat) (σ : Store) (Γ : TyCtx)
     · exact ⟨_, .iffall (hp ▸ hinstr) (Bool.eq_false_iff.mpr hb)⟩
   | .halt          => exact ⟨_, .halt (hp ▸ hinstr)⟩
 
+/-- **Type safety (single step)**: a well-typed program with a well-typed store
+    never steps to a type-error configuration. -/
+theorem Step.no_typeError_of_wellTyped {p : Prog} {pc : Nat} {σ τ : Store} {Γ : TyCtx}
+    (hpc : pc < p.size) (hwtp : WellTypedProg Γ p) (hts : TypedStore Γ σ) :
+    ¬ (p ⊩ Cfg.run pc σ ⟶ Cfg.typeError τ) := by
+  intro hstep
+  cases hstep with
+  | binop_typeError hinstr hne =>
+    have hwti := hwtp pc hpc
+    have := instr_eq_of_lookup hpc hinstr
+    rw [this] at hwti
+    cases hwti with
+    | binop _ hy hz =>
+      cases hne with
+      | inl hl => exact hl (by rw [hts]; exact hy)
+      | inr hr => exact hr (by rw [hts]; exact hz)
+
 -- ============================================================
 -- § 10. Observable output at a configuration
 -- ============================================================

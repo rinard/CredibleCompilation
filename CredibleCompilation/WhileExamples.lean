@@ -25,15 +25,14 @@ def prog : Stmt :=
     (assign "s" (bin .add (var "s") (var "i")) ;;
      assign "i" (bin .add (var "i") (lit 1)))
 
-def observable : List Var := ["s"]
-def tac : Prog := compile prog
+def tac : Prog := { compile prog with observable := ["s"] }
 
 -- Compile and verify
 #eval tac.code.toList
 #eval do let σ ← Stmt.interp 1000 (fun v => if v == "n" then .int 10 else .int 0) prog; return σ "s"
 
 -- Optimize with constant propagation, then check
-def cert := ConstPropOpt.optimize tac observable
+def cert := ConstPropOpt.optimize tac
 #eval checkCertificateExec cert
 #eval checkCertificateVerboseExec cert
 
@@ -52,13 +51,12 @@ def prog : Stmt :=
     (assign "r" (bin .mul (var "r") (var "n")) ;;
      assign "n" (bin .sub (var "n") (lit 1)))
 
-def observable : List Var := ["r"]
-def tac : Prog := compile prog
+def tac : Prog := { compile prog with observable := ["r"] }
 
 #eval tac.code.toList
 #eval do let σ ← Stmt.interp 1000 (fun v => if v == "n" then .int 5 else .int 0) prog; return σ "r"
 
-def cert := ConstPropOpt.optimize tac observable
+def cert := ConstPropOpt.optimize tac
 #eval checkCertificateExec cert
 #eval checkCertificateVerboseExec cert
 
@@ -76,13 +74,12 @@ def prog : Stmt :=
     (assign "m" (var "b"))
     (assign "m" (var "a"))
 
-def observable : List Var := ["m"]
-def tac : Prog := compile prog
+def tac : Prog := { compile prog with observable := ["m"] }
 
 #eval tac.code.toList
 #eval do let σ ← Stmt.interp 100 (fun v => if v == "a" then .int 3 else if v == "b" then .int 7 else .int 0) prog; return σ "m"
 
-def cert := ConstPropOpt.optimize tac observable
+def cert := ConstPropOpt.optimize tac
 #eval checkCertificateExec cert
 #eval checkCertificateVerboseExec cert
 
@@ -99,14 +96,13 @@ def prog : Stmt :=
   assign "x" (bin .add (lit 2) (lit 3)) ;;
   assign "y" (bin .mul (var "x") (lit 4))
 
-def observable : List Var := ["y"]
-def tac : Prog := compile prog
+def tac : Prog := { compile prog with observable := ["y"] }
 
 #eval tac.code.toList
 #eval do let σ ← Stmt.interp 100 (fun _ => .int 0) prog; return σ "y"
 
 -- Constant propagation should fold this aggressively
-def cert := ConstPropOpt.optimize tac observable
+def cert := ConstPropOpt.optimize tac
 #eval cert.trans.code.toList
 #eval checkCertificateExec cert
 #eval checkCertificateVerboseExec cert
@@ -125,12 +121,11 @@ def prog : Stmt :=
     (assign "r" (bin .sub (lit 0) (var "x")))
     (assign "r" (var "x"))
 
-def observable : List Var := ["r"]
-def tac : Prog := compile prog
+def tac : Prog := { compile prog with observable := ["r"] }
 
 #eval tac.code.toList
 
-def cert := ConstPropOpt.optimize tac observable
+def cert := ConstPropOpt.optimize tac
 #eval checkCertificateExec cert
 #eval checkCertificateVerboseExec cert
 
@@ -158,13 +153,12 @@ def prog : Stmt :=
         assign "j" (bin .add (var "j") (lit 1))) ;;
      assign "i" (bin .add (var "i") (lit 1)))
 
-def observable : List Var := ["s"]
-def tac : Prog := compile prog
+def tac : Prog := { compile prog with observable := ["s"] }
 
 #eval tac.code.toList
 #eval do let σ ← Stmt.interp 10000 (fun v => if v == "n" then .int 3 else .int 0) prog; return σ "s"
 
-def cert := ConstPropOpt.optimize tac observable
+def cert := ConstPropOpt.optimize tac
 #eval checkCertificateExec cert
 #eval checkCertificateVerboseExec cert
 
@@ -180,12 +174,11 @@ namespace WhileDiv
 def prog : Stmt :=
   assign "q" (bin .div (var "a") (var "b"))
 
-def observable : List Var := ["q"]
-def tac : Prog := compile prog
+def tac : Prog := { compile prog with observable := ["q"] }
 
 #eval tac.code.toList
 
-def cert := ConstPropOpt.optimize tac observable
+def cert := ConstPropOpt.optimize tac
 #eval checkCertificateExec cert
 
 end WhileDiv

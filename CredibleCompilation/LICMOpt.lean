@@ -80,7 +80,7 @@ def buildInvariants (avails : Array (Option CSEOpt.AvailSet)) : Array EInv :=
 
 /-- Run LICM on `prog` and produce a certified transformation.
     The result is an `ECertificate` that `checkCertificateExec` will accept. -/
-def optimize (prog : Prog) (observable : List Var) : ECertificate :=
+def optimize (prog : Prog) : ECertificate :=
   let avails := CSEOpt.analyze prog
   let trans := transformProg prog avails
   let inv := buildInvariants avails
@@ -88,10 +88,8 @@ def optimize (prog : Prog) (observable : List Var) : ECertificate :=
   let haltCerts := _root_.buildHaltCerts instrCerts trans
   { orig := prog
     trans := trans
-    tyCtx := fun _ => VarTy.int
     inv_orig := inv
     inv_trans := inv
-    observable := observable
     instrCerts := instrCerts
     haltCerts := haltCerts
     measure := Array.replicate trans.size 0 }

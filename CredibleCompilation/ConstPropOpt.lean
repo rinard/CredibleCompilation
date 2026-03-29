@@ -181,7 +181,7 @@ def buildInvariants (consts : Array (Option ConstMap)) : Array EInv :=
 
 /-- Run constant propagation on `prog` and produce a certified transformation.
     The result is an `ECertificate` that `checkCertificateExec` will accept. -/
-def optimize (prog : Prog) (observable : List Var) : ECertificate :=
+def optimize (prog : Prog) : ECertificate :=
   let consts := analyze prog
   let trans := transformProg prog consts
   let inv := buildInvariants consts
@@ -189,10 +189,8 @@ def optimize (prog : Prog) (observable : List Var) : ECertificate :=
   let haltCerts := _root_.buildHaltCerts instrCerts trans
   { orig := prog
     trans := trans
-    tyCtx := fun _ => VarTy.int
     inv_orig := inv
     inv_trans := inv
-    observable := observable
     instrCerts := instrCerts
     haltCerts := haltCerts
     measure := Array.replicate trans.size 0 }

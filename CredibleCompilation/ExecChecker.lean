@@ -263,18 +263,23 @@ def buildSubstMap (rel : EExprRel) : SymStore :=
     | .var v => some (v, e_o)
     | _ => none
 
-/-- An executable certificate: all data needed to verify the transformation. -/
+/-- An executable certificate: all data needed to verify the transformation.
+    The type context and observable variables are derived from the original program. -/
 structure ECertificate where
   orig       : Prog
   trans      : Prog
-  tyCtx      : TyCtx
   inv_orig   : Array EInv
   inv_trans  : Array EInv
-  observable : List Var
   instrCerts : Array EInstrCert
   haltCerts  : Array EHaltCert
   /-- Well-founded measure for non-termination (per transformed label). -/
   measure    : Array Nat
+
+/-- The type context for the certificate, derived from the original program. -/
+abbrev ECertificate.tyCtx (cert : ECertificate) : TyCtx := cert.orig.tyCtx
+
+/-- The observable variables for the certificate, derived from the original program. -/
+abbrev ECertificate.observable (cert : ECertificate) : List Var := cert.orig.observable
 
 -- ============================================================
 -- § 5b. Shared certificate-building utilities

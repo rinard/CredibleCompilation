@@ -133,7 +133,7 @@ def buildInstrCerts (prog : Prog) (origMap : Array Nat)
 
 /-- Run peephole optimization: remove `goto (pc+1)` and `copy x x`,
     compact the program, and produce a certified transformation. -/
-def optimize (prog : Prog) (observable : List Var) : ECertificate :=
+def optimize (prog : Prog) : ECertificate :=
   let n := prog.size
   let removed := ((List.range n).map (isNop prog)).toArray
   let origMap := _root_.buildOrigMap (removedToKept removed)
@@ -144,10 +144,8 @@ def optimize (prog : Prog) (observable : List Var) : ECertificate :=
   let haltCerts := _root_.buildHaltCerts instrCerts trans
   { orig := prog
     trans := trans
-    tyCtx := fun _ => VarTy.int
     inv_orig := Array.replicate n ([] : EInv)
     inv_trans := Array.replicate trans.size ([] : EInv)
-    observable := observable
     instrCerts := instrCerts
     haltCerts := haltCerts
     measure := Array.replicate trans.size 0 }

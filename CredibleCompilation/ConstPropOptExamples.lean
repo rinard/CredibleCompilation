@@ -28,14 +28,11 @@ namespace ConstPropOptExamples
     3: halt
 -/
 
-def simpleProg : Prog := .ofCode #[
-  .const "x" (.int 7),
-  .copy "y" "x",
-  .copy "z" "y",
-  .halt
-]
+def simpleProg : Prog :=
+  { code := #[.const "x" (.int 7), .copy "y" "x", .copy "z" "y", .halt],
+    tyCtx := fun _ => .int, observable := ["z"] }
 
-def simpleCert := optimize simpleProg ("z" :: [])
+def simpleCert := optimize simpleProg
 
 #eval! simpleCert.trans
 #eval! checkCertificateExec simpleCert
@@ -53,15 +50,12 @@ def simpleCert := optimize simpleProg ("z" :: [])
     4: halt
 -/
 
-def foldProg : Prog := .ofCode #[
-  .const "a" (.int 5),
-  .const "b" (.int 3),
-  .binop "c" .add "a" "b",
-  .binop "d" .mul "c" "b",
-  .halt
-]
+def foldProg : Prog :=
+  { code := #[.const "a" (.int 5), .const "b" (.int 3),
+              .binop "c" .add "a" "b", .binop "d" .mul "c" "b", .halt],
+    tyCtx := fun _ => .int, observable := ["d"] }
 
-def foldCert := optimize foldProg ("d" :: [])
+def foldCert := optimize foldProg
 
 #eval! foldCert.trans
 #eval! checkCertificateExec foldCert
@@ -80,14 +74,11 @@ def foldCert := optimize foldProg ("d" :: [])
   Expected: pc 1 unchanged, pc 2 becomes const "c" 10
 -/
 
-def partialProg : Prog := .ofCode #[
-  .const "a" (.int 10),
-  .binop "b" .add "a" "x",
-  .copy "c" "a",
-  .halt
-]
+def partialProg : Prog :=
+  { code := #[.const "a" (.int 10), .binop "b" .add "a" "x", .copy "c" "a", .halt],
+    tyCtx := fun _ => .int, observable := ["b", "c"] }
 
-def partialCert := optimize partialProg ("b" :: "c" :: [])
+def partialCert := optimize partialProg
 
 #eval! partialCert.trans
 #eval! checkCertificateExec partialCert
@@ -107,15 +98,12 @@ def partialCert := optimize partialProg ("b" :: "c" :: [])
   Expected: pc 1 becomes goto 3
 -/
 
-def branchProg : Prog := .ofCode #[
-  .const "x" (.int 1),
-  .ifgoto (.cmpLit .ne "x" 0) 3,
-  .halt,
-  .const "y" (.int 5),
-  .halt
-]
+def branchProg : Prog :=
+  { code := #[.const "x" (.int 1), .ifgoto (.cmpLit .ne "x" 0) 3, .halt,
+              .const "y" (.int 5), .halt],
+    tyCtx := fun _ => .int, observable := ["y"] }
 
-def branchCert := optimize branchProg ("y" :: [])
+def branchCert := optimize branchProg
 
 #eval! branchCert.trans
 #eval! checkCertificateExec branchCert
@@ -134,14 +122,12 @@ def branchCert := optimize branchProg ("y" :: [])
   Expected: pc 1 becomes goto 2
 -/
 
-def fallProg : Prog := .ofCode #[
-  .const "x" (.int 0),
-  .ifgoto (.cmpLit .ne "x" 0) 3,
-  .const "y" (.int 42),
-  .halt
-]
+def fallProg : Prog :=
+  { code := #[.const "x" (.int 0), .ifgoto (.cmpLit .ne "x" 0) 3,
+              .const "y" (.int 42), .halt],
+    tyCtx := fun _ => .int, observable := ["y"] }
 
-def fallCert := optimize fallProg ("y" :: [])
+def fallCert := optimize fallProg
 
 #eval! fallCert.trans
 #eval! checkCertificateExec fallCert
@@ -164,17 +150,13 @@ def fallCert := optimize fallProg ("y" :: [])
   the loop header), but the certificate should still verify.
 -/
 
-def loopProg : Prog := .ofCode #[
-  .const "one" (.int 1),
-  .const "n" (.int 10),
-  .const "i" (.int 0),
-  .ifgoto (.cmp .lt "i" "n") 5,
-  .halt,
-  .binop "i" .add "i" "one",
-  .goto 3
-]
+def loopProg : Prog :=
+  { code := #[.const "one" (.int 1), .const "n" (.int 10), .const "i" (.int 0),
+              .ifgoto (.cmp .lt "i" "n") 5, .halt,
+              .binop "i" .add "i" "one", .goto 3],
+    tyCtx := fun _ => .int, observable := ["i"] }
 
-def loopCert := optimize loopProg ("i" :: [])
+def loopCert := optimize loopProg
 
 #eval! loopCert.trans
 #eval! checkCertificateExec loopCert
@@ -193,16 +175,12 @@ def loopCert := optimize loopProg ("i" :: [])
     5: halt
 -/
 
-def chainProg : Prog := .ofCode #[
-  .const "x" (.int 100),
-  .copy "y" "x",
-  .copy "z" "y",
-  .binop "w" .add "x" "z",
-  .binop "v" .sub "w" "y",
-  .halt
-]
+def chainProg : Prog :=
+  { code := #[.const "x" (.int 100), .copy "y" "x", .copy "z" "y",
+              .binop "w" .add "x" "z", .binop "v" .sub "w" "y", .halt],
+    tyCtx := fun _ => .int, observable := ["v", "w"] }
 
-def chainCert := optimize chainProg ("v" :: "w" :: [])
+def chainCert := optimize chainProg
 
 #eval! chainCert.trans
 #eval! checkCertificateExec chainCert
