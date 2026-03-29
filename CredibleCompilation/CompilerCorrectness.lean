@@ -19,7 +19,7 @@ verified compiler correctness proof.
 -- § 1. Variable classification
 -- ============================================================
 
-def Var.isTmp (v : Var) : Bool := v.startsWith "__t"
+-- Var.isTmp is now defined in WhileLang.lean
 
 def SExpr.freeVars : SExpr → List Var
   | .lit _ => []
@@ -95,11 +95,7 @@ theorem SBool.eval_tmpAgree (sb : SBool) (σ τ : Store)
 -- § 2a. String helpers
 -- ============================================================
 
-private axiom string_startsWith_append_left (s t : String) :
-    (s ++ t).startsWith s = true
-
-theorem freshVar_isTmp (n : Nat) : (s!"__t{n}" : String).startsWith "__t" = true :=
-  string_startsWith_append_left "__t" (toString n)
+-- freshVar_isTmp is replaced by tmpName_isTmp_wt in WhileLang.lean
 
 -- ============================================================
 -- § 3. Interpreter congruence on tmp-free programs
@@ -264,6 +260,296 @@ def Stmt.intTyped (fuel : Nat) (σ : Store) : Stmt → Prop
         | some σ' => (Stmt.loop b body).intTyped fuel' σ'
         | none => True
       else True
+
+-- ============================================================
+-- § 4c. Bridge: typeCheck → tmpFree
+-- ============================================================
+
+/-- If `noTmpDecls decls` holds and `v` is found in `decls`, then `v` is not a tmp. -/
+private theorem noTmpDecls_not_tmp {decls : List (Var × VarTy)} {v : Var} {ty : VarTy}
+    (hnt : Program.noTmpDecls decls = true) (hlook : decls.lookup v = some ty) :
+    v.isTmp = false := by
+  -- If v.isTmp were true, lookup would return none, contradicting hlook
+  cases hv : v.isTmp with
+  | false => rfl
+  | true =>
+    have := lookup_none_of_isTmp_wt hnt hv
+    simp [this] at hlook
+
+/-- All variables in a well-typed arithmetic expression are declared. -/
+private theorem checkSExpr_declared {lookup : Var → Option VarTy}
+    {e : SExpr} (h : Program.checkSExpr lookup e = true) :
+    ∀ v ∈ e.freeVars, ∃ ty, lookup v = some ty := by
+  induction e with
+  | lit _ => intro v hv; simp [SExpr.freeVars] at hv
+  | var x =>
+    intro v hv; simp [SExpr.freeVars] at hv; subst hv
+    simp [Program.checkSExpr] at h; exact ⟨.int, h⟩
+  | bin _ a b iha ihb =>
+    simp [Program.checkSExpr, Bool.and_eq_true] at h
+    intro v hv; simp [SExpr.freeVars] at hv
+    rcases hv with ha | hb
+    · exact iha h.1 v ha
+    · exact ihb h.2 v hb
+
+/-- All variables in a well-typed boolean expression are declared. -/
+private theorem checkSBool_declared {lookup : Var → Option VarTy}
+    {b : SBool} (h : Program.checkSBool lookup b = true) :
+    ∀ v ∈ b.freeVars, ∃ ty, lookup v = some ty := by
+  induction b with
+  | bvar x =>
+    intro v hv; simp [SBool.freeVars] at hv; subst hv
+    simp [Program.checkSBool] at h; exact ⟨.bool, h⟩
+  | cmp _ a b =>
+    simp [Program.checkSBool, Bool.and_eq_true] at h
+    intro v hv; simp [SBool.freeVars] at hv
+    rcases hv with ha | hb
+    · exact checkSExpr_declared h.1 v ha
+    · exact checkSExpr_declared h.2 v hb
+  | not e ih =>
+    simp [Program.checkSBool] at h
+    intro v hv; simp [SBool.freeVars] at hv; exact ih h v hv
+  | and a b iha ihb =>
+    simp [Program.checkSBool, Bool.and_eq_true] at h
+    intro v hv; simp [SBool.freeVars] at hv
+    rcases hv with ha | hb
+    · exact iha h.1 v ha
+    · exact ihb h.2 v hb
+  | or a b iha ihb =>
+    simp [Program.checkSBool, Bool.and_eq_true] at h
+    intro v hv; simp [SBool.freeVars] at hv
+    rcases hv with ha | hb
+    · exact iha h.1 v ha
+    · exact ihb h.2 v hb
+
+/-- All variables in a well-typed statement are declared. -/
+private theorem checkStmt_declared {lookup : Var → Option VarTy}
+    {s : Stmt} (h : Program.checkStmt lookup s = true) :
+    ∀ v ∈ s.allVars, ∃ ty, lookup v = some ty := by
+  induction s with
+  | skip => intro v hv; simp [Stmt.allVars] at hv
+  | assign x e =>
+    simp [Program.checkStmt, Bool.and_eq_true] at h
+    intro v hv; simp [Stmt.allVars] at hv
+    rcases hv with rfl | he
+    · exact ⟨.int, h.1⟩
+    · exact checkSExpr_declared h.2 v he
+  | bassign x b =>
+    simp [Program.checkStmt, Bool.and_eq_true] at h
+    intro v hv; simp [Stmt.allVars] at hv
+    rcases hv with rfl | hb
+    · exact ⟨.bool, h.1⟩
+    · exact checkSBool_declared h.2 v hb
+  | seq s1 s2 ih1 ih2 =>
+    simp [Program.checkStmt, Bool.and_eq_true] at h
+    intro v hv; simp [Stmt.allVars] at hv
+    rcases hv with h1 | h2
+    · exact ih1 h.1 v h1
+    · exact ih2 h.2 v h2
+  | ite b s1 s2 ih1 ih2 =>
+    simp [Program.checkStmt, Bool.and_eq_true] at h
+    obtain ⟨⟨hb, h1⟩, h2⟩ := h
+    intro v hv; simp [Stmt.allVars] at hv
+    rcases hv with hfb | h1v | h2v
+    · exact checkSBool_declared hb v hfb
+    · exact ih1 h1 v h1v
+    · exact ih2 h2 v h2v
+  | loop b body ih =>
+    simp [Program.checkStmt, Bool.and_eq_true] at h
+    intro v hv; simp [Stmt.allVars] at hv
+    rcases hv with hfb | hbv
+    · exact checkSBool_declared h.1 v hfb
+    · exact ih h.2 v hbv
+
+/-- **Bridge lemma**: A type-checked program's body is tmp-free — no variable
+    in the source program uses the compiler-reserved `__t` prefix. -/
+theorem Program.typeCheck_tmpFree (prog : Program) (h : prog.typeCheck = true) :
+    prog.body.tmpFree := by
+  simp [Program.typeCheck, Bool.and_eq_true] at h
+  obtain ⟨⟨_, hnt⟩, hchk⟩ := h
+  intro v hv
+  obtain ⟨ty, hlook⟩ := checkStmt_declared hchk v hv
+  exact noTmpDecls_not_tmp hnt hlook
+
+-- ============================================================
+-- § 4d. Source-level type preservation
+-- ============================================================
+
+/-- Helper: if `Γ x = .int`, then `TypedStore Γ σ` implies `∃ n, σ x = .int n`. -/
+private theorem TypedStore.getInt {Γ : TyCtx} {σ : Store} {x : Var}
+    (hts : TypedStore Γ σ) (hty : Γ x = .int) : ∃ n, σ x = .int n := by
+  have := hts x; rw [hty] at this
+  exact Value.int_of_typeOf_int this
+
+/-- Helper: checkStmt-declared variables have their declared type in tyCtx. -/
+private theorem lookup_tyCtx {lookup : Var → Option VarTy} {Γ : TyCtx}
+    (hcompat : ∀ x ty, lookup x = some ty → Γ x = ty) {x : Var} {ty : VarTy}
+    (h : lookup x = some ty) : Γ x = ty := hcompat x ty h
+
+/-- Source-level type preservation: interpreting a well-typed statement
+    preserves TypedStore. -/
+theorem Stmt.interp_preserves_typedStore
+    {s : Stmt} {fuel : Nat} {σ σ' : Store} {Γ : TyCtx}
+    {lookup : Var → Option VarTy}
+    (hcompat : ∀ x ty, lookup x = some ty → Γ x = ty)
+    (hchk : Program.checkStmt lookup s = true)
+    (hts : TypedStore Γ σ)
+    (hinterp : s.interp fuel σ = some σ') :
+    TypedStore Γ σ' := by
+  induction s generalizing fuel σ σ' with
+  | skip =>
+    simp [Stmt.interp] at hinterp; subst hinterp; exact hts
+  | assign x e =>
+    simp [Stmt.interp] at hinterp; subst hinterp
+    simp [Program.checkStmt, Bool.and_eq_true] at hchk
+    intro y; simp [Store.update]; split
+    · case isTrue heq => simp [heq, Value.typeOf_int, hcompat _ .int hchk.1]
+    · case isFalse => exact hts y
+  | bassign x b =>
+    simp [Stmt.interp] at hinterp; subst hinterp
+    simp [Program.checkStmt, Bool.and_eq_true] at hchk
+    intro y; simp [Store.update]; split
+    · case isTrue heq => simp [heq, Value.typeOf_bool, hcompat _ .bool hchk.1]
+    · case isFalse => exact hts y
+  | seq s1 s2 ih1 ih2 =>
+    simp [Program.checkStmt, Bool.and_eq_true] at hchk
+    simp [Stmt.interp] at hinterp
+    cases hq : s1.interp fuel σ with
+    | none => simp [hq] at hinterp
+    | some σ₁ =>
+      simp [hq] at hinterp
+      exact ih2 hchk.2 (ih1 hchk.1 hts hq) hinterp
+  | ite b s1 s2 ih1 ih2 =>
+    simp [Program.checkStmt, Bool.and_eq_true] at hchk
+    obtain ⟨⟨_, h1⟩, h2⟩ := hchk
+    cases hcond : b.eval σ with
+    | true =>
+      simp [Stmt.interp, hcond] at hinterp
+      exact ih1 h1 hts hinterp
+    | false =>
+      simp [Stmt.interp, hcond] at hinterp
+      exact ih2 h2 hts hinterp
+  | loop b body ih =>
+    induction fuel generalizing σ σ' with
+    | zero => simp [Stmt.interp] at hinterp
+    | succ fuel' ihf =>
+      simp [Program.checkStmt, Bool.and_eq_true] at hchk
+      cases hcond : b.eval σ with
+      | false =>
+        simp [Stmt.interp, hcond] at hinterp; subst hinterp; exact hts
+      | true =>
+        simp [Stmt.interp, hcond] at hinterp
+        cases hq : body.interp fuel' σ with
+        | none => simp [hq] at hinterp
+        | some σ₁ =>
+          simp [hq] at hinterp
+          exact ihf (ih hchk.2 hts hq) hinterp
+
+-- ============================================================
+-- § 4e. Bridge: typeCheck + TypedStore → intTyped
+-- ============================================================
+
+/-- If `checkSExpr lookup e = true` and `TypedStore Γ σ` with compatible lookup/Γ,
+    then all vars in `e.freeVars` have int values in `σ`. -/
+private theorem checkSExpr_intVars
+    {lookup : Var → Option VarTy} {Γ : TyCtx} {σ : Store} {e : SExpr}
+    (hcompat : ∀ x ty, lookup x = some ty → Γ x = ty)
+    (hchk : Program.checkSExpr lookup e = true)
+    (hts : TypedStore Γ σ) :
+    ∀ v ∈ e.freeVars, ∃ n, σ v = .int n := by
+  induction e with
+  | lit _ => intro v hv; simp [SExpr.freeVars] at hv
+  | var x =>
+    intro v hv; simp [SExpr.freeVars] at hv; subst hv
+    simp [Program.checkSExpr] at hchk
+    exact TypedStore.getInt hts (hcompat _ .int hchk)
+  | bin _ a b iha ihb =>
+    simp [Program.checkSExpr, Bool.and_eq_true] at hchk
+    intro v hv; simp [SExpr.freeVars] at hv
+    rcases hv with ha | hb
+    · exact iha hchk.1 v ha
+    · exact ihb hchk.2 v hb
+
+/-- If `checkSBool lookup b = true` and `TypedStore Γ σ` with compatible lookup/Γ,
+    then `b.intTyped σ`. -/
+private theorem checkSBool_intTyped
+    {lookup : Var → Option VarTy} {Γ : TyCtx} {σ : Store} {b : SBool}
+    (hcompat : ∀ x ty, lookup x = some ty → Γ x = ty)
+    (hchk : Program.checkSBool lookup b = true)
+    (hts : TypedStore Γ σ) :
+    b.intTyped σ := by
+  induction b with
+  | bvar _ => trivial
+  | cmp _ a b =>
+    simp [Program.checkSBool, Bool.and_eq_true] at hchk
+    exact ⟨checkSExpr_intVars hcompat hchk.1 hts, checkSExpr_intVars hcompat hchk.2 hts⟩
+  | not e ih => simp [Program.checkSBool] at hchk; exact ih hchk
+  | and a b iha ihb =>
+    simp [Program.checkSBool, Bool.and_eq_true] at hchk
+    exact ⟨iha hchk.1, ihb hchk.2⟩
+  | or a b iha ihb =>
+    simp [Program.checkSBool, Bool.and_eq_true] at hchk
+    exact ⟨iha hchk.1, ihb hchk.2⟩
+
+/-- If `checkStmt lookup s = true`, `TypedStore Γ σ`, and lookup/Γ are compatible,
+    then `s.intTyped fuel σ`. -/
+theorem checkStmt_intTyped
+    (lookup : Var → Option VarTy) (Γ : TyCtx) (σ : Store) (s : Stmt) (fuel : Nat)
+    (hcompat : ∀ x ty, lookup x = some ty → Γ x = ty)
+    (hchk : Program.checkStmt lookup s = true)
+    (hts : TypedStore Γ σ) :
+    s.intTyped fuel σ := by
+  induction s generalizing fuel σ with
+  | skip => simp [Stmt.intTyped]
+  | assign x e =>
+    simp [Program.checkStmt, Bool.and_eq_true] at hchk
+    simp [Stmt.intTyped]
+    exact checkSExpr_intVars hcompat hchk.2 hts
+  | bassign x b =>
+    simp [Program.checkStmt, Bool.and_eq_true] at hchk
+    simp [Stmt.intTyped]
+    exact checkSBool_intTyped hcompat hchk.2 hts
+  | seq s1 s2 ih1 ih2 =>
+    simp [Program.checkStmt, Bool.and_eq_true] at hchk
+    simp only [Stmt.intTyped]
+    refine ⟨ih1 σ fuel hchk.1 hts, ?_⟩
+    cases hq : s1.interp fuel σ with
+    | none => simp [hq]
+    | some σ₁ =>
+        exact ih2 σ₁ fuel hchk.2 (Stmt.interp_preserves_typedStore hcompat hchk.1 hts hq)
+  | ite b s1 s2 ih1 ih2 =>
+    simp [Program.checkStmt, Bool.and_eq_true] at hchk
+    obtain ⟨⟨hb, h1⟩, h2⟩ := hchk
+    simp only [Stmt.intTyped]
+    refine ⟨checkSBool_intTyped hcompat hb hts, ?_⟩
+    cases b.eval σ <;> simp
+    · exact ih2 σ fuel h2 hts
+    · exact ih1 σ fuel h1 hts
+  | loop b body ih =>
+    induction fuel generalizing σ with
+    | zero => simp [Stmt.intTyped]
+    | succ fuel' ihf =>
+      simp [Program.checkStmt, Bool.and_eq_true] at hchk
+      simp only [Stmt.intTyped]
+      refine ⟨checkSBool_intTyped hcompat hchk.1 hts, ?_⟩
+      cases hcond : b.eval σ <;> simp [hcond]
+      refine ⟨ih σ fuel' hchk.2 hts, ?_⟩
+      cases hq : body.interp fuel' σ with
+      | none => simp [hq]
+      | some σ₁ =>
+        simp [hq]
+        exact ihf σ₁ (Stmt.interp_preserves_typedStore hcompat hchk.2 hts hq)
+
+/-- **Bridge lemma**: A type-checked program with a well-typed store satisfies intTyped. -/
+theorem Program.typeCheck_intTyped (prog : Program) (h : prog.typeCheck = true)
+    (σ : Store) (hts : TypedStore prog.tyCtx σ) (fuel : Nat) :
+    prog.body.intTyped fuel σ := by
+  simp [Program.typeCheck, Bool.and_eq_true] at h
+  obtain ⟨⟨_, _⟩, hchk⟩ := h
+  exact checkStmt_intTyped prog.lookupTy prog.tyCtx σ prog.body fuel
+    (fun x ty hlook => by
+      show (prog.lookupTy x).getD .int = ty
+      rw [hlook]; rfl) hchk hts
 
 -- ============================================================
 -- § 5. Fragment execution

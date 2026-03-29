@@ -1,4 +1,6 @@
 import CredibleCompilation.CompilerCorrectness
+import Mathlib.Tactic.IntervalCases
+import Mathlib.Data.List.Basic
 
 set_option linter.unusedSimpArgs false
 set_option maxHeartbeats 800000
@@ -18,14 +20,101 @@ preservation, which is the key invariant the monadic compiler proofs lacked.
 
 -- tmpName is defined in WhileLang.lean
 
-private axiom tmpName_injective_ax : Function.Injective tmpName
+-- -----------------------------------------------
+-- Proving tmpName injective (no axiom)
+-- -----------------------------------------------
+
+/-- Clean base-10 digit representation. -/
+private noncomputable def myDigits (n : Nat) : List Char :=
+  if n < 10 then [(n % 10).digitChar]
+  else myDigits (n / 10) ++ [(n % 10).digitChar]
+termination_by n
+decreasing_by omega
+
+private theorem digitChar_injective {m n : Nat} (hm : m < 10) (hn : n < 10)
+    (h : m.digitChar = n.digitChar) : m = n := by
+  interval_cases m <;> interval_cases n <;> simp_all [Nat.digitChar]
+
+private theorem digitChar_toNat {n : Nat} (hn : n < 10) :
+    n.digitChar.toNat - '0'.toNat = n := by
+  interval_cases n <;> simp [Nat.digitChar]
+
+private def parseNat (cs : List Char) : Nat :=
+  cs.foldl (fun acc c => acc * 10 + (c.toNat - '0'.toNat)) 0
+
+private theorem parseNat_myDigits (n : Nat) : parseNat (myDigits n) = n := by
+  rw [myDigits]
+  split
+  · rename_i hn
+    simp only [parseNat, List.foldl]
+    rw [digitChar_toNat (by omega : n % 10 < 10)]
+    omega
+  · rename_i hn
+    simp only [parseNat, List.foldl_append, List.foldl]
+    show List.foldl (fun acc c => acc * 10 + (c.toNat - '0'.toNat)) 0
+        (myDigits (n / 10)) * 10 + ((n % 10).digitChar.toNat - '0'.toNat) = n
+    have ih := parseNat_myDigits (n / 10)
+    simp only [parseNat] at ih
+    rw [ih, digitChar_toNat (by omega : n % 10 < 10)]
+    omega
+termination_by n
+decreasing_by omega
+
+private theorem myDigits_injective : Function.Injective myDigits := by
+  intro m n h
+  have hm := parseNat_myDigits m
+  have hn := parseNat_myDigits n
+  rw [h] at hm; omega
+
+private theorem tdc_eq_aux (fuel n : Nat) (ds : List Char) (hfuel : n ≤ fuel) :
+    Nat.toDigitsCore 10 (fuel + 1) n ds = myDigits n ++ ds := by
+  induction fuel generalizing n ds with
+  | zero =>
+    have : n = 0 := by omega
+    subst this
+    simp [Nat.toDigitsCore, myDigits]
+  | succ fuel ih =>
+    show (let d := (n % 10).digitChar
+          let n' := n / 10
+          if n' = 0 then d :: ds
+          else Nat.toDigitsCore 10 (fuel + 1) n' (d :: ds)) = myDigits n ++ ds
+    by_cases hn : n < 10
+    · simp [show n / 10 = 0 by omega, myDigits, hn]
+    · simp only [show ¬(n / 10 = 0) by omega, ite_false]
+      rw [ih (n / 10) _ (by omega)]
+      conv_rhs => rw [myDigits, if_neg hn]
+      simp [List.append_assoc]
+
+private theorem myDigits_eq_toDigits (n : Nat) : myDigits n = Nat.toDigits 10 n := by
+  simp only [Nat.toDigits]
+  rw [tdc_eq_aux n n List.nil (by omega)]
+  simp
+
+private theorem Nat_toString_injective : Function.Injective (toString : Nat → String) := by
+  intro m n h
+  have h_toList : (toString m : String).toList = (toString n : String).toList :=
+    String.ext_iff.mp h
+  show m = n
+  simp only [show (toString m : String) = Nat.repr m from rfl,
+             show (toString n : String) = Nat.repr n from rfl,
+             Nat.repr, String.toList_ofList] at h_toList
+  rw [← myDigits_eq_toDigits, ← myDigits_eq_toDigits] at h_toList
+  exact myDigits_injective h_toList
+
+private theorem tmpName_injective : Function.Injective tmpName := by
+  intro k j h
+  have h2 := String.ext_iff.mp h
+  simp only [tmpName, String.toList_append] at h2
+  have h3 := List.append_cancel_left h2
+  exact Nat_toString_injective (String.ext_iff.mpr h3)
+
+-- -----------------------------------------------
 
 theorem tmpName_ne {k j : Nat} (h : k ≠ j) : tmpName k ≠ tmpName j :=
-  fun heq => h (tmpName_injective_ax heq)
+  fun heq => h (tmpName_injective heq)
 
-theorem tmpName_isTmp (k : Nat) : (tmpName k).isTmp = true := by
-  show (s!"__t{k}" : String).startsWith "__t" = true
-  exact freshVar_isTmp k
+theorem tmpName_isTmp (k : Nat) : (tmpName k).isTmp = true :=
+  tmpName_isTmp_wt k
 
 theorem isTmp_false_ne_tmpName {v : Var} {k : Nat} (h : v.isTmp = false) : v ≠ tmpName k := by
   intro heq; have := tmpName_isTmp k; rw [← heq] at this; simp [h] at this
@@ -272,7 +361,7 @@ theorem Store.update_isTmp_ne {σ : Store} {t : Var} {v : Value}
   Store.update_other σ t w v (fun heq => by rw [heq] at hw; simp [hw] at ht)
 
 -- ============================================================
--- § 8. Monotonicity and result bounds (sorry for now)
+-- § 8. Monotonicity and result bounds
 -- ============================================================
 
 theorem refCompileExpr_nextTmp_ge (e : SExpr) (offset nextTmp : Nat) :
@@ -1842,6 +1931,274 @@ theorem refCompile_stuck (s : Stmt) (fuel : Nat) (σ σ' : Store)
   exact error_run_no_halt hfrag herror hhalt
 
 -- ============================================================
+-- § 16b. Statement unsafe theorem (generalises stuck)
+-- ============================================================
+
+/-- If `¬ s.divSafe fuel σ`, the compiled statement code reaches a stuck
+    configuration (division by zero), regardless of whether `interp` terminates.
+    This generalises `refCompileStmt_stuck` by dropping the `hinterp` hypothesis. -/
+theorem refCompileStmt_unsafe (s : Stmt) (fuel : Nat) (σ : Store)
+    (offset nextTmp : Nat) (p : Prog) (σ_tac : Store)
+    (htmpfree : s.tmpFree)
+    (hunsafe : ¬ s.divSafe fuel σ)
+    (hintv : s.intTyped fuel σ)
+    (hagree : ∀ v, v.isTmp = false → σ_tac v = σ v)
+    (hcode : CodeAt (refCompileStmt s offset nextTmp).1 p offset) :
+    ∃ pc_s σ_s, FragExec p offset σ_tac pc_s σ_s ∧
+      Step p (Cfg.run pc_s σ_s) (Cfg.error σ_s) ∧
+      pc_s < offset + (refCompileStmt s offset nextTmp).1.length := by
+  induction s generalizing fuel σ offset nextTmp p σ_tac with
+  | skip => simp [Stmt.divSafe] at hunsafe
+  | assign x e =>
+    exact refCompileStmt_stuck _ fuel σ (σ[x ↦ .int (e.eval σ)]) offset nextTmp p σ_tac
+      (by simp [Stmt.interp]) htmpfree hunsafe hintv hagree hcode
+  | bassign x b =>
+    exact refCompileStmt_stuck _ fuel σ (σ[x ↦ .bool (b.eval σ)]) offset nextTmp p σ_tac
+      (by simp [Stmt.interp]) htmpfree hunsafe hintv hagree hcode
+  | seq s₁ s₂ ih₁ ih₂ =>
+    have htf₁ : s₁.tmpFree := fun v hv => htmpfree v (List.mem_append_left _ hv)
+    have htf₂ : s₂.tmpFree := fun v hv => htmpfree v (List.mem_append_right _ hv)
+    simp only [Stmt.intTyped] at hintv
+    have hintv₁ : s₁.intTyped fuel σ := hintv.1
+    dsimp only [refCompileStmt] at hcode ⊢
+    generalize hrc1 : refCompileStmt s₁ offset nextTmp = rc1 at hcode ⊢
+    obtain ⟨code1, tmp1⟩ := rc1
+    generalize hrc2 : refCompileStmt s₂ (offset + code1.length) tmp1 = rc2 at hcode ⊢
+    obtain ⟨code2, tmp2⟩ := rc2
+    simp only [] at hcode ⊢
+    have hcode1 : CodeAt (refCompileStmt s₁ offset nextTmp).1 p offset := by
+      rw [hrc1]; exact hcode.left
+    have hcode2 : CodeAt (refCompileStmt s₂ (offset + code1.length) tmp1).1 p
+        (offset + code1.length) := by rw [hrc2]; exact hcode.right
+    cases hq₁ : s₁.interp fuel σ with
+    | none =>
+      have : ¬ s₁.divSafe fuel σ := by
+        intro h; exact hunsafe (by simp [Stmt.divSafe, hq₁, h])
+      obtain ⟨pc_s, σ_s, hfrag, hstuck, hlt⟩ :=
+        ih₁ fuel σ offset nextTmp p σ_tac htf₁ this hintv₁ hagree hcode1
+      rw [hrc1] at hlt; simp at hlt
+      exact ⟨pc_s, σ_s, hfrag, hstuck, by simp [List.length_append]; omega⟩
+    | some σ₁ =>
+      rw [hq₁] at hintv
+      have hintv₂ : s₂.intTyped fuel σ₁ := hintv.2
+      by_cases hds₁ : s₁.divSafe fuel σ
+      · have hds₂ : ¬ s₂.divSafe fuel σ₁ := by
+          intro h; exact hunsafe (by simp [Stmt.divSafe, hq₁, hds₁, h])
+        obtain ⟨σ₁_tac, hexec₁, hagree₁⟩ :=
+          refCompileStmt_correct s₁ fuel σ σ₁ offset nextTmp p σ_tac
+            hq₁ htf₁ hds₁ hintv₁ hagree hcode1
+        rw [hrc1] at hexec₁; simp at hexec₁
+        obtain ⟨pc_s, σ_s, hfrag, hstuck, hlt⟩ :=
+          ih₂ fuel σ₁ (offset + code1.length) tmp1 p σ₁_tac
+            htf₂ hds₂ hintv₂ hagree₁ hcode2
+        rw [hrc2] at hlt; simp at hlt
+        exact ⟨pc_s, σ_s, FragExec.trans' hexec₁ hfrag, hstuck,
+          by simp [List.length_append]; omega⟩
+      · obtain ⟨pc_s, σ_s, hfrag, hstuck, hlt⟩ :=
+          refCompileStmt_stuck s₁ fuel σ σ₁ offset nextTmp p σ_tac
+            hq₁ htf₁ hds₁ hintv₁ hagree hcode1
+        rw [hrc1] at hlt; simp at hlt
+        exact ⟨pc_s, σ_s, hfrag, hstuck, by simp [List.length_append]; omega⟩
+  | ite b s₁ s₂ ih₁ ih₂ =>
+    dsimp only [refCompileStmt] at hcode ⊢
+    generalize hrcb : refCompileBool b offset nextTmp = rcb at hcode ⊢
+    obtain ⟨codeBool, be, tmpB⟩ := rcb
+    generalize hrce : refCompileStmt s₂ (offset + codeBool.length + 1) tmpB = rce at hcode ⊢
+    obtain ⟨codeElse, tmpElse⟩ := rce
+    generalize hrct : refCompileStmt s₁
+        (offset + codeBool.length + 1 + codeElse.length + 1) tmpElse = rct at hcode ⊢
+    obtain ⟨codeThen, tmpThen⟩ := rct
+    simp only [] at hcode ⊢
+    have htf_b : ∀ v ∈ b.freeVars, v.isTmp = false :=
+      fun v hv => htmpfree v (List.mem_append_left _ (List.mem_append_left _ hv))
+    have hintv_b : b.intTyped σ := by
+      simp only [Stmt.intTyped] at hintv; exact hintv.1
+    have hcb : CodeAt (refCompileBool b offset nextTmp).1 p offset := by
+      rw [hrcb]; exact hcode.left.left.left.left
+    by_cases hbds : b.divSafe σ
+    · obtain ⟨σ_bool, hexec_bool, heval_bool, hntmp_bool, _⟩ :=
+        refCompileBool_correct b offset nextTmp σ σ_tac p htf_b hintv_b hbds hagree hcb
+      rw [hrcb] at hexec_bool heval_bool; simp at hexec_bool heval_bool
+      have hagree_bool : ∀ v, v.isTmp = false → σ_bool v = σ v := by
+        intro v hv; rw [hntmp_bool v hv]; exact hagree v hv
+      have hifg : p[offset + codeBool.length]? =
+          some (.ifgoto be (offset + codeBool.length + 1 + codeElse.length + 1)) := by
+        have := hcode.left.left.left.right.head
+        simp only [List.length_append] at this; exact this
+      cases hb : b.eval σ with
+      | true =>
+        have htf₁ : s₁.tmpFree :=
+          fun v hv => htmpfree v (List.mem_append_left _ (List.mem_append_right _ hv))
+        have hintv₁ : s₁.intTyped fuel σ := by
+          simp only [Stmt.intTyped, hb] at hintv; exact hintv.2
+        have hds₁ : ¬ s₁.divSafe fuel σ := by
+          intro h; exact hunsafe (by simp [Stmt.divSafe, hbds, hb, h])
+        have hexec_if := FragExec.single_iftrue hifg (by rw [heval_bool, hb])
+        have hct : CodeAt (refCompileStmt s₁
+            (offset + codeBool.length + 1 + codeElse.length + 1) tmpElse).1 p
+            (offset + codeBool.length + 1 + codeElse.length + 1) := by
+          rw [hrct]; have := hcode.right
+          simp only [List.length_append, List.length_cons, List.length_nil] at this
+          rwa [show offset + (codeBool.length + 1 + codeElse.length + 1) =
+              offset + codeBool.length + 1 + codeElse.length + 1 from by omega] at this
+        obtain ⟨pc_s, σ_s, hfrag, hstuck, hlt⟩ :=
+          ih₁ fuel σ (offset + codeBool.length + 1 + codeElse.length + 1) tmpElse p
+            σ_bool htf₁ hds₁ hintv₁ hagree_bool hct
+        rw [hrct] at hlt; simp at hlt
+        exact ⟨pc_s, σ_s,
+          FragExec.trans' (FragExec.trans' hexec_bool hexec_if) hfrag, hstuck,
+          by simp [List.length_append, List.length_cons, List.length_nil]; omega⟩
+      | false =>
+        have htf₂ : s₂.tmpFree := fun v hv => htmpfree v (List.mem_append_right _ hv)
+        have hintv₂ : s₂.intTyped fuel σ := by
+          simp only [Stmt.intTyped, hb, Bool.false_eq_true, ite_false] at hintv; exact hintv.2
+        have hds₂ : ¬ s₂.divSafe fuel σ := by
+          intro h; exact hunsafe (by simp [Stmt.divSafe, hbds, hb, h])
+        have hexec_if := FragExec.single_iffalse hifg (by rw [heval_bool, hb])
+        have hce : CodeAt (refCompileStmt s₂ (offset + codeBool.length + 1) tmpB).1 p
+            (offset + codeBool.length + 1) := by
+          rw [hrce]; have := hcode.left.left.right
+          simp only [List.length_append, List.length_cons, List.length_nil] at this
+          rwa [show offset + (codeBool.length + 1) =
+              offset + codeBool.length + 1 from by omega] at this
+        obtain ⟨pc_s, σ_s, hfrag, hstuck, hlt⟩ :=
+          ih₂ fuel σ (offset + codeBool.length + 1) tmpB p
+            σ_bool htf₂ hds₂ hintv₂ hagree_bool hce
+        rw [hrce] at hlt; simp at hlt
+        exact ⟨pc_s, σ_s,
+          FragExec.trans' (FragExec.trans' hexec_bool hexec_if) hfrag, hstuck,
+          by simp [List.length_append, List.length_cons, List.length_nil]; omega⟩
+    · obtain ⟨pc_s, σ_s, hfrag, hstuck, hlt⟩ :=
+        refCompileBool_stuck b offset nextTmp σ σ_tac p htf_b hintv_b hbds hagree hcb
+      rw [hrcb] at hlt; simp at hlt
+      exact ⟨pc_s, σ_s, hfrag, hstuck,
+        by simp [List.length_append, List.length_cons, List.length_nil]; omega⟩
+  | loop b body ih =>
+    induction fuel generalizing σ σ_tac with
+    | zero => simp [Stmt.divSafe] at hunsafe
+    | succ fuel' ihf =>
+      dsimp only [refCompileStmt] at hcode ⊢
+      generalize hrcb : refCompileBool b offset nextTmp = rcb at hcode ⊢
+      obtain ⟨codeBool, be, tmpB⟩ := rcb
+      generalize hrcbody : refCompileStmt body (offset + codeBool.length + 1) tmpB = rcbody
+          at hcode ⊢
+      obtain ⟨codeBody, tmpBody⟩ := rcbody
+      simp only [] at hcode ⊢
+      have htf_b : ∀ v ∈ b.freeVars, v.isTmp = false :=
+        fun v hv => htmpfree v (List.mem_append_left _ hv)
+      have htf_body : body.tmpFree :=
+        fun v hv => htmpfree v (List.mem_append_right _ hv)
+      have hcb : CodeAt (refCompileBool b offset nextTmp).1 p offset := by
+        rw [hrcb]; exact hcode.left.left.left
+      have hintv_b : b.intTyped σ := by
+        unfold Stmt.intTyped at hintv; exact hintv.1
+      cases hb : b.eval σ with
+      | false =>
+        have hbds : ¬ b.divSafe σ := by
+          intro h; exact hunsafe (by simp [Stmt.divSafe, h, hb])
+        obtain ⟨pc_s, σ_s, hfrag, hstuck, hlt⟩ :=
+          refCompileBool_stuck b offset nextTmp σ σ_tac p htf_b hintv_b hbds hagree hcb
+        rw [hrcb] at hlt; simp at hlt
+        exact ⟨pc_s, σ_s, hfrag, hstuck,
+          by simp [List.length_append, List.length_cons, List.length_nil]; omega⟩
+      | true =>
+        by_cases hbds : b.divSafe σ
+        · -- Guard safe: execute guard, enter body
+          obtain ⟨σ_bool, hexec_bool, heval_bool, hntmp_bool, _⟩ :=
+            refCompileBool_correct b offset nextTmp σ σ_tac p htf_b hintv_b hbds hagree hcb
+          rw [hrcb] at hexec_bool heval_bool; simp at hexec_bool heval_bool
+          have hagree_bool : ∀ v, v.isTmp = false → σ_bool v = σ v := by
+            intro v hv; rw [hntmp_bool v hv]; exact hagree v hv
+          have hifg : p[offset + codeBool.length]? =
+              some (.ifgoto (.not be)
+                (offset + codeBool.length + 1 + codeBody.length + 1)) := by
+            have := hcode.left.left.right.head
+            simp only [List.length_append, List.length_cons, List.length_nil] at this
+            exact this
+          have hexec_if : FragExec p _ σ_bool _ σ_bool :=
+            FragExec.single_iffalse hifg
+              (by simp only [BoolExpr.eval]; rw [heval_bool, hb]; decide)
+          have hcbody : CodeAt (refCompileStmt body
+              (offset + codeBool.length + 1) tmpB).1 p
+              (offset + codeBool.length + 1) := by
+            rw [hrcbody]; have := hcode.left.right
+            simp only [List.length_append, List.length_cons, List.length_nil] at this
+            rwa [show offset + (codeBool.length + 1) =
+                offset + codeBool.length + 1 from by omega] at this
+          have hintv_body : body.intTyped fuel' σ := by
+            unfold Stmt.intTyped at hintv; simp [hb] at hintv; exact hintv.2.1
+          cases hq : body.interp fuel' σ with
+          | none =>
+            -- Body diverges → body must be unsafe
+            have hds_body : ¬ body.divSafe fuel' σ := by
+              intro h; exact hunsafe (by simp [Stmt.divSafe, hbds, hb, h, hq])
+            obtain ⟨pc_s, σ_s, hfrag, hstuck, hlt⟩ :=
+              ih fuel' σ (offset + codeBool.length + 1) tmpB p σ_bool
+                htf_body hds_body hintv_body hagree_bool hcbody
+            rw [hrcbody] at hlt; simp at hlt
+            exact ⟨pc_s, σ_s,
+              FragExec.trans' (FragExec.trans' hexec_bool hexec_if) hfrag, hstuck,
+              by simp [List.length_append, List.length_cons, List.length_nil]; omega⟩
+          | some σ₁ =>
+            by_cases hds_body : body.divSafe fuel' σ
+            · -- Body safe: execute body, recurse on loop via fuel IH
+              obtain ⟨σ_body, hexec_body, hagree_body⟩ :=
+                refCompileStmt_correct body fuel' σ σ₁ (offset + codeBool.length + 1)
+                  tmpB p σ_bool hq htf_body hds_body hintv_body hagree_bool hcbody
+              rw [hrcbody] at hexec_body; simp at hexec_body
+              have hgoto_back : p[offset + codeBool.length + 1 + codeBody.length]? =
+                  some (.goto offset) := by
+                have := hcode.right.head
+                simp only [List.length_append, List.length_cons, List.length_nil] at this
+                rwa [show offset + (codeBool.length + 1 + codeBody.length) =
+                    offset + codeBool.length + 1 + codeBody.length from by omega] at this
+              have hexec_goto : FragExec p _ σ_body _ σ_body :=
+                FragExec.single_goto hgoto_back
+              have hexec_iter := FragExec.trans'
+                (FragExec.trans' (FragExec.trans' hexec_bool hexec_if) hexec_body)
+                hexec_goto
+              have hds_loop : ¬ (Stmt.loop b body).divSafe fuel' σ₁ := by
+                intro h; exact hunsafe (by simp [Stmt.divSafe, hbds, hb, hds_body, hq, h])
+              have hintv_loop : (Stmt.loop b body).intTyped fuel' σ₁ := by
+                unfold Stmt.intTyped at hintv; simp [hb] at hintv
+                rw [hq] at hintv; exact hintv.2.2
+              obtain ⟨pc_s, σ_s, hfrag, hstuck, hlt⟩ :=
+                ihf σ₁ σ_body hds_loop hintv_loop hagree_body
+              dsimp only [refCompileStmt] at hlt; rw [hrcb, hrcbody] at hlt
+              simp only [] at hlt
+              exact ⟨pc_s, σ_s, FragExec.trans' hexec_iter hfrag, hstuck, hlt⟩
+            · -- Body unsafe: IH on body
+              obtain ⟨pc_s, σ_s, hfrag, hstuck, hlt⟩ :=
+                ih fuel' σ (offset + codeBool.length + 1) tmpB p σ_bool
+                  htf_body hds_body hintv_body hagree_bool hcbody
+              rw [hrcbody] at hlt; simp at hlt
+              exact ⟨pc_s, σ_s,
+                FragExec.trans' (FragExec.trans' hexec_bool hexec_if) hfrag, hstuck,
+                by simp [List.length_append, List.length_cons, List.length_nil]; omega⟩
+        · -- Guard unsafe
+          obtain ⟨pc_s, σ_s, hfrag, hstuck, hlt⟩ :=
+            refCompileBool_stuck b offset nextTmp σ σ_tac p htf_b hintv_b hbds hagree hcb
+          rw [hrcb] at hlt; simp at hlt
+          exact ⟨pc_s, σ_s, hfrag, hstuck,
+            by simp [List.length_append, List.length_cons, List.length_nil]; omega⟩
+
+/-- If `¬ s.divSafe fuel σ` holds for some fuel, the compiled program
+    does **not** halt — it reaches a division-by-zero error. -/
+theorem refCompile_unsafe (s : Stmt) (fuel : Nat) (σ : Store)
+    (htmpfree : s.tmpFree)
+    (hunsafe : ¬ s.divSafe fuel σ)
+    (hintv : s.intTyped fuel σ) :
+    ¬ ∃ σ_tac, haltsWithResult (refCompile s) 0 σ σ_tac := by
+  intro ⟨σ_tac, hhalt⟩
+  have hcode : CodeAt (refCompileStmt s 0 0).1 (refCompile s) 0 := by
+    intro i hi; unfold refCompile; simp only [List.getElem?_toArray, Nat.zero_add]
+    exact List.getElem?_append_left hi
+  obtain ⟨pc_s, σ_s, hfrag, herror, _⟩ :=
+    refCompileStmt_unsafe s fuel σ 0 0 (refCompile s) σ
+      htmpfree hunsafe hintv (fun _ _ => rfl) hcode
+  exact error_run_no_halt hfrag herror hhalt
+
+-- ============================================================
 -- § 17. Step-indexed execution (RefStepsN)
 -- ============================================================
 
@@ -2551,3 +2908,532 @@ theorem refCompile_diverge (s : Stmt) (σ : Store)
   have hunbounded := refCompileStmt_diverges s σ 0 0 (refCompile s) σ
     htmpfree hdiv hsafe hintv (fun _ _ => rfl) hcode
   exact no_halt_of_unbounded hunbounded σ_tac hhalt
+
+-- ============================================================
+-- § 12. Bridge: compileStmt = refCompileStmt
+-- ============================================================
+
+theorem compileExpr_eq_refCompileExpr (e : SExpr) (o t : Nat) :
+    compileExpr e o t = refCompileExpr e o t := by
+  induction e generalizing o t with
+  | lit _ => rfl
+  | var _ => rfl
+  | bin _ a b iha ihb => simp only [compileExpr, refCompileExpr, iha, ihb]
+
+theorem compileBool_eq_refCompileBool (b : SBool) (o t : Nat) :
+    compileBool b o t = refCompileBool b o t := by
+  induction b generalizing o t with
+  | bvar _ => rfl
+  | cmp _ a b => simp only [compileBool, refCompileBool, compileExpr_eq_refCompileExpr]
+  | not _ ih => simp only [compileBool, refCompileBool, ih]
+  | and _ _ iha ihb => simp only [compileBool, refCompileBool, iha, ihb]
+  | or _ _ iha ihb => simp only [compileBool, refCompileBool, iha, ihb]
+
+theorem compileStmt_eq_refCompileStmt (s : Stmt) (o t : Nat) :
+    compileStmt s o t = refCompileStmt s o t := by
+  induction s generalizing o t with
+  | skip => rfl
+  | assign x e =>
+    cases e with
+    | lit _ => rfl
+    | var _ => rfl
+    | bin _ a b => simp only [compileStmt, refCompileStmt, compileExpr_eq_refCompileExpr]
+  | bassign _ b => simp only [compileStmt, refCompileStmt, compileBool_eq_refCompileBool]
+  | seq _ _ ih1 ih2 => simp only [compileStmt, refCompileStmt, ih1, ih2]
+  | ite _ _ _ ih1 ih2 =>
+    simp only [compileStmt, refCompileStmt, compileBool_eq_refCompileBool, ih1, ih2]
+  | loop _ _ ih =>
+    simp only [compileStmt, refCompileStmt, compileBool_eq_refCompileBool, ih]
+
+/-- The WhileLang `compile` and RefCompiler `refCompile` produce identical TAC programs. -/
+theorem compile_eq_refCompile (s : Stmt) : compile s = refCompile s := by
+  simp only [compile, refCompile, compileStmt_eq_refCompileStmt]
+
+-- ============================================================
+-- § 13. Unified behavioral equivalence for the statement compiler
+-- ============================================================
+
+/-- **Halt preservation**: If the source program terminates safely,
+    the compiled TAC program halts with a matching store. -/
+theorem compile_halt (s : Stmt) (fuel : Nat) (σ σ' : Store)
+    (hinterp : s.interp fuel σ = some σ')
+    (htmpfree : s.tmpFree)
+    (hsafe : s.divSafe fuel σ)
+    (hintv : s.intTyped fuel σ) :
+    ∃ σ_tac, program_behavior (compile s) σ (.halts σ_tac) ∧
+      (∀ v, v.isTmp = false → σ_tac v = σ' v) := by
+  rw [compile_eq_refCompile]
+  exact refCompile_correct s fuel σ σ' hinterp htmpfree hsafe hintv
+
+/-- **Error preservation**: If the source program terminates but has an
+    unsafe division, the compiled TAC program does not halt (it errors). -/
+theorem compile_error (s : Stmt) (fuel : Nat) (σ σ' : Store)
+    (hinterp : s.interp fuel σ = some σ')
+    (htmpfree : s.tmpFree)
+    (hunsafe : ¬ s.divSafe fuel σ)
+    (hintv : s.intTyped fuel σ) :
+    ¬ ∃ σ_tac, haltsWithResult (compile s) 0 σ σ_tac := by
+  rw [compile_eq_refCompile]
+  exact refCompile_stuck s fuel σ σ' hinterp htmpfree hunsafe hintv
+
+/-- **Divergence preservation**: If the source program diverges (for all
+    fuel levels) while remaining safe and well-typed, the compiled TAC
+    program does not halt (it diverges). -/
+theorem compile_diverge (s : Stmt) (σ : Store)
+    (htmpfree : s.tmpFree)
+    (hdiv : ∀ fuel, s.interp fuel σ = none)
+    (hsafe : ∀ fuel, s.divSafe fuel σ)
+    (hintv : ∀ fuel, s.intTyped fuel σ) :
+    ¬ ∃ σ_tac, haltsWithResult (compile s) 0 σ σ_tac := by
+  rw [compile_eq_refCompile]
+  exact refCompile_diverge s σ htmpfree hdiv hsafe hintv
+
+-- ============================================================
+-- § 14. Unified theorems with typeCheck as sole static precondition
+-- ============================================================
+
+/-- **Halt preservation (typed)**: If a type-checked program's body terminates
+    safely under a well-typed store, the compiled TAC program halts with a
+    matching store. Only `typeCheck` (static) and `divSafe` (runtime) are needed. -/
+theorem typed_compile_halt (prog : Program) (fuel : Nat) (σ σ' : Store)
+    (htc : prog.typeCheck = true)
+    (hts : TypedStore prog.tyCtx σ)
+    (hinterp : prog.body.interp fuel σ = some σ')
+    (hsafe : prog.body.divSafe fuel σ) :
+    ∃ σ_tac, program_behavior (compile prog.body) σ (.halts σ_tac) ∧
+      (∀ v, v.isTmp = false → σ_tac v = σ' v) :=
+  compile_halt prog.body fuel σ σ' hinterp
+    (Program.typeCheck_tmpFree prog htc) hsafe
+    (Program.typeCheck_intTyped prog htc σ hts fuel)
+
+/-- **Error preservation (typed)**: If a type-checked program's body terminates
+    with an unsafe division, the compiled TAC program does not halt normally. -/
+theorem typed_compile_error (prog : Program) (fuel : Nat) (σ σ' : Store)
+    (htc : prog.typeCheck = true)
+    (hts : TypedStore prog.tyCtx σ)
+    (hinterp : prog.body.interp fuel σ = some σ')
+    (hunsafe : ¬ prog.body.divSafe fuel σ) :
+    ¬ ∃ σ_tac, haltsWithResult (compile prog.body) 0 σ σ_tac :=
+  compile_error prog.body fuel σ σ' hinterp
+    (Program.typeCheck_tmpFree prog htc) hunsafe
+    (Program.typeCheck_intTyped prog htc σ hts fuel)
+
+/-- **Divergence preservation (typed)**: If a type-checked program's body
+    diverges for all fuel levels under a well-typed store, the compiled TAC
+    program does not halt. -/
+theorem typed_compile_diverge (prog : Program) (σ : Store)
+    (htc : prog.typeCheck = true)
+    (hts : TypedStore prog.tyCtx σ)
+    (hdiv : ∀ fuel, prog.body.interp fuel σ = none)
+    (hsafe : ∀ fuel, prog.body.divSafe fuel σ) :
+    ¬ ∃ σ_tac, haltsWithResult (compile prog.body) 0 σ σ_tac :=
+  compile_diverge prog.body σ
+    (Program.typeCheck_tmpFree prog htc) hdiv hsafe
+    (fun fuel => Program.typeCheck_intTyped prog htc σ hts fuel)
+
+-- ============================================================
+-- § 15. Refinement: TAC behavior → source behavior
+-- ============================================================
+
+/-- Source interpreter returns `none` iff it doesn't return `some`. -/
+private theorem interp_none_iff (s : Stmt) (fuel : Nat) (σ : Store) :
+    s.interp fuel σ = none ↔ ¬ ∃ σ', s.interp fuel σ = some σ' := by
+  constructor
+  · intro h ⟨σ', hσ'⟩; simp [h] at hσ'
+  · intro h; cases hq : s.interp fuel σ with
+    | none => rfl
+    | some σ' => exact absurd ⟨σ', hq⟩ h
+
+/-- If the source diverges with unsafe divisions, the compiled TAC program
+    still cannot halt — it errors on the first unsafe division encountered. -/
+private theorem diverge_unsafe_no_halt (s : Stmt) (σ : Store)
+    (htmpfree : s.tmpFree) (hintv : ∀ fuel, s.intTyped fuel σ)
+    (hdiv : ∀ fuel, s.interp fuel σ = none) :
+    ¬ ∃ σ_tac, haltsWithResult (compile s) 0 σ σ_tac := by
+  rw [compile_eq_refCompile]
+  by_cases hsafe : ∀ fuel, s.divSafe fuel σ
+  · exact refCompile_diverge s σ htmpfree hdiv hsafe hintv
+  · obtain ⟨fuel₀, hunsafe⟩ := Classical.not_forall.mp hsafe
+    exact refCompile_unsafe s fuel₀ σ htmpfree hunsafe (hintv fuel₀)
+
+/-- **Refinement (halt case)**: If the compiled TAC program halts, the source
+    program terminates with a store that agrees on all non-temporary variables.
+    This is the backward direction of compiler correctness — the compiler
+    does not invent behaviors the source doesn't have. -/
+theorem compile_halt_refinement (prog : Program)
+    (htc : prog.typeCheck = true) (σ₀ σ_tac : Store)
+    (hts₀ : TypedStore prog.tyCtx σ₀)
+    (hhalt : program_behavior (compile prog.body) σ₀ (.halts σ_tac)) :
+    ∃ fuel σ', prog.body.interp fuel σ₀ = some σ' ∧
+      ∀ v, v.isTmp = false → σ_tac v = σ' v := by
+  -- hhalt : haltsWithResult (compile prog.body) 0 σ₀ σ_tac
+  have htmpfree := Program.typeCheck_tmpFree prog htc
+  have hintv := fun fuel => Program.typeCheck_intTyped prog htc σ₀ hts₀ fuel
+  -- LEM: source either terminates or diverges
+  by_cases hterm : ∃ fuel σ', prog.body.interp fuel σ₀ = some σ'
+  · -- Source terminates
+    obtain ⟨fuel, σ', hinterp⟩ := hterm
+    -- LEM: safe or unsafe
+    by_cases hsafe : prog.body.divSafe fuel σ₀
+    · -- Safe termination → forward-halt gives matching TAC halt
+      obtain ⟨σ_tac', hhalt', hagree⟩ := typed_compile_halt prog fuel σ₀ σ' htc hts₀ hinterp hsafe
+      -- By determinism, σ_tac = σ_tac'
+      have : σ_tac = σ_tac' := haltsWithResult_unique hhalt hhalt'
+      subst this
+      exact ⟨fuel, σ', hinterp, hagree⟩
+    · -- Unsafe termination → forward-error says TAC doesn't halt
+      exact absurd ⟨σ_tac, hhalt⟩
+        (typed_compile_error prog fuel σ₀ σ' htc hts₀ hinterp hsafe)
+  · -- Source diverges
+    have hdiv : ∀ fuel, prog.body.interp fuel σ₀ = none :=
+      fun fuel => (interp_none_iff _ _ _).mpr (fun ⟨σ', h⟩ => hterm ⟨fuel, σ', h⟩)
+    -- TAC cannot halt when source diverges
+    by_cases hsafe_all : ∀ fuel, prog.body.divSafe fuel σ₀
+    · -- Safe divergence → forward-diverge
+      exact absurd ⟨σ_tac, hhalt⟩
+        (typed_compile_diverge prog σ₀ htc hts₀ hdiv hsafe_all)
+    · -- Unsafe divergence
+      exact absurd ⟨σ_tac, hhalt⟩
+        (diverge_unsafe_no_halt prog.body σ₀ htmpfree hintv hdiv)
+
+-- ============================================================
+-- § 15c. Behavior exclusion and backward refinement
+-- ============================================================
+
+/-- No steps from error: error is a terminal configuration. -/
+private theorem RefStepsN.no_step_error {p : Prog} {n : Nat} {σ : Store} {c : Cfg}
+    (h : RefStepsN p (n + 1) (Cfg.error σ) c) : False := by
+  cases h with | step s _ => exact Step.no_step_from_error s
+
+/-- If execution takes unbounded steps through `run` configs, it cannot error. -/
+theorem no_error_of_unbounded {p : Prog} {pc : Nat} {σ : Store}
+    (hunbounded : ∀ N, ∃ n, n ≥ N ∧ ∃ pc' σ',
+      RefStepsN p n (Cfg.run pc σ) (Cfg.run pc' σ')) :
+    ∀ σ', ¬ (p ⊩ Cfg.run pc σ ⟶* Cfg.error σ') := by
+  intro σ' herr
+  obtain ⟨k, hk⟩ := herr.to_RefStepsN
+  obtain ⟨n, hn_ge, pc', σ_r, hn⟩ := hunbounded (k + 1)
+  have hpref := RefStepsN.det_prefix hk hn (by omega)
+  have : ∃ d, n - k = d + 1 := ⟨n - k - 1, by omega⟩
+  obtain ⟨d, hd⟩ := this
+  rw [hd] at hpref
+  exact RefStepsN.no_step_error hpref
+
+/-- If `¬ s.divSafe fuel σ`, the compiled program reaches an error state. -/
+theorem compile_reaches_error (s : Stmt) (fuel : Nat) (σ : Store)
+    (htmpfree : s.tmpFree)
+    (hunsafe : ¬ s.divSafe fuel σ)
+    (hintv : s.intTyped fuel σ) :
+    ∃ σ_e, (compile s) ⊩ Cfg.run 0 σ ⟶* Cfg.error σ_e := by
+  rw [compile_eq_refCompile]
+  have hcode : CodeAt (refCompileStmt s 0 0).1 (refCompile s) 0 := by
+    intro i hi; unfold refCompile; simp only [List.getElem?_toArray, Nat.zero_add]
+    exact List.getElem?_append_left hi
+  obtain ⟨pc_s, σ_s, hfrag, herror, _⟩ :=
+    refCompileStmt_unsafe s fuel σ 0 0 (refCompile s) σ
+      htmpfree hunsafe hintv (fun _ _ => rfl) hcode
+  exact ⟨σ_s, Steps.trans hfrag (Steps.step herror Steps.refl)⟩
+
+/-- Extract `StepsN` from an `IsInfiniteExec`: the first `n` steps of an
+    infinite execution give a deterministic `n`-step path. -/
+private theorem inf_exec_to_StepsN {p : Prog} {f : Nat → Cfg}
+    (hinf : IsInfiniteExec p f) :
+    ∀ n, StepsN p (f 0) (f n) n := by
+  intro n; induction n with
+  | zero => rfl
+  | succ n ih => exact StepsN_trans ih ⟨f (n + 1), hinf.2 n, rfl⟩
+
+/-- **Refinement (error case)**: If the compiled TAC program errors, the source
+    program has an unsafe division at some fuel level. -/
+theorem compile_error_refinement (prog : Program)
+    (htc : prog.typeCheck = true) (σ₀ σ_e : Store)
+    (hts₀ : TypedStore prog.tyCtx σ₀)
+    (herror : program_behavior (compile prog.body) σ₀ (.errors σ_e)) :
+    ∃ fuel, ¬ prog.body.divSafe fuel σ₀ := by
+  -- herror : (compile prog.body) ⊩ Cfg.run 0 σ₀ ⟶* Cfg.error σ_e
+  have htmpfree := Program.typeCheck_tmpFree prog htc
+  have hintv := fun fuel => Program.typeCheck_intTyped prog htc σ₀ hts₀ fuel
+  -- Contrapositive: if ∀ fuel, divSafe, we derive False
+  by_cases h : ∀ fuel, prog.body.divSafe fuel σ₀
+  · -- All fuel levels safe → derive contradiction
+    exfalso
+    by_cases hterm : ∃ fuel σ', prog.body.interp fuel σ₀ = some σ'
+    · -- Source terminates safely → TAC halts → contradicts error
+      obtain ⟨fuel, σ', hinterp⟩ := hterm
+      obtain ⟨σ_tac, hhalt, _⟩ :=
+        typed_compile_halt prog fuel σ₀ σ' htc hts₀ hinterp (h fuel)
+      have halt_terminal : ∀ d, ¬ Step (compile prog.body) (Cfg.halt σ_tac) d :=
+        fun _ h => Step.no_step_from_halt h
+      have err_terminal : ∀ d, ¬ Step (compile prog.body) (Cfg.error σ_e) d :=
+        fun _ h => Step.no_step_from_error h
+      exact Cfg.noConfusion (Steps.stuck_det hhalt herror halt_terminal err_terminal)
+    · -- Source diverges safely → unbounded execution → contradicts error
+      have hdiv : ∀ fuel, prog.body.interp fuel σ₀ = none :=
+        fun fuel => (interp_none_iff _ _ _).mpr (fun ⟨σ', hq⟩ => hterm ⟨fuel, σ', hq⟩)
+      rw [compile_eq_refCompile] at herror
+      have hcode : CodeAt (refCompileStmt prog.body 0 0).1 (refCompile prog.body) 0 := by
+        intro i hi; unfold refCompile; simp only [List.getElem?_toArray, Nat.zero_add]
+        exact List.getElem?_append_left hi
+      have hunbounded := refCompileStmt_diverges prog.body σ₀ 0 0 (refCompile prog.body) σ₀
+        htmpfree hdiv h hintv (fun _ _ => rfl) hcode
+      exact no_error_of_unbounded hunbounded σ_e herror
+  · -- ¬(∀ fuel, divSafe) → ∃ fuel, ¬divSafe
+    exact Classical.not_forall.mp h
+
+/-- **Refinement (divergence case)**: If the compiled TAC program diverges
+    (infinite execution), the source program also diverges. -/
+theorem compile_diverge_refinement (prog : Program)
+    (htc : prog.typeCheck = true) (σ₀ : Store)
+    (hts₀ : TypedStore prog.tyCtx σ₀)
+    (hdiverge : program_behavior (compile prog.body) σ₀ .diverges) :
+    ∀ fuel, prog.body.interp fuel σ₀ = none := by
+  -- hdiverge : ∃ f, IsInfiniteExec (compile prog.body) f ∧ f 0 = Cfg.run 0 σ₀
+  obtain ⟨f, hinf, hf0⟩ := hdiverge
+  have htmpfree := Program.typeCheck_tmpFree prog htc
+  have hintv := fun fuel => Program.typeCheck_intTyped prog htc σ₀ hts₀ fuel
+  -- Helper: infinite exec yields StepsN from initial config
+  have inf_steps : ∀ n, StepsN (compile prog.body) (Cfg.run 0 σ₀) (f n) n :=
+    fun n => hf0 ▸ inf_exec_to_StepsN hinf n
+  intro fuel
+  by_cases hq : prog.body.interp fuel σ₀ = none
+  · exact hq
+  · exfalso
+    obtain ⟨σ', hinterp⟩ := Option.ne_none_iff_exists'.mp hq
+    by_cases hsafe : prog.body.divSafe fuel σ₀
+    · -- Safe termination → TAC halts → contradicts infinite exec
+      obtain ⟨σ_tac, hhalt, _⟩ :=
+        typed_compile_halt prog fuel σ₀ σ' htc hts₀ hinterp hsafe
+      obtain ⟨k, hk⟩ := Steps_to_StepsN hhalt
+      obtain ⟨pc_k, σ_k, hfk_eq⟩ := inf_exec_is_run hinf k
+      have := (StepsN_det hk (inf_steps k)).trans hfk_eq
+      exact Cfg.noConfusion this
+    · -- Unsafe termination → TAC reaches error → contradicts infinite exec
+      obtain ⟨σ_e, herr⟩ :=
+        compile_reaches_error prog.body fuel σ₀ htmpfree hsafe (hintv fuel)
+      obtain ⟨k, hk⟩ := Steps_to_StepsN herr
+      obtain ⟨pc_k, σ_k, hfk_eq⟩ := inf_exec_is_run hinf k
+      have := (StepsN_det hk (inf_steps k)).trans hfk_eq
+      exact Cfg.noConfusion this
+
+/-- **Full backward refinement**: For every behavior of the compiled TAC
+    program, the source program has a corresponding behavior.
+    - TAC halts with σ_tac → source terminates with agreeing σ'
+    - TAC errors → source has an unsafe division
+    - TAC diverges → source diverges -/
+theorem compile_refinement (prog : Program)
+    (htc : prog.typeCheck = true) (σ₀ : Store) (b : Behavior)
+    (hts₀ : TypedStore prog.tyCtx σ₀)
+    (hbeh : program_behavior (compile prog.body) σ₀ b) :
+    match b with
+    | .halts σ_tac => ∃ fuel σ', prog.body.interp fuel σ₀ = some σ' ∧
+        ∀ v, v.isTmp = false → σ_tac v = σ' v
+    | .errors _ => ∃ fuel, ¬ prog.body.divSafe fuel σ₀
+    | .diverges => ∀ fuel, prog.body.interp fuel σ₀ = none := by
+  cases b with
+  | halts σ_tac => exact compile_halt_refinement prog htc σ₀ σ_tac hts₀ hbeh
+  | errors σ_e => exact compile_error_refinement prog htc σ₀ σ_e hts₀ hbeh
+  | diverges => exact compile_diverge_refinement prog htc σ₀ hts₀ hbeh
+
+-- ============================================================
+-- § 16. Refinement for Program.compile (with init code)
+-- ============================================================
+
+/-- The body code from `compileStmt` (= `refCompileStmt`) is embedded in `prog.compile`
+    starting at offset `prog.decls.length`. -/
+private theorem progCompile_body_codeAt (prog : Program) :
+    CodeAt (refCompileStmt prog.body prog.decls.length 0).1
+      prog.compile prog.decls.length := by
+  rw [← compileStmt_eq_refCompileStmt]
+  intro i hi
+  open Program in exact compile_body_getElem prog i hi
+
+/-- **Forward halt** for `prog.compile`: if the source terminates safely,
+    `prog.compile` halts with a matching store. -/
+theorem progCompile_halt (prog : Program) (fuel : Nat) (σ' : Store)
+    (htc : prog.typeCheck = true)
+    (hinterp : prog.body.interp fuel prog.initStore = some σ')
+    (hsafe : prog.body.divSafe fuel prog.initStore) :
+    ∃ σ_tac, haltsWithResult prog.compile 0 prog.initStore σ_tac ∧
+      (∀ v, v.isTmp = false → σ_tac v = σ' v) := by
+  have hnd := prog.typeCheck_noDups htc
+  have htmpfree := Program.typeCheck_tmpFree prog htc
+  have hts := Program.typeCheck_initStore_typedStore prog htc
+  have hintv := Program.typeCheck_intTyped prog htc prog.initStore hts fuel
+  have hcode := progCompile_body_codeAt prog
+  obtain ⟨σ_tac, hexec, hagree⟩ :=
+    refCompileStmt_correct prog.body fuel prog.initStore σ' prog.decls.length 0
+      prog.compile prog.initStore hinterp htmpfree hsafe hintv (fun _ _ => rfl) hcode
+  have hinit := open Program in compile_initExec prog hnd
+  have hhalt_instr := open Program in compile_halt_getElem prog
+  rw [compileStmt_eq_refCompileStmt] at hhalt_instr
+  have hfull : FragExec prog.compile 0 prog.initStore
+      (prog.decls.length + (refCompileStmt prog.body prog.decls.length 0).1.length)
+      σ_tac :=
+    FragExec.trans' hinit hexec
+  exact ⟨σ_tac, FragExec.toHalt hfull hhalt_instr, hagree⟩
+
+/-- **Forward error** for `prog.compile`: if `¬divSafe`, the compiled program
+    cannot halt (it reaches an error). -/
+theorem progCompile_no_halt_unsafe (prog : Program) (fuel : Nat)
+    (htc : prog.typeCheck = true)
+    (hunsafe : ¬ prog.body.divSafe fuel prog.initStore) :
+    ¬ ∃ σ_tac, haltsWithResult prog.compile 0 prog.initStore σ_tac := by
+  intro ⟨σ_tac, hhalt⟩
+  have hnd := prog.typeCheck_noDups htc
+  have htmpfree := Program.typeCheck_tmpFree prog htc
+  have hts := Program.typeCheck_initStore_typedStore prog htc
+  have hintv := Program.typeCheck_intTyped prog htc prog.initStore hts fuel
+  have hcode := progCompile_body_codeAt prog
+  obtain ⟨pc_s, σ_s, hfrag, herror, _⟩ :=
+    refCompileStmt_unsafe prog.body fuel prog.initStore prog.decls.length 0
+      prog.compile prog.initStore htmpfree hunsafe hintv (fun _ _ => rfl) hcode
+  have hinit := open Program in compile_initExec prog hnd
+  have hfull : prog.compile ⊩ Cfg.run 0 prog.initStore ⟶* Cfg.run pc_s σ_s :=
+    FragExec.trans' hinit hfrag
+  have herr_reach : prog.compile ⊩ Cfg.run 0 prog.initStore ⟶* Cfg.error σ_s :=
+    Steps.trans hfull (Steps.step herror Steps.refl)
+  have halt_terminal : ∀ d, ¬ Step prog.compile (Cfg.halt σ_tac) d :=
+    fun _ h => Step.no_step_from_halt h
+  have err_terminal : ∀ d, ¬ Step prog.compile (Cfg.error σ_s) d :=
+    fun _ h => Step.no_step_from_error h
+  exact Cfg.noConfusion (Steps.stuck_det hhalt herr_reach halt_terminal err_terminal)
+
+/-- **Forward error reachability** for `prog.compile`: if `¬divSafe`, the
+    compiled program reaches an error state. -/
+theorem progCompile_reaches_error (prog : Program) (fuel : Nat)
+    (htc : prog.typeCheck = true)
+    (hunsafe : ¬ prog.body.divSafe fuel prog.initStore) :
+    ∃ σ_e, prog.compile ⊩ Cfg.run 0 prog.initStore ⟶* Cfg.error σ_e := by
+  have hnd := prog.typeCheck_noDups htc
+  have htmpfree := Program.typeCheck_tmpFree prog htc
+  have hts := Program.typeCheck_initStore_typedStore prog htc
+  have hintv := Program.typeCheck_intTyped prog htc prog.initStore hts fuel
+  have hcode := progCompile_body_codeAt prog
+  obtain ⟨pc_s, σ_s, hfrag, herror, _⟩ :=
+    refCompileStmt_unsafe prog.body fuel prog.initStore prog.decls.length 0
+      prog.compile prog.initStore htmpfree hunsafe hintv (fun _ _ => rfl) hcode
+  have hinit := open Program in compile_initExec prog hnd
+  exact ⟨σ_s, Steps.trans (FragExec.trans' hinit hfrag) (Steps.step herror Steps.refl)⟩
+
+/-- **Forward no-halt for safe divergence** in `prog.compile`: if the source
+    diverges safely, the compiled program doesn't halt. -/
+theorem progCompile_no_halt_diverge (prog : Program)
+    (htc : prog.typeCheck = true)
+    (hdiv : ∀ fuel, prog.body.interp fuel prog.initStore = none)
+    (hsafe : ∀ fuel, prog.body.divSafe fuel prog.initStore) :
+    ¬ ∃ σ_tac, haltsWithResult prog.compile 0 prog.initStore σ_tac := by
+  intro ⟨σ_tac, hhalt⟩
+  have hnd := prog.typeCheck_noDups htc
+  have htmpfree := Program.typeCheck_tmpFree prog htc
+  have hts := Program.typeCheck_initStore_typedStore prog htc
+  have hintv := fun fuel => Program.typeCheck_intTyped prog htc prog.initStore hts fuel
+  have hcode := progCompile_body_codeAt prog
+  have hunbounded := refCompileStmt_diverges prog.body prog.initStore prog.decls.length 0
+    prog.compile prog.initStore htmpfree hdiv hsafe hintv (fun _ _ => rfl) hcode
+  -- Shift unbounded to PC 0 using init exec
+  have hinit := open Program in compile_initExec prog hnd
+  have hunb0 : ∀ N, ∃ n, n ≥ N ∧ ∃ pc' σ',
+      RefStepsN prog.compile n (Cfg.run 0 prog.initStore) (Cfg.run pc' σ') := by
+    intro N
+    obtain ⟨n, hn_ge, pc', σ', hn⟩ := hunbounded N
+    obtain ⟨k, hk⟩ := hinit.to_RefStepsN
+    exact ⟨k + n, by omega, pc', σ', RefStepsN.trans hk hn⟩
+  exact no_halt_of_unbounded hunb0 σ_tac hhalt
+
+/-- **Forward no-halt for unsafe divergence** in `prog.compile`. -/
+private theorem progCompile_no_halt_diverge_unsafe (prog : Program)
+    (htc : prog.typeCheck = true)
+    (hdiv : ∀ fuel, prog.body.interp fuel prog.initStore = none) :
+    ¬ ∃ σ_tac, haltsWithResult prog.compile 0 prog.initStore σ_tac := by
+  have htmpfree := Program.typeCheck_tmpFree prog htc
+  have hnd := prog.typeCheck_noDups htc
+  have hts := Program.typeCheck_initStore_typedStore prog htc
+  have hintv := fun fuel => Program.typeCheck_intTyped prog htc prog.initStore hts fuel
+  by_cases hsafe : ∀ fuel, prog.body.divSafe fuel prog.initStore
+  · exact progCompile_no_halt_diverge prog htc hdiv hsafe
+  · obtain ⟨fuel₀, hunsafe⟩ := Classical.not_forall.mp hsafe
+    exact progCompile_no_halt_unsafe prog fuel₀ htc hunsafe
+
+/-- **Full backward refinement for `Program.compile`**: For every behavior of
+    the compiled program (with init code), the source program has a
+    corresponding behavior.
+    - TAC halts with σ_tac → source terminates with agreeing σ'
+    - TAC errors → source has an unsafe division
+    - TAC diverges → source diverges -/
+theorem program_refinement (prog : Program) (htc : prog.typeCheck = true) (b : Behavior)
+    (hbeh : program_behavior prog.compile prog.initStore b) :
+    match b with
+    | .halts σ_tac => ∃ fuel σ', prog.interp fuel = some σ' ∧
+        ∀ v, v.isTmp = false → σ_tac v = σ' v
+    | .errors _ => ∃ fuel, ¬ prog.body.divSafe fuel prog.initStore
+    | .diverges => ∀ fuel, prog.interp fuel = none := by
+  have hnd := prog.typeCheck_noDups htc
+  have htmpfree := Program.typeCheck_tmpFree prog htc
+  have hts := Program.typeCheck_initStore_typedStore prog htc
+  have hintv := fun fuel => Program.typeCheck_intTyped prog htc prog.initStore hts fuel
+  cases b with
+  | halts σ_tac =>
+    -- hbeh : haltsWithResult prog.compile 0 prog.initStore σ_tac
+    by_cases hterm : ∃ fuel σ', prog.body.interp fuel prog.initStore = some σ'
+    · obtain ⟨fuel, σ', hinterp⟩ := hterm
+      by_cases hsafe : prog.body.divSafe fuel prog.initStore
+      · obtain ⟨σ_tac', hhalt', hagree⟩ := progCompile_halt prog fuel σ' htc hinterp hsafe
+        have : σ_tac = σ_tac' := haltsWithResult_unique hbeh hhalt'
+        subst this
+        exact ⟨fuel, σ', hinterp, hagree⟩
+      · exact absurd ⟨σ_tac, hbeh⟩ (progCompile_no_halt_unsafe prog fuel htc hsafe)
+    · have hdiv : ∀ fuel, prog.body.interp fuel prog.initStore = none :=
+        fun fuel => (interp_none_iff _ _ _).mpr (fun ⟨σ', h⟩ => hterm ⟨fuel, σ', h⟩)
+      exact absurd ⟨σ_tac, hbeh⟩ (progCompile_no_halt_diverge_unsafe prog htc hdiv)
+  | errors σ_e =>
+    -- hbeh : prog.compile ⊩ Cfg.run 0 prog.initStore ⟶* Cfg.error σ_e
+    by_cases h : ∀ fuel, prog.body.divSafe fuel prog.initStore
+    · exfalso
+      by_cases hterm : ∃ fuel σ', prog.body.interp fuel prog.initStore = some σ'
+      · obtain ⟨fuel, σ', hinterp⟩ := hterm
+        obtain ⟨σ_tac, hhalt, _⟩ := progCompile_halt prog fuel σ' htc hinterp (h fuel)
+        have halt_terminal : ∀ d, ¬ Step prog.compile (Cfg.halt σ_tac) d :=
+          fun _ h => Step.no_step_from_halt h
+        have err_terminal : ∀ d, ¬ Step prog.compile (Cfg.error σ_e) d :=
+          fun _ h => Step.no_step_from_error h
+        exact Cfg.noConfusion (Steps.stuck_det hhalt hbeh halt_terminal err_terminal)
+      · have hdiv : ∀ fuel, prog.body.interp fuel prog.initStore = none :=
+          fun fuel => (interp_none_iff _ _ _).mpr (fun ⟨σ', hq⟩ => hterm ⟨fuel, σ', hq⟩)
+        have hcode := progCompile_body_codeAt prog
+        have hunbounded := refCompileStmt_diverges prog.body prog.initStore
+          prog.decls.length 0 prog.compile prog.initStore htmpfree hdiv h hintv
+          (fun _ _ => rfl) hcode
+        have hinit := open Program in compile_initExec prog hnd
+        have hunb0 : ∀ N, ∃ n, n ≥ N ∧ ∃ pc' σ',
+            RefStepsN prog.compile n (Cfg.run 0 prog.initStore) (Cfg.run pc' σ') := by
+          intro N
+          obtain ⟨n, hn_ge, pc', σ', hn⟩ := hunbounded N
+          obtain ⟨k, hk⟩ := hinit.to_RefStepsN
+          exact ⟨k + n, by omega, pc', σ', RefStepsN.trans hk hn⟩
+        exact no_error_of_unbounded hunb0 σ_e hbeh
+    · exact Classical.not_forall.mp h
+  | diverges =>
+    -- hbeh : ∃ f, IsInfiniteExec prog.compile f ∧ f 0 = Cfg.run 0 prog.initStore
+    intro fuel
+    rw [Program.interp]
+    by_cases hq : prog.body.interp fuel prog.initStore = none
+    · exact hq
+    · exfalso
+      obtain ⟨σ', hinterp⟩ := Option.ne_none_iff_exists'.mp hq
+      by_cases hsafe : prog.body.divSafe fuel prog.initStore
+      · obtain ⟨σ_tac, hhalt, _⟩ := progCompile_halt prog fuel σ' htc hinterp hsafe
+        obtain ⟨f, hinf, hf0⟩ := hbeh
+        have inf_steps : ∀ n, StepsN prog.compile (Cfg.run 0 prog.initStore) (f n) n :=
+          fun n => hf0 ▸ inf_exec_to_StepsN hinf n
+        obtain ⟨k, hk⟩ := Steps_to_StepsN hhalt
+        obtain ⟨pc_k, σ_k, hfk_eq⟩ := inf_exec_is_run hinf k
+        have := (StepsN_det hk (inf_steps k)).trans hfk_eq
+        exact Cfg.noConfusion this
+      · obtain ⟨σ_e, herr⟩ := progCompile_reaches_error prog fuel htc hsafe
+        obtain ⟨f, hinf, hf0⟩ := hbeh
+        have inf_steps : ∀ n, StepsN prog.compile (Cfg.run 0 prog.initStore) (f n) n :=
+          fun n => hf0 ▸ inf_exec_to_StepsN hinf n
+        obtain ⟨k, hk⟩ := Steps_to_StepsN herr
+        obtain ⟨pc_k, σ_k, hfk_eq⟩ := inf_exec_is_run hinf k
+        have := (StepsN_det hk (inf_steps k)).trans hfk_eq
+        exact Cfg.noConfusion this

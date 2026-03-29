@@ -1,4 +1,5 @@
 import CredibleCompilation.Semantics
+import CredibleCompilation.PropChecker
 
 /-!
 # While Language — Source Language and Compiler to TAC
@@ -96,6 +97,13 @@ def Stmt.interp (fuel : Nat) (σ : Store) : Stmt → Option Store
 
 /-- Temporary variable name from index. -/
 def tmpName (k : Nat) : Var := s!"__t{k}"
+
+/-- A variable is a temporary iff its name starts with `__t`.
+    Defined on `String` so dot notation works (since `Var` is `abbrev String`). -/
+def String.isTmp (v : String) : Bool :=
+  match v.toList with
+  | '_' :: '_' :: 't' :: _ => true
+  | _ => false
 
 /-- Compile an arithmetic expression. Returns (code, result variable, next temp index).
     Pre-computes code lengths so no patching is needed. -/
@@ -240,9 +248,10 @@ private def noDups : List Var → Bool
 
 /-- No declared variable uses a compiler-reserved temporary name (`__t`-prefixed).
     Required so that compiler-generated integer temporaries are always typed as `.int`
-    by `tyCtx` (which maps undeclared variables to `.int` by default). -/
-private def noTmpDecls (decls : List (Var × VarTy)) : Bool :=
-  decls.all fun (x, _) => !x.startsWith "__t"
+    by `tyCtx` (which maps undeclared variables to `.int` by default).
+    Not private: used by `CompilerCorrectness.typeCheck_tmpFree`. -/
+def noTmpDecls (decls : List (Var × VarTy)) : Bool :=
+  decls.all fun (x, _) => !x.isTmp
 
 /-- Check that all variables in an arithmetic expression are declared as `int`. -/
 def checkSExpr (lookup : Var → Option VarTy) : SExpr → Bool
@@ -292,6 +301,11 @@ def compile (prog : Program) : Prog :=
   let inits := initCode prog.decls
   let (body, _) := compileStmt prog.body inits.length 0
   (inits ++ body ++ [TAC.halt]).toArray
+
+/-- Safe compiler: rejects programs that fail the static type checker.
+    When `safeCompile prog = some p`, all correctness guarantees hold. -/
+def safeCompile (prog : Program) : Option Prog :=
+  if prog.typeCheck then some prog.compile else none
 
 -- ============================================================
 -- § 5c. Interpretation
@@ -387,6 +401,115 @@ theorem initStore_typedStore (prog : Program)
   rw [initFold_typeOf prog.decls Store.init x hnd]
   simp [Store.init, Value.typeOf]
 
+/-- Extract noDups from typeCheck (public, so other files can use it). -/
+theorem typeCheck_noDups (prog : Program) (h : prog.typeCheck = true) :
+    noDups (prog.decls.map Prod.fst) = true := by
+  simp [typeCheck, Bool.and_eq_true] at h; exact h.1.1
+
+/-- If a program type-checks, its initial store is well-typed. -/
+theorem typeCheck_initStore_typedStore (prog : Program) (h : prog.typeCheck = true) :
+    TypedStore prog.tyCtx prog.initStore :=
+  initStore_typedStore prog (typeCheck_noDups prog h)
+
+-- ============================================================
+-- § 5d'. initStore declared-variable values and init code execution
+-- ============================================================
+
+/-- For a declared variable in a no-dup list, the fold assigns its default value. -/
+private theorem initFold_declared (ds : List (Var × VarTy)) (σ : Store) (x : Var) (ty : VarTy)
+    (hmem : (x, ty) ∈ ds) (hnd : noDups (ds.map Prod.fst) = true) :
+    ds.foldl initFold σ x = ty.defaultVal := by
+  induction ds generalizing σ with
+  | nil => contradiction
+  | cons hd rest ih =>
+    simp only [List.map_cons, noDups, Bool.not_eq_true', Bool.and_eq_true] at hnd
+    obtain ⟨hny, hnd_rest⟩ := hnd
+    simp only [List.foldl]
+    cases hmem with
+    | head =>
+      rw [initFold_notMem rest _ x (notMem_of_contains_false hny)]
+      cases ty <;> simp [initFold, Store.update_self, VarTy.defaultVal]
+    | tail _ hmem_rest =>
+      exact ih (initFold σ hd) hmem_rest hnd_rest
+
+/-- For each declared variable, `initStore` holds the type-appropriate default. -/
+theorem initStore_declared (prog : Program) {x : Var} {ty : VarTy}
+    (hmem : (x, ty) ∈ prog.decls) (hnd : noDups (prog.decls.map Prod.fst) = true) :
+    prog.initStore x = ty.defaultVal :=
+  initFold_declared prog.decls Store.init x ty hmem hnd
+
+/-- `initCode` has the same length as the declaration list. -/
+private theorem initCode_length (decls : List (Var × VarTy)) :
+    (initCode decls).length = decls.length := by
+  simp [initCode, List.length_map]
+
+/-- Running init code from `initStore` is idempotent: each `const x v` sets a variable
+    that already holds `v`, so the store is unchanged. -/
+theorem compile_initExec (prog : Program)
+    (hnd : noDups (prog.decls.map Prod.fst) = true) :
+    prog.compile ⊩ Cfg.run 0 prog.initStore ⟶* Cfg.run prog.decls.length prog.initStore := by
+  suffices h : ∀ (k : Nat), k ≤ prog.decls.length →
+      prog.compile ⊩ Cfg.run 0 prog.initStore ⟶* Cfg.run k prog.initStore from
+    h prog.decls.length (Nat.le_refl _)
+  intro k hk
+  induction k with
+  | zero => exact Steps.refl
+  | succ k ih =>
+    have ih_steps := ih (by omega)
+    have hk_lt : k < prog.decls.length := by omega
+    -- The k-th declaration and its init instruction
+    have hmem_decl : prog.decls[k] ∈ prog.decls := List.getElem_mem hk_lt
+    have hval := initStore_declared prog hmem_decl hnd
+    -- The const step is a no-op because the value is already present
+    have hstep : Step prog.compile (.run k prog.initStore)
+        (.run (k + 1) prog.initStore) := by
+      -- Normalize get/getElem
+      have hget : prog.decls.get ⟨k, hk_lt⟩ = prog.decls[k] := rfl
+      rw [hget] at hval
+      -- Case split on the type of the k-th declaration
+      cases hty : (prog.decls[k]).2 with
+      | int =>
+        simp only [hty, VarTy.defaultVal] at hval
+        have hinst : prog.compile[k]? =
+            some (.const (prog.decls[k]).1 (.int 0)) := by
+          simp only [Program.compile, List.getElem?_toArray]
+          rw [List.getElem?_append_left (by rw [List.length_append, initCode_length]; omega)]
+          rw [List.getElem?_append_left (by rw [initCode_length]; omega)]
+          simp only [initCode, List.getElem?_map, List.getElem?_eq_getElem hk_lt,
+            Option.map_some, hty]
+        have := Step.const hinst (σ := prog.initStore)
+        rwa [Store.update_of_eq _ _ _ hval] at this
+      | bool =>
+        simp only [hty, VarTy.defaultVal] at hval
+        have hinst : prog.compile[k]? =
+            some (.const (prog.decls[k]).1 (.bool false)) := by
+          simp only [Program.compile, List.getElem?_toArray]
+          rw [List.getElem?_append_left (by rw [List.length_append, initCode_length]; omega)]
+          rw [List.getElem?_append_left (by rw [initCode_length]; omega)]
+          simp only [initCode, List.getElem?_map, List.getElem?_eq_getElem hk_lt,
+            Option.map_some, hty]
+        have := Step.const hinst (σ := prog.initStore)
+        rwa [Store.update_of_eq _ _ _ hval] at this
+    exact Steps.trans ih_steps (Steps.step hstep Steps.refl)
+
+/-- Index into body code within `prog.compile`. The body starts at offset `decls.length`. -/
+theorem compile_body_getElem (prog : Program) (i : Nat)
+    (hi : i < (compileStmt prog.body prog.decls.length 0).1.length) :
+    prog.compile[prog.decls.length + i]? =
+      (compileStmt prog.body prog.decls.length 0).1[i]? := by
+  simp only [Program.compile, List.getElem?_toArray]
+  rw [List.getElem?_append_left (by rw [List.length_append, initCode_length]; omega)]
+  rw [List.getElem?_append_right (by rw [initCode_length]; omega)]
+  simp [initCode_length]
+
+/-- The halt instruction sits right after the body code in `prog.compile`. -/
+theorem compile_halt_getElem (prog : Program) :
+    prog.compile[prog.decls.length +
+      (compileStmt prog.body prog.decls.length 0).1.length]? = some .halt := by
+  simp only [Program.compile, List.getElem?_toArray]
+  rw [List.getElem?_append_right (by rw [List.length_append, initCode_length]; omega)]
+  simp [List.length_append, initCode_length]
+
 -- ============================================================
 -- § 5e. Executable well-typedness check for compiled output
 -- ============================================================
@@ -475,13 +598,9 @@ theorem lookup_of_mem_noDups_wt {decls : List (Var × VarTy)} {x : Var} {ty : Va
       · simp [hxy]
         exact ih hmem_rest hnd_rest
 
--- String.startsWith for concrete prefix appended to arbitrary suffix
-private axiom string_startsWith_append_left' (s t : String) :
-    (s ++ t).startsWith s = true
-
--- If noTmpDecls and x starts with "__t", then lookup returns none
-theorem lookup_none_of_startsWith_tmp_wt {decls : List (Var × VarTy)}
-    (hnt : Program.noTmpDecls decls = true) {x : Var} (hx : x.startsWith "__t" = true) :
+-- If noTmpDecls and x.isTmp, then lookup returns none
+theorem lookup_none_of_isTmp_wt {decls : List (Var × VarTy)}
+    (hnt : Program.noTmpDecls decls = true) {x : Var} (hx : x.isTmp = true) :
     decls.lookup x = none := by
   induction decls with
   | nil => rfl
@@ -494,20 +613,23 @@ theorem lookup_none_of_startsWith_tmp_wt {decls : List (Var × VarTy)}
       simp only [beq_eq_false_iff_ne, ne_eq]
       intro heq; subst heq
       simp only [Bool.not_eq_true'] at hny
-      simp [hx] at hny
+      rw [hx] at hny; exact Bool.noConfusion hny
     simp only [hne, ite_false]
     exact ih hnt_rest
 
--- tmpName k starts with "__t"
-theorem tmpName_startsWith_wt (k : Nat) : (tmpName k).startsWith "__t" = true :=
-  string_startsWith_append_left' "__t" (toString k)
+-- tmpName k is a temporary variable
+theorem tmpName_isTmp_wt (k : Nat) : (tmpName k).isTmp = true := by
+  simp only [String.isTmp, tmpName, String.toList_append]
+  show (match '_' :: '_' :: 't' :: (toString k).toList with
+    | '_' :: '_' :: 't' :: _ => true | _ => false) = true
+  rfl
 
 -- tyCtx maps temporaries to .int
 theorem tyCtx_tmp_wt (prog : Program)
     (hnt : Program.noTmpDecls prog.decls = true) (k : Nat) :
     prog.tyCtx (tmpName k) = .int := by
   unfold Program.tyCtx Program.lookupTy
-  rw [lookup_none_of_startsWith_tmp_wt hnt (tmpName_startsWith_wt k)]
+  rw [lookup_none_of_isTmp_wt hnt (tmpName_isTmp_wt k)]
   rfl
 
 -- If lookupTy x = some ty, then tyCtx x = ty
@@ -727,7 +849,257 @@ theorem no_type_stuck (prog : Program)
     (prog.compile_wellTyped htc) hts
 
 -- ============================================================
--- § 5g. Pretty-printing
+-- § 5g. Compiled programs are step-closed in bounds
+-- ============================================================
+
+/-- All goto/ifgoto targets in `code` are ≤ `bound`. -/
+def AllJumpsLe (bound : Nat) (code : List TAC) : Prop :=
+  ∀ instr, instr ∈ code →
+    match instr with
+    | .goto l => l ≤ bound
+    | .ifgoto _ l => l ≤ bound
+    | _ => True
+
+@[simp] theorem AllJumpsLe_nil : AllJumpsLe bound ([] : List TAC) := by
+  intro _ h; simp at h
+
+theorem AllJumpsLe_append (h1 : AllJumpsLe b l1) (h2 : AllJumpsLe b l2) :
+    AllJumpsLe b (l1 ++ l2) :=
+  fun instr hmem => (List.mem_append.mp hmem).elim (h1 instr) (h2 instr)
+
+theorem AllJumpsLe_mono (h : AllJumpsLe b1 code) (hle : b1 ≤ b2) :
+    AllJumpsLe b2 code := by
+  intro instr hmem
+  have hi := h instr hmem
+  cases instr with
+  | goto l => exact Nat.le_trans hi hle
+  | ifgoto _ l => exact Nat.le_trans hi hle
+  | _ => trivial
+
+theorem AllJumpsLe_single_goto (hle : l ≤ bound) :
+    AllJumpsLe bound ([TAC.goto l] : List TAC) := by
+  intro instr hmem; simp at hmem; subst hmem; exact hle
+
+theorem AllJumpsLe_single_ifgoto {be : BoolExpr} (hle : l ≤ bound) :
+    AllJumpsLe bound ([TAC.ifgoto be l] : List TAC) := by
+  intro instr hmem; simp at hmem; subst hmem; exact hle
+
+/-- Code with no goto/ifgoto/halt satisfies AllJumpsLe for any bound. -/
+def IsSeqInstr (instr : TAC) : Prop :=
+  match instr with
+  | .const _ _ | .copy _ _ | .binop _ _ _ _ | .boolop _ _ => True
+  | _ => False
+
+theorem AllJumpsLe_of_allSeq {code : List TAC}
+    (h : ∀ instr, instr ∈ code → IsSeqInstr instr) : AllJumpsLe bound code := by
+  intro instr hmem; have := h instr hmem; cases instr <;> simp_all [IsSeqInstr]
+
+theorem compileExpr_allSeq (e : SExpr) (offset nextTmp : Nat) :
+    ∀ instr, instr ∈ (compileExpr e offset nextTmp).1 → IsSeqInstr instr := by
+  induction e generalizing offset nextTmp with
+  | lit _ => intro instr hmem; simp [compileExpr] at hmem; subst hmem; trivial
+  | var _ => intro _ hmem; simp [compileExpr] at hmem
+  | bin _ a b iha ihb =>
+    intro instr hmem; simp [compileExpr, List.mem_append] at hmem
+    rcases hmem with ha | hb | rfl
+    · exact iha _ _ instr ha
+    · exact ihb _ _ instr hb
+    · trivial
+
+theorem compileBool_allSeq (b : SBool) (offset nextTmp : Nat) :
+    ∀ instr, instr ∈ (compileBool b offset nextTmp).1 → IsSeqInstr instr := by
+  induction b generalizing offset nextTmp with
+  | bvar _ => intro _ hmem; simp [compileBool] at hmem
+  | cmp _ a b =>
+    intro instr hmem; simp [compileBool, List.mem_append] at hmem
+    rcases hmem with ha | hb
+    · exact compileExpr_allSeq a _ _ instr ha
+    · exact compileExpr_allSeq b _ _ instr hb
+  | not _ ih => intro instr hmem; simp [compileBool] at hmem; exact ih _ _ instr hmem
+  | and _ _ iha ihb =>
+    intro instr hmem; simp [compileBool, List.mem_append] at hmem
+    rcases hmem with ha | hb
+    · exact iha _ _ instr ha
+    · exact ihb _ _ instr hb
+  | or _ _ iha ihb =>
+    intro instr hmem; simp [compileBool, List.mem_append] at hmem
+    rcases hmem with ha | hb
+    · exact iha _ _ instr ha
+    · exact ihb _ _ instr hb
+
+theorem initCode_allSeq (decls : List (Var × VarTy)) :
+    ∀ instr, instr ∈ initCode decls → IsSeqInstr instr := by
+  intro instr hmem; simp only [initCode, List.mem_map] at hmem
+  obtain ⟨⟨_, ty⟩, _, rfl⟩ := hmem; cases ty <;> trivial
+
+/-- All jump targets in compiled statement code are ≤ offset + code.length. -/
+theorem compileStmt_allJumpsLe (s : Stmt) (offset nextTmp : Nat) :
+    AllJumpsLe (offset + (compileStmt s offset nextTmp).1.length)
+      (compileStmt s offset nextTmp).1 := by
+  induction s generalizing offset nextTmp with
+  | skip => exact AllJumpsLe_nil
+  | assign x e =>
+    cases e with
+    | lit _ => intro _ hmem; simp [compileStmt] at hmem; subst hmem; trivial
+    | var _ => intro _ hmem; simp [compileStmt] at hmem; subst hmem; trivial
+    | bin _ a b =>
+      exact AllJumpsLe_of_allSeq (by
+        intro instr hmem; simp [compileStmt, List.mem_append] at hmem
+        rcases hmem with ha | hb | rfl
+        · exact compileExpr_allSeq a _ _ instr ha
+        · exact compileExpr_allSeq b _ _ instr hb
+        · trivial)
+  | bassign _ b =>
+    exact AllJumpsLe_of_allSeq (by
+      intro instr hmem; simp [compileStmt, List.mem_append] at hmem
+      rcases hmem with hb | rfl
+      · exact compileBool_allSeq b _ _ instr hb
+      · trivial)
+  | seq s1 s2 ih1 ih2 =>
+    simp only [compileStmt, List.length_append]
+    exact AllJumpsLe_append (AllJumpsLe_mono (ih1 offset nextTmp) (by omega))
+      (AllJumpsLe_mono (ih2 _ _) (by omega))
+  | ite b s1 s2 ih1 ih2 =>
+    match hcb : compileBool b offset nextTmp with
+    | (codeB, be, tmpB) =>
+    match hs2 : compileStmt s2 (offset + codeB.length + 1) tmpB with
+    | (codeElse, tmpE) =>
+    match hs1 : compileStmt s1 (offset + codeB.length + 1 + codeElse.length + 1) tmpE with
+    | (codeThen, _) =>
+    simp only [compileStmt, hcb, hs2, hs1, List.length_append, List.length_singleton]
+    have hb : ∀ instr, instr ∈ codeB → IsSeqInstr instr := by
+      have := compileBool_allSeq b offset nextTmp; simp [hcb] at this; exact this
+    have h2 := ih2 (offset + codeB.length + 1) tmpB
+    simp only [hs2] at h2
+    have h1 := ih1 (offset + codeB.length + 1 + codeElse.length + 1) tmpE
+    simp only [hs1] at h1
+    -- ++ is left-associative: ((((codeB ++ [ifgoto]) ++ codeElse) ++ [goto]) ++ codeThen)
+    exact AllJumpsLe_append
+      (AllJumpsLe_append
+        (AllJumpsLe_append
+          (AllJumpsLe_append (AllJumpsLe_of_allSeq hb)
+            (AllJumpsLe_single_ifgoto (by omega)))
+          (AllJumpsLe_mono h2 (by omega)))
+        (AllJumpsLe_single_goto (by omega)))
+      (AllJumpsLe_mono h1 (by omega))
+  | loop b body ih =>
+    match hcb : compileBool b offset nextTmp with
+    | (codeB, be, tmpB) =>
+    match hsbody : compileStmt body (offset + codeB.length + 1) tmpB with
+    | (codeBody, _) =>
+    simp only [compileStmt, hcb, hsbody, List.length_append, List.length_singleton]
+    have hb : ∀ instr, instr ∈ codeB → IsSeqInstr instr := by
+      have := compileBool_allSeq b offset nextTmp; simp [hcb] at this; exact this
+    have hih := ih (offset + codeB.length + 1) tmpB
+    simp only [hsbody] at hih
+    -- ++ is left-associative: (((codeB ++ [ifgoto]) ++ codeBody) ++ [goto])
+    exact AllJumpsLe_append
+      (AllJumpsLe_append
+        (AllJumpsLe_append (AllJumpsLe_of_allSeq hb)
+          (AllJumpsLe_single_ifgoto (by omega)))
+        (AllJumpsLe_mono hih (by omega)))
+      (AllJumpsLe_single_goto (by omega))
+
+/-- Bridge: if all jump targets in `code` are ≤ `code.length`, then
+    `(code ++ [halt]).toArray` is step-closed in bounds. -/
+private theorem stepClosed_of_allJumpsLe {code : List TAC}
+    (hjumps : AllJumpsLe code.length code) :
+    StepClosedInBounds (code ++ [TAC.halt]).toArray := by
+  have hlen : (code ++ [TAC.halt]).toArray.size = code.length + 1 := by simp
+  constructor
+  · omega
+  · intro pc pc' σ σ' hpc hstep
+    obtain ⟨instr, hinstr, hmem⟩ := Step.mem_successors hstep
+    rw [hlen] at hpc ⊢
+    rw [show (code ++ [TAC.halt]).toArray[pc]? =
+      (code ++ [TAC.halt])[pc]? from by simp [List.getElem?_toArray]] at hinstr
+    by_cases hlt : pc < code.length
+    · -- Instruction is from `code`
+      rw [List.getElem?_append_left hlt] at hinstr
+      have hmem_code := List.mem_of_getElem? hinstr
+      have hj := hjumps instr hmem_code
+      cases instr with
+      | const _ _ | copy _ _ | binop _ _ _ _ | boolop _ _ =>
+        simp [TAC.successors] at hmem; omega
+      | goto l => simp [TAC.successors] at hmem; subst hmem; exact Nat.lt_of_le_of_lt hj (by omega)
+      | ifgoto _ l =>
+        simp [TAC.successors, List.mem_cons] at hmem
+        rcases hmem with rfl | rfl
+        · exact Nat.lt_of_le_of_lt hj (by omega)
+        · omega
+      | halt => simp [TAC.successors] at hmem
+    · -- Instruction is halt (at position code.length)
+      have hpc_eq : pc = code.length := by omega
+      subst hpc_eq
+      rw [List.getElem?_append_right (by omega)] at hinstr
+      simp at hinstr; subst hinstr
+      simp [TAC.successors] at hmem
+
+/-- **Step-closedness**: A type-checked program's compiled output has all
+    jump targets within bounds — no instruction can jump outside the program. -/
+theorem compile_stepClosed (prog : Program) (_h : prog.typeCheck = true) :
+    StepClosedInBounds prog.compile := by
+  simp only [Program.compile]
+  -- prog.compile = (inits ++ body ++ [halt]).toArray
+  -- Rewrite as ((inits ++ body) ++ [halt]).toArray
+  rw [show initCode prog.decls ++ (compileStmt prog.body (initCode prog.decls).length 0).1 ++
+    [TAC.halt] = (initCode prog.decls ++
+    (compileStmt prog.body (initCode prog.decls).length 0).1) ++ [TAC.halt] from by
+    rw [List.append_assoc]]
+  apply stepClosed_of_allJumpsLe
+  simp only [List.length_append]
+  exact AllJumpsLe_append (AllJumpsLe_of_allSeq (initCode_allSeq prog.decls))
+    (compileStmt_allJumpsLe prog.body (initCode prog.decls).length 0)
+
+/-- **No-stuck guarantee**: A type-checked program always has a behavior —
+    it either halts, errors (div-by-zero), or diverges. No execution can
+    get stuck. Combines `compile_wellTyped`, `compile_stepClosed`, and
+    `has_behavior`. -/
+theorem compile_has_behavior (prog : Program) (htc : prog.typeCheck = true)
+    (σ₀ : Store) (hts₀ : TypedStore prog.tyCtx σ₀) :
+    ∃ b, program_behavior prog.compile σ₀ b :=
+  has_behavior prog.compile σ₀ prog.tyCtx
+    (prog.compile_wellTyped htc) hts₀ (prog.compile_stepClosed htc)
+
+-- ============================================================
+-- § 5h. safeCompile correctness
+-- ============================================================
+
+/-- safeCompile succeeds iff the program type-checks. -/
+theorem safeCompile_iff (prog : Program) :
+    (∃ p, prog.safeCompile = some p) ↔ prog.typeCheck = true := by
+  constructor
+  · rintro ⟨p, h⟩; simp [safeCompile] at h; exact h.1
+  · intro htc; exact ⟨prog.compile, by simp [safeCompile, htc]⟩
+
+private theorem safeCompile_tc {prog : Program} {p : Prog}
+    (h : prog.safeCompile = some p) : prog.typeCheck = true := by
+  simp [safeCompile] at h; exact h.1
+
+private theorem safeCompile_eq {prog : Program} {p : Prog}
+    (h : prog.safeCompile = some p) : p = prog.compile := by
+  simp [safeCompile] at h; exact h.2.symm
+
+/-- When safeCompile succeeds, the output is well-typed. -/
+theorem safeCompile_wellTyped {prog : Program} {p : Prog}
+    (h : prog.safeCompile = some p) : WellTypedProg prog.tyCtx p :=
+  safeCompile_eq h ▸ prog.compile_wellTyped (safeCompile_tc h)
+
+/-- When safeCompile succeeds, the output is step-closed in bounds. -/
+theorem safeCompile_stepClosed {prog : Program} {p : Prog}
+    (h : prog.safeCompile = some p) : StepClosedInBounds p :=
+  safeCompile_eq h ▸ prog.compile_stepClosed (safeCompile_tc h)
+
+/-- **Main theorem for safeCompile**: When compilation succeeds, the output
+    program always has a behavior — halt, error, or diverge. No stuck states. -/
+theorem safeCompile_has_behavior {prog : Program} {p : Prog}
+    (h : prog.safeCompile = some p)
+    (σ₀ : Store) (hts₀ : TypedStore prog.tyCtx σ₀) :
+    ∃ b, program_behavior p σ₀ b :=
+  safeCompile_eq h ▸ prog.compile_has_behavior (safeCompile_tc h) σ₀ hts₀
+
+-- ============================================================
+-- § 5i. Pretty-printing
 -- ============================================================
 
 private def tyToString : VarTy → String

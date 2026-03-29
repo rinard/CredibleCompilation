@@ -31,6 +31,15 @@ inductive VarTy where
   | int | bool
   deriving Repr, DecidableEq
 
+namespace VarTy
+
+/-- The default `Value` for a variable type: `0` for int, `false` for bool. -/
+def defaultVal : VarTy → Value
+  | .int  => .int 0
+  | .bool => .bool false
+
+end VarTy
+
 namespace Value
 
 def toInt : Value → Int
@@ -94,6 +103,13 @@ theorem update_shadow (σ : Store) (x : Var) (u v : Value) :
 theorem update_comm (σ : Store) (x y : Var) (u v : Value) (h : x ≠ y) :
     (σ.update x u).update y v = (σ.update y v).update x u := by
   funext z; simp [update]; split <;> split <;> simp_all [Ne.symm]
+
+/-- Updating a variable with its current value is a no-op. -/
+theorem update_of_eq (σ : Store) (x : Var) (v : Value) (h : σ x = v) :
+    σ.update x v = σ := by
+  funext y; simp only [update]; split
+  next heq => rw [beq_iff_eq] at heq; rw [heq, h]
+  next => rfl
 
 end Store
 
