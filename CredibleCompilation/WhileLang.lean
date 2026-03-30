@@ -962,20 +962,24 @@ theorem compileExpr_allSeq (e : SExpr) (offset nextTmp : Nat) :
     · exact ihb _ _ instr hb
     · trivial
 
-theorem compileBool_allSeq (b : SBool) (offset nextTmp : Nat) :
-    ∀ instr, instr ∈ (compileBool b offset nextTmp).1 → IsSeqInstr instr := by
-  induction b generalizing offset nextTmp with
-  | bvar _ => intro _ hmem; simp [compileBool] at hmem
+theorem compileBool_allJumpsLe (b : SBool) (offset nextTmp bound : Nat)
+    (hbound : offset + (compileBool b offset nextTmp).1.length ≤ bound) :
+    AllJumpsLe bound (compileBool b offset nextTmp).1 := by
+  induction b generalizing offset nextTmp bound with
+  | bvar _ => exact AllJumpsLe_nil
   | cmp _ a b =>
-    intro instr hmem; simp [compileBool, List.mem_append] at hmem
-    rcases hmem with ha | hb
-    · exact compileExpr_allSeq a _ _ instr ha
-    · exact compileExpr_allSeq b _ _ instr hb
-  | not _ ih => intro instr hmem; simp [compileBool] at hmem; exact ih _ _ instr hmem
+    exact AllJumpsLe_of_allSeq (fun instr hmem => by
+      simp [compileBool, List.mem_append] at hmem
+      rcases hmem with ha | hb
+      · exact compileExpr_allSeq a _ _ instr ha
+      · exact compileExpr_allSeq b _ _ instr hb)
+  | not _ ih =>
+    simp only [compileBool] at hbound ⊢
+    exact ih offset nextTmp bound hbound
   | and _ _ iha ihb =>
-    sorry -- Flattened and: code now includes boolop/ifgoto/goto/const
+    sorry
   | or _ _ iha ihb =>
-    sorry -- Flattened or: same structure
+    sorry
 
 theorem initCode_allSeq (decls : List (Var × VarTy)) :
     ∀ instr, instr ∈ initCode decls → IsSeqInstr instr := by
@@ -1000,11 +1004,10 @@ theorem compileStmt_allJumpsLe (s : Stmt) (offset nextTmp : Nat) :
         · exact compileExpr_allSeq b _ _ instr hb
         · trivial)
   | bassign _ b =>
-    exact AllJumpsLe_of_allSeq (by
-      intro instr hmem; simp [compileStmt, List.mem_append] at hmem
-      rcases hmem with hb | rfl
-      · exact compileBool_allSeq b _ _ instr hb
-      · trivial)
+    simp only [compileStmt, List.length_append, List.length_singleton]
+    exact AllJumpsLe_append
+      (AllJumpsLe_mono (compileBool_allJumpsLe b offset nextTmp _ (Nat.le_refl _)) (by omega))
+      (AllJumpsLe_of_allSeq (fun instr hmem => by simp at hmem; subst hmem; trivial))
   | seq s1 s2 ih1 ih2 =>
     simp only [compileStmt, List.length_append]
     exact AllJumpsLe_append (AllJumpsLe_mono (ih1 offset nextTmp) (by omega))
@@ -1017,8 +1020,9 @@ theorem compileStmt_allJumpsLe (s : Stmt) (offset nextTmp : Nat) :
     match hs1 : compileStmt s1 (offset + codeB.length + 1 + codeElse.length + 1) tmpE with
     | (codeThen, _) =>
     simp only [compileStmt, hcb, hs2, hs1, List.length_append, List.length_singleton]
-    have hb : ∀ instr, instr ∈ codeB → IsSeqInstr instr := by
-      have := compileBool_allSeq b offset nextTmp; simp [hcb] at this; exact this
+    have hb : AllJumpsLe (offset + codeB.length) codeB := by
+      have := compileBool_allJumpsLe b offset nextTmp (offset + codeB.length) (by simp [hcb])
+      simp [hcb] at this; exact this
     have h2 := ih2 (offset + codeB.length + 1) tmpB
     simp only [hs2] at h2
     have h1 := ih1 (offset + codeB.length + 1 + codeElse.length + 1) tmpE
@@ -1027,7 +1031,7 @@ theorem compileStmt_allJumpsLe (s : Stmt) (offset nextTmp : Nat) :
     exact AllJumpsLe_append
       (AllJumpsLe_append
         (AllJumpsLe_append
-          (AllJumpsLe_append (AllJumpsLe_of_allSeq hb)
+          (AllJumpsLe_append (AllJumpsLe_mono hb (by omega))
             (AllJumpsLe_single_ifgoto (by omega)))
           (AllJumpsLe_mono h2 (by omega)))
         (AllJumpsLe_single_goto (by omega)))
@@ -1038,14 +1042,15 @@ theorem compileStmt_allJumpsLe (s : Stmt) (offset nextTmp : Nat) :
     match hsbody : compileStmt body (offset + codeB.length + 1) tmpB with
     | (codeBody, _) =>
     simp only [compileStmt, hcb, hsbody, List.length_append, List.length_singleton]
-    have hb : ∀ instr, instr ∈ codeB → IsSeqInstr instr := by
-      have := compileBool_allSeq b offset nextTmp; simp [hcb] at this; exact this
+    have hb : AllJumpsLe (offset + codeB.length) codeB := by
+      have := compileBool_allJumpsLe b offset nextTmp (offset + codeB.length) (by simp [hcb])
+      simp [hcb] at this; exact this
     have hih := ih (offset + codeB.length + 1) tmpB
     simp only [hsbody] at hih
     -- ++ is left-associative: (((codeB ++ [ifgoto]) ++ codeBody) ++ [goto])
     exact AllJumpsLe_append
       (AllJumpsLe_append
-        (AllJumpsLe_append (AllJumpsLe_of_allSeq hb)
+        (AllJumpsLe_append (AllJumpsLe_mono hb (by omega))
           (AllJumpsLe_single_ifgoto (by omega)))
         (AllJumpsLe_mono hih (by omega)))
       (AllJumpsLe_single_goto (by omega))
