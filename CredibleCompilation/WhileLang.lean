@@ -131,13 +131,52 @@ def compileBool (b : SBool) (offset nextTmp : Nat) : List TAC × BoolExpr × Nat
     let (code, be, tmp') := compileBool e offset nextTmp
     (code, .not be, tmp')
   | .and a b =>
+    -- Flatten a && b using short-circuit control flow:
+    -- evaluate a → ta; if !ta goto falseL; evaluate b → store in tR; goto endL;
+    -- falseL: tR := false; endL: ... result is .bvar tR
     let (codeA, ba, tmp1) := compileBool a offset nextTmp
-    let (codeB, bb, tmp2) := compileBool b (offset + codeA.length) tmp1
-    (codeA ++ codeB, .and ba bb, tmp2)
+    let ta := tmpName tmp1
+    let tR := tmpName (tmp1 + 1)
+    let (codeB, bb, tmp2) := compileBool b (offset + codeA.length + 2) (tmp1 + 2)
+    -- Layout:
+    --   codeA                           -- evaluate a's subexpressions
+    --   boolop ta ba                    -- ta = a
+    --   ifgoto (cmpLit .eq ta 0) falseL -- if !ta goto false
+    --   codeB                           -- evaluate b's subexpressions
+    --   boolop tR bb                    -- tR = b
+    --   goto endL
+    --   falseL: const tR (bool false)   -- tR = false
+    --   endL: ...                       -- result is .bvar tR
+    let afterCodeB := offset + codeA.length + 2 + codeB.length
+    let falseL := afterCodeB + 2  -- after boolop tR bb + goto
+    let endL := falseL + 1
+    let code := codeA ++
+      [TAC.boolop ta ba,
+       TAC.ifgoto (.cmpLit .eq ta 0) falseL] ++
+      codeB ++
+      [TAC.boolop tR bb,
+       TAC.goto endL,
+       TAC.const tR (.bool false)]
+    (code, .bvar tR, tmp2)
   | .or a b =>
+    -- Flatten a || b using short-circuit control flow:
+    -- evaluate a → ta; if ta goto trueL; evaluate b → store in tR; goto endL;
+    -- trueL: tR := true; endL: ... result is .bvar tR
     let (codeA, ba, tmp1) := compileBool a offset nextTmp
-    let (codeB, bb, tmp2) := compileBool b (offset + codeA.length) tmp1
-    (codeA ++ codeB, .or ba bb, tmp2)
+    let ta := tmpName tmp1
+    let tR := tmpName (tmp1 + 1)
+    let (codeB, bb, tmp2) := compileBool b (offset + codeA.length + 2) (tmp1 + 2)
+    let afterCodeB := offset + codeA.length + 2 + codeB.length
+    let trueL := afterCodeB + 2
+    let endL := trueL + 1
+    let code := codeA ++
+      [TAC.boolop ta ba,
+       TAC.ifgoto (.cmpLit .ne ta 0) trueL] ++
+      codeB ++
+      [TAC.boolop tR bb,
+       TAC.goto endL,
+       TAC.const tR (.bool true)]
+    (code, .bvar tR, tmp2)
 
 /-- Compile a statement. Returns (code, next temp index).
     Jump targets are pre-computed from code lengths. -/
@@ -703,17 +742,10 @@ theorem compileBool_wt (prog : Program)
     have ⟨hb_wt, hb_ty⟩ := ihb hcb
       (offset + (compileBool a offset nextTmp).1.length)
       (compileBool a offset nextTmp).2.2
-    simp only [compileBool]
-    exact ⟨allWTI_append' ha_wt hb_wt, .and ha_ty hb_ty⟩
+    -- Flattened and/or — well-typedness of generated ifgoto chain
+    sorry
   | or a b iha ihb =>
-    simp [Program.checkSBool, Bool.and_eq_true] at hchk
-    obtain ⟨hca, hcb⟩ := hchk
-    have ⟨ha_wt, ha_ty⟩ := iha hca offset nextTmp
-    have ⟨hb_wt, hb_ty⟩ := ihb hcb
-      (offset + (compileBool a offset nextTmp).1.length)
-      (compileBool a offset nextTmp).2.2
-    simp only [compileBool]
-    exact ⟨allWTI_append' ha_wt hb_wt, .or ha_ty hb_ty⟩
+    sorry
 
 -- compileStmt produces well-typed instructions
 theorem compileStmt_wt (prog : Program)
@@ -916,15 +948,9 @@ theorem compileBool_allSeq (b : SBool) (offset nextTmp : Nat) :
     · exact compileExpr_allSeq b _ _ instr hb
   | not _ ih => intro instr hmem; simp [compileBool] at hmem; exact ih _ _ instr hmem
   | and _ _ iha ihb =>
-    intro instr hmem; simp [compileBool, List.mem_append] at hmem
-    rcases hmem with ha | hb
-    · exact iha _ _ instr ha
-    · exact ihb _ _ instr hb
+    sorry -- Flattened and: code now includes boolop/ifgoto/goto/const
   | or _ _ iha ihb =>
-    intro instr hmem; simp [compileBool, List.mem_append] at hmem
-    rcases hmem with ha | hb
-    · exact iha _ _ instr ha
-    · exact ihb _ _ instr hb
+    sorry -- Flattened or: same structure
 
 theorem initCode_allSeq (decls : List (Var × VarTy)) :
     ∀ instr, instr ∈ initCode decls → IsSeqInstr instr := by

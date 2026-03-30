@@ -98,16 +98,6 @@ private partial def genBoolExpr (varMap : List (Var × Nat)) (be : BoolExpr) : L
     ("  cmp x1, x2" :: s!"  cset w0, {cond}" :: List.nil)
   | .not e =>
     genBoolExpr varMap e ++ ("  eor w0, w0, #1" :: List.nil)
-  | .and a b =>
-    genBoolExpr varMap a ++
-    ("  str x0, [sp]" :: List.nil) ++
-    genBoolExpr varMap b ++
-    ("  ldr x1, [sp]" :: "  and w0, w0, w1" :: List.nil)
-  | .or a b =>
-    genBoolExpr varMap a ++
-    ("  str x0, [sp]" :: List.nil) ++
-    genBoolExpr varMap b ++
-    ("  ldr x1, [sp]" :: "  orr w0, w0, w1" :: List.nil)
 
 -- ============================================================
 -- § 4. Instruction codegen

@@ -359,12 +359,6 @@ def formalGenBoolExpr (vm : VarMap) (be : BoolExpr) : List ArmInstr :=
     | none => []
   | .not e =>
     formalGenBoolExpr vm e ++ [.eorImm .x0 .x0 1]
-  | .and a b =>
-    formalGenBoolExpr vm a ++ [.str .x0 0] ++
-    formalGenBoolExpr vm b ++ [.ldr .x1 0, .andR .x0 .x0 .x1]
-  | .or a b =>
-    formalGenBoolExpr vm a ++ [.str .x0 0] ++
-    formalGenBoolExpr vm b ++ [.ldr .x1 0, .orrR .x0 .x0 .x1]
 
 /-- Generate formal ARM64 instructions for a TAC instruction.
     Mirrors `genInstr` in CodeGen.lean (without the label string).
@@ -661,60 +655,6 @@ theorem genBoolExpr_correct (prog : ArmProg) (vm : VarMap)
     simp only [hOff] at hCode ⊢
     -- Code = [ldr x1 off] ++ loadImm64 x2 n ++ [cmp x1 x2, cset x0 cond]
     -- This needs loadImm64_correct for x2, then cmp/cset
-    sorry
-  | and a b =>
-    -- Code = (genA ++ [str x0 0]) ++ (genB ++ [ldr x1 0, andR x0 x0 x1])
-    -- Rewrite as two halves for splitting
-    simp only [formalGenBoolExpr] at hCode ⊢
-    -- The list is left-associated: ((genA ++ [str]) ++ genB) ++ [ldr, and]
-    -- Split off the tail [ldr x1 0, andR]
-    have hCodeMain := hCode.append_left   -- genA ++ [str] ++ genB
-    have hCodeTail := hCode.append_right  -- [ldr x1 0, andR]
-    -- Split genA ++ [str] from genB
-    have hCodeAS := hCodeMain.append_left   -- genA ++ [str]
-    have hCodeB := hCodeMain.append_right   -- genB
-    -- Split genA from [str]
-    have hCodeA := hCodeAS.append_left    -- genA
-    have hCodeStr := hCodeAS.append_right -- [str x0 0]
-    -- 1. Execute genBoolExpr a
-    obtain ⟨s1, hSteps1, hx0_a, hStack1, hPC1⟩ :=
-      genBoolExpr_correct prog vm a σ s startPC hRel hScratch hCodeA hPC hVarMap hIntVars
-    -- 2. str x0, [sp, #0] — save a's result to scratch
-    have hStr := hCodeStr.head; rw [← hPC1] at hStr
-    let s2 := s1.setStack 0 (s1.regs .x0) |>.nextPC
-    have hSteps12 : ArmSteps prog s s2 := hSteps1.trans (.single (.str .x0 0 hStr))
-    -- s2 preserves StateRel (scratch doesn't alias vars)
-    have hRel2 : StateRel vm σ s2 := by
-      intro v off hv
-      simp only [s2, ArmState.setStack, ArmState.nextPC]
-      simp [hScratch v off hv]
-      exact (hStack1 v off hv).trans (hRel v off hv)
-    have hPC2 : s2.pc = startPC + (formalGenBoolExpr vm a).length + 1 := by
-      simp [s2, ArmState.setStack, ArmState.nextPC, hPC1]
-    -- 3. Execute genBoolExpr b
-    have hlen_eq : (formalGenBoolExpr vm a ++ [ArmInstr.str .x0 0]).length =
-        (formalGenBoolExpr vm a).length + 1 := by simp [List.length_append]
-    rw [hlen_eq] at hCodeB
-    rw [show startPC + ((formalGenBoolExpr vm a).length + 1) =
-          startPC + (formalGenBoolExpr vm a).length + 1 from by omega] at hCodeB
-    rw [← hPC2] at hCodeB
-    obtain ⟨s3, hSteps3, hx0_b, hStack3, hPC3⟩ :=
-      genBoolExpr_correct prog vm b σ s2 s2.pc hRel2 hScratch hCodeB rfl hVarMap hIntVars
-    have hSteps13 : ArmSteps prog s s3 := hSteps12.trans hSteps3
-    -- 4. ldr x1, [sp, #0] — reload a's result
-    -- Convert hCodeTail offset to s3.pc
-    have hTailPC : startPC + (formalGenBoolExpr vm a ++ [ArmInstr.str .x0 0] ++ formalGenBoolExpr vm b).length = s3.pc := by
-      simp [List.length_append, hPC3, hPC2]; omega
-    rw [hTailPC] at hCodeTail
-    have hLdr := hCodeTail.head
-    have hAnd := hCodeTail.tail.head
-    -- Known limitation: for expressions like (a && b) && (c && d), the
-    -- right-side (c && d) clobbers scratch while the left-side result is
-    -- saved there. This is correct when the right operand doesn't contain
-    -- and/or (e.g., (a && b) && (c < d) works fine). A fix would use
-    -- a scratch stack indexed by nesting depth.
-    sorry
-  | or a b =>
     sorry
 
 /-- StateRel is preserved when store is updated at `x ↦ w` and stack at `off ↦ w.encode`,

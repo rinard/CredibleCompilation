@@ -207,8 +207,6 @@ inductive BoolExpr where
   | cmp    : CmpOp → Var → Var → BoolExpr     -- x op y (integer comparison)
   | cmpLit : CmpOp → Var → Int → BoolExpr     -- x op n (variable vs literal)
   | not    : BoolExpr → BoolExpr
-  | and    : BoolExpr → BoolExpr → BoolExpr
-  | or     : BoolExpr → BoolExpr → BoolExpr
   deriving Repr, DecidableEq
 
 /-- Evaluate a boolean expression. Uses `.toInt`/`.toBool` extractors;
@@ -218,8 +216,6 @@ def BoolExpr.eval (σ : Store) : BoolExpr → Bool
   | .cmp op x y   => op.eval (σ x).toInt (σ y).toInt
   | .cmpLit op x n => op.eval (σ x).toInt n
   | .not e         => !e.eval σ
-  | .and a b       => a.eval σ && b.eval σ
-  | .or a b        => a.eval σ || b.eval σ
 
 theorem BoolExpr.eval_congr (cond : BoolExpr) (σ τ : Store)
     (hagree : ∀ y, σ y = τ y) : cond.eval σ = cond.eval τ := by
@@ -228,8 +224,6 @@ theorem BoolExpr.eval_congr (cond : BoolExpr) (σ τ : Store)
   | cmp op x y => simp [BoolExpr.eval, hagree]
   | cmpLit op x n => simp [BoolExpr.eval, hagree]
   | not e ih => simp [BoolExpr.eval, ih]
-  | and a b iha ihb => simp [BoolExpr.eval, iha, ihb]
-  | or a b iha ihb => simp [BoolExpr.eval, iha, ihb]
 
 /-- Collect all variable names from a boolean expression. -/
 def BoolExpr.vars : BoolExpr → List Var
@@ -237,8 +231,6 @@ def BoolExpr.vars : BoolExpr → List Var
   | .cmp _ x y    => [x, y]
   | .cmpLit _ x _ => [x]
   | .not e        => e.vars
-  | .and a b      => a.vars ++ b.vars
-  | .or a b       => a.vars ++ b.vars
 
 -- ============================================================
 -- § 3. Syntax – Three-Address Code instructions
@@ -327,10 +319,6 @@ inductive WellTypedBoolExpr (Γ : TyCtx) : BoolExpr → Prop where
   | cmp    : Γ x = .int → Γ y = .int → WellTypedBoolExpr Γ (.cmp op x y)
   | cmpLit : Γ x = .int → WellTypedBoolExpr Γ (.cmpLit op x n)
   | not    : WellTypedBoolExpr Γ b → WellTypedBoolExpr Γ (.not b)
-  | and    : WellTypedBoolExpr Γ a → WellTypedBoolExpr Γ b →
-      WellTypedBoolExpr Γ (.and a b)
-  | or     : WellTypedBoolExpr Γ a → WellTypedBoolExpr Γ b →
-      WellTypedBoolExpr Γ (.or a b)
 
 /-- Well-typedness for a single TAC instruction. -/
 inductive WellTypedInstr (Γ : TyCtx) : TAC → Prop where
@@ -693,8 +681,6 @@ def checkWellTypedBoolExpr (Γ : TyCtx) : BoolExpr → Bool
   | .cmp _ x y    => decide (Γ x = .int) && decide (Γ y = .int)
   | .cmpLit _ x _ => decide (Γ x = .int)
   | .not e        => checkWellTypedBoolExpr Γ e
-  | .and a b      => checkWellTypedBoolExpr Γ a && checkWellTypedBoolExpr Γ b
-  | .or a b       => checkWellTypedBoolExpr Γ a && checkWellTypedBoolExpr Γ b
 
 def checkWellTypedInstr (Γ : TyCtx) : TAC → Bool
   | .const x v     => decide (v.typeOf = Γ x)
@@ -719,12 +705,6 @@ theorem checkWellTypedBoolExpr_sound {Γ : TyCtx} {b : BoolExpr}
     exact .cmpLit h
   | not e ih =>
     simp [checkWellTypedBoolExpr] at h; exact .not (ih h)
-  | and a b iha ihb =>
-    simp [checkWellTypedBoolExpr, Bool.and_eq_true] at h
-    exact .and (iha h.1) (ihb h.2)
-  | or a b iha ihb =>
-    simp [checkWellTypedBoolExpr, Bool.and_eq_true] at h
-    exact .or (iha h.1) (ihb h.2)
 
 theorem checkWellTypedInstr_sound {Γ : TyCtx} {instr : TAC}
     (h : checkWellTypedInstr Γ instr = true) : WellTypedInstr Γ instr := by

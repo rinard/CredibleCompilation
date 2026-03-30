@@ -60,12 +60,6 @@ def evalBoolConst (cm : ConstMap) : BoolExpr → Option Bool
     | some (.int a) => some (op.eval a n)
     | _ => none
   | .not e => evalBoolConst cm e |>.map (!·)
-  | .and a b => match evalBoolConst cm a, evalBoolConst cm b with
-    | some a, some b => some (a && b)
-    | _, _ => none
-  | .or a b => match evalBoolConst cm a, evalBoolConst cm b with
-    | some a, some b => some (a || b)
-    | _, _ => none
 
 -- ============================================================
 -- § 3. Transfer function

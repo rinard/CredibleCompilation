@@ -89,8 +89,6 @@ def BoolExpr.toSymExpr (ss : SymStore) : BoolExpr → Expr
   | .cmp op x y    => .cmpE op (ssGet ss x) (ssGet ss y)
   | .cmpLit op x n => .cmpLitE op (ssGet ss x) n
   | .not e         => .notE (e.toSymExpr ss)
-  | .and a b       => .andE (a.toSymExpr ss) (b.toSymExpr ss)
-  | .or a b        => .orE (a.toSymExpr ss) (b.toSymExpr ss)
 
 /-- Symbolically execute one TAC instruction.
     Expressions in the resulting store reference the *initial* variable values. -/
@@ -150,12 +148,6 @@ def BoolExpr.symEval (ss : SymStore) (inv : EInv) : BoolExpr → Option Bool
     | .lit a => some (op.eval a n)
     | _ => none
   | .not e => e.symEval ss inv |>.map (!·)
-  | .and a b => match a.symEval ss inv, b.symEval ss inv with
-    | some a, some b => some (a && b)
-    | _, _ => none
-  | .or a b => match a.symEval ss inv, b.symEval ss inv with
-    | some a, some b => some (a || b)
-    | _, _ => none
 
 /-- Like `canReach`, but for `ifgoto` also verifies the branch direction
     via symbolic evaluation of the boolean condition under the invariant.
@@ -248,12 +240,6 @@ def BoolExpr.mapVarsRel (rel : EExprRel) : BoolExpr → Option BoolExpr
     | .var x' => some (.cmpLit op x' n)
     | _ => none
   | .not e => e.mapVarsRel rel |>.map .not
-  | .and a b => match a.mapVarsRel rel, b.mapVarsRel rel with
-    | some a', some b' => some (.and a' b')
-    | _, _ => none
-  | .or a b => match a.mapVarsRel rel, b.mapVarsRel rel with
-    | some a', some b' => some (.or a' b')
-    | _, _ => none
 
 /-- Build a substitution map from pre-relation pairs of the form `(e_o, .var v)`.
     Maps transformed variable `v` to original expression `e_o`. -/

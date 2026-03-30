@@ -326,12 +326,6 @@ private theorem BoolExpr.toSymExpr_sound (be : BoolExpr) (ss : SymStore) (σ₀ 
   | not e ih =>
     simp only [BoolExpr.toSymExpr, Expr.eval, BoolExpr.eval]
     rw [ih]; simp [Value.toBool]
-  | and a b iha ihb =>
-    simp only [BoolExpr.toSymExpr, Expr.eval, BoolExpr.eval]
-    rw [iha, ihb]; simp [Value.toBool]
-  | or a b iha ihb =>
-    simp only [BoolExpr.toSymExpr, Expr.eval, BoolExpr.eval]
-    rw [iha, ihb]; simp [Value.toBool]
 
 /-- Symbolic execution soundness: if the symbolic store `ss` correctly represents
     the relationship between an initial store `σ₀` and a current store `σ`,
@@ -763,22 +757,6 @@ private theorem BoolExpr.symEval_sound (b : BoolExpr) (ss : SymStore) (inv : EIn
       have := ih val he
       simp [BoolExpr.eval, this]
       exact heval
-  | and a b iha ihb =>
-    simp only [BoolExpr.symEval] at heval
-    cases ha : a.symEval ss inv <;> simp [ha] at heval
-    case some va =>
-      cases hb : b.symEval ss inv <;> simp [hb] at heval
-      case some vb =>
-        simp [BoolExpr.eval, iha va ha, ihb vb hb]
-        exact heval
-  | or a b iha ihb =>
-    simp only [BoolExpr.symEval] at heval
-    cases ha : a.symEval ss inv <;> simp [ha] at heval
-    case some va =>
-      cases hb : b.symEval ss inv <;> simp [hb] at heval
-      case some vb =>
-        simp [BoolExpr.eval, iha va ha, ihb vb hb]
-        exact heval
 
 /-- Generalized path execution soundness with arbitrary initial symbolic store.
     The path check includes symbolic branch-direction verification for ifgoto.
@@ -1078,20 +1056,6 @@ private theorem BoolExpr.eval_mapVarsRel (b origCond : BoolExpr)
     cases he : e.mapVarsRel rel <;> simp [he] at hmap
     case some e' =>
       rw [← hmap]; simp [BoolExpr.eval, ih e' he]
-  | and a b iha ihb =>
-    simp only [BoolExpr.mapVarsRel] at hmap
-    cases ha : a.mapVarsRel rel <;> simp [ha] at hmap
-    case some a' =>
-      cases hb : b.mapVarsRel rel <;> simp [hb] at hmap
-      case some b' =>
-        rw [← hmap]; simp [BoolExpr.eval, iha a' ha, ihb b' hb]
-  | or a b iha ihb =>
-    simp only [BoolExpr.mapVarsRel] at hmap
-    cases ha : a.mapVarsRel rel <;> simp [ha] at hmap
-    case some a' =>
-      cases hb : b.mapVarsRel rel <;> simp [hb] at hmap
-      case some b' =>
-        rw [← hmap]; simp [BoolExpr.eval, iha a' ha, ihb b' hb]
 
 /-- Branch direction info from the transformed program's ifgoto instruction.
     For `ifgoto b l` with `l ≠ pc + 1`, returns `some (b, pc' == l)` indicating
@@ -1125,8 +1089,6 @@ private theorem branchInfoWithRel_nil (instr : TAC) (pc_t pc_t' : Label) :
     | cmp op x y => simp [BoolExpr.mapVarsRel, relGetOrigExpr, List.find?]
     | cmpLit op x n => simp [BoolExpr.mapVarsRel, relGetOrigExpr, List.find?]
     | not e ih => simp [BoolExpr.mapVarsRel, ih, Option.map]
-    | and a b iha ihb => simp [BoolExpr.mapVarsRel, iha, ihb]
-    | or a b iha ihb => simp [BoolExpr.mapVarsRel, iha, ihb]
   | _ => simp [branchInfoWithRel, transBranchInfo]
 
 /-- When `transBranchInfo` returns `some (cond, taken)`,
