@@ -977,9 +977,35 @@ theorem compileBool_allJumpsLe (b : SBool) (offset nextTmp bound : Nat)
     simp only [compileBool] at hbound ⊢
     exact ih offset nextTmp bound hbound
   | and _ _ iha ihb =>
-    sorry
+    simp only [compileBool, List.length_append, List.length_cons, List.length_nil] at hbound ⊢
+    apply AllJumpsLe_append
+    · apply AllJumpsLe_append
+      · apply AllJumpsLe_append
+        · exact AllJumpsLe_mono (iha offset nextTmp _ (Nat.le_refl _)) (by omega)
+        · exact AllJumpsLe_single_ifgoto (by omega)
+      · exact AllJumpsLe_mono (ihb _ _ _ (Nat.le_refl _)) (by omega)
+    · intro instr hmem
+      simp [List.mem_cons] at hmem
+      rcases hmem with rfl | rfl | rfl | rfl
+      · exact by omega  -- ifgoto
+      · trivial  -- const
+      · exact by omega  -- goto
+      · trivial  -- const
   | or _ _ iha ihb =>
-    sorry
+    simp only [compileBool, List.length_append, List.length_cons, List.length_nil] at hbound ⊢
+    apply AllJumpsLe_append
+    · apply AllJumpsLe_append
+      · apply AllJumpsLe_append
+        · exact AllJumpsLe_mono (iha offset nextTmp _ (Nat.le_refl _)) (by omega)
+        · exact AllJumpsLe_single_ifgoto (by omega)
+      · exact AllJumpsLe_mono (ihb _ _ _ (Nat.le_refl _)) (by omega)
+    · intro instr hmem
+      simp [List.mem_cons] at hmem
+      rcases hmem with rfl | rfl | rfl | rfl
+      · exact by omega
+      · trivial
+      · exact by omega
+      · trivial
 
 theorem initCode_allSeq (decls : List (Var × VarTy)) :
     ∀ instr, instr ∈ initCode decls → IsSeqInstr instr := by
