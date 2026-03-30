@@ -490,6 +490,22 @@ theorem Flags.condHolds_correct (op : CmpOp) (a b : Int) :
   · -- le
     omega
 
+/-- Helper: executing ldr/ldr/cmp/cset for a `.cmp` boolean expression. -/
+private theorem genBoolExpr_cmp_correct (prog : ArmProg) (vm : VarMap)
+    (op : CmpOp) (lv rv : Var) (σ : Store) (s : ArmState) (startPC : Nat)
+    (offL offR : Nat)
+    (hL : vm.lookup lv = some offL) (hR : vm.lookup rv = some offR)
+    (hRel : StateRel vm σ s)
+    (hCode : CodeAt prog startPC
+      (.ldr .x1 offL :: .ldr .x2 offR :: .cmp .x1 .x2 ::
+       .cset .x0 (match op with | .eq => .eq | .ne => .ne | .lt => .lt | .le => .le) :: List.nil))
+    (hPC : s.pc = startPC) :
+    ∃ s', ArmSteps prog s s' ∧
+      s'.regs .x0 = (if op.eval (σ lv).toInt (σ rv).toInt then (1 : Int) else 0) ∧
+      (∀ v off, vm.lookup v = some off → s'.stack off = s.stack off) ∧
+      s'.pc = startPC + 4 := by
+  sorry
+
 /-- `genBoolExpr` correctly evaluates a boolean expression into x0. -/
 theorem genBoolExpr_correct (prog : ArmProg) (vm : VarMap)
     (be : BoolExpr) (σ : Store) (s : ArmState) (startPC : Nat)
