@@ -363,9 +363,10 @@ partial def formalGenBoolExpr (vm : VarMap) (be : BoolExpr) : List ArmInstr :=
     formalGenBoolExpr vm b ++ [.ldr .x1 0, .orrR .x0 .x0 .x1]
 
 /-- Generate formal ARM64 instructions for a TAC instruction.
-    Mirrors `genInstr` in CodeGen.lean (without the label string). -/
-def formalGenInstr (vm : VarMap) (instr : TAC) (haltLabel : Nat) (divLabel : Nat)
-    : List ArmInstr :=
+    Mirrors `genInstr` in CodeGen.lean (without the label string).
+    `pcMap` maps TAC labels to ARM PCs for branch targets. -/
+def formalGenInstr (vm : VarMap) (pcMap : Nat → Nat) (instr : TAC)
+    (haltLabel : Nat) (divLabel : Nat) : List ArmInstr :=
   match instr with
   | .const v (.int n) =>
     match vm.lookup v with
@@ -397,9 +398,9 @@ def formalGenInstr (vm : VarMap) (instr : TAC) (haltLabel : Nat) (divLabel : Nat
     match vm.lookup dst with
     | some offD => formalGenBoolExpr vm be ++ [.str .x0 offD]
     | none => []
-  | .goto l => [.b l]
+  | .goto l => [.b (pcMap l)]
   | .ifgoto be l =>
-    formalGenBoolExpr vm be ++ [.cbnz .x0 l]
+    formalGenBoolExpr vm be ++ [.cbnz .x0 (pcMap l)]
   | .halt => [.b haltLabel]
 
 -- ============================================================
@@ -561,18 +562,21 @@ private theorem genBoolExpr_cmp_correct (prog : ArmProg) (vm : VarMap)
        rw [hvalL, hvalR, hnL, hnR]; simp only [Value.encode, Value.toInt]; exact hval,
     ⟨fun _ _ _ => rfl, by simp [ArmState.setReg, ArmState.nextPC]⟩⟩
 
-/-- `genBoolExpr` correctly evaluates a boolean expression into x0. -/
+/-- `genBoolExpr` correctly evaluates a boolean expression into x0.
+    Requires that compared variables are integers (guaranteed by well-typedness). -/
 theorem genBoolExpr_correct (prog : ArmProg) (vm : VarMap)
     (be : BoolExpr) (σ : Store) (s : ArmState) (startPC : Nat)
     (hRel : StateRel vm σ s)
     (hScratch : ScratchSafe vm)
     (hCode : CodeAt prog startPC (formalGenBoolExpr vm be))
-    (hPC : s.pc = startPC) :
+    (hPC : s.pc = startPC)
+    (hIntVars : ∀ v, (∃ off, vm.lookup v = some off) → ∃ n, σ v = .int n) :
     ∃ s', ArmSteps prog s s' ∧
       s'.regs .x0 = (if be.eval σ then (1 : Int) else 0) ∧
       (∀ v off, vm.lookup v = some off → s'.stack off = s.stack off) ∧
       s'.pc = startPC + (formalGenBoolExpr vm be).length := by
-  sorry
+  cases be with
+  | _ => sorry  -- All BoolExpr cases deferred; .cmp uses genBoolExpr_cmp_correct
 
 /-- Single TAC instruction backward simulation. -/
 theorem genInstr_correct (prog : ArmProg) (vm : VarMap) (pcMap : Nat → Nat)
@@ -582,14 +586,52 @@ theorem genInstr_correct (prog : ArmProg) (vm : VarMap) (pcMap : Nat → Nat)
     (hRel : SimRel vm pcMap (.run pc σ) s)
     (hScratch : ScratchSafe vm)
     (cfg' : Cfg) (hStep : p ⊩ Cfg.run pc σ ⟶ cfg')
-    (hCodeInstr : CodeAt prog (pcMap pc) (formalGenInstr vm instr haltLabel divLabel))
+    (hCodeInstr : CodeAt prog (pcMap pc) (formalGenInstr vm pcMap instr haltLabel divLabel))
     (hPcNext : ∀ pc', cfg' = .run pc' σ → -- placeholder for PC mapping
-      pcMap pc' = pcMap pc + (formalGenInstr vm instr haltLabel divLabel).length) :
+      pcMap pc' = pcMap pc + (formalGenInstr vm pcMap instr haltLabel divLabel).length) :
     ∃ s', ArmSteps prog s s' ∧ SimRel vm pcMap cfg' s' := by
-  sorry -- Proof by cases on `hStep`; each TAC instruction maps to its formal
-  -- ARM sequence. The .const case uses loadImm64_correct + str.
-  -- The .binop case uses ldr/ldr/op/str (with cbz for div).
-  -- The .goto case is a single `b`. The .halt case branches to haltLabel.
+  obtain ⟨hStateRel, hPcRel⟩ := hRel
+  cases hStep with
+  | goto hinstr =>
+    -- TAC: goto l → ARM: b (pcMap l)
+    -- formalGenInstr generates [.b l], but pcMap maps TAC labels to ARM PCs
+    sorry
+  | halt hinstr =>
+    -- TAC: halt → ARM: b haltLabel
+    -- formalGenInstr for .halt = [.b haltLabel]
+    have hformal : formalGenInstr vm pcMap .halt haltLabel divLabel = [.b haltLabel] := rfl
+    rw [show instr = .halt from by
+      have := Option.some.inj (hInstr.symm.trans hinstr); exact this] at hCodeInstr
+    rw [hformal] at hCodeInstr
+    have hb := hCodeInstr.head
+    rw [← hPcRel] at hb
+    exact ⟨{ s with pc := haltLabel },
+      .single (.branch haltLabel hb),
+      hStateRel⟩
+  | const hinstr =>
+    -- TAC: x := v → ARM: loadImm64 + str
+    sorry
+  | copy hinstr =>
+    -- TAC: x := y → ARM: ldr + str
+    sorry
+  | binop hinstr hy hz hs =>
+    -- TAC: x := y op z → ARM: ldr/ldr/op/str (with cbz for div)
+    sorry
+  | boolop hinstr =>
+    -- TAC: x := bexpr → ARM: genBoolExpr + str
+    sorry
+  | iftrue hinstr hcond =>
+    -- TAC: if cond goto l → ARM: genBoolExpr + cbnz
+    sorry
+  | iffall hinstr hcond =>
+    -- TAC: if cond goto l (fallthrough) → ARM: genBoolExpr + cbnz
+    sorry
+  | error hinstr hy hz hs =>
+    -- TAC: div-by-zero → ARM: cbz branches to divLabel
+    sorry
+  | binop_typeError hinstr hne =>
+    -- Cannot happen under well-typedness (but we don't have that here)
+    sorry
 
 /-- Main backward simulation: every TAC step is matched by ARM64 steps. -/
 theorem backward_simulation (p : Prog) (armProg : ArmProg)
