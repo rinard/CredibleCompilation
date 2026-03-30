@@ -479,6 +479,27 @@ theorem ArmSteps.one_then {prog : ArmProg} {s s' s'' : ArmState}
 @[simp] theorem ArmReg.x2_ne_x1 : (ArmReg.x2 == ArmReg.x1) = false := by native_decide
 @[simp] theorem ArmReg.beq_self (r : ArmReg) : (r == r) = true := by cases r <;> native_decide
 
+-- Helper: split CodeAt for appended lists
+theorem CodeAt.append_left {prog : ArmProg} {startPC : Nat} {l1 l2 : List ArmInstr}
+    (h : CodeAt prog startPC (l1 ++ l2)) :
+    CodeAt prog startPC l1 := by
+  intro i hi
+  have := h i (by simp; omega)
+  simp [List.getElem_append_left hi] at this
+  exact this
+
+theorem CodeAt.append_right {prog : ArmProg} {startPC : Nat} {l1 l2 : List ArmInstr}
+    (h : CodeAt prog startPC (l1 ++ l2)) :
+    CodeAt prog (startPC + l1.length) l2 := by
+  intro i hi
+  have hlt : l1.length + i < (l1 ++ l2).length := by simp; omega
+  have := h (l1.length + i) hlt
+  have hge : l1.length ≤ l1.length + i := Nat.le_add_right _ _
+  rw [List.getElem_append_right hge] at this
+  simp at this
+  rw [show startPC + l1.length + i = startPC + (l1.length + i) from by omega]
+  exact this
+
 theorem loadImm64_correct (prog : ArmProg) (rd : ArmReg) (n : Int)
     (s : ArmState) (startPC : Nat)
     (hCode : CodeAt prog startPC (formalLoadImm64 rd n))
@@ -638,8 +659,73 @@ theorem genInstr_correct (prog : ArmProg) (vm : VarMap) (pcMap : Nat → Nat)
       .single (.branch haltLabel hb),
       hStateRel⟩
   | const hinstr =>
-    -- TAC: x := v → ARM: loadImm64 + str
-    sorry
+    -- TAC: x := v → ARM: loadImm64 + str (int) or mov + str (bool)
+    rename_i x v
+    obtain ⟨offD, hD⟩ := hVarMap x
+    have heq : instr = .const x v := Option.some.inj (hInstr.symm.trans hinstr)
+    cases v with
+    | int n =>
+      -- formalGenInstr = formalLoadImm64 x0 n ++ [str x0 offD]
+      have hformal : formalGenInstr vm pcMap (.const x (.int n)) haltLabel divLabel =
+          formalLoadImm64 .x0 n ++ (.str .x0 offD :: List.nil) := by
+        show (match vm.lookup x with | some off => _ | none => _) = _
+        rw [hD]
+      rw [heq, hformal] at hCodeInstr
+      -- Split CodeAt into loadImm64 part and str part
+      have hCodeL := hCodeInstr.append_left
+      have hCodeR := hCodeInstr.append_right
+      have hStr := hCodeR.head
+      -- Use loadImm64_correct to load n into x0
+      obtain ⟨s1, hSteps1, hx0, hStack1, hPC1⟩ :=
+        loadImm64_correct prog .x0 n s (pcMap pc) hCodeL hPcRel
+      -- Then str x0, [sp, #offD]
+      rw [← hPC1] at hStr
+      let s2 := s1.setStack offD (s1.regs .x0) |>.nextPC
+      refine ⟨s2, hSteps1.trans (.single (.str .x0 offD hStr)), ⟨?_, ?_⟩⟩
+      · -- StateRel
+        intro w off hv
+        simp only [s2, ArmState.setStack, ArmState.nextPC]
+        by_cases hoff : off = offD
+        · subst hoff; simp
+          have := hInjective w x off hv hD; subst this
+          rw [Store.update_self, hx0]; simp [Value.encode]
+        · simp [hoff]
+          have hne : w ≠ x := fun h => hoff (Option.some.inj ((h ▸ hv).symm.trans hD))
+          rw [Store.update_other _ _ _ _ hne]
+          rw [show s1.stack off = s.stack off from by rw [hStack1]]
+          exact hStateRel w off hv
+      · -- PcRel
+        show s1.pc + 1 = pcMap (pc + 1)
+        rw [heq, hformal] at hPcNext
+        have := hPcNext _ _ rfl; simp at this
+        rw [this, hPC1]; omega
+    | bool b =>
+      have hformal : formalGenInstr vm pcMap (.const x (.bool b)) haltLabel divLabel =
+          (.mov .x0 (if b then 1 else 0) :: .str .x0 offD :: List.nil) := by
+        show (match vm.lookup x with | some off => _ | none => _) = _
+        rw [hD]
+      rw [heq, hformal] at hCodeInstr
+      have h0 := hCodeInstr.head; have h1 := hCodeInstr.tail.head
+      rw [← hPcRel] at h0 h1
+      refine ⟨(s.setReg .x0 (if b then 1 else 0) |>.nextPC |>.setStack offD
+                (s.setReg .x0 (if b then 1 else 0) |>.nextPC |>.regs .x0) |>.nextPC),
+        .step (.mov .x0 _ h0) (.single (.str .x0 offD h1)), ⟨?_, ?_⟩⟩
+      · -- StateRel
+        intro w off hv
+        simp only [ArmState.setStack, ArmState.setReg, ArmState.nextPC,
+                    ArmReg.beq_self, ite_true]
+        by_cases hoff : off = offD
+        · subst hoff; simp
+          have := hInjective w x off hv hD; subst this
+          rw [Store.update_self]; simp [Value.encode]
+        · simp [hoff]
+          have hne : w ≠ x := fun h => hoff (Option.some.inj ((h ▸ hv).symm.trans hD))
+          rw [Store.update_other _ _ _ _ hne]; exact hStateRel w off hv
+      · -- PcRel
+        show s.pc + 1 + 1 = pcMap (pc + 1)
+        rw [heq, hformal] at hPcNext
+        have := hPcNext _ _ rfl; simp at this
+        rw [this, hPcRel]
   | copy hinstr =>
     -- TAC: copy x y → ARM: ldr x0 offS; str x0 offD
     rename_i x y
