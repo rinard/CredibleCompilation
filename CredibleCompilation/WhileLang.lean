@@ -734,23 +734,43 @@ theorem compileBool_wt (prog : Program)
     obtain ⟨hca, hcb⟩ := hchk
     have ⟨ha_wt, ha_ty⟩ := iha hca offset nextTmp
     have ⟨hb_wt, hb_ty⟩ := ihb hcb
-      (offset + (compileBool a offset nextTmp).1.length)
-      (compileBool a offset nextTmp).2.2
-    -- Well-typedness of result BoolExpr: .cmpLit .ne tR 0 where tR = tmpName tmp1
+      (offset + (compileBool a offset nextTmp).1.length + 1)
+      ((compileBool a offset nextTmp).2.2 + 1)
     simp only [compileBool]
     refine ⟨?_, .cmpLit (tyCtx_tmp_wt prog hnt _)⟩
-    -- AllWTI for the flattened code: codeA ++ [ifgoto] ++ codeB ++ [ifgoto, const, goto, const]
-    sorry -- Mechanical: compose allWTI_append for each segment
+    let tmp1 := (compileBool a offset nextTmp).2.2
+    have htR : (Value.int 1).typeOf = prog.tyCtx (tmpName tmp1) := by
+      simp [Value.typeOf]; exact (tyCtx_tmp_wt prog hnt tmp1).symm
+    have htR0 : (Value.int 0).typeOf = prog.tyCtx (tmpName tmp1) := by
+      simp [Value.typeOf]; exact (tyCtx_tmp_wt prog hnt tmp1).symm
+    exact allWTI_append' (allWTI_append' (allWTI_append' ha_wt
+      (allWTI_one (.ifgoto (.not ha_ty))))
+      hb_wt)
+      (allWTI_cons' (.ifgoto (.not hb_ty))
+        (allWTI_cons' (.const htR)
+          (allWTI_cons' .goto
+            (allWTI_one (.const htR0)))))
   | or a b iha ihb =>
     simp [Program.checkSBool, Bool.and_eq_true] at hchk
     obtain ⟨hca, hcb⟩ := hchk
     have ⟨ha_wt, ha_ty⟩ := iha hca offset nextTmp
     have ⟨hb_wt, hb_ty⟩ := ihb hcb
-      (offset + (compileBool a offset nextTmp).1.length)
-      (compileBool a offset nextTmp).2.2
+      (offset + (compileBool a offset nextTmp).1.length + 1)
+      ((compileBool a offset nextTmp).2.2 + 1)
     simp only [compileBool]
     refine ⟨?_, .cmpLit (tyCtx_tmp_wt prog hnt _)⟩
-    sorry
+    let tmp1 := (compileBool a offset nextTmp).2.2
+    have htR : (Value.int 0).typeOf = prog.tyCtx (tmpName tmp1) := by
+      simp [Value.typeOf]; exact (tyCtx_tmp_wt prog hnt tmp1).symm
+    have htR1 : (Value.int 1).typeOf = prog.tyCtx (tmpName tmp1) := by
+      simp [Value.typeOf]; exact (tyCtx_tmp_wt prog hnt tmp1).symm
+    exact allWTI_append' (allWTI_append' (allWTI_append' ha_wt
+      (allWTI_one (.ifgoto ha_ty)))
+      hb_wt)
+      (allWTI_cons' (.ifgoto hb_ty)
+        (allWTI_cons' (.const htR)
+          (allWTI_cons' .goto
+            (allWTI_one (.const htR1)))))
 
 -- compileStmt produces well-typed instructions
 theorem compileStmt_wt (prog : Program)
