@@ -586,16 +586,21 @@ theorem genInstr_correct (prog : ArmProg) (vm : VarMap) (pcMap : Nat → Nat)
     (hRel : SimRel vm pcMap (.run pc σ) s)
     (hScratch : ScratchSafe vm)
     (cfg' : Cfg) (hStep : p ⊩ Cfg.run pc σ ⟶ cfg')
+    (hVarMap : ∀ v, ∃ off, vm.lookup v = some off)
     (hCodeInstr : CodeAt prog (pcMap pc) (formalGenInstr vm pcMap instr haltLabel divLabel))
-    (hPcNext : ∀ pc', cfg' = .run pc' σ → -- placeholder for PC mapping
+    (hPcNext : ∀ pc', cfg' = .run pc' σ →
       pcMap pc' = pcMap pc + (formalGenInstr vm pcMap instr haltLabel divLabel).length) :
     ∃ s', ArmSteps prog s s' ∧ SimRel vm pcMap cfg' s' := by
   obtain ⟨hStateRel, hPcRel⟩ := hRel
   cases hStep with
   | goto hinstr =>
     -- TAC: goto l → ARM: b (pcMap l)
-    -- formalGenInstr generates [.b l], but pcMap maps TAC labels to ARM PCs
-    sorry
+    have heq : instr = .goto _ := Option.some.inj (hInstr.symm.trans hinstr)
+    rw [heq] at hCodeInstr; simp only [formalGenInstr] at hCodeInstr
+    have hb := hCodeInstr.head
+    rw [← hPcRel] at hb
+    exact ⟨{ s with pc := pcMap _ }, .single (.branch _ hb),
+      ⟨hStateRel, rfl⟩⟩
   | halt hinstr =>
     -- TAC: halt → ARM: b haltLabel
     -- formalGenInstr for .halt = [.b haltLabel]
@@ -612,7 +617,8 @@ theorem genInstr_correct (prog : ArmProg) (vm : VarMap) (pcMap : Nat → Nat)
     -- TAC: x := v → ARM: loadImm64 + str
     sorry
   | copy hinstr =>
-    -- TAC: x := y → ARM: ldr + str
+    -- TAC: x := y → ARM: ldr x0 offS; str x0 offD
+    -- Requires VarMap injectivity for StateRel preservation across store updates
     sorry
   | binop hinstr hy hz hs =>
     -- TAC: x := y op z → ARM: ldr/ldr/op/str (with cbz for div)
