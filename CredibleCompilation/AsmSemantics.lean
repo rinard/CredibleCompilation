@@ -265,6 +265,13 @@ def Value.decode (ty : VarTy) (n : Int) : Value :=
   | .int  => .int n
   | .bool => .bool (n != 0)
 
+/-- For integer values, encode equals toInt. -/
+theorem Value.encode_eq_toInt_of_int {v : Value} (h : ∃ n, v = .int n) :
+    v.encode = v.toInt := by
+  obtain ⟨n, rfl⟩ := h; rfl
+
+/-- For any value, encode equals toInt when the value is an integer. -/
+@[simp] theorem Value.encode_int (n : Int) : (Value.int n).encode = n := rfl
 theorem Value.encode_decode_int (n : Int) :
     Value.decode .int (Value.encode (.int n)) = .int n := by
   simp [encode, decode]
@@ -452,6 +459,21 @@ theorem ArmSteps.one_then {prog : ArmProg} {s s' s'' : ArmState}
 @[simp] theorem ArmState.setReg_pc (s : ArmState) (r : ArmReg) (v : Int) :
     (s.setReg r v).pc = s.pc := rfl
 
+@[simp] theorem ArmState.setReg_flags (s : ArmState) (r : ArmReg) (v : Int) :
+    (s.setReg r v).flags = s.flags := rfl
+
+@[simp] theorem ArmState.nextPC_flags (s : ArmState) :
+    s.nextPC.flags = s.flags := rfl
+
+-- Register inequality facts for simp
+@[simp] theorem ArmReg.x0_ne_x1 : (ArmReg.x0 == ArmReg.x1) = false := by native_decide
+@[simp] theorem ArmReg.x0_ne_x2 : (ArmReg.x0 == ArmReg.x2) = false := by native_decide
+@[simp] theorem ArmReg.x1_ne_x0 : (ArmReg.x1 == ArmReg.x0) = false := by native_decide
+@[simp] theorem ArmReg.x1_ne_x2 : (ArmReg.x1 == ArmReg.x2) = false := by native_decide
+@[simp] theorem ArmReg.x2_ne_x0 : (ArmReg.x2 == ArmReg.x0) = false := by native_decide
+@[simp] theorem ArmReg.x2_ne_x1 : (ArmReg.x2 == ArmReg.x1) = false := by native_decide
+@[simp] theorem ArmReg.beq_self (r : ArmReg) : (r == r) = true := by cases r <;> native_decide
+
 theorem loadImm64_correct (prog : ArmProg) (rd : ArmReg) (n : Int)
     (s : ArmState) (startPC : Nat)
     (hCode : CodeAt prog startPC (formalLoadImm64 rd n))
@@ -496,6 +518,7 @@ private theorem genBoolExpr_cmp_correct (prog : ArmProg) (vm : VarMap)
     (offL offR : Nat)
     (hL : vm.lookup lv = some offL) (hR : vm.lookup rv = some offR)
     (hRel : StateRel vm σ s)
+    (hIntL : ∃ n, σ lv = .int n) (hIntR : ∃ n, σ rv = .int n)
     (hCode : CodeAt prog startPC
       (.ldr .x1 offL :: .ldr .x2 offR :: .cmp .x1 .x2 ::
        .cset .x0 (match op with | .eq => .eq | .ne => .ne | .lt => .lt | .le => .le) :: List.nil))
@@ -504,7 +527,24 @@ private theorem genBoolExpr_cmp_correct (prog : ArmProg) (vm : VarMap)
       s'.regs .x0 = (if op.eval (σ lv).toInt (σ rv).toInt then (1 : Int) else 0) ∧
       (∀ v off, vm.lookup v = some off → s'.stack off = s.stack off) ∧
       s'.pc = startPC + 4 := by
-  sorry
+  subst hPC
+  have h0 := hCode.head
+  have h1 := hCode.tail.head
+  have h2 := hCode.tail.tail.head
+  have h3 := hCode.tail.tail.tail.head
+  -- Build the 4-step execution explicitly
+  -- After ldr x1: x1 = stack[offL] = (σ lv).encode
+  -- After ldr x2: x2 = stack[offR] = (σ rv).encode
+  -- After cmp: flags.diff = x1 - x2
+  -- After cset: x0 = condHolds flags cond ? 1 : 0
+  have hvalL := hRel lv offL hL
+  have hvalR := hRel rv offR hR
+  -- We need to show the result for each op case
+  obtain ⟨nL, hnL⟩ := hIntL; obtain ⟨nR, hnR⟩ := hIntR
+  -- Each case: 4 ARM steps (ldr, ldr, cmp, cset) then show value/stack/pc.
+  -- The value goal reduces to (if nL - nR ⊕ 0 then ... else ...) = (if nL ⊕ nR then ... else ...)
+  -- which follows from simple arithmetic.
+  cases op <;> sorry
 
 /-- `genBoolExpr` correctly evaluates a boolean expression into x0. -/
 theorem genBoolExpr_correct (prog : ArmProg) (vm : VarMap)
