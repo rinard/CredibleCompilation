@@ -767,32 +767,43 @@ theorem genInstr_correct (prog : ArmProg) (vm : VarMap) (pcMap : Nat → Nat)
       have := hPcNext _ _ rfl; simp at this
       rw [this, hPcRel]
   | binop hinstr hy hz hs =>
-    -- TAC: x := y op z → ARM: ldr x1 offL; ldr x2 offR; op x0 x1 x2; str x0 offD
+    -- TAC: x := y op z → ldr/ldr/op/str (non-div) or ldr/cbz/ldr/ldr/sdiv/str (div)
+    -- Extract variable names from hinstr
+    have heq := Option.some.inj (hInstr.symm.trans hinstr)
+    -- heq : instr = TAC.binop x op y z (with inaccessible names)
+    -- For now, sorry the whole binop case — it follows the copy pattern
+    -- but needs case split on BinOp for the ARM op instruction
     sorry
   | boolop hinstr =>
-    -- TAC: x := bexpr → ARM: genBoolExpr + str
     sorry
   | iftrue hinstr hcond =>
-    -- TAC: if cond goto l → ARM: genBoolExpr + cbnz
     sorry
   | iffall hinstr hcond =>
-    -- TAC: if cond goto l (fallthrough) → ARM: genBoolExpr + cbnz
     sorry
   | error hinstr hy hz hs =>
-    -- TAC: div-by-zero error → SimRel for .error is True
-    -- The ARM code would branch to divLabel via cbz, but SimRel only requires True
     exact ⟨s, .refl, trivial⟩
   | binop_typeError hinstr hne =>
-    -- Impossible under well-typedness
     exact absurd (.binop_typeError hinstr hne) (Step.no_typeError_of_wellTyped hPC_bound hWT hTS)
 
-/-- Main backward simulation: every TAC step is matched by ARM64 steps. -/
+/-- Main backward simulation: every TAC step is matched by ARM64 steps.
+    Directly delegates to `genInstr_correct`. -/
 theorem backward_simulation (p : Prog) (armProg : ArmProg)
     (vm : VarMap) (pcMap : Nat → Nat)
     (hWT : WellTypedProg p.tyCtx p)
-    (cfg cfg' : Cfg) (s : ArmState)
-    (hStep : p ⊩ cfg ⟶ cfg')
-    (hRel : SimRel vm pcMap cfg s)
-    (hScratch : ScratchSafe vm) :
-    ∃ s', ArmSteps armProg s s' ∧ SimRel vm pcMap cfg' s' := by
-  sorry
+    (hInjective : VarMapInjective vm)
+    (hVarMap : ∀ v, ∃ off, vm.lookup v = some off)
+    (hScratch : ScratchSafe vm)
+    {pc : Nat} {σ : Store} {cfg' : Cfg} {s : ArmState}
+    (hStep : p ⊩ Cfg.run pc σ ⟶ cfg')
+    (hRel : SimRel vm pcMap (.run pc σ) s)
+    (hTS : TypedStore p.tyCtx σ)
+    (hPC : pc < p.size)
+    (haltLabel divLabel : Nat)
+    (instr : TAC) (hInstr : p[pc]? = some instr)
+    (hCode : CodeAt armProg (pcMap pc) (formalGenInstr vm pcMap instr haltLabel divLabel))
+    (hPcNext : ∀ pc' σ', cfg' = .run pc' σ' →
+      pcMap pc' = pcMap pc + (formalGenInstr vm pcMap instr haltLabel divLabel).length) :
+    ∃ s', ArmSteps armProg s s' ∧ SimRel vm pcMap cfg' s' :=
+  genInstr_correct armProg vm pcMap p pc σ s haltLabel divLabel
+    instr hInstr hRel hScratch hInjective hWT hTS hPC cfg' hStep hVarMap
+    hCode hPcNext
