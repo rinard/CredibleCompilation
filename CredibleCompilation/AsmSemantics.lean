@@ -339,7 +339,7 @@ def formalLoadImm64 (rd : ArmReg) (n : Int) : List ArmInstr :=
 
 /-- Generate formal ARM64 instructions for a boolean expression.
     Result is left in x0 (0 or 1). Mirrors `genBoolExpr` in CodeGen.lean. -/
-partial def formalGenBoolExpr (vm : VarMap) (be : BoolExpr) : List ArmInstr :=
+def formalGenBoolExpr (vm : VarMap) (be : BoolExpr) : List ArmInstr :=
   match be with
   | .bvar v =>
     match vm.lookup v with
@@ -595,13 +595,51 @@ theorem genBoolExpr_correct (prog : ArmProg) (vm : VarMap)
     (hScratch : ScratchSafe vm)
     (hCode : CodeAt prog startPC (formalGenBoolExpr vm be))
     (hPC : s.pc = startPC)
+    (hVarMap : ∀ v, ∃ off, vm.lookup v = some off)
     (hIntVars : ∀ v, (∃ off, vm.lookup v = some off) → ∃ n, σ v = .int n) :
     ∃ s', ArmSteps prog s s' ∧
       s'.regs .x0 = (if be.eval σ then (1 : Int) else 0) ∧
       (∀ v off, vm.lookup v = some off → s'.stack off = s.stack off) ∧
       s'.pc = startPC + (formalGenBoolExpr vm be).length := by
   cases be with
-  | _ => sorry  -- All BoolExpr cases deferred; .cmp uses genBoolExpr_cmp_correct
+  | cmp op lv rv =>
+    simp only [formalGenBoolExpr] at hCode ⊢
+    cases hlv : vm.lookup lv with
+    | none => exact absurd hlv (by obtain ⟨_, h⟩ := hVarMap lv; simp [h])
+    | some offL =>
+    cases hrv : vm.lookup rv with
+    | none => exact absurd hrv (by obtain ⟨_, h⟩ := hVarMap rv; simp [h])
+    | some offR =>
+    simp only [hlv, hrv] at hCode ⊢
+    have hIntL := hIntVars lv ⟨offL, hlv⟩
+    have hIntR := hIntVars rv ⟨offR, hrv⟩
+    exact genBoolExpr_cmp_correct prog vm op lv rv σ s startPC offL offR
+      hlv hrv hRel hIntL hIntR hCode hPC
+  | not e =>
+    simp only [formalGenBoolExpr] at hCode ⊢
+    -- Code = formalGenBoolExpr vm e ++ [eorImm x0 x0 1]
+    have hCodeE := hCode.append_left
+    have hCodeEor := hCode.append_right
+    obtain ⟨s1, hSteps1, hx0, hStack1, hPC1⟩ :=
+      genBoolExpr_correct prog vm e σ s startPC hRel hScratch hCodeE hPC hVarMap hIntVars
+    have hEor := hCodeEor.head
+    rw [← hPC1] at hEor
+    -- After eor: x0 = 1 - x0 (flips 0↔1)
+    refine ⟨s1.setReg .x0 (Int.ofNat (s1.regs .x0 |>.toNat.xor 1)) |>.nextPC,
+      hSteps1.trans (.single (.eorImm .x0 .x0 1 hEor)), ?_, ?_, ?_⟩
+    · -- value: !(eval e σ)
+      simp only [ArmState.setReg_regs_same, ArmState.nextPC_regs]
+      rw [hx0]; simp only [BoolExpr.eval, Bool.not_eq_true']
+      match h : BoolExpr.eval σ e with
+      | true => simp [Int.toNat, Nat.xor, Nat.bitwise]
+      | false => simp [Int.toNat, Nat.xor, Nat.bitwise]
+    · intro v off hv
+      simp only [ArmState.setReg, ArmState.nextPC]
+      exact hStack1 v off hv
+    · simp only [ArmState.setReg, ArmState.nextPC, hPC1, List.length_append, List.length_cons,
+                  List.length_nil]
+      omega
+  | _ => sorry
 
 /-- StateRel is preserved when store is updated at `x ↦ w` and stack at `off ↦ w.encode`,
     provided `vm.lookup x = some off` and the VarMap is injective. -/
