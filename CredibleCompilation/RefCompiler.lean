@@ -182,43 +182,37 @@ def refCompileBool (b : SBool) (offset nextTmp : Nat) : List TAC × BoolExpr × 
     let (code, be, tmp') := refCompileBool e offset nextTmp
     (code, .not be, tmp')
   | .and a b =>
-    -- Flatten a && b using short-circuit control flow:
-    -- evaluate a → ta; if !ta goto falseL; evaluate b → store in tR; goto endL;
-    -- falseL: tR := false; endL: ... result is .bvar tR
+    -- Flatten a && b: if !a goto false; if !b goto false; tR := 1; goto end; false: tR := 0
     let (codeA, ba, tmp1) := refCompileBool a offset nextTmp
-    let ta := tmpName tmp1
-    let tR := tmpName (tmp1 + 1)
-    let (codeB, bb, tmp2) := refCompileBool b (offset + codeA.length + 2) (tmp1 + 2)
-    let afterCodeB := offset + codeA.length + 2 + codeB.length
-    let falseL := afterCodeB + 2  -- after boolop tR bb + goto
+    let tR := tmpName tmp1
+    let (codeB, bb, tmp2) := refCompileBool b (offset + codeA.length + 1) (tmp1 + 1)
+    let afterCodeB := offset + codeA.length + 1 + codeB.length
+    let falseL := afterCodeB + 3
     let endL := falseL + 1
     let code := codeA ++
-      [TAC.boolop ta ba,
-       TAC.ifgoto (.cmpLit .eq ta 0) falseL] ++
+      [TAC.ifgoto (.not ba) falseL] ++
       codeB ++
-      [TAC.boolop tR bb,
+      [TAC.ifgoto (.not bb) falseL,
+       TAC.const tR (.int 1),
        TAC.goto endL,
-       TAC.const tR (.bool false)]
-    (code, .bvar tR, tmp2)
+       TAC.const tR (.int 0)]
+    (code, .cmpLit .ne tR 0, tmp2)
   | .or a b =>
-    -- Flatten a || b using short-circuit control flow:
-    -- evaluate a → ta; if ta goto trueL; evaluate b → store in tR; goto endL;
-    -- trueL: tR := true; endL: ... result is .bvar tR
+    -- Flatten a || b: if a goto true; if b goto true; tR := 0; goto end; true: tR := 1
     let (codeA, ba, tmp1) := refCompileBool a offset nextTmp
-    let ta := tmpName tmp1
-    let tR := tmpName (tmp1 + 1)
-    let (codeB, bb, tmp2) := refCompileBool b (offset + codeA.length + 2) (tmp1 + 2)
-    let afterCodeB := offset + codeA.length + 2 + codeB.length
-    let trueL := afterCodeB + 2
+    let tR := tmpName tmp1
+    let (codeB, bb, tmp2) := refCompileBool b (offset + codeA.length + 1) (tmp1 + 1)
+    let afterCodeB := offset + codeA.length + 1 + codeB.length
+    let trueL := afterCodeB + 3
     let endL := trueL + 1
     let code := codeA ++
-      [TAC.boolop ta ba,
-       TAC.ifgoto (.cmpLit .ne ta 0) trueL] ++
+      [TAC.ifgoto ba trueL] ++
       codeB ++
-      [TAC.boolop tR bb,
+      [TAC.ifgoto bb trueL,
+       TAC.const tR (.int 0),
        TAC.goto endL,
-       TAC.const tR (.bool true)]
-    (code, .bvar tR, tmp2)
+       TAC.const tR (.int 1)]
+    (code, .cmpLit .ne tR 0, tmp2)
 
 def refCompileStmt (s : Stmt) (offset nextTmp : Nat) : List TAC × Nat :=
   match s with
@@ -415,8 +409,8 @@ theorem refCompileBool_nextTmp_ge (sb : SBool) (offset nextTmp : Nat) :
     have ha := iha offset nextTmp
     generalize refCompileBool a offset nextTmp = ra at ha ⊢
     obtain ⟨codeA, ba, tmp1⟩ := ra; simp at ha ⊢
-    have hb := ihb (offset + codeA.length + 2) (tmp1 + 2)
-    generalize refCompileBool b (offset + codeA.length + 2) (tmp1 + 2) = rb at hb ⊢
+    have hb := ihb (offset + codeA.length + 1) (tmp1 + 1)
+    generalize refCompileBool b (offset + codeA.length + 1) (tmp1 + 1) = rb at hb ⊢
     obtain ⟨codeB, bb, tmp2⟩ := rb; simp at hb ⊢
     omega
   | or a b iha ihb =>
@@ -424,8 +418,8 @@ theorem refCompileBool_nextTmp_ge (sb : SBool) (offset nextTmp : Nat) :
     have ha := iha offset nextTmp
     generalize refCompileBool a offset nextTmp = ra at ha ⊢
     obtain ⟨codeA, ba, tmp1⟩ := ra; simp at ha ⊢
-    have hb := ihb (offset + codeA.length + 2) (tmp1 + 2)
-    generalize refCompileBool b (offset + codeA.length + 2) (tmp1 + 2) = rb at hb ⊢
+    have hb := ihb (offset + codeA.length + 1) (tmp1 + 1)
+    generalize refCompileBool b (offset + codeA.length + 1) (tmp1 + 1) = rb at hb ⊢
     obtain ⟨codeB, bb, tmp2⟩ := rb; simp at hb ⊢
     omega
 
@@ -494,30 +488,30 @@ theorem refCompileBool_vars_bound (sb : SBool) (offset nextTmp : Nat)
     dsimp only [refCompileBool]
     generalize hra : refCompileBool a offset nextTmp = ra
     obtain ⟨codeA, ba, tmp1⟩ := ra
-    generalize hrb : refCompileBool b (offset + codeA.length + 2) (tmp1 + 2) = rb
+    generalize hrb : refCompileBool b (offset + codeA.length + 1) (tmp1 + 1) = rb
     obtain ⟨codeB, bb, tmp2⟩ := rb
     simp only [BoolExpr.vars, List.mem_singleton]
     intro v hv; subst hv
     right
     have hge_a := refCompileBool_nextTmp_ge a offset nextTmp
     rw [hra] at hge_a; simp at hge_a
-    have hge_b := refCompileBool_nextTmp_ge b (offset + codeA.length + 2) (tmp1 + 2)
+    have hge_b := refCompileBool_nextTmp_ge b (offset + codeA.length + 1) (tmp1 + 1)
     rw [hrb] at hge_b; simp at hge_b
-    exact ⟨tmp1 + 1, by omega, by omega, rfl⟩
+    exact ⟨tmp1, by omega, by omega, rfl⟩
   | or a b iha ihb =>
     dsimp only [refCompileBool]
     generalize hra : refCompileBool a offset nextTmp = ra
     obtain ⟨codeA, ba, tmp1⟩ := ra
-    generalize hrb : refCompileBool b (offset + codeA.length + 2) (tmp1 + 2) = rb
+    generalize hrb : refCompileBool b (offset + codeA.length + 1) (tmp1 + 1) = rb
     obtain ⟨codeB, bb, tmp2⟩ := rb
     simp only [BoolExpr.vars, List.mem_singleton]
     intro v hv; subst hv
     right
     have hge_a := refCompileBool_nextTmp_ge a offset nextTmp
     rw [hra] at hge_a; simp at hge_a
-    have hge_b := refCompileBool_nextTmp_ge b (offset + codeA.length + 2) (tmp1 + 2)
+    have hge_b := refCompileBool_nextTmp_ge b (offset + codeA.length + 1) (tmp1 + 1)
     rw [hrb] at hge_b; simp at hge_b
-    exact ⟨tmp1 + 1, by omega, by omega, rfl⟩
+    exact ⟨tmp1, by omega, by omega, rfl⟩
 
 -- ============================================================
 -- § 9. Expression compilation correctness

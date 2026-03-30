@@ -131,52 +131,46 @@ def compileBool (b : SBool) (offset nextTmp : Nat) : List TAC × BoolExpr × Nat
     let (code, be, tmp') := compileBool e offset nextTmp
     (code, .not be, tmp')
   | .and a b =>
-    -- Flatten a && b using short-circuit control flow:
-    -- evaluate a → ta; if !ta goto falseL; evaluate b → store in tR; goto endL;
-    -- falseL: tR := false; endL: ... result is .bvar tR
+    -- Flatten a && b: if !a goto false; if !b goto false; tR := 1; goto end; false: tR := 0; end:
     let (codeA, ba, tmp1) := compileBool a offset nextTmp
-    let ta := tmpName tmp1
-    let tR := tmpName (tmp1 + 1)
-    let (codeB, bb, tmp2) := compileBool b (offset + codeA.length + 2) (tmp1 + 2)
+    let tR := tmpName tmp1
+    let (codeB, bb, tmp2) := compileBool b (offset + codeA.length + 1) (tmp1 + 1)
     -- Layout:
-    --   codeA                           -- evaluate a's subexpressions
-    --   boolop ta ba                    -- ta = a
-    --   ifgoto (cmpLit .eq ta 0) falseL -- if !ta goto false
-    --   codeB                           -- evaluate b's subexpressions
-    --   boolop tR bb                    -- tR = b
+    --   codeA                        -- evaluate a's subexpressions
+    --   ifgoto (not ba) falseL       -- if !a goto false
+    --   codeB                        -- evaluate b's subexpressions
+    --   ifgoto (not bb) falseL       -- if !b goto false
+    --   const tR (.int 1)            -- both true → tR = 1
     --   goto endL
-    --   falseL: const tR (bool false)   -- tR = false
-    --   endL: ...                       -- result is .bvar tR
-    let afterCodeB := offset + codeA.length + 2 + codeB.length
-    let falseL := afterCodeB + 2  -- after boolop tR bb + goto
+    --   falseL: const tR (.int 0)    -- at least one false → tR = 0
+    --   endL: ...
+    let afterCodeB := offset + codeA.length + 1 + codeB.length
+    let falseL := afterCodeB + 3  -- after ifgoto + const + goto
     let endL := falseL + 1
     let code := codeA ++
-      [TAC.boolop ta ba,
-       TAC.ifgoto (.cmpLit .eq ta 0) falseL] ++
+      [TAC.ifgoto (.not ba) falseL] ++
       codeB ++
-      [TAC.boolop tR bb,
+      [TAC.ifgoto (.not bb) falseL,
+       TAC.const tR (.int 1),
        TAC.goto endL,
-       TAC.const tR (.bool false)]
-    (code, .bvar tR, tmp2)
+       TAC.const tR (.int 0)]
+    (code, .cmpLit .ne tR 0, tmp2)
   | .or a b =>
-    -- Flatten a || b using short-circuit control flow:
-    -- evaluate a → ta; if ta goto trueL; evaluate b → store in tR; goto endL;
-    -- trueL: tR := true; endL: ... result is .bvar tR
+    -- Flatten a || b: if a goto true; if b goto true; tR := 0; goto end; true: tR := 1; end:
     let (codeA, ba, tmp1) := compileBool a offset nextTmp
-    let ta := tmpName tmp1
-    let tR := tmpName (tmp1 + 1)
-    let (codeB, bb, tmp2) := compileBool b (offset + codeA.length + 2) (tmp1 + 2)
-    let afterCodeB := offset + codeA.length + 2 + codeB.length
-    let trueL := afterCodeB + 2
+    let tR := tmpName tmp1
+    let (codeB, bb, tmp2) := compileBool b (offset + codeA.length + 1) (tmp1 + 1)
+    let afterCodeB := offset + codeA.length + 1 + codeB.length
+    let trueL := afterCodeB + 3
     let endL := trueL + 1
     let code := codeA ++
-      [TAC.boolop ta ba,
-       TAC.ifgoto (.cmpLit .ne ta 0) trueL] ++
+      [TAC.ifgoto ba trueL] ++
       codeB ++
-      [TAC.boolop tR bb,
+      [TAC.ifgoto bb trueL,
+       TAC.const tR (.int 0),
        TAC.goto endL,
-       TAC.const tR (.bool true)]
-    (code, .bvar tR, tmp2)
+       TAC.const tR (.int 1)]
+    (code, .cmpLit .ne tR 0, tmp2)
 
 /-- Compile a statement. Returns (code, next temp index).
     Jump targets are pre-computed from code lengths. -/
