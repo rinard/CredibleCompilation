@@ -630,6 +630,9 @@ theorem genInstr_correct (prog : ArmProg) (vm : VarMap) (pcMap : Nat → Nat)
     (hRel : SimRel vm pcMap (.run pc σ) s)
     (hScratch : ScratchSafe vm)
     (hInjective : VarMapInjective vm)
+    (hWT : WellTypedProg p.tyCtx p)
+    (hTS : TypedStore p.tyCtx σ)
+    (hPC_bound : pc < p.size)
     (cfg' : Cfg) (hStep : p ⊩ Cfg.run pc σ ⟶ cfg')
     (hVarMap : ∀ v, ∃ off, vm.lookup v = some off)
     (hCodeInstr : CodeAt prog (pcMap pc) (formalGenInstr vm pcMap instr haltLabel divLabel))
@@ -776,17 +779,17 @@ theorem genInstr_correct (prog : ArmProg) (vm : VarMap) (pcMap : Nat → Nat)
     -- TAC: if cond goto l (fallthrough) → ARM: genBoolExpr + cbnz
     sorry
   | error hinstr hy hz hs =>
-    -- TAC: div-by-zero error → ARM: cbz branches to divLabel
-    -- SimRel for .error is True
-    sorry
+    -- TAC: div-by-zero error → SimRel for .error is True
+    -- The ARM code would branch to divLabel via cbz, but SimRel only requires True
+    exact ⟨s, .refl, trivial⟩
   | binop_typeError hinstr hne =>
-    -- SimRel for .typeError is False — need well-typedness to rule this out
-    sorry
+    -- Impossible under well-typedness
+    exact absurd (.binop_typeError hinstr hne) (Step.no_typeError_of_wellTyped hPC_bound hWT hTS)
 
 /-- Main backward simulation: every TAC step is matched by ARM64 steps. -/
 theorem backward_simulation (p : Prog) (armProg : ArmProg)
-    (vm : VarMap) (pcMap : Nat → Nat) (Γ : TyCtx)
-    (hWT : WellTypedProg Γ p)
+    (vm : VarMap) (pcMap : Nat → Nat)
+    (hWT : WellTypedProg p.tyCtx p)
     (cfg cfg' : Cfg) (s : ArmState)
     (hStep : p ⊩ cfg ⟶ cfg')
     (hRel : SimRel vm pcMap cfg s)
