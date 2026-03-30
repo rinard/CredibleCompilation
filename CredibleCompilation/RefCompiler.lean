@@ -3120,6 +3120,7 @@ theorem program_refinement (prog : Program) (htc : prog.typeCheck = true) (b : B
     | .halts σ_tac => ∃ fuel σ', prog.interp fuel = some σ' ∧
         ∀ v, v.isTmp = false → σ_tac v = σ' v
     | .errors _ => ∃ fuel, ¬ prog.body.divSafe fuel prog.initStore
+    | .typeErrors _ => False
     | .diverges => ∀ fuel, prog.interp fuel = none := by
   have hnd := prog.typeCheck_noDups htc
   have htmpfree := Program.typeCheck_tmpFree prog htc
@@ -3166,6 +3167,9 @@ theorem program_refinement (prog : Program) (htc : prog.typeCheck = true) (b : B
           exact ⟨k + n, by omega, pc', σ', RefStepsN.trans hk hn⟩
         exact no_error_of_unbounded hunb0 σ_e hbeh
     · exact Classical.not_forall.mp h
+  | typeErrors σ_e =>
+    exact absurd hbeh (type_safety (prog.compile_wellTyped htc) hts
+      (prog.compile_stepClosed htc))
   | diverges =>
     -- hbeh : ∃ f, IsInfiniteExec prog.compile f ∧ f 0 = Cfg.run 0 prog.initStore
     intro fuel

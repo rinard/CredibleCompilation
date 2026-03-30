@@ -743,16 +743,18 @@ theorem soundness_diverge
 /-- A behavior is halting (with a final store), erroring (e.g. div-by-zero),
     or diverging. -/
 inductive Behavior where
-  | halts    : Store → Behavior
-  | errors   : Store → Behavior
-  | diverges : Behavior
+  | halts      : Store → Behavior
+  | errors     : Store → Behavior
+  | typeErrors : Store → Behavior
+  | diverges   : Behavior
 
 /-- Extract behavior of a program from label 0 with initial store σ₀. -/
 def program_behavior (p : Prog) (σ₀ : Store) (b : Behavior) : Prop :=
   match b with
-  | .halts σ'   => haltsWithResult p 0 σ₀ σ'
-  | .errors σ'  => p ⊩ Cfg.run 0 σ₀ ⟶* Cfg.error σ'
-  | .diverges   => ∃ f : Nat → Cfg, IsInfiniteExec p f ∧ f 0 = Cfg.run 0 σ₀
+  | .halts σ'      => haltsWithResult p 0 σ₀ σ'
+  | .errors σ'     => p ⊩ Cfg.run 0 σ₀ ⟶* Cfg.error σ'
+  | .typeErrors σ' => p ⊩ Cfg.run 0 σ₀ ⟶* Cfg.typeError σ'
+  | .diverges      => ∃ f : Nat → Cfg, IsInfiniteExec p f ∧ f 0 = Cfg.run 0 σ₀
 
 -- ============================================================
 -- § 10a. Totality: bounds-closed programs always have a behavior
@@ -768,61 +770,47 @@ private theorem StepsN_to_Steps' {p : Prog} {c c' : Cfg} {n : Nat}
     obtain ⟨c'', hs, hn⟩ := h
     exact .step hs (ih hn)
 
-/-- **Totality**: A well-typed, step-closed program always has a behavior
-    (halts, errors, or diverges). -/
-theorem has_behavior (p : Prog) (σ₀ : Store) (Γ : TyCtx)
-    (hwtp : WellTypedProg Γ p) (hts₀ : TypedStore Γ σ₀)
+/-- **Totality**: A step-closed program always has a behavior
+    (halts, errors, type-errors, or diverges). -/
+theorem has_behavior (p : Prog) (σ₀ : Store)
     (hclosed : StepClosedInBounds p) :
     ∃ b, program_behavior p σ₀ b := by
-  -- Either the program reaches halt at some finite step, or it never does.
   by_cases h : ∃ n σ', StepsN p (Cfg.run 0 σ₀) (Cfg.halt σ') n
-  · -- Case: halts
-    obtain ⟨n, σ', hn⟩ := h
+  · obtain ⟨n, σ', hn⟩ := h
     exact ⟨.halts σ', StepsN_to_Steps' hn⟩
   · by_cases he : ∃ n σ', StepsN p (Cfg.run 0 σ₀) (Cfg.error σ') n
-    · -- Case: errors
-      obtain ⟨_, σ', hn⟩ := he
+    · obtain ⟨_, σ', hn⟩ := he
       exact ⟨.errors σ', StepsN_to_Steps' hn⟩
-    · -- Never halts and never errors. For well-typed, step-closed programs: diverges.
-      have h_run : ∀ n, ∃ pc σ, StepsN p (Cfg.run 0 σ₀) (Cfg.run pc σ) n ∧
-          pc < p.size ∧ TypedStore Γ σ := by
-        intro n; induction n with
-        | zero => exact ⟨0, σ₀, rfl, hclosed.1, hts₀⟩
-        | succ n ih =>
-          obtain ⟨pc, σ, hn, hpc, hts⟩ := ih
-          obtain ⟨c', hstep⟩ := Step.progress p pc σ Γ hpc hwtp hts
-          match c', hstep with
-          | .halt σ', hstep =>
-            exact absurd ⟨n + 1, σ', StepsN_extend hn hstep⟩ h
-          | .error σ', hstep =>
-            exact absurd ⟨n + 1, σ', StepsN_extend hn hstep⟩ he
-          | .typeError σ', hstep =>
-            -- typeError unreachable: well-typed store means binop operands are int
-            exfalso
-            cases hstep with
-            | binop_typeError hinstr hne =>
-              have hwti := hwtp pc hpc
-              have := Option.some.inj ((Prog.getElem?_eq_getElem hpc).symm.trans hinstr)
-              rw [this] at hwti
-              cases hwti with
-              | binop _ hy hz =>
-                cases hne with
-                | inl hl => exact hl (by rw [hts]; exact hy)
-                | inr hr => exact hr (by rw [hts]; exact hz)
-          | .run pc' σ', hstep =>
-            exact ⟨pc', σ', StepsN_extend hn hstep, hclosed.2 pc pc' σ σ' hpc hstep,
-              type_preservation hwtp hts hpc hstep⟩
-      -- Build the infinite execution using Classical.choice + determinism
-      have g_spec : ∀ n, ∃ c, StepsN p (Cfg.run 0 σ₀) c n ∧ ∃ pc σ, c = Cfg.run pc σ := by
-        intro n; obtain ⟨pc, σ, hn, _⟩ := h_run n; exact ⟨_, hn, pc, σ, rfl⟩
-      let g : Nat → Cfg := fun n => (g_spec n).choose
-      have g_stepsN : ∀ n, StepsN p (Cfg.run 0 σ₀) (g n) n :=
-        fun n => (g_spec n).choose_spec.1
-      refine ⟨.diverges, g, ⟨⟨σ₀, ?_⟩, fun n => ?_⟩, ?_⟩
-      · exact (g_stepsN 0).symm
-      · obtain ⟨c'', h_prefix, h_last⟩ := StepsN_split_last (g_stepsN (n + 1))
-        exact StepsN_det (g_stepsN n) h_prefix ▸ h_last
-      · exact (g_stepsN 0).symm
+    · by_cases hte : ∃ n σ', StepsN p (Cfg.run 0 σ₀) (Cfg.typeError σ') n
+      · obtain ⟨_, σ', hn⟩ := hte
+        exact ⟨.typeErrors σ', StepsN_to_Steps' hn⟩
+      · -- Never halts, errors, or type-errors → diverges.
+        have h_run : ∀ n, ∃ pc σ, StepsN p (Cfg.run 0 σ₀) (Cfg.run pc σ) n ∧
+            pc < p.size := by
+          intro n; induction n with
+          | zero => exact ⟨0, σ₀, rfl, hclosed.1⟩
+          | succ n ih =>
+            obtain ⟨pc, σ, hn, hpc⟩ := ih
+            obtain ⟨c', hstep⟩ := Step.progress_untyped p pc σ hpc
+            match c', hstep with
+            | .halt σ', hstep =>
+              exact absurd ⟨n + 1, σ', StepsN_extend hn hstep⟩ h
+            | .error σ', hstep =>
+              exact absurd ⟨n + 1, σ', StepsN_extend hn hstep⟩ he
+            | .typeError σ', hstep =>
+              exact absurd ⟨n + 1, σ', StepsN_extend hn hstep⟩ hte
+            | .run pc' σ', hstep =>
+              exact ⟨pc', σ', StepsN_extend hn hstep, hclosed.2 pc pc' σ σ' hpc hstep⟩
+        have g_spec : ∀ n, ∃ c, StepsN p (Cfg.run 0 σ₀) c n ∧ ∃ pc σ, c = Cfg.run pc σ := by
+          intro n; obtain ⟨pc, σ, hn, _⟩ := h_run n; exact ⟨_, hn, pc, σ, rfl⟩
+        let g : Nat → Cfg := fun n => (g_spec n).choose
+        have g_stepsN : ∀ n, StepsN p (Cfg.run 0 σ₀) (g n) n :=
+          fun n => (g_spec n).choose_spec.1
+        refine ⟨.diverges, g, ⟨⟨σ₀, ?_⟩, fun n => ?_⟩, ?_⟩
+        · exact (g_stepsN 0).symm
+        · obtain ⟨c'', h_prefix, h_last⟩ := StepsN_split_last (g_stepsN (n + 1))
+          exact StepsN_det (g_stepsN n) h_prefix ▸ h_last
+        · exact (g_stepsN 0).symm
 
 -- ============================================================
 -- § 11. Simulation trace for reachable run-configs
@@ -1122,10 +1110,15 @@ theorem credible_compilation_soundness
     | .halts σ_t => ∃ σ_o, haltsWithResult cert.orig 0 σ₀ σ_o ∧
         ∀ v ∈ cert.observable, σ_t v = σ_o v
     | .errors σ_e => ∃ σ_o, cert.orig ⊩ Cfg.run 0 σ₀ ⟶* Cfg.error σ_o
+    | .typeErrors _ => False
     | .diverges => ∃ f, IsInfiniteExec cert.orig f ∧ f 0 = Cfg.run 0 σ₀ := by
   cases b with
   | halts σ_t' => exact soundness_halt cert hvalid σ₀ σ_t' hts₀ htrans
   | errors σ_e => exact error_preservation cert hvalid σ₀ hts₀ htrans
+  | typeErrors σ_e =>
+    have hwt : WellTypedProg cert.tyCtx cert.trans := by
+      rw [PCertificate.tyCtx, hvalid.same_tyCtx]; exact hvalid.well_typed_trans
+    exact absurd htrans (type_safety hwt hts₀ hvalid.step_closed)
   | diverges =>
     obtain ⟨f, hinf, hf0⟩ := htrans
     exact soundness_diverge cert hvalid f σ₀ hts₀ hinf hf0
@@ -1143,13 +1136,17 @@ theorem credible_compilation_total
       | .halts σ_t => ∃ σ_o, haltsWithResult cert.orig 0 σ₀ σ_o ∧
           ∀ v ∈ cert.observable, σ_t v = σ_o v
       | .errors σ_e => ∃ σ_o, cert.orig ⊩ Cfg.run 0 σ₀ ⟶* Cfg.error σ_o
+      | .typeErrors _ => False
       | .diverges => ∃ f, IsInfiniteExec cert.orig f ∧ f 0 = Cfg.run 0 σ₀ := by
-  obtain ⟨b, hb⟩ := has_behavior cert.trans σ₀ cert.trans.tyCtx hvalid.well_typed_trans
-    (hvalid.same_tyCtx ▸ hts₀) hvalid.step_closed
+  obtain ⟨b, hb⟩ := has_behavior cert.trans σ₀ hvalid.step_closed
   refine ⟨b, hb, ?_⟩
   cases b with
   | halts σ_t => exact soundness_halt cert hvalid σ₀ σ_t hts₀ hb
   | errors σ_e => exact error_preservation cert hvalid σ₀ hts₀ hb
+  | typeErrors σ_e =>
+    have hwt : WellTypedProg cert.tyCtx cert.trans := by
+      rw [PCertificate.tyCtx, hvalid.same_tyCtx]; exact hvalid.well_typed_trans
+    exact absurd hb (type_safety hwt hts₀ hvalid.step_closed)
   | diverges =>
     obtain ⟨f, hinf, hf0⟩ := hb
     exact soundness_diverge cert hvalid f σ₀ hts₀ hinf hf0
@@ -1167,7 +1164,7 @@ def observeProp (cert : PCertificate) (c : Cfg) : Observation :=
   match c with
   | .halt σ  => Observation.halt (cert.observable.map fun v => (v, σ v))
   | .error _ => Observation.error
-  | .typeError _ => Observation.error
+  | .typeError _ => Observation.typeError
   | .run pc σ =>
     match cert.trans[pc]? with
     | some .halt => Observation.halt (cert.observable.map fun v => (v, σ v))

@@ -1051,10 +1051,9 @@ theorem compile_stepClosed (prog : Program) (_h : prog.typeCheck = true) :
     get stuck. Combines `compile_wellTyped`, `compile_stepClosed`, and
     `has_behavior`. -/
 theorem compile_has_behavior (prog : Program) (htc : prog.typeCheck = true)
-    (σ₀ : Store) (hts₀ : TypedStore prog.tyCtx σ₀) :
+    (σ₀ : Store) :
     ∃ b, program_behavior prog.compile σ₀ b :=
-  has_behavior prog.compile σ₀ prog.tyCtx
-    (prog.compile_wellTyped htc) hts₀ (prog.compile_stepClosed htc)
+  has_behavior prog.compile σ₀ (prog.compile_stepClosed htc)
 
 -- ============================================================
 -- § 5h. Pretty-printing

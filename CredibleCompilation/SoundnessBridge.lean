@@ -1685,12 +1685,9 @@ redundant assignment removal).
 theorem trans_has_behavior
     (dc : ECertificate) (h : checkCertificateExec dc = true)
     (htyctx : dc.orig.tyCtx = dc.trans.tyCtx)
-    (σ₀ : Store) (hts₀ : TypedStore dc.tyCtx σ₀) :
+    (σ₀ : Store) :
     ∃ b, program_behavior dc.trans σ₀ b :=
-  have hvalid := soundness_bridge dc h htyctx
-  have hwt : WellTypedProg dc.trans.tyCtx dc.trans :=
-    htyctx ▸ hvalid.well_typed_trans
-  has_behavior dc.trans σ₀ dc.trans.tyCtx hwt (htyctx ▸ hts₀) hvalid.step_closed
+  has_behavior dc.trans σ₀ (soundness_bridge dc h htyctx).step_closed
 
 /-- **End-to-end correctness**: If the executable checker accepts,
     then every behavior of the transformed program has a corresponding
@@ -1709,6 +1706,7 @@ theorem exec_checker_correct
       | .halts σ_t, .halts σ_o =>
           ∀ v ∈ dc.observable, σ_t v = σ_o v
       | .errors _, .errors _ => True
+      | .typeErrors _, _ => True
       | .diverges, .diverges => True
       | _, _ => False := by
   have hvalid := soundness_bridge dc h htyctx
@@ -1721,6 +1719,10 @@ theorem exec_checker_correct
     obtain ⟨σ_o', ho⟩ := error_preservation
       (toPCertificate dc) hvalid σ₀ hts₀ htrans
     exact ⟨.errors σ_o', ho, trivial⟩
+  | typeErrors σ_e =>
+    have hwt : WellTypedProg dc.tyCtx dc.trans := by
+      rw [ECertificate.tyCtx, htyctx]; exact hvalid.well_typed_trans
+    exact absurd htrans (type_safety hwt hts₀ hvalid.step_closed)
   | diverges =>
     obtain ⟨f, hinf, hf0⟩ := htrans
     obtain ⟨g, hg, hg0⟩ := soundness_diverge
@@ -1738,9 +1740,10 @@ theorem exec_checker_total
         match b, b' with
         | .halts σ_t, .halts σ_o => ∀ v ∈ dc.observable, σ_t v = σ_o v
         | .errors _, .errors _ => True
+        | .typeErrors _, _ => True
         | .diverges, .diverges => True
         | _, _ => False := by
-  obtain ⟨b, hb⟩ := trans_has_behavior dc h htyctx σ₀ hts₀
+  obtain ⟨b, hb⟩ := trans_has_behavior dc h htyctx σ₀
   have hvalid := soundness_bridge dc h htyctx
   cases b with
   | halts σ_t =>
@@ -1751,6 +1754,10 @@ theorem exec_checker_total
     obtain ⟨σ_o', ho⟩ := error_preservation
       (toPCertificate dc) hvalid σ₀ hts₀ hb
     exact ⟨.errors σ_e, hb, .errors σ_o', ho, trivial⟩
+  | typeErrors σ_e =>
+    have hwt : WellTypedProg dc.tyCtx dc.trans := by
+      rw [ECertificate.tyCtx, htyctx]; exact hvalid.well_typed_trans
+    exact absurd hb (type_safety hwt hts₀ hvalid.step_closed)
   | diverges =>
     obtain ⟨f, hinf, hf0⟩ := hb
     obtain ⟨g, hg, hg0⟩ := soundness_diverge

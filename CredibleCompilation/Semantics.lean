@@ -630,6 +630,34 @@ theorem Step.no_typeError_of_wellTyped {p : Prog} {pc : Nat} {σ τ : Store} {Γ
       | inl hl => exact hl (by rw [hts]; exact hy)
       | inr hr => exact hr (by rw [hts]; exact hz)
 
+/-- **Progress (untyped)**: an in-bounds PC always admits a step,
+    regardless of type safety. For ill-typed binop operands, the step
+    is `binop_typeError`. -/
+theorem Step.progress_untyped (p : Prog) (pc : Nat) (σ : Store)
+    (hinb : pc < p.size) :
+    ∃ c', Step p (Cfg.run pc σ) c' := by
+  have hinstr : p[pc]? = some p[pc] := Prog.getElem?_eq_getElem hinb
+  match hp : p[pc] with
+  | .const x v     => exact ⟨_, .const (hp ▸ hinstr)⟩
+  | .copy x y      => exact ⟨_, .copy (hp ▸ hinstr)⟩
+  | .binop x op y z =>
+    by_cases hy : (σ y).typeOf = .int
+    · by_cases hz : (σ z).typeOf = .int
+      · obtain ⟨a, ha⟩ := Value.int_of_typeOf_int hy
+        obtain ⟨b, hb⟩ := Value.int_of_typeOf_int hz
+        by_cases hs : op.safe a b
+        · exact ⟨_, .binop (hp ▸ hinstr) ha hb hs⟩
+        · exact ⟨_, .error (hp ▸ hinstr) ha hb hs⟩
+      · exact ⟨_, .binop_typeError (hp ▸ hinstr) (.inr hz)⟩
+    · exact ⟨_, .binop_typeError (hp ▸ hinstr) (.inl hy)⟩
+  | .boolop x be   => exact ⟨_, .boolop (hp ▸ hinstr)⟩
+  | .goto l        => exact ⟨_, .goto (hp ▸ hinstr)⟩
+  | .ifgoto b l    =>
+    by_cases hb : b.eval σ = true
+    · exact ⟨_, .iftrue (hp ▸ hinstr) hb⟩
+    · exact ⟨_, .iffall (hp ▸ hinstr) (Bool.eq_false_iff.mpr hb)⟩
+  | .halt          => exact ⟨_, .halt (hp ▸ hinstr)⟩
+
 -- ============================================================
 -- § 10. Observable output at a configuration
 -- ============================================================
@@ -638,9 +666,10 @@ theorem Step.no_typeError_of_wellTyped {p : Prog} {pc : Nat} {σ τ : Store} {Γ
     observable variable–value pairs), an error occurred (e.g. div-by-zero),
     or nothing observable happened yet. -/
 inductive Observation where
-  | halt    : List (Var × Value) → Observation
-  | error   : Observation
-  | nothing : Observation
+  | halt      : List (Var × Value) → Observation
+  | error     : Observation
+  | typeError : Observation
+  | nothing   : Observation
   deriving Repr, DecidableEq
 
 /-- Observe a configuration against a program and list of observable variables. -/
@@ -648,7 +677,7 @@ def observe (p : Prog) (obs : List Var) (c : Cfg) : Observation :=
   match c with
   | .halt σ      => Observation.halt (obs.map fun v => (v, σ v))
   | .error _     => Observation.error
-  | .typeError _ => Observation.error
+  | .typeError _ => Observation.typeError
   | .run pc σ =>
     match p[pc]? with
     | some .halt => Observation.halt (obs.map fun v => (v, σ v))
@@ -769,6 +798,63 @@ theorem type_preservation {Γ : TyCtx} {p : Prog} {pc pc' : Nat} {σ σ' : Store
   | iftrue _ _ => exact hts
   | iffall _ _ => exact hts
 
+
+/-- **Type safety (multi-step)**: a well-typed, step-closed program never
+    reaches a type-error configuration from a well-typed initial store. -/
+theorem type_safety {p : Prog} {σ₀ σ' : Store} {Γ : TyCtx}
+    (hwtp : WellTypedProg Γ p) (hts₀ : TypedStore Γ σ₀)
+    (hclosed : StepClosedInBounds p) :
+    ¬ (p ⊩ Cfg.run 0 σ₀ ⟶* Cfg.typeError σ') := by
+  intro hsteps
+  suffices ∀ c c', Steps p c c' →
+      ∀ pc σ, c = Cfg.run pc σ → c' = Cfg.typeError σ' →
+      pc < p.size → TypedStore Γ σ → False from
+    this _ _ hsteps 0 σ₀ rfl rfl hclosed.1 hts₀
+  intro c c' hss
+  induction hss with
+  | refl => intro _ _ hc hc' _ _; rw [hc] at hc'; exact Cfg.noConfusion hc'
+  | step hstep rest ih =>
+    intro pc σ hc hc' hpc hts; subst hc
+    cases hstep with
+    | halt h => cases rest with
+      | refl => exact Cfg.noConfusion hc'
+      | step s _ => exact Step.no_step_from_halt s
+    | error h _ _ _ => cases rest with
+      | refl => exact Cfg.noConfusion hc'
+      | step s _ => exact Step.no_step_from_error s
+    | binop_typeError hinstr hne =>
+      cases rest with
+      | refl => exact Step.no_typeError_of_wellTyped hpc hwtp hts
+                  (.binop_typeError hinstr hne)
+      | step s _ => exact Step.no_step_from_typeError s
+    | const h =>
+      apply ih _ _ rfl hc'
+      · exact hclosed.2 pc _ σ _ hpc (Step.const h)
+      · exact type_preservation hwtp hts hpc (Step.const h)
+    | copy h =>
+      apply ih _ _ rfl hc'
+      · exact hclosed.2 pc _ σ _ hpc (Step.copy h)
+      · exact type_preservation hwtp hts hpc (Step.copy h)
+    | binop h hy hz hs =>
+      apply ih _ _ rfl hc'
+      · exact hclosed.2 pc _ σ _ hpc (Step.binop h hy hz hs)
+      · exact type_preservation hwtp hts hpc (Step.binop h hy hz hs)
+    | boolop h =>
+      apply ih _ _ rfl hc'
+      · exact hclosed.2 pc _ σ _ hpc (Step.boolop h)
+      · exact type_preservation hwtp hts hpc (Step.boolop h)
+    | goto h =>
+      apply ih _ _ rfl hc'
+      · exact hclosed.2 pc _ σ _ hpc (Step.goto h)
+      · exact type_preservation hwtp hts hpc (Step.goto h)
+    | iftrue h hne =>
+      apply ih _ _ rfl hc'
+      · exact hclosed.2 pc _ σ _ hpc (Step.iftrue h hne)
+      · exact type_preservation hwtp hts hpc (Step.iftrue h hne)
+    | iffall h heq =>
+      apply ih _ _ rfl hc'
+      · exact hclosed.2 pc _ σ _ hpc (Step.iffall h heq)
+      · exact type_preservation hwtp hts hpc (Step.iffall h heq)
 
 -- ============================================================
 -- § 12. Example program:  acc := 1 + 2 + … + n

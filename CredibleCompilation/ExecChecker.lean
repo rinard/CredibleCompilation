@@ -593,7 +593,7 @@ def observeExec (cert : ECertificate) (c : Cfg) : Observation :=
   match c with
   | .halt σ      => Observation.halt (cert.observable.map fun v => (v, σ v))
   | .error _     => Observation.error
-  | .typeError _ => Observation.error
+  | .typeError _ => Observation.typeError
   | .run pc σ    =>
     match cert.trans[pc]? with
     | some .halt => Observation.halt (cert.observable.map fun v => (v, σ v))
