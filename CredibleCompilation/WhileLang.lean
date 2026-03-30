@@ -736,9 +736,20 @@ theorem compileBool_wt (prog : Program)
     have ⟨hb_wt, hb_ty⟩ := ihb hcb
       (offset + (compileBool a offset nextTmp).1.length)
       (compileBool a offset nextTmp).2.2
-    -- Flattened and/or — well-typedness of generated ifgoto chain
-    sorry
+    -- Well-typedness of result BoolExpr: .cmpLit .ne tR 0 where tR = tmpName tmp1
+    simp only [compileBool]
+    refine ⟨?_, .cmpLit (tyCtx_tmp_wt prog hnt _)⟩
+    -- AllWTI for the flattened code: codeA ++ [ifgoto] ++ codeB ++ [ifgoto, const, goto, const]
+    sorry -- Mechanical: compose allWTI_append for each segment
   | or a b iha ihb =>
+    simp [Program.checkSBool, Bool.and_eq_true] at hchk
+    obtain ⟨hca, hcb⟩ := hchk
+    have ⟨ha_wt, ha_ty⟩ := iha hca offset nextTmp
+    have ⟨hb_wt, hb_ty⟩ := ihb hcb
+      (offset + (compileBool a offset nextTmp).1.length)
+      (compileBool a offset nextTmp).2.2
+    simp only [compileBool]
+    refine ⟨?_, .cmpLit (tyCtx_tmp_wt prog hnt _)⟩
     sorry
 
 -- compileStmt produces well-typed instructions
