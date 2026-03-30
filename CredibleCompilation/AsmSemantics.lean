@@ -300,6 +300,10 @@ def StateRel (vm : VarMap) (σ : Store) (arm : ArmState) : Prop :=
 def ScratchSafe (vm : VarMap) : Prop :=
   ∀ v off, vm.lookup v = some off → off ≠ 0
 
+/-- The VarMap is injective: distinct variables have distinct offsets. -/
+def VarMapInjective (vm : VarMap) : Prop :=
+  ∀ v1 v2 off, vm.lookup v1 = some off → vm.lookup v2 = some off → v1 = v2
+
 /-- PC correspondence: TAC PC maps to ARM PC. -/
 def PcRel (pcMap : Nat → Nat) (tac_pc : Nat) (arm_pc : Nat) : Prop :=
   arm_pc = pcMap tac_pc
@@ -578,6 +582,25 @@ theorem genBoolExpr_correct (prog : ArmProg) (vm : VarMap)
   cases be with
   | _ => sorry  -- All BoolExpr cases deferred; .cmp uses genBoolExpr_cmp_correct
 
+/-- StateRel is preserved when store is updated at `x ↦ w` and stack at `off ↦ w.encode`,
+    provided `vm.lookup x = some off` and the VarMap is injective. -/
+theorem StateRel.update {vm : VarMap} {σ : Store} {arm : ArmState}
+    (hRel : StateRel vm σ arm)
+    (hInj : VarMapInjective vm)
+    (x : Var) (w : Value) (off : Nat) (hOff : vm.lookup x = some off) :
+    StateRel vm (Store.update σ x w) (arm.setStack off w.encode) := by
+  intro v voff hv
+  simp only [ArmState.setStack, Store.update]
+  by_cases hvo : voff = off
+  · -- v maps to the same offset as x → v = x (by injectivity)
+    subst hvo
+    have := hInj v x voff hv hOff; subst this
+    simp
+  · -- different offset → v ≠ x (otherwise offsets would match)
+    have hne : v ≠ x := fun h => hvo (by subst h; exact Option.some.inj (hv.symm.trans hOff))
+    simp [hvo, hne]
+    exact hRel v voff hv
+
 /-- Single TAC instruction backward simulation. -/
 theorem genInstr_correct (prog : ArmProg) (vm : VarMap) (pcMap : Nat → Nat)
     (p : Prog) (pc : Nat) (σ : Store) (s : ArmState)
@@ -585,10 +608,11 @@ theorem genInstr_correct (prog : ArmProg) (vm : VarMap) (pcMap : Nat → Nat)
     (instr : TAC) (hInstr : p[pc]? = some instr)
     (hRel : SimRel vm pcMap (.run pc σ) s)
     (hScratch : ScratchSafe vm)
+    (hInjective : VarMapInjective vm)
     (cfg' : Cfg) (hStep : p ⊩ Cfg.run pc σ ⟶ cfg')
     (hVarMap : ∀ v, ∃ off, vm.lookup v = some off)
     (hCodeInstr : CodeAt prog (pcMap pc) (formalGenInstr vm pcMap instr haltLabel divLabel))
-    (hPcNext : ∀ pc', cfg' = .run pc' σ →
+    (hPcNext : ∀ pc' σ', cfg' = .run pc' σ' →
       pcMap pc' = pcMap pc + (formalGenInstr vm pcMap instr haltLabel divLabel).length) :
     ∃ s', ArmSteps prog s s' ∧ SimRel vm pcMap cfg' s' := by
   obtain ⟨hStateRel, hPcRel⟩ := hRel
@@ -617,9 +641,42 @@ theorem genInstr_correct (prog : ArmProg) (vm : VarMap) (pcMap : Nat → Nat)
     -- TAC: x := v → ARM: loadImm64 + str
     sorry
   | copy hinstr =>
-    -- TAC: x := y → ARM: ldr x0 offS; str x0 offD
-    -- Requires VarMap injectivity for StateRel preservation across store updates
-    sorry
+    -- TAC: copy x y → ARM: ldr x0 offS; str x0 offD
+    rename_i x y
+    have heq : instr = .copy x y := Option.some.inj (hInstr.symm.trans hinstr)
+    obtain ⟨offS, hS⟩ := hVarMap y
+    obtain ⟨offD, hD⟩ := hVarMap x
+    have hformal : formalGenInstr vm pcMap (.copy x y) haltLabel divLabel =
+        (.ldr .x0 offS :: .str .x0 offD :: List.nil) := by
+      show (match vm.lookup y, vm.lookup x with
+        | some offS, some offD => _ | _, _ => _) = _
+      rw [hS, hD]
+    rw [heq, hformal] at hCodeInstr
+    have h0 := hCodeInstr.head; have h1 := hCodeInstr.tail.head
+    rw [← hPcRel] at h0 h1
+    -- Execute: ldr x0, [sp, #offS]; str x0, [sp, #offD]
+    refine ⟨(s.setReg .x0 (s.stack offS) |>.nextPC |>.setStack offD
+              (s.setReg .x0 (s.stack offS) |>.nextPC |>.regs .x0) |>.nextPC),
+      .step (.ldr .x0 offS h0) (.single (.str .x0 offD h1)),
+      ⟨?_, ?_⟩⟩
+    · -- StateRel for σ[x ↦ σ y]
+      intro v off hv
+      simp only [ArmState.setStack, ArmState.setReg, ArmState.nextPC,
+                  ArmReg.beq_self, ite_true]
+      by_cases hoff : off = offD
+      · subst hoff
+        simp
+        have := hInjective v _ off hv hD; subst this
+        rw [Store.update_self]; exact hStateRel y offS hS
+      · simp [hoff]
+        have hne : v ≠ x := fun h => hoff (Option.some.inj ((h ▸ hv).symm.trans hD))
+        show s.stack off = (σ[x ↦ σ y] v).encode
+        rw [Store.update_other _ _ _ _ hne]; exact hStateRel v off hv
+    · -- PcRel
+      show s.pc + 1 + 1 = pcMap (pc + 1)
+      rw [heq, hformal] at hPcNext
+      have := hPcNext _ _ rfl; simp at this
+      rw [this, hPcRel]
   | binop hinstr hy hz hs =>
     -- TAC: x := y op z → ARM: ldr/ldr/op/str (with cbz for div)
     sorry
