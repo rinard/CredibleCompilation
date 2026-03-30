@@ -541,10 +541,25 @@ private theorem genBoolExpr_cmp_correct (prog : ArmProg) (vm : VarMap)
   have hvalR := hRel rv offR hR
   -- We need to show the result for each op case
   obtain ⟨nL, hnL⟩ := hIntL; obtain ⟨nR, hnR⟩ := hIntR
-  -- Each case: 4 ARM steps (ldr, ldr, cmp, cset) then show value/stack/pc.
-  -- The value goal reduces to (if nL - nR ⊕ 0 then ... else ...) = (if nL ⊕ nR then ... else ...)
-  -- which follows from simple arithmetic.
-  cases op <;> sorry
+  -- Helper: build the 4-step execution and close value/stack/pc goals
+  suffices ∀ (c : Cond),
+      prog[s.pc + 1 + 1 + 1]? = some (.cset .x0 c) →
+      (if (Flags.mk (nL - nR)).condHolds c then (1:Int) else 0) =
+        (if op.eval nL nR then 1 else 0) →
+      ∃ s', ArmSteps prog s s' ∧
+        (s'.regs .x0 = if op.eval (σ lv).toInt (σ rv).toInt then (1:Int) else 0) ∧
+        (∀ v off, vm.lookup v = some off → s'.stack off = s.stack off) ∧
+        s'.pc = s.pc + 4 from by
+    cases op <;> simp only [] at h3 <;> exact this _ h3 (by
+      simp [Flags.condHolds, CmpOp.eval]; split <;> split <;> omega)
+  intro c h3c hval
+  exact ⟨_, .step (.ldr .x1 offL h0) (.step (.ldr .x2 offR h1)
+    (.step (.cmpRR .x1 .x2 h2) (.single (.cset .x0 c h3c)))),
+    by simp only [ArmState.setReg, ArmState.nextPC,
+          ArmReg.beq_self, ArmReg.x0_ne_x1, ArmReg.x0_ne_x2,
+          ArmReg.x1_ne_x2, ArmReg.x2_ne_x1, ite_true, Bool.false_eq_true, ite_false]
+       rw [hvalL, hvalR, hnL, hnR]; simp only [Value.encode, Value.toInt]; exact hval,
+    ⟨fun _ _ _ => rfl, by simp [ArmState.setReg, ArmState.nextPC]⟩⟩
 
 /-- `genBoolExpr` correctly evaluates a boolean expression into x0. -/
 theorem genBoolExpr_correct (prog : ArmProg) (vm : VarMap)
