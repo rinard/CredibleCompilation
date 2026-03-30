@@ -708,13 +708,11 @@ theorem genBoolExpr_correct (prog : ArmProg) (vm : VarMap)
     rw [hTailPC] at hCodeTail
     have hLdr := hCodeTail.head
     have hAnd := hCodeTail.tail.head
-    -- BUG: For nested and/or (e.g., (a && b) && c), the inner genBoolExpr
-    -- for (a && b) clobbers the scratch slot at offset 0, which the outer
-    -- and/or also uses. The code generator shares a single scratch slot
-    -- for all boolean and/or operations. This is correct only for
-    -- non-nested boolean expressions. A fix would use a scratch stack
-    -- or spill to distinct offsets.
-    -- For non-nested cases, scratch is preserved and the proof would work.
+    -- Known limitation: for expressions like (a && b) && (c && d), the
+    -- right-side (c && d) clobbers scratch while the left-side result is
+    -- saved there. This is correct when the right operand doesn't contain
+    -- and/or (e.g., (a && b) && (c < d) works fine). A fix would use
+    -- a scratch stack indexed by nesting depth.
     sorry
   | or a b =>
     sorry
