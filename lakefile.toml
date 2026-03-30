@@ -14,3 +14,7 @@ globs = ["CredibleCompilation", "CredibleCompilation.+"]
 [[lean_exe]]
 name = "checker"
 root = "Main"
+
+[[lean_exe]]
+name = "compiler"
+root = "Compiler"
