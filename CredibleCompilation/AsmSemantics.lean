@@ -764,7 +764,7 @@ theorem genInstr_correct (prog : ArmProg) (vm : VarMap) (pcMap : Nat → Nat)
       have := hPcNext _ _ rfl; simp at this
       rw [this, hPcRel]
   | binop hinstr hy hz hs =>
-    -- TAC: x := y op z → ARM: ldr/ldr/op/str (with cbz for div)
+    -- TAC: x := y op z → ARM: ldr x1 offL; ldr x2 offR; op x0 x1 x2; str x0 offD
     sorry
   | boolop hinstr =>
     -- TAC: x := bexpr → ARM: genBoolExpr + str
@@ -776,10 +776,11 @@ theorem genInstr_correct (prog : ArmProg) (vm : VarMap) (pcMap : Nat → Nat)
     -- TAC: if cond goto l (fallthrough) → ARM: genBoolExpr + cbnz
     sorry
   | error hinstr hy hz hs =>
-    -- TAC: div-by-zero → ARM: cbz branches to divLabel
+    -- TAC: div-by-zero error → ARM: cbz branches to divLabel
+    -- SimRel for .error is True
     sorry
   | binop_typeError hinstr hne =>
-    -- Cannot happen under well-typedness (but we don't have that here)
+    -- SimRel for .typeError is False — need well-typedness to rule this out
     sorry
 
 /-- Main backward simulation: every TAC step is matched by ARM64 steps. -/
