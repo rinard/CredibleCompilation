@@ -639,7 +639,28 @@ theorem genBoolExpr_correct (prog : ArmProg) (vm : VarMap)
     · simp only [ArmState.setReg, ArmState.nextPC, hPC1, List.length_append, List.length_cons,
                   List.length_nil]
       omega
-  | _ => sorry
+  | bvar v =>
+    simp only [formalGenBoolExpr] at hCode ⊢
+    obtain ⟨off, hOff⟩ := hVarMap v
+    simp only [hOff] at hCode ⊢
+    have h0 := hCode.head; have h1 := hCode.tail.head
+    rw [← hPC] at h0 h1
+    refine ⟨s.setReg .x0 (s.stack off) |>.nextPC
+            |>.setReg .x0 (Int.ofNat (s.setReg .x0 (s.stack off) |>.nextPC |>.regs .x0 |>.toNat.land 1))
+            |>.nextPC,
+      .step (.ldr .x0 off h0) (.single (.andImm .x0 .x0 1 h1)), ?_, ?_, ?_⟩
+    · -- value
+      simp only [ArmState.setReg, ArmState.nextPC, ArmReg.beq_self, ite_true,
+                  BoolExpr.eval, hRel v off hOff]
+      sorry -- Need: (encode (σ v)).toNat.land 1 relates to (σ v).toBool
+    · intro w woff hv; simp [ArmState.setReg, ArmState.nextPC]
+    · simp only [ArmState.setReg, ArmState.nextPC, List.length_cons, List.length_nil]; subst hPC; omega
+  | cmpLit op v n =>
+    sorry
+  | and a b =>
+    sorry
+  | or a b =>
+    sorry
 
 /-- StateRel is preserved when store is updated at `x ↦ w` and stack at `off ↦ w.encode`,
     provided `vm.lookup x = some off` and the VarMap is injective. -/
