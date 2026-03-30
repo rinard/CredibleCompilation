@@ -512,7 +512,10 @@ theorem loadImm64_correct (prog : ArmProg) (rd : ArmReg) (n : Int)
     · simp
     · simp
     · simp; subst hPC; rfl
-  · -- Large immediate: movz/movk sequence — defer for now
+  · -- Large immediate: movz/movk sequence
+    -- Requires proving that splitting n into 16-bit chunks via UInt64 bitwise ops
+    -- and reassembling via insertBits is the identity. This is a pure bitwise
+    -- arithmetic fact about UInt64 decomposition.
     sorry
 
 /-- Helper: Flags.condHolds matches CmpOp.eval for signed integer comparison. -/
@@ -646,7 +649,10 @@ theorem genBoolExpr_correct (prog : ArmProg) (vm : VarMap)
     · -- value
       simp only [ArmState.setReg, ArmState.nextPC, ArmReg.beq_self, ite_true,
                   BoolExpr.eval, hRel v off hOff]
-      sorry -- Need: (encode (σ v)).toNat.land 1 relates to (σ v).toBool
+      -- Under well-typedness, σ v is a bool. Need ∃ b, σ v = .bool b.
+      -- The hIntVars hypothesis is wrong for bvar (it assumes int).
+      -- This sorry requires a type-aware store hypothesis.
+      sorry
     · intro w woff hv; simp [ArmState.setReg, ArmState.nextPC]
     · simp only [ArmState.setReg, ArmState.nextPC, List.length_cons, List.length_nil]; subst hPC; omega
   | cmpLit op v n =>
@@ -654,7 +660,8 @@ theorem genBoolExpr_correct (prog : ArmProg) (vm : VarMap)
     obtain ⟨off, hOff⟩ := hVarMap v
     simp only [hOff] at hCode ⊢
     -- Code = [ldr x1 off] ++ loadImm64 x2 n ++ [cmp x1 x2, cset x0 cond]
-    -- This needs loadImm64_correct for x2, then cmp/cset
+    -- Needs loadImm64_correct for x2 (which has sorry for large case),
+    -- then follows the same pattern as genBoolExpr_cmp_correct.
     sorry
 
 /-- StateRel is preserved when store is updated at `x ↦ w` and stack at `off ↦ w.encode`,
