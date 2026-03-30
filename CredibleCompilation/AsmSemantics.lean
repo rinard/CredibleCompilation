@@ -404,6 +404,54 @@ def CodeAt (prog : ArmProg) (startPC : Nat) (instrs : List ArmInstr) : Prop :=
   ∀ i, (h : i < instrs.length) →
     prog[startPC + i]? = some instrs[i]
 
+-- Helper: CodeAt for a single instruction
+theorem CodeAt.head {prog : ArmProg} {startPC : Nat} {instr : ArmInstr} {rest : List ArmInstr}
+    (h : CodeAt prog startPC (instr :: rest)) :
+    prog[startPC]? = some instr := by
+  have := h 0 (by simp)
+  simp at this; exact this
+
+-- Helper: CodeAt for the tail
+theorem CodeAt.tail {prog : ArmProg} {startPC : Nat} {instr : ArmInstr} {rest : List ArmInstr}
+    (h : CodeAt prog startPC (instr :: rest)) :
+    CodeAt prog (startPC + 1) rest := by
+  intro i hi
+  have := h (i + 1) (by simp; omega)
+  rw [show startPC + (i + 1) = startPC + 1 + i from by omega] at this
+  exact this
+
+-- Helper: execute one instruction and advance
+theorem ArmSteps.one_then {prog : ArmProg} {s s' s'' : ArmState}
+    (h1 : ArmStep prog s s') (h2 : ArmSteps prog s' s'') :
+    ArmSteps prog s s'' :=
+  .step h1 h2
+
+-- setReg preserves stack
+@[simp] theorem ArmState.setReg_stack (s : ArmState) (r : ArmReg) (v : Int) :
+    (s.setReg r v).stack = s.stack := rfl
+
+-- nextPC preserves stack and regs
+@[simp] theorem ArmState.nextPC_stack (s : ArmState) :
+    s.nextPC.stack = s.stack := rfl
+
+@[simp] theorem ArmState.nextPC_regs (s : ArmState) :
+    s.nextPC.regs = s.regs := rfl
+
+@[simp] theorem ArmState.nextPC_pc (s : ArmState) :
+    s.nextPC.pc = s.pc + 1 := rfl
+
+-- setReg reads
+@[simp] theorem ArmState.setReg_regs_same (s : ArmState) (r : ArmReg) (v : Int) :
+    (s.setReg r v).regs r = v := by
+  simp [setReg]
+
+@[simp] theorem ArmState.setReg_regs_other (s : ArmState) (r r' : ArmReg) (v : Int) (h : r' ≠ r) :
+    (s.setReg r v).regs r' = s.regs r' := by
+  simp [setReg, h]
+
+@[simp] theorem ArmState.setReg_pc (s : ArmState) (r : ArmReg) (v : Int) :
+    (s.setReg r v).pc = s.pc := rfl
+
 theorem loadImm64_correct (prog : ArmProg) (rd : ArmReg) (n : Int)
     (s : ArmState) (startPC : Nat)
     (hCode : CodeAt prog startPC (formalLoadImm64 rd n))
@@ -412,7 +460,35 @@ theorem loadImm64_correct (prog : ArmProg) (rd : ArmReg) (n : Int)
       s'.regs rd = n ∧
       s'.stack = s.stack ∧
       s'.pc = startPC + (formalLoadImm64 rd n).length := by
-  sorry
+  by_cases hsmall : -65536 < n && n < 65536
+  · -- Small immediate: single `mov rd, #n`
+    have hformal : formalLoadImm64 rd n = [.mov rd n] := by
+      simp [formalLoadImm64, hsmall]
+    rw [hformal] at hCode ⊢
+    refine ⟨s.setReg rd n |>.nextPC, ?_, ?_, ?_, ?_⟩
+    · exact .single (.mov rd n (by subst hPC; exact hCode.head))
+    · simp
+    · simp
+    · simp; subst hPC; rfl
+  · -- Large immediate: movz/movk sequence — defer for now
+    sorry
+
+/-- Helper: Flags.condHolds matches CmpOp.eval for signed integer comparison. -/
+theorem Flags.condHolds_correct (op : CmpOp) (a b : Int) :
+    (Flags.mk (a - b)).condHolds (match op with | .eq => .eq | .ne => .ne | .lt => .lt | .le => .le)
+    = op.eval a b := by
+  cases op <;> simp [Flags.condHolds, CmpOp.eval]
+  · -- eq: (a - b == 0) = (a == b)
+    show (a - b == 0) = (a == b)
+    cases h : (a == b) <;> simp_all [beq_iff_eq] <;> omega
+  · -- ne: (a - b != 0) = (a != b)
+    show (a - b != 0) = (a != b)
+    unfold bne
+    cases h : (a - b == 0) <;> cases h' : (a == b) <;> simp_all [beq_iff_eq] <;> omega
+  · -- lt
+    omega
+  · -- le
+    omega
 
 /-- `genBoolExpr` correctly evaluates a boolean expression into x0. -/
 theorem genBoolExpr_correct (prog : ArmProg) (vm : VarMap)
@@ -434,9 +510,15 @@ theorem genInstr_correct (prog : ArmProg) (vm : VarMap) (pcMap : Nat → Nat)
     (instr : TAC) (hInstr : p[pc]? = some instr)
     (hRel : SimRel vm pcMap (.run pc σ) s)
     (hScratch : ScratchSafe vm)
-    (cfg' : Cfg) (hStep : p ⊩ Cfg.run pc σ ⟶ cfg') :
+    (cfg' : Cfg) (hStep : p ⊩ Cfg.run pc σ ⟶ cfg')
+    (hCodeInstr : CodeAt prog (pcMap pc) (formalGenInstr vm instr haltLabel divLabel))
+    (hPcNext : ∀ pc', cfg' = .run pc' σ → -- placeholder for PC mapping
+      pcMap pc' = pcMap pc + (formalGenInstr vm instr haltLabel divLabel).length) :
     ∃ s', ArmSteps prog s s' ∧ SimRel vm pcMap cfg' s' := by
-  sorry
+  sorry -- Proof by cases on `hStep`; each TAC instruction maps to its formal
+  -- ARM sequence. The .const case uses loadImm64_correct + str.
+  -- The .binop case uses ldr/ldr/op/str (with cbz for div).
+  -- The .goto case is a single `b`. The .halt case branches to haltLabel.
 
 /-- Main backward simulation: every TAC step is matched by ARM64 steps. -/
 theorem backward_simulation (p : Prog) (armProg : ArmProg)
