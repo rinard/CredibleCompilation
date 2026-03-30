@@ -776,7 +776,52 @@ theorem genInstr_correct (prog : ArmProg) (vm : VarMap) (pcMap : Nat → Nat)
     obtain ⟨offD, hD'⟩ := hVarMap x
     -- Case split on BinOp first, then compute formalGenInstr for each
     cases bop with
-    | div => sorry -- div case has extra cbz guard
+    | div =>
+      -- formalGenInstr for div = [ldr x2 offR, cbz x2 divLabel, ldr x1 offL, ldr x2 offR, sdiv x0 x1 x2, str x0 offD]
+      have hformal : formalGenInstr vm pcMap (.binop x .div y z) haltLabel divLabel =
+          (.ldr .x2 offR :: .cbz .x2 divLabel :: .ldr .x1 offL :: .ldr .x2 offR ::
+           .sdivR .x0 .x1 .x2 :: .str .x0 offD :: List.nil) := by
+        show (match vm.lookup y, vm.lookup z, vm.lookup x with
+          | some offL, some offR, some offD => _ | _, _, _ => _) = _
+        rw [hL, hR, hD']; simp
+      rw [hformal] at hCodeInstr hPcNext
+      have h0 := hCodeInstr.head
+      have h1 := hCodeInstr.tail.head
+      have h2 := hCodeInstr.tail.tail.head
+      have h3 := hCodeInstr.tail.tail.tail.head
+      have h4 := hCodeInstr.tail.tail.tail.tail.head
+      have h5 := hCodeInstr.tail.tail.tail.tail.tail.head
+      rw [← hPcRel] at h0 h1 h2 h3 h4 h5
+      -- hs : BinOp.div.safe a b means b ≠ 0
+      -- After ldr x2 offR: x2 = stack[offR] = (σ z).encode = b
+      -- cbz x2 divLabel: since b ≠ 0, falls through
+      -- Then ldr x1, ldr x2, sdiv, str — same as add/sub/mul
+      have hb_ne : (s.stack offR : Int) ≠ 0 := by
+        rw [hStateRel z offR hR, hz]; simp [Value.encode]; exact hs
+      exact ⟨_, .step (.ldr .x2 offR h0)
+              (.step (.cbz_fall .x2 divLabel h1 (by simp [ArmState.setReg, ArmState.nextPC]; exact hb_ne))
+              (.step (.ldr .x1 offL h2)
+              (.step (.ldr .x2 offR h3)
+              (.step (.sdivR .x0 .x1 .x2 h4 (by
+                simp [ArmState.setReg, ArmState.nextPC]
+                rw [hStateRel z offR hR, hz]; simp [Value.encode]; exact hs))
+              (.single (.str .x0 offD h5)))))),
+        by intro v off hv
+           simp only [ArmState.setStack, ArmState.setReg, ArmState.nextPC,
+                       ArmReg.beq_self, ArmReg.x0_ne_x1, ArmReg.x0_ne_x2,
+                       ArmReg.x1_ne_x2, ArmReg.x2_ne_x0, ArmReg.x2_ne_x1,
+                       ite_true, ite_false, Bool.false_eq_true]
+           by_cases hoff : off = offD
+           · subst hoff; simp
+             have := hInjective v x off hv hD'; subst this
+             rw [Store.update_self, hStateRel y offL hL, hStateRel z offR hR, hy, hz]
+             simp [Value.encode, BinOp.eval]
+           · simp [hoff]
+             have hne : v ≠ x := fun h => hoff (Option.some.inj ((h ▸ hv).symm.trans hD'))
+             rw [Store.update_other _ _ _ _ hne]; exact hStateRel v off hv,
+        by simp only [ArmState.setStack, ArmState.setReg, ArmState.nextPC]
+           show s.pc + 6 = pcMap (pc + 1)
+           have := hPcNext _ _ rfl; simp at this; rw [this, hPcRel]⟩
     | add =>
       -- formalGenInstr for add = [ldr x1 offL, ldr x2 offR, addR x0 x1 x2, str x0 offD]
       have hformal : formalGenInstr vm pcMap (.binop x .add y z) haltLabel divLabel =
