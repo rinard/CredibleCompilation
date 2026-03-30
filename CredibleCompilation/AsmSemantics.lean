@@ -656,6 +656,11 @@ theorem genBoolExpr_correct (prog : ArmProg) (vm : VarMap)
     · intro w woff hv; simp [ArmState.setReg, ArmState.nextPC]
     · simp only [ArmState.setReg, ArmState.nextPC, List.length_cons, List.length_nil]; subst hPC; omega
   | cmpLit op v n =>
+    simp only [formalGenBoolExpr] at hCode ⊢
+    obtain ⟨off, hOff⟩ := hVarMap v
+    simp only [hOff] at hCode ⊢
+    -- Code = [ldr x1 off] ++ loadImm64 x2 n ++ [cmp x1 x2, cset x0 cond]
+    -- This needs loadImm64_correct for x2, then cmp/cset
     sorry
   | and a b =>
     sorry
@@ -964,11 +969,79 @@ theorem genInstr_correct (prog : ArmProg) (vm : VarMap) (pcMap : Nat → Nat)
            show s.pc + 4 = pcMap (pc + 1)
            have := hPcNext _ _ rfl; simp at this; rw [this, hPcRel]⟩
   | boolop hinstr =>
-    sorry
+    -- TAC: x := bexpr → ARM: genBoolExpr ++ [str x0 offD]
+    have heq : instr = _ := Option.some.inj (hInstr.symm.trans hinstr)
+    subst heq
+    rename_i x be
+    obtain ⟨offD, hD'⟩ := hVarMap x
+    -- formalGenInstr = formalGenBoolExpr ++ [str x0 offD]
+    have hformal : formalGenInstr vm pcMap (.boolop x be) haltLabel divLabel =
+        formalGenBoolExpr vm be ++ (.str .x0 offD :: List.nil) := by
+      show (match vm.lookup x with | some offD => _ | none => _) = _
+      rw [hD']
+    rw [hformal] at hCodeInstr hPcNext
+    have hCodeBE := hCodeInstr.append_left
+    have hCodeStr := hCodeInstr.append_right
+    obtain ⟨s1, hSteps1, hx0, hStack1, hPC1⟩ :=
+      genBoolExpr_correct prog vm be σ s (pcMap pc) hStateRel hScratch hCodeBE hPcRel hVarMap
+        (fun v hv => sorry)
+    -- Then str x0, [sp, #offD]
+    have hStr := hCodeStr.head; rw [← hPC1] at hStr
+    refine ⟨s1.setStack offD (s1.regs .x0) |>.nextPC,
+      hSteps1.trans (.single (.str .x0 offD hStr)), ⟨?_, ?_⟩⟩
+    · -- StateRel for σ[x ↦ .bool (be.eval σ)]
+      intro v off hv
+      simp only [ArmState.setStack, ArmState.nextPC]
+      by_cases hoff : off = offD
+      · subst hoff; simp
+        have := hInjective v x off hv hD'; subst this
+        rw [Store.update_self, hx0]
+        simp [Value.encode]
+      · simp [hoff]
+        have hne : v ≠ x := fun h => hoff (Option.some.inj ((h ▸ hv).symm.trans hD'))
+        rw [Store.update_other _ _ _ _ hne]
+        exact (hStack1 v off hv).trans (hStateRel v off hv)
+    · -- PcRel
+      simp only [ArmState.setStack, ArmState.nextPC]
+      show s1.pc + 1 = pcMap (pc + 1)
+      have := hPcNext _ _ rfl
+      simp [List.length_append] at this
+      rw [this, hPC1]; omega
   | iftrue hinstr hcond =>
-    sorry
+    -- TAC: if cond goto l (taken) → ARM: genBoolExpr ++ [cbnz x0 (pcMap l)]
+    have heq : instr = _ := Option.some.inj (hInstr.symm.trans hinstr)
+    subst heq
+    -- After subst, instr is gone and hCodeInstr uses the concrete ifgoto
+    simp only [formalGenInstr] at hCodeInstr
+    have hCodeBE := hCodeInstr.append_left
+    have hCodeCbnz := hCodeInstr.append_right
+    obtain ⟨s1, hSteps1, hx0, hStack1, hPC1⟩ :=
+      genBoolExpr_correct prog vm _ σ s (pcMap pc) hStateRel hScratch hCodeBE hPcRel hVarMap
+        (fun v hv => sorry)
+    have hCbnz := hCodeCbnz.head; rw [← hPC1] at hCbnz
+    have hx0_ne : s1.regs .x0 ≠ 0 := by rw [hx0, hcond]; simp
+    exact ⟨{ s1 with pc := pcMap _ },
+      hSteps1.trans (.single (.cbnz_taken .x0 _ hCbnz hx0_ne)),
+      ⟨fun v off hv => (hStack1 v off hv).trans (hStateRel v off hv), rfl⟩⟩
   | iffall hinstr hcond =>
-    sorry
+    -- TAC: if cond goto l (not taken) → ARM: genBoolExpr ++ [cbnz x0 (pcMap l)]
+    have heq : instr = _ := Option.some.inj (hInstr.symm.trans hinstr)
+    subst heq
+    simp only [formalGenInstr] at hCodeInstr hPcNext
+    have hCodeBE := hCodeInstr.append_left
+    have hCodeCbnz := hCodeInstr.append_right
+    obtain ⟨s1, hSteps1, hx0, hStack1, hPC1⟩ :=
+      genBoolExpr_correct prog vm _ σ s (pcMap pc) hStateRel hScratch hCodeBE hPcRel hVarMap
+        (fun v hv => sorry)
+    have hCbnz := hCodeCbnz.head; rw [← hPC1] at hCbnz
+    have hx0_eq : s1.regs .x0 = 0 := by rw [hx0]; simp [hcond]
+    refine ⟨s1.nextPC,
+      hSteps1.trans (.single (.cbnz_fall .x0 _ hCbnz hx0_eq)),
+      ⟨fun v off hv => (hStack1 v off hv).trans (hStateRel v off hv), ?_⟩⟩
+    · show s1.pc + 1 = pcMap (pc + 1)
+      have := hPcNext _ _ rfl
+      simp [List.length_append] at this
+      rw [this, hPC1]; omega
   | error hinstr hy hz hs =>
     exact ⟨s, .refl, trivial⟩
   | binop_typeError hinstr hne =>
