@@ -1590,21 +1590,23 @@ theorem checkSuccessorsInBounds_sound (dc : ECertificate)
       have := hall pc hpc; simp [hi, successors] at this; exact this.2
 
 theorem soundness_bridge
-    (dc : ECertificate) (h : checkCertificateExec dc = true) :
+    (dc : ECertificate) (h : checkCertificateExec dc = true)
+    (htyctx : dc.orig.tyCtx = dc.trans.tyCtx) :
     PCertificateValid (toPCertificate dc) := by
-  -- checkCertificateExec is: wt_orig && wt_trans && c1 && c2 && c3 && c4 && c5 && c6 && c7 && c8_div && c9
+  -- checkCertificateExec is: wt_orig && wt_trans && same_obs && c1 && c2 && c3 && c4 && c5 && c6 && c7 && c8_div && c9
   -- && is left-associative, so decompose from right to left
   unfold checkCertificateExec at h
-  have ⟨h21, h10⟩ := and_true_of_and_eq_true h     -- h10 = checkSuccessorsInBounds
-  have ⟨h20, h9⟩  := and_true_of_and_eq_true h21   -- h9  = checkDivPreservationExec
-  have ⟨h19, h8⟩  := and_true_of_and_eq_true h20
-  have ⟨h18, h7⟩  := and_true_of_and_eq_true h19
-  have ⟨h17, h6⟩  := and_true_of_and_eq_true h18
-  have ⟨h16, h5⟩  := and_true_of_and_eq_true h17
-  have ⟨h15, h4⟩  := and_true_of_and_eq_true h16
-  have ⟨h14, h3⟩  := and_true_of_and_eq_true h15
-  have ⟨h13, h2⟩  := and_true_of_and_eq_true h14
-  have ⟨h12, h1⟩  := and_true_of_and_eq_true h13
+  have ⟨h22, h10⟩ := and_true_of_and_eq_true h     -- h10 = checkSuccessorsInBounds
+  have ⟨h21, h9⟩  := and_true_of_and_eq_true h22   -- h9  = checkDivPreservationExec
+  have ⟨h20, h8⟩  := and_true_of_and_eq_true h21
+  have ⟨h19, h7⟩  := and_true_of_and_eq_true h20
+  have ⟨h18, h6⟩  := and_true_of_and_eq_true h19
+  have ⟨h17, h5⟩  := and_true_of_and_eq_true h18
+  have ⟨h16, h4⟩  := and_true_of_and_eq_true h17
+  have ⟨h15, h3⟩  := and_true_of_and_eq_true h16
+  have ⟨h14, h2⟩  := and_true_of_and_eq_true h15
+  have ⟨h13, h1⟩  := and_true_of_and_eq_true h14
+  have ⟨h12, hobs_eq⟩ := and_true_of_and_eq_true h13
   have ⟨hwt_orig, hwt_trans⟩ := and_true_of_and_eq_true h12
   -- Derive rel=[] at start from checkRelAtStartExec (h3)
   have hrel0 : (dc.instrCerts.getD 0 default).rel = [] := by
@@ -1615,6 +1617,10 @@ theorem soundness_bridge
   exact {
     well_typed_orig  := by simp [toPCertificate]; exact checkWellTypedProg_sound hwt_orig
     well_typed_trans := by simp [toPCertificate]; exact checkWellTypedProg_sound hwt_trans
+    same_tyCtx       := by simp [toPCertificate]; exact htyctx
+    same_observable  := by
+      simp [toPCertificate]
+      exact beq_iff_eq.mp hobs_eq
     start_corr    := checkStartCorrespondenceExec_sound dc h1 hrel0
     start_inv     := checkInvariantsAtStartExec_sound dc h2
     inv_preserved := checkInvariantsPreservedExec_sound dc h4
@@ -1678,10 +1684,13 @@ redundant assignment removal).
     has a behavior for every well-typed initial store. -/
 theorem trans_has_behavior
     (dc : ECertificate) (h : checkCertificateExec dc = true)
+    (htyctx : dc.orig.tyCtx = dc.trans.tyCtx)
     (σ₀ : Store) (hts₀ : TypedStore dc.tyCtx σ₀) :
     ∃ b, program_behavior dc.trans σ₀ b :=
-  has_behavior dc.trans σ₀ dc.tyCtx (soundness_bridge dc h).well_typed_trans hts₀
-    (soundness_bridge dc h).step_closed
+  have hvalid := soundness_bridge dc h htyctx
+  have hwt : WellTypedProg dc.trans.tyCtx dc.trans :=
+    htyctx ▸ hvalid.well_typed_trans
+  has_behavior dc.trans σ₀ dc.trans.tyCtx hwt (htyctx ▸ hts₀) hvalid.step_closed
 
 /-- **End-to-end correctness**: If the executable checker accepts,
     then every behavior of the transformed program has a corresponding
@@ -1692,6 +1701,7 @@ theorem trans_has_behavior
     `checkCertificateExec dc = true` to semantic preservation. -/
 theorem exec_checker_correct
     (dc : ECertificate) (h : checkCertificateExec dc = true)
+    (htyctx : dc.orig.tyCtx = dc.trans.tyCtx)
     (σ₀ : Store) (hts₀ : TypedStore dc.tyCtx σ₀) (b : Behavior)
     (htrans : program_behavior dc.trans σ₀ b) :
     ∃ b', program_behavior dc.orig σ₀ b' ∧
@@ -1701,7 +1711,7 @@ theorem exec_checker_correct
       | .errors _, .errors _ => True
       | .diverges, .diverges => True
       | _, _ => False := by
-  have hvalid := soundness_bridge dc h
+  have hvalid := soundness_bridge dc h htyctx
   cases b with
   | halts σ_t' =>
     obtain ⟨σ_o', ho, hobs⟩ := soundness_halt
@@ -1721,6 +1731,7 @@ theorem exec_checker_correct
     in the transformed program, and that behavior is matched by the original. -/
 theorem exec_checker_total
     (dc : ECertificate) (h : checkCertificateExec dc = true)
+    (htyctx : dc.orig.tyCtx = dc.trans.tyCtx)
     (σ₀ : Store) (hts₀ : TypedStore dc.tyCtx σ₀) :
     ∃ b, program_behavior dc.trans σ₀ b ∧
       ∃ b', program_behavior dc.orig σ₀ b' ∧
@@ -1729,8 +1740,8 @@ theorem exec_checker_total
         | .errors _, .errors _ => True
         | .diverges, .diverges => True
         | _, _ => False := by
-  obtain ⟨b, hb⟩ := trans_has_behavior dc h σ₀ hts₀
-  have hvalid := soundness_bridge dc h
+  obtain ⟨b, hb⟩ := trans_has_behavior dc h htyctx σ₀ hts₀
+  have hvalid := soundness_bridge dc h htyctx
   cases b with
   | halts σ_t =>
     obtain ⟨σ_o', ho, hobs⟩ := soundness_halt
@@ -1755,28 +1766,31 @@ theorem exec_checker_total
     observable values. -/
 theorem exec_halt_preservation
     (dc : ECertificate) (h : checkCertificateExec dc = true)
+    (htyctx : dc.orig.tyCtx = dc.trans.tyCtx)
     (σ₀ σ_t' : Store) (hts₀ : TypedStore dc.tyCtx σ₀)
     (hexec : haltsWithResult dc.trans 0 σ₀ σ_t') :
     ∃ σ_o', haltsWithResult dc.orig 0 σ₀ σ_o' ∧
       ∀ v ∈ dc.observable, σ_t' v = σ_o' v :=
-  soundness_halt (toPCertificate dc) (soundness_bridge dc h) σ₀ σ_t' hts₀ hexec
+  soundness_halt (toPCertificate dc) (soundness_bridge dc h htyctx) σ₀ σ_t' hts₀ hexec
 
 /-- **Error preservation (executable)**: If the executable checker accepts and
     the transformed program reaches an error state, the original
     program also reaches an error state. -/
 theorem exec_error_preservation
     (dc : ECertificate) (h : checkCertificateExec dc = true)
+    (htyctx : dc.orig.tyCtx = dc.trans.tyCtx)
     (σ₀ : Store) (hts₀ : TypedStore dc.tyCtx σ₀) {σ_e : Store}
     (hreach : dc.trans ⊩ Cfg.run 0 σ₀ ⟶* Cfg.error σ_e) :
     ∃ σ_o, dc.orig ⊩ Cfg.run 0 σ₀ ⟶* Cfg.error σ_o :=
-  error_preservation (toPCertificate dc) (soundness_bridge dc h) σ₀ hts₀ hreach
+  error_preservation (toPCertificate dc) (soundness_bridge dc h htyctx) σ₀ hts₀ hreach
 
 /-- **Divergence preservation (executable)**: If the executable checker accepts
     and the transformed program diverges, the original program also diverges. -/
 theorem exec_diverge_preservation
     (dc : ECertificate) (h : checkCertificateExec dc = true)
+    (htyctx : dc.orig.tyCtx = dc.trans.tyCtx)
     (f : Nat → Cfg) (σ₀ : Store) (hts₀ : TypedStore dc.tyCtx σ₀)
     (hinf : IsInfiniteExec dc.trans f)
     (hf0 : f 0 = Cfg.run 0 σ₀) :
     ∃ g : Nat → Cfg, IsInfiniteExec dc.orig g ∧ g 0 = Cfg.run 0 σ₀ :=
-  soundness_diverge (toPCertificate dc) (soundness_bridge dc h) f σ₀ hts₀ hinf hf0
+  soundness_diverge (toPCertificate dc) (soundness_bridge dc h htyctx) f σ₀ hts₀ hinf hf0

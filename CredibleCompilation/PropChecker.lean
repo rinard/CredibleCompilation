@@ -232,10 +232,13 @@ def checkNonterminationProp (cert : PCertificate) : Prop :=
 -- ============================================================
 
 /-- A certificate is valid if all checking conditions hold.
-    Uses `cert.tyCtx` to require well-typedness of both programs. -/
+    Each program is well-typed under its own type context, with
+    an explicit requirement that the two type contexts agree. -/
 structure PCertificateValid (cert : PCertificate) : Prop where
   well_typed_orig  : WellTypedProg cert.tyCtx cert.orig
-  well_typed_trans : WellTypedProg cert.tyCtx cert.trans
+  well_typed_trans : WellTypedProg cert.trans.tyCtx cert.trans
+  same_tyCtx       : cert.orig.tyCtx = cert.trans.tyCtx
+  same_observable  : cert.orig.observable = cert.trans.observable
   start_corr       : checkStartCorrespondenceProp cert
   start_inv        : checkInvariantsAtStartProp cert
   inv_preserved    : checkInvariantsPreservedProp cert
@@ -1141,7 +1144,8 @@ theorem credible_compilation_total
           ∀ v ∈ cert.observable, σ_t v = σ_o v
       | .errors σ_e => ∃ σ_o, cert.orig ⊩ Cfg.run 0 σ₀ ⟶* Cfg.error σ_o
       | .diverges => ∃ f, IsInfiniteExec cert.orig f ∧ f 0 = Cfg.run 0 σ₀ := by
-  obtain ⟨b, hb⟩ := has_behavior cert.trans σ₀ cert.tyCtx hvalid.well_typed_trans hts₀ hvalid.step_closed
+  obtain ⟨b, hb⟩ := has_behavior cert.trans σ₀ cert.trans.tyCtx hvalid.well_typed_trans
+    (hvalid.same_tyCtx ▸ hts₀) hvalid.step_closed
   refine ⟨b, hb, ?_⟩
   cases b with
   | halts σ_t => exact soundness_halt cert hvalid σ₀ σ_t hts₀ hb

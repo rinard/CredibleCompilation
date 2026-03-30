@@ -554,8 +554,9 @@ def checkDivPreservationExec (cert : ECertificate) : Bool :=
 
 /-- Check all certificate conditions. Returns `true` iff the certificate is valid. -/
 def checkCertificateExec (cert : ECertificate) : Bool :=
-  checkWellTypedProg cert.tyCtx cert.orig &&
-  checkWellTypedProg cert.tyCtx cert.trans &&
+  checkWellTypedProg cert.orig.tyCtx cert.orig &&
+  checkWellTypedProg cert.trans.tyCtx cert.trans &&
+  (cert.orig.observable == cert.trans.observable) &&
   checkStartCorrespondenceExec cert &&
   checkInvariantsAtStartExec cert &&
   checkRelAtStartExec cert &&
@@ -569,8 +570,9 @@ def checkCertificateExec (cert : ECertificate) : Bool :=
 
 /-- Verbose check: returns the result of each individual condition. -/
 def checkCertificateVerboseExec (cert : ECertificate) : List (String × Bool) :=
-  [ ("well_typed_orig",       checkWellTypedProg cert.tyCtx cert.orig),
-    ("well_typed_trans",      checkWellTypedProg cert.tyCtx cert.trans),
+  [ ("well_typed_orig",       checkWellTypedProg cert.orig.tyCtx cert.orig),
+    ("well_typed_trans",      checkWellTypedProg cert.trans.tyCtx cert.trans),
+    ("same_observable",       cert.orig.observable == cert.trans.observable),
     ("start_correspondence",  checkStartCorrespondenceExec cert),
     ("invariants_at_start",   checkInvariantsAtStartExec cert),
     ("rel_at_start",          checkRelAtStartExec cert),

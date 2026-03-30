@@ -176,6 +176,50 @@ Added stuck-state and divergence preservation theorems to `RefCompiler.lean`, pr
 
 **Zero sorry holes remain.**
 
+## 19. While language + RefCompiler committed (`5e1f3af` — 2026-03-26)
+
+Committed entries 15–18 (While source language, compiler correctness framework, reference compiler, stuck/divergence theorems) in a single commit.
+
+## 20. Typed Value system (`acc813d` — 2026-03-27)
+
+Added a typed value system with `int` and `bool` types:
+
+- `Value` inductive: `.int i` and `.bool b` constructors (replacing bare `Int`).
+- `VarTy` inductive: `.int` and `.bool` for type contexts.
+- `TAC.boolop`: new instruction that evaluates a `BoolExpr` and stores the boolean result.
+- `TypedStore Γ σ`: every variable's value matches its declared type.
+- Type preservation theorem: well-typed programs preserve `TypedStore` across steps.
+- `Cfg.typeError`: new stuck configuration for type errors (e.g., adding a bool to an int).
+
+## 21. Integrate typed Values across all modules (`19a86c1` — 2026-03-27)
+
+Threaded the new `Value` type through all modules: `Semantics`, `PropChecker`, `ExecChecker`, `SoundnessBridge`, optimizers, and examples. Closed all sorry holes introduced by the type system migration.
+
+## 22. Embed TyCtx in certificates + error semantics (`25f10fd` — 2026-03-27)
+
+Embedded `TyCtx` directly in `PCertificate`/`ECertificate` (derived from original program). Renamed stuck semantics to error semantics (`Cfg.error`, `checkErrorPreservationProp`). Added `WellTypedProg` to `PCertificateValid` and `checkCertificateExec`.
+
+## 23. Program refinement theorem + eliminate axioms (`a5fb5b1` — 2026-03-28)
+
+Added `program_refinement` theorem: if the checker accepts, then `∀ σ₀, ∀ obs ∈ observations(trans), obs ∈ observations(orig)`. Eliminated all project-specific axioms — the entire development is axiom-free (modulo Lean's built-in axioms).
+
+## 24. Prog as structure + Cfg.typeError (`4ff8f4f` — 2026-03-28)
+
+Refactored `Prog` from a type alias (`Array TAC`) to a structure with `code`, `tyCtx`, and `observable` fields. Programs now carry their own type context and observable variable list. Added `Cfg.typeError` for type-mismatch errors at runtime.
+
+## 25. Remove redundant certificate fields + type safety theorem (`4caf647` — 2026-03-28)
+
+Removed standalone `tyCtx`/`observable` fields from certificates — they're now derived from the original program's `Prog` structure via abbreviations (`ECertificate.tyCtx`, `PCertificate.observable`). Added a `type_safety` theorem: well-typed programs never reach `Cfg.typeError`.
+
+## 26. Check observable equality + per-program type checking (uncommitted — 2026-03-30)
+
+Made both checkers verify that original and transformed programs have the same observable variables and are each well-typed under their own type context:
+
+- **`PCertificateValid`**: `well_typed_trans` now requires `WellTypedProg cert.trans.tyCtx cert.trans` (was `cert.tyCtx`). Added `same_tyCtx : cert.orig.tyCtx = cert.trans.tyCtx` and `same_observable : cert.orig.observable = cert.trans.observable`.
+- **`checkCertificateExec`**: uses `cert.orig.tyCtx` for orig and `cert.trans.tyCtx` for trans. Adds `cert.orig.observable == cert.trans.observable` check.
+- **`soundness_bridge`** and all downstream end-to-end theorems take an extra hypothesis `htyctx : dc.orig.tyCtx = dc.trans.tyCtx` (function equality isn't decidable, so this can't be checked executably).
+- **PropExamples**: `transProg` definitions carry explicit matching `tyCtx`/`observable` (no longer using `Prog.ofCode`).
+
 ---
 
 ## Key theorem locations
