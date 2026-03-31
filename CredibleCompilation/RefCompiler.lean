@@ -703,15 +703,316 @@ theorem refCompileBool_correct (sb : SBool) (offset nextTmp : Nat) (σ σ_tac : 
   | and a b iha ihb =>
     -- Flattened short-circuit &&: correctness requires FragExec through
     -- conditional branches with case analysis on a.eval and b.eval.
-    -- The proof structure is: execute codeA → ifgoto (case split on a) →
-    -- if a=false: jump to falseL, const tR 0, result = false = false&&b ✓
-    -- if a=true: fall through, execute codeB → ifgoto (case split on b) →
-    --   if b=false: jump to falseL, const tR 0, result = false = true&&false ✓
-    --   if b=true: fall through, const tR 1, goto endL, result = true = true&&true ✓
-    sorry
+    have htf_a : ∀ v ∈ a.freeVars, v.isTmp = false :=
+      fun v hv => htf v (List.mem_append_left _ hv)
+    have htf_b : ∀ v ∈ b.freeVars, v.isTmp = false :=
+      fun v hv => htf v (List.mem_append_right _ hv)
+    have ⟨hintv_a, hintv_b⟩ : a.intTyped σ ∧ b.intTyped σ := hintv
+    unfold SBool.divSafe at hbsafe
+    obtain ⟨hbsafe_a, hbsafe_b_imp⟩ := hbsafe
+    dsimp only [refCompileBool] at hcode ⊢
+    generalize hra : refCompileBool a offset nextTmp = ra at hcode ⊢
+    obtain ⟨codeA, ba, tmp1⟩ := ra
+    generalize hrb : refCompileBool b (offset + codeA.length + 1) (tmp1 + 1) = rb at hcode ⊢
+    obtain ⟨codeB, bb, tmp2⟩ := rb
+    simp only [] at hcode ⊢
+    -- Extract code-at facts
+    -- Code structure (left-assoc): ((codeA ++ [ifgoto_a]) ++ codeB) ++ [ifgoto_b, const1, goto, const0]
+    have hcodeA : CodeAt (refCompileBool a offset nextTmp).1 p offset := by
+      rw [hra]; exact hcode.left.left.left
+    have hifgA : p[offset + codeA.length]? = some (TAC.ifgoto (.not ba) (offset + codeA.length + 1 + codeB.length + 3)) := by
+      exact hcode.left.left.right.head
+    have hcodeB : CodeAt (refCompileBool b (offset + codeA.length + 1) (tmp1 + 1)).1 p
+        (offset + codeA.length + 1) := by
+      rw [hrb]
+      have h := hcode.left.right
+      simp only [List.length_append, List.length_cons, List.length_nil] at h
+      rwa [show offset + (codeA.length + 1) = offset + codeA.length + 1 from by omega] at h
+    have htail := hcode.right
+    simp only [List.length_append, List.length_cons, List.length_nil] at htail
+    have hifgB : p[offset + codeA.length + 1 + codeB.length]? =
+        some (TAC.ifgoto (.not bb) (offset + codeA.length + 1 + codeB.length + 3)) := by
+      have h := htail 0 (by simp)
+      simp only [List.getElem?_cons_zero] at h
+      rwa [show offset + (codeA.length + 1 + codeB.length) + 0 = offset + codeA.length + 1 + codeB.length from by omega] at h
+    have hconst1 : p[offset + codeA.length + 1 + codeB.length + 1]? =
+        some (TAC.const (tmpName tmp1) (.int 1)) := by
+      have h := htail 1 (by simp)
+      simp only [List.getElem?_cons_succ, List.getElem?_cons_zero] at h
+      rwa [show offset + (codeA.length + 1 + codeB.length) + 1 = offset + codeA.length + 1 + codeB.length + 1 from by omega] at h
+    have hgoto_end : p[offset + codeA.length + 1 + codeB.length + 2]? =
+        some (TAC.goto (offset + codeA.length + 1 + codeB.length + 3 + 1)) := by
+      have h := htail 2 (by simp)
+      simp only [List.getElem?_cons_succ, List.getElem?_cons_zero] at h
+      rwa [show offset + (codeA.length + 1 + codeB.length) + 2 = offset + codeA.length + 1 + codeB.length + 2 from by omega] at h
+    have hconst0 : p[offset + codeA.length + 1 + codeB.length + 3]? =
+        some (TAC.const (tmpName tmp1) (.int 0)) := by
+      have h := htail 3 (by simp)
+      simp only [List.getElem?_cons_succ, List.getElem?_cons_zero, List.getElem?_nil] at h
+      rwa [show offset + (codeA.length + 1 + codeB.length) + 3 = offset + codeA.length + 1 + codeB.length + 3 from by omega] at h
+    -- Bounds
+    have hge_a : nextTmp ≤ tmp1 := by
+      have := refCompileBool_nextTmp_ge a offset nextTmp; rw [hra] at this; simpa using this
+    have hge_b : tmp1 + 1 ≤ tmp2 := by
+      have := refCompileBool_nextTmp_ge b (offset + codeA.length + 1) (tmp1 + 1)
+      rw [hrb] at this; simpa using this
+    -- Execute codeA
+    obtain ⟨σ_a, hexec_a, heval_a, hntmp_a, hprev_a⟩ :=
+      iha offset nextTmp σ_tac htf_a hintv_a hbsafe_a hagree hcodeA
+    rw [hra] at hexec_a heval_a; simp at hexec_a heval_a
+    -- Prepare for codeB
+    have hagree_a : ∀ v, v.isTmp = false → σ_a v = σ v := by
+      intro v hv; rw [hntmp_a v hv]; exact hagree v hv
+    -- Case split on a.eval σ
+    by_cases ha_eval : a.eval σ = true
+    · -- a.eval σ = true
+      have hbsafe_b : b.divSafe σ := hbsafe_b_imp ha_eval
+      have hba_true : ba.eval σ_a = true := by rw [heval_a, ha_eval]
+      have hnot_ba_false : (BoolExpr.not ba).eval σ_a = false := by
+        simp [BoolExpr.eval, hba_true]
+      -- (.not ba) is false, so ifgoto falls through
+      have hexec_ifA := FragExec.single_iffalse hifgA hnot_ba_false
+      -- Execute codeB
+      obtain ⟨σ_b, hexec_b, heval_b, hntmp_b, hprev_b⟩ :=
+        ihb (offset + codeA.length + 1) (tmp1 + 1) σ_a htf_b hintv_b hbsafe_b hagree_a hcodeB
+      rw [hrb] at hexec_b heval_b; simp at hexec_b heval_b
+      -- Case split on b.eval σ
+      by_cases hb_eval : b.eval σ = true
+      · -- b.eval σ = true: both true path
+        have hbb_true : bb.eval σ_b = true := by rw [heval_b, hb_eval]
+        have hnot_bb_false : (BoolExpr.not bb).eval σ_b = false := by
+          simp [BoolExpr.eval, hbb_true]
+        have hexec_ifB := FragExec.single_iffalse hifgB hnot_bb_false
+        -- const tR 1
+        have hexec_c1 : FragExec p _ σ_b _ (σ_b[tmpName tmp1 ↦ .int 1]) :=
+          FragExec.single_const hconst1
+        -- goto endL
+        have hexec_goto : FragExec p _ (σ_b[tmpName tmp1 ↦ .int 1]) _ (σ_b[tmpName tmp1 ↦ .int 1]) :=
+          FragExec.single_goto hgoto_end
+        -- Final store
+        let σ_final := σ_b[tmpName tmp1 ↦ .int 1]
+        refine ⟨σ_final, ?_, ?_, ?_, ?_⟩
+        · -- FragExec
+          have h := FragExec.trans' (FragExec.trans' (FragExec.trans' (FragExec.trans' hexec_a hexec_ifA) hexec_b) hexec_ifB) (FragExec.trans' hexec_c1 hexec_goto)
+          simp only [List.length_append, List.length_cons, List.length_nil] at h ⊢
+          convert h using 1; omega
+        · -- eval
+          simp only [BoolExpr.eval, CmpOp.eval, σ_final, Store.update_self, Value.toInt]
+          simp [SBool.eval, ha_eval, hb_eval]
+        · -- non-tmp preserved
+          intro w hw
+          simp only [σ_final]
+          rw [Store.update_isTmp_ne (tmpName_isTmp tmp1) hw, hntmp_b w hw, hntmp_a w hw]
+        · -- prev tmp preserved
+          intro k hk
+          simp only [σ_final]
+          rw [Store.update_tmpName_ne (by omega), hprev_b k (by omega), hprev_a k hk]
+      · -- b.eval σ = false: a true, b false
+        have hb_false : b.eval σ = false := Bool.eq_false_iff.mpr hb_eval
+        have hbb_false : bb.eval σ_b = false := by rw [heval_b, hb_false]
+        have hnot_bb_true : (BoolExpr.not bb).eval σ_b = true := by
+          simp [BoolExpr.eval, hbb_false]
+        -- ifgoto (.not bb) jumps to falseL
+        have hexec_ifB := FragExec.single_iftrue hifgB hnot_bb_true
+        -- const tR 0
+        have hexec_c0 : FragExec p _ σ_b _ (σ_b[tmpName tmp1 ↦ .int 0]) :=
+          FragExec.single_const hconst0
+        let σ_final := σ_b[tmpName tmp1 ↦ .int 0]
+        refine ⟨σ_final, ?_, ?_, ?_, ?_⟩
+        · -- FragExec
+          have h := FragExec.trans' (FragExec.trans' (FragExec.trans' (FragExec.trans' hexec_a hexec_ifA) hexec_b) hexec_ifB) hexec_c0
+          simp only [List.length_append, List.length_cons, List.length_nil] at h ⊢
+          convert h using 1; omega
+        · -- eval
+          simp only [BoolExpr.eval, CmpOp.eval, σ_final, Store.update_self, Value.toInt]
+          simp [SBool.eval, ha_eval, hb_false]
+        · -- non-tmp preserved
+          intro w hw
+          simp only [σ_final]
+          rw [Store.update_isTmp_ne (tmpName_isTmp tmp1) hw, hntmp_b w hw, hntmp_a w hw]
+        · -- prev tmp preserved
+          intro k hk
+          simp only [σ_final]
+          rw [Store.update_tmpName_ne (by omega), hprev_b k (by omega), hprev_a k hk]
+    · -- a.eval σ = false
+      have ha_false : a.eval σ = false := Bool.eq_false_iff.mpr ha_eval
+      have hba_false : ba.eval σ_a = false := by rw [heval_a, ha_false]
+      have hnot_ba_true : (BoolExpr.not ba).eval σ_a = true := by
+        simp [BoolExpr.eval, hba_false]
+      -- ifgoto (.not ba) jumps to falseL
+      have hexec_ifA := FragExec.single_iftrue hifgA hnot_ba_true
+      -- const tR 0
+      have hexec_c0 : FragExec p _ σ_a _ (σ_a[tmpName tmp1 ↦ .int 0]) :=
+        FragExec.single_const hconst0
+      let σ_final := σ_a[tmpName tmp1 ↦ .int 0]
+      refine ⟨σ_final, ?_, ?_, ?_, ?_⟩
+      · -- FragExec
+        have h := FragExec.trans' (FragExec.trans' hexec_a hexec_ifA) hexec_c0
+        simp only [List.length_append, List.length_cons, List.length_nil] at h ⊢
+        convert h using 1; omega
+      · -- eval
+        simp only [BoolExpr.eval, CmpOp.eval, σ_final, Store.update_self, Value.toInt]
+        simp [SBool.eval, ha_false]
+      · -- non-tmp preserved
+        intro w hw
+        simp only [σ_final]
+        rw [Store.update_isTmp_ne (tmpName_isTmp tmp1) hw, hntmp_a w hw]
+      · -- prev tmp preserved
+        intro k hk
+        simp only [σ_final]
+        rw [Store.update_tmpName_ne (by omega), hprev_a k hk]
   | or a b iha ihb =>
     -- Symmetric to and: short-circuit ||
-    sorry
+    have htf_a : ∀ v ∈ a.freeVars, v.isTmp = false :=
+      fun v hv => htf v (List.mem_append_left _ hv)
+    have htf_b : ∀ v ∈ b.freeVars, v.isTmp = false :=
+      fun v hv => htf v (List.mem_append_right _ hv)
+    have ⟨hintv_a, hintv_b⟩ : a.intTyped σ ∧ b.intTyped σ := hintv
+    unfold SBool.divSafe at hbsafe
+    obtain ⟨hbsafe_a, hbsafe_b_imp⟩ := hbsafe
+    dsimp only [refCompileBool] at hcode ⊢
+    generalize hra : refCompileBool a offset nextTmp = ra at hcode ⊢
+    obtain ⟨codeA, ba, tmp1⟩ := ra
+    generalize hrb : refCompileBool b (offset + codeA.length + 1) (tmp1 + 1) = rb at hcode ⊢
+    obtain ⟨codeB, bb, tmp2⟩ := rb
+    simp only [] at hcode ⊢
+    -- Extract code-at facts
+    -- Code structure (left-assoc): ((codeA ++ [ifgoto_a]) ++ codeB) ++ [ifgoto_b, const0, goto, const1]
+    have hcodeA : CodeAt (refCompileBool a offset nextTmp).1 p offset := by
+      rw [hra]; exact hcode.left.left.left
+    have hifgA : p[offset + codeA.length]? = some (TAC.ifgoto ba (offset + codeA.length + 1 + codeB.length + 3)) := by
+      exact hcode.left.left.right.head
+    have hcodeB : CodeAt (refCompileBool b (offset + codeA.length + 1) (tmp1 + 1)).1 p
+        (offset + codeA.length + 1) := by
+      rw [hrb]
+      have h := hcode.left.right
+      simp only [List.length_append, List.length_cons, List.length_nil] at h
+      rwa [show offset + (codeA.length + 1) = offset + codeA.length + 1 from by omega] at h
+    have htail := hcode.right
+    simp only [List.length_append, List.length_cons, List.length_nil] at htail
+    have hifgB : p[offset + codeA.length + 1 + codeB.length]? =
+        some (TAC.ifgoto bb (offset + codeA.length + 1 + codeB.length + 3)) := by
+      have h := htail 0 (by simp)
+      simp only [List.getElem?_cons_zero] at h
+      rwa [show offset + (codeA.length + 1 + codeB.length) + 0 = offset + codeA.length + 1 + codeB.length from by omega] at h
+    have hconst0 : p[offset + codeA.length + 1 + codeB.length + 1]? =
+        some (TAC.const (tmpName tmp1) (.int 0)) := by
+      have h := htail 1 (by simp)
+      simp only [List.getElem?_cons_succ, List.getElem?_cons_zero] at h
+      rwa [show offset + (codeA.length + 1 + codeB.length) + 1 = offset + codeA.length + 1 + codeB.length + 1 from by omega] at h
+    have hgoto_end : p[offset + codeA.length + 1 + codeB.length + 2]? =
+        some (TAC.goto (offset + codeA.length + 1 + codeB.length + 3 + 1)) := by
+      have h := htail 2 (by simp)
+      simp only [List.getElem?_cons_succ, List.getElem?_cons_zero] at h
+      rwa [show offset + (codeA.length + 1 + codeB.length) + 2 = offset + codeA.length + 1 + codeB.length + 2 from by omega] at h
+    have hconst1 : p[offset + codeA.length + 1 + codeB.length + 3]? =
+        some (TAC.const (tmpName tmp1) (.int 1)) := by
+      have h := htail 3 (by simp)
+      simp only [List.getElem?_cons_succ, List.getElem?_cons_zero, List.getElem?_nil] at h
+      rwa [show offset + (codeA.length + 1 + codeB.length) + 3 = offset + codeA.length + 1 + codeB.length + 3 from by omega] at h
+    -- Bounds
+    have hge_a : nextTmp ≤ tmp1 := by
+      have := refCompileBool_nextTmp_ge a offset nextTmp; rw [hra] at this; simpa using this
+    have hge_b : tmp1 + 1 ≤ tmp2 := by
+      have := refCompileBool_nextTmp_ge b (offset + codeA.length + 1) (tmp1 + 1)
+      rw [hrb] at this; simpa using this
+    -- Execute codeA
+    obtain ⟨σ_a, hexec_a, heval_a, hntmp_a, hprev_a⟩ :=
+      iha offset nextTmp σ_tac htf_a hintv_a hbsafe_a hagree hcodeA
+    rw [hra] at hexec_a heval_a; simp at hexec_a heval_a
+    -- Prepare for codeB
+    have hagree_a : ∀ v, v.isTmp = false → σ_a v = σ v := by
+      intro v hv; rw [hntmp_a v hv]; exact hagree v hv
+    -- Case split on a.eval σ
+    by_cases ha_eval : a.eval σ = true
+    · -- a.eval σ = true: short-circuit, jump to trueL
+      have hba_true : ba.eval σ_a = true := by rw [heval_a, ha_eval]
+      -- ifgoto ba jumps to trueL
+      have hexec_ifA := FragExec.single_iftrue hifgA hba_true
+      -- const tR 1
+      have hexec_c1 : FragExec p _ σ_a _ (σ_a[tmpName tmp1 ↦ .int 1]) :=
+        FragExec.single_const hconst1
+      let σ_final := σ_a[tmpName tmp1 ↦ .int 1]
+      refine ⟨σ_final, ?_, ?_, ?_, ?_⟩
+      · -- FragExec
+        have h := FragExec.trans' (FragExec.trans' hexec_a hexec_ifA) hexec_c1
+        simp only [List.length_append, List.length_cons, List.length_nil] at h ⊢
+        convert h using 1; omega
+      · -- eval
+        simp only [BoolExpr.eval, CmpOp.eval, σ_final, Store.update_self, Value.toInt]
+        simp [SBool.eval, ha_eval]
+      · -- non-tmp preserved
+        intro w hw
+        simp only [σ_final]
+        rw [Store.update_isTmp_ne (tmpName_isTmp tmp1) hw, hntmp_a w hw]
+      · -- prev tmp preserved
+        intro k hk
+        simp only [σ_final]
+        rw [Store.update_tmpName_ne (by omega), hprev_a k hk]
+    · -- a.eval σ = false
+      have ha_false : a.eval σ = false := Bool.eq_false_iff.mpr ha_eval
+      have hbsafe_b : b.divSafe σ := hbsafe_b_imp ha_false
+      have hba_false : ba.eval σ_a = false := by rw [heval_a, ha_false]
+      -- ifgoto ba falls through
+      have hexec_ifA := FragExec.single_iffalse hifgA hba_false
+      -- Execute codeB
+      obtain ⟨σ_b, hexec_b, heval_b, hntmp_b, hprev_b⟩ :=
+        ihb (offset + codeA.length + 1) (tmp1 + 1) σ_a htf_b hintv_b hbsafe_b hagree_a hcodeB
+      rw [hrb] at hexec_b heval_b; simp at hexec_b heval_b
+      -- Case split on b.eval σ
+      by_cases hb_eval : b.eval σ = true
+      · -- b.eval σ = true
+        have hbb_true : bb.eval σ_b = true := by rw [heval_b, hb_eval]
+        -- ifgoto bb jumps to trueL
+        have hexec_ifB := FragExec.single_iftrue hifgB hbb_true
+        -- const tR 1
+        have hexec_c1 : FragExec p _ σ_b _ (σ_b[tmpName tmp1 ↦ .int 1]) :=
+          FragExec.single_const hconst1
+        let σ_final := σ_b[tmpName tmp1 ↦ .int 1]
+        refine ⟨σ_final, ?_, ?_, ?_, ?_⟩
+        · -- FragExec
+          have h := FragExec.trans' (FragExec.trans' (FragExec.trans' (FragExec.trans' hexec_a hexec_ifA) hexec_b) hexec_ifB) hexec_c1
+          simp only [List.length_append, List.length_cons, List.length_nil] at h ⊢
+          convert h using 1; omega
+        · -- eval
+          simp only [BoolExpr.eval, CmpOp.eval, σ_final, Store.update_self, Value.toInt]
+          simp [SBool.eval, ha_false, hb_eval]
+        · -- non-tmp preserved
+          intro w hw
+          simp only [σ_final]
+          rw [Store.update_isTmp_ne (tmpName_isTmp tmp1) hw, hntmp_b w hw, hntmp_a w hw]
+        · -- prev tmp preserved
+          intro k hk
+          simp only [σ_final]
+          rw [Store.update_tmpName_ne (by omega), hprev_b k (by omega), hprev_a k hk]
+      · -- b.eval σ = false: both false path
+        have hb_false : b.eval σ = false := Bool.eq_false_iff.mpr hb_eval
+        have hbb_false : bb.eval σ_b = false := by rw [heval_b, hb_false]
+        -- ifgoto bb falls through
+        have hexec_ifB := FragExec.single_iffalse hifgB hbb_false
+        -- const tR 0
+        have hexec_c0 : FragExec p _ σ_b _ (σ_b[tmpName tmp1 ↦ .int 0]) :=
+          FragExec.single_const hconst0
+        -- goto endL
+        have hexec_goto : FragExec p _ (σ_b[tmpName tmp1 ↦ .int 0]) _ (σ_b[tmpName tmp1 ↦ .int 0]) :=
+          FragExec.single_goto hgoto_end
+        let σ_final := σ_b[tmpName tmp1 ↦ .int 0]
+        refine ⟨σ_final, ?_, ?_, ?_, ?_⟩
+        · -- FragExec
+          have h := FragExec.trans' (FragExec.trans' (FragExec.trans' (FragExec.trans' hexec_a hexec_ifA) hexec_b) hexec_ifB) (FragExec.trans' hexec_c0 hexec_goto)
+          simp only [List.length_append, List.length_cons, List.length_nil] at h ⊢
+          convert h using 1; omega
+        · -- eval
+          simp only [BoolExpr.eval, CmpOp.eval, σ_final, Store.update_self, Value.toInt]
+          simp [SBool.eval, ha_false, hb_false]
+        · -- non-tmp preserved
+          intro w hw
+          simp only [σ_final]
+          rw [Store.update_isTmp_ne (tmpName_isTmp tmp1) hw, hntmp_b w hw, hntmp_a w hw]
+        · -- prev tmp preserved
+          intro k hk
+          simp only [σ_final]
+          rw [Store.update_tmpName_ne (by omega), hprev_b k (by omega), hprev_a k hk]
 
 -- ============================================================
 -- § 11. Statement compilation correctness
@@ -1383,11 +1684,99 @@ theorem refCompileBool_stuck (sb : SBool) (offset nextTmp : Nat) (σ σ_tac : St
     rw [hrc] at hlt; simp at hlt
     exact ⟨pc_s, σ_s, hfrag, hstuck, hlt⟩
   | and a b iha ihb =>
-    -- Flattened and: stuck in codeA (if ¬a.divSafe) or codeB (if a.divSafe ∧ ¬b.divSafe)
-    -- In both cases, the stuck PC is within the generated code bounds
-    sorry
+    have htf_a : ∀ v ∈ a.freeVars, v.isTmp = false :=
+      fun v hv => htf v (List.mem_append_left _ hv)
+    have htf_b : ∀ v ∈ b.freeVars, v.isTmp = false :=
+      fun v hv => htf v (List.mem_append_right _ hv)
+    have ⟨hintv_a, hintv_b⟩ : a.intTyped σ ∧ b.intTyped σ := hintv
+    unfold SBool.divSafe at hunsafe
+    push_neg at hunsafe
+    dsimp only [refCompileBool] at hcode ⊢
+    generalize hra : refCompileBool a offset nextTmp = ra at hcode ⊢
+    obtain ⟨codeA, ba, tmp1⟩ := ra
+    generalize hrb : refCompileBool b (offset + codeA.length + 1) (tmp1 + 1) = rb at hcode ⊢
+    obtain ⟨codeB, bb, tmp2⟩ := rb
+    simp only [] at hcode ⊢
+    have hcodeA : CodeAt (refCompileBool a offset nextTmp).1 p offset := by
+      rw [hra]; exact hcode.left.left.left
+    by_cases ha : a.divSafe σ
+    · -- a safe, so ¬(a.eval σ = true → b.divSafe σ), i.e. a.eval σ = true ∧ ¬b.divSafe σ
+      have ⟨ha_eval, hb_unsafe⟩ := hunsafe ha
+      obtain ⟨σ_a, hexec_a, heval_a, hntmp_a, _⟩ :=
+        refCompileBool_correct a offset nextTmp σ σ_tac p htf_a hintv_a ha hagree hcodeA
+      rw [hra] at hexec_a heval_a; simp at hexec_a heval_a
+      have hagree_a : ∀ v, v.isTmp = false → σ_a v = σ v := by
+        intro v hv; rw [hntmp_a v hv]; exact hagree v hv
+      -- ifgoto (.not ba) falls through since a.eval σ = true
+      have hba_true : ba.eval σ_a = true := by rw [heval_a, ha_eval]
+      have hifgA : p[offset + codeA.length]? = some (TAC.ifgoto (.not ba) (offset + codeA.length + 1 + codeB.length + 3)) :=
+        hcode.left.left.right.head
+      have hnot_ba_false : (BoolExpr.not ba).eval σ_a = false := by
+        simp [BoolExpr.eval, hba_true]
+      have hexec_ifA := FragExec.single_iffalse hifgA hnot_ba_false
+      have hcodeB : CodeAt (refCompileBool b (offset + codeA.length + 1) (tmp1 + 1)).1 p
+          (offset + codeA.length + 1) := by
+        rw [hrb]
+        have h := hcode.left.right
+        simp only [List.length_append, List.length_cons, List.length_nil] at h
+        rwa [show offset + (codeA.length + 1) = offset + codeA.length + 1 from by omega] at h
+      obtain ⟨pc_s, σ_s, hfrag, hstuck, hlt⟩ :=
+        ihb (offset + codeA.length + 1) (tmp1 + 1) σ_a htf_b hintv_b hb_unsafe hagree_a hcodeB
+      rw [hrb] at hlt; simp at hlt
+      exact ⟨pc_s, σ_s, FragExec.trans' hexec_a (FragExec.trans' hexec_ifA hfrag), hstuck,
+        by simp [List.length_append, List.length_cons, List.length_nil]; omega⟩
+    · -- a unsafe: stuck in codeA
+      obtain ⟨pc_s, σ_s, hfrag, hstuck, hlt⟩ :=
+        iha offset nextTmp σ_tac htf_a hintv_a ha hagree hcodeA
+      rw [hra] at hlt; simp at hlt
+      exact ⟨pc_s, σ_s, hfrag, hstuck,
+        by simp [List.length_append, List.length_cons, List.length_nil]; omega⟩
   | or a b iha ihb =>
-    sorry
+    have htf_a : ∀ v ∈ a.freeVars, v.isTmp = false :=
+      fun v hv => htf v (List.mem_append_left _ hv)
+    have htf_b : ∀ v ∈ b.freeVars, v.isTmp = false :=
+      fun v hv => htf v (List.mem_append_right _ hv)
+    have ⟨hintv_a, hintv_b⟩ : a.intTyped σ ∧ b.intTyped σ := hintv
+    unfold SBool.divSafe at hunsafe
+    push_neg at hunsafe
+    dsimp only [refCompileBool] at hcode ⊢
+    generalize hra : refCompileBool a offset nextTmp = ra at hcode ⊢
+    obtain ⟨codeA, ba, tmp1⟩ := ra
+    generalize hrb : refCompileBool b (offset + codeA.length + 1) (tmp1 + 1) = rb at hcode ⊢
+    obtain ⟨codeB, bb, tmp2⟩ := rb
+    simp only [] at hcode ⊢
+    have hcodeA : CodeAt (refCompileBool a offset nextTmp).1 p offset := by
+      rw [hra]; exact hcode.left.left.left
+    by_cases ha : a.divSafe σ
+    · -- a safe, so ¬(a.eval σ = false → b.divSafe σ), i.e. a.eval σ = false ∧ ¬b.divSafe σ
+      have ⟨ha_eval, hb_unsafe⟩ := hunsafe ha
+      obtain ⟨σ_a, hexec_a, heval_a, hntmp_a, _⟩ :=
+        refCompileBool_correct a offset nextTmp σ σ_tac p htf_a hintv_a ha hagree hcodeA
+      rw [hra] at hexec_a heval_a; simp at hexec_a heval_a
+      have hagree_a : ∀ v, v.isTmp = false → σ_a v = σ v := by
+        intro v hv; rw [hntmp_a v hv]; exact hagree v hv
+      -- ifgoto ba falls through since a.eval σ = false
+      have hba_false : ba.eval σ_a = false := by rw [heval_a, ha_eval]
+      have hifgA : p[offset + codeA.length]? = some (TAC.ifgoto ba (offset + codeA.length + 1 + codeB.length + 3)) :=
+        hcode.left.left.right.head
+      have hexec_ifA := FragExec.single_iffalse hifgA hba_false
+      have hcodeB : CodeAt (refCompileBool b (offset + codeA.length + 1) (tmp1 + 1)).1 p
+          (offset + codeA.length + 1) := by
+        rw [hrb]
+        have h := hcode.left.right
+        simp only [List.length_append, List.length_cons, List.length_nil] at h
+        rwa [show offset + (codeA.length + 1) = offset + codeA.length + 1 from by omega] at h
+      obtain ⟨pc_s, σ_s, hfrag, hstuck, hlt⟩ :=
+        ihb (offset + codeA.length + 1) (tmp1 + 1) σ_a htf_b hintv_b hb_unsafe hagree_a hcodeB
+      rw [hrb] at hlt; simp at hlt
+      exact ⟨pc_s, σ_s, FragExec.trans' hexec_a (FragExec.trans' hexec_ifA hfrag), hstuck,
+        by simp [List.length_append, List.length_cons, List.length_nil]; omega⟩
+    · -- a unsafe: stuck in codeA
+      obtain ⟨pc_s, σ_s, hfrag, hstuck, hlt⟩ :=
+        iha offset nextTmp σ_tac htf_a hintv_a ha hagree hcodeA
+      rw [hra] at hlt; simp at hlt
+      exact ⟨pc_s, σ_s, hfrag, hstuck,
+        by simp [List.length_append, List.length_cons, List.length_nil]; omega⟩
 
 -- ============================================================
 -- § 15. Statement stuck theorem

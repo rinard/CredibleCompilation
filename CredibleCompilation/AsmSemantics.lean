@@ -1,4 +1,5 @@
 import CredibleCompilation.Semantics
+import Std.Tactic.BVDecide
 
 /-!
 # ARM64 Subset Semantics
@@ -498,29 +499,227 @@ theorem CodeAt.append_right {prog : ArmProg} {startPC : Nat} {l1 l2 : List ArmIn
   rw [show startPC + l1.length + i = startPC + (l1.length + i) from by omega]
   exact this
 
+-- === Helpers for loadImm64_correct large case ===
+
+set_option maxHeartbeats 102400000
+
+private theorem uint64_nat_roundtrip (u : UInt64) : u.toNat.toUInt64 = u := by
+  simp [Nat.toUInt64]
+
+private theorem insertBits_uint64 (u : UInt64) (imm16 : UInt64) (shift : Nat) :
+    insertBits (Int.ofNat u.toNat) imm16 shift =
+    Int.ofNat ((u &&& ~~~((0xFFFF : UInt64) <<< shift.toUInt64) ||| imm16 <<< shift.toUInt64)).toNat := by
+  unfold insertBits; simp only [Int.toNat, uint64_nat_roundtrip]
+
+/-- Execute an optional movk instruction (present when w ≠ 0, skipped when w = 0). -/
+private theorem optional_movk_step (prog : ArmProg) (rd : ArmReg) (w : UInt64) (shift : Nat)
+    (s : ArmState) (pc0 : Nat) (hPC : s.pc = pc0)
+    (hCode : CodeAt prog pc0 (if (w != 0) = true then [ArmInstr.movk rd w shift] else [])) :
+    ∃ s', ArmSteps prog s s' ∧
+      s'.regs rd = (if (w != 0) = true then insertBits (s.regs rd) w shift else s.regs rd) ∧
+      s'.stack = s.stack ∧
+      s'.pc = pc0 + (if (w != 0) = true then [ArmInstr.movk rd w shift] else []).length ∧
+      (∀ r, r ≠ rd → s'.regs r = s.regs r) := by
+  subst hPC
+  cases hw : (w != 0) <;> simp only [hw, ite_true] at hCode ⊢
+  · exact ⟨s, .refl, rfl, rfl, by simp, fun _ _ => rfl⟩
+  · refine ⟨s.setReg rd (insertBits (s.regs rd) w shift) |>.nextPC, ?_, ?_, ?_, ?_, ?_⟩
+    · exact .single (ArmStep.movk rd w shift hCode.head)
+    · simp
+    · simp
+    · simp
+    · intro r hr; simp [ArmState.setReg, ArmState.nextPC, beq_iff_eq, hr]
+
+private theorem uint64_shl_zero (u : UInt64) : u <<< (0 : UInt64) = u := by
+  apply UInt64.eq_of_toBitVec_eq; simp
+
+-- UInt64 chunk reassembly identities (8 cases for which movk's are present).
+-- Each proved by converting to BitVec 64 and using the bv_decide decision procedure.
+
+private theorem bv_chain_111 (bits : UInt64) :
+    (((bits &&& (0xFFFF : UInt64) &&& ~~~((0xFFFF : UInt64) <<< (16 : UInt64))) ||| ((bits >>> 16 &&& (0xFFFF : UInt64)) <<< (16 : UInt64))) &&&
+     ~~~((0xFFFF : UInt64) <<< (32 : UInt64)) ||| ((bits >>> 32 &&& (0xFFFF : UInt64)) <<< (32 : UInt64))) &&&
+    ~~~((0xFFFF : UInt64) <<< (48 : UInt64)) ||| ((bits >>> 48 &&& (0xFFFF : UInt64)) <<< (48 : UInt64)) = bits := by
+  apply UInt64.eq_of_toBitVec_eq; bv_decide
+
+private theorem bv_chain_110 (bits : UInt64) (hw3 : bits >>> 48 &&& (0xFFFF : UInt64) = 0) :
+    ((bits &&& (0xFFFF : UInt64) &&& ~~~((0xFFFF : UInt64) <<< (16 : UInt64))) ||| ((bits >>> 16 &&& (0xFFFF : UInt64)) <<< (16 : UInt64))) &&&
+    ~~~((0xFFFF : UInt64) <<< (32 : UInt64)) ||| ((bits >>> 32 &&& (0xFFFF : UInt64)) <<< (32 : UInt64)) = bits := by
+  apply UInt64.eq_of_toBitVec_eq; bv_decide
+
+private theorem bv_chain_101 (bits : UInt64) (hw2 : bits >>> 32 &&& (0xFFFF : UInt64) = 0) :
+    ((bits &&& (0xFFFF : UInt64) &&& ~~~((0xFFFF : UInt64) <<< (16 : UInt64))) ||| ((bits >>> 16 &&& (0xFFFF : UInt64)) <<< (16 : UInt64))) &&&
+    ~~~((0xFFFF : UInt64) <<< (48 : UInt64)) ||| ((bits >>> 48 &&& (0xFFFF : UInt64)) <<< (48 : UInt64)) = bits := by
+  apply UInt64.eq_of_toBitVec_eq; bv_decide
+
+private theorem bv_chain_100 (bits : UInt64)
+    (hw2 : bits >>> 32 &&& (0xFFFF : UInt64) = 0) (hw3 : bits >>> 48 &&& (0xFFFF : UInt64) = 0) :
+    (bits &&& (0xFFFF : UInt64) &&& ~~~((0xFFFF : UInt64) <<< (16 : UInt64))) ||| ((bits >>> 16 &&& (0xFFFF : UInt64)) <<< (16 : UInt64)) = bits := by
+  apply UInt64.eq_of_toBitVec_eq; bv_decide
+
+private theorem bv_chain_011 (bits : UInt64) (hw1 : bits >>> 16 &&& (0xFFFF : UInt64) = 0) :
+    ((bits &&& (0xFFFF : UInt64) &&& ~~~((0xFFFF : UInt64) <<< (32 : UInt64))) ||| ((bits >>> 32 &&& (0xFFFF : UInt64)) <<< (32 : UInt64))) &&&
+    ~~~((0xFFFF : UInt64) <<< (48 : UInt64)) ||| ((bits >>> 48 &&& (0xFFFF : UInt64)) <<< (48 : UInt64)) = bits := by
+  apply UInt64.eq_of_toBitVec_eq; bv_decide
+
+private theorem bv_chain_010 (bits : UInt64)
+    (hw1 : bits >>> 16 &&& (0xFFFF : UInt64) = 0) (hw3 : bits >>> 48 &&& (0xFFFF : UInt64) = 0) :
+    (bits &&& (0xFFFF : UInt64) &&& ~~~((0xFFFF : UInt64) <<< (32 : UInt64))) ||| ((bits >>> 32 &&& (0xFFFF : UInt64)) <<< (32 : UInt64)) = bits := by
+  apply UInt64.eq_of_toBitVec_eq; bv_decide
+
+private theorem bv_chain_001 (bits : UInt64)
+    (hw1 : bits >>> 16 &&& (0xFFFF : UInt64) = 0) (hw2 : bits >>> 32 &&& (0xFFFF : UInt64) = 0) :
+    (bits &&& (0xFFFF : UInt64) &&& ~~~((0xFFFF : UInt64) <<< (48 : UInt64))) ||| ((bits >>> 48 &&& (0xFFFF : UInt64)) <<< (48 : UInt64)) = bits := by
+  apply UInt64.eq_of_toBitVec_eq; bv_decide
+
+private theorem bv_chain_000 (bits : UInt64)
+    (hw1 : bits >>> 16 &&& (0xFFFF : UInt64) = 0)
+    (hw2 : bits >>> 32 &&& (0xFFFF : UInt64) = 0)
+    (hw3 : bits >>> 48 &&& (0xFFFF : UInt64) = 0) :
+    bits &&& (0xFFFF : UInt64) = bits := by
+  apply UInt64.eq_of_toBitVec_eq; bv_decide
+
 theorem loadImm64_correct (prog : ArmProg) (rd : ArmReg) (n : Int)
     (s : ArmState) (startPC : Nat)
     (hCode : CodeAt prog startPC (formalLoadImm64 rd n))
-    (hPC : s.pc = startPC) :
+    (hPC : s.pc = startPC)
+    (hn64 : n.toNat < 2 ^ 64) :
     ∃ s', ArmSteps prog s s' ∧
       s'.regs rd = n ∧
       s'.stack = s.stack ∧
-      s'.pc = startPC + (formalLoadImm64 rd n).length := by
+      s'.pc = startPC + (formalLoadImm64 rd n).length ∧
+      (∀ r, r ≠ rd → s'.regs r = s.regs r) := by
   by_cases hsmall : n < 0 || (-65536 < n && n < 65536)
   · -- Small or negative: single `mov rd, #n`
     have hformal : formalLoadImm64 rd n = [.mov rd n] := by
       simp [formalLoadImm64, hsmall]
     rw [hformal] at hCode ⊢
-    refine ⟨s.setReg rd n |>.nextPC, ?_, ?_, ?_, ?_⟩
+    refine ⟨s.setReg rd n |>.nextPC, ?_, ?_, ?_, ?_, ?_⟩
     · exact .single (.mov rd n (by subst hPC; exact hCode.head))
     · simp
     · simp
     · simp; subst hPC; rfl
+    · intro r hr; simp [ArmState.setReg, ArmState.nextPC, beq_iff_eq, hr]
   · -- Large non-negative: movz/movk sequence
-    -- hsmall : ¬(n < 0 || small range) so n ≥ 0 and n ≥ 65536
-    -- The movz/movk sequence reconstructs n from its UInt64 16-bit chunks.
-    -- This requires proving the bitwise decomposition/reassembly identity.
-    sorry
+    subst hPC
+    have hf : (n < 0 || (-65536 < n && n < 65536)) = false := by
+      cases h : (n < 0 || (-65536 < n && n < 65536)) <;> simp_all
+    have hnn : 0 ≤ n := by
+      have h := (Bool.or_eq_false_iff.mp hf).1
+      exact Int.not_lt.mp (decide_eq_false_iff_not.mp h)
+    -- Rewrite formalLoadImm64 to the explicit movz/movk form
+    have hfml : formalLoadImm64 rd n =
+        [ArmInstr.movz rd (n.toNat.toUInt64 &&& (0xFFFF : UInt64)) 0] ++
+        (if (n.toNat.toUInt64 >>> 16 &&& (0xFFFF : UInt64) != 0) = true
+         then [ArmInstr.movk rd (n.toNat.toUInt64 >>> 16 &&& (0xFFFF : UInt64)) 16] else []) ++
+        (if (n.toNat.toUInt64 >>> 32 &&& (0xFFFF : UInt64) != 0) = true
+         then [ArmInstr.movk rd (n.toNat.toUInt64 >>> 32 &&& (0xFFFF : UInt64)) 32] else []) ++
+        (if (n.toNat.toUInt64 >>> 48 &&& (0xFFFF : UInt64) != 0) = true
+         then [ArmInstr.movk rd (n.toNat.toUInt64 >>> 48 &&& (0xFFFF : UInt64)) 48] else []) := by
+      unfold formalLoadImm64; simp [hf]
+    rw [hfml] at hCode
+    -- Step 1: Execute movz
+    have hMovz := hCode.append_left.append_left.append_left.head
+    let s1 := (s.setReg rd (Int.ofNat ((n.toNat.toUInt64 &&& (0xFFFF : UInt64)) <<<
+                (0 : Nat).toUInt64).toNat)).nextPC
+    have hStep1 : ArmStep prog s s1 :=
+      ArmStep.movz rd (n.toNat.toUInt64 &&& (0xFFFF : UInt64)) 0 hMovz
+    -- Step 2: optional movk at shift 16
+    have hCode_k1 : CodeAt prog s1.pc
+        (if (n.toNat.toUInt64 >>> 16 &&& (0xFFFF : UInt64) != 0) = true
+         then [ArmInstr.movk rd (n.toNat.toUInt64 >>> 16 &&& (0xFFFF : UInt64)) 16] else []) := by
+      show CodeAt prog (s.pc + 1) _; exact hCode.append_left.append_left.append_right
+    obtain ⟨s2, hSteps2, hs2_rd, hs2_stack, hs2_pc, hs2_other⟩ :=
+      optional_movk_step prog rd (n.toNat.toUInt64 >>> 16 &&& (0xFFFF : UInt64)) 16
+        s1 (s.pc + 1) rfl hCode_k1
+    -- Step 3: optional movk at shift 32
+    have hCode_k2 : CodeAt prog s2.pc
+        (if (n.toNat.toUInt64 >>> 32 &&& (0xFFFF : UInt64) != 0) = true
+         then [ArmInstr.movk rd (n.toNat.toUInt64 >>> 32 &&& (0xFFFF : UInt64)) 32] else []) := by
+      rw [hs2_pc]
+      have h := hCode.append_left.append_right
+      have heq : s.pc + ([ArmInstr.movz rd (n.toNat.toUInt64 &&& (0xFFFF : UInt64)) 0] ++
+          if (n.toNat.toUInt64 >>> 16 &&& (0xFFFF : UInt64) != 0) = true
+          then [ArmInstr.movk rd (n.toNat.toUInt64 >>> 16 &&& (0xFFFF : UInt64)) 16]
+          else []).length =
+          s.pc + 1 + (if (n.toNat.toUInt64 >>> 16 &&& (0xFFFF : UInt64) != 0) = true
+          then [ArmInstr.movk rd (n.toNat.toUInt64 >>> 16 &&& (0xFFFF : UInt64)) 16]
+          else []).length := by
+        simp [List.length_cons]; omega
+      exact heq ▸ h
+    obtain ⟨s3, hSteps3, hs3_rd, hs3_stack, hs3_pc, hs3_other⟩ :=
+      optional_movk_step prog rd (n.toNat.toUInt64 >>> 32 &&& (0xFFFF : UInt64)) 32 s2 _ rfl hCode_k2
+    -- Step 4: optional movk at shift 48
+    have hCode_k3 : CodeAt prog s3.pc
+        (if (n.toNat.toUInt64 >>> 48 &&& (0xFFFF : UInt64) != 0) = true
+         then [ArmInstr.movk rd (n.toNat.toUInt64 >>> 48 &&& (0xFFFF : UInt64)) 48] else []) := by
+      rw [hs3_pc, hs2_pc]
+      have h := hCode.append_right
+      have heq : s.pc + (([ArmInstr.movz rd (n.toNat.toUInt64 &&& (0xFFFF : UInt64)) 0] ++
+          if (n.toNat.toUInt64 >>> 16 &&& (0xFFFF : UInt64) != 0) = true
+          then [ArmInstr.movk rd (n.toNat.toUInt64 >>> 16 &&& (0xFFFF : UInt64)) 16]
+          else []) ++
+          if (n.toNat.toUInt64 >>> 32 &&& (0xFFFF : UInt64) != 0) = true
+          then [ArmInstr.movk rd (n.toNat.toUInt64 >>> 32 &&& (0xFFFF : UInt64)) 32]
+          else []).length =
+          s.pc + 1 + (if (n.toNat.toUInt64 >>> 16 &&& (0xFFFF : UInt64) != 0) = true
+          then [ArmInstr.movk rd (n.toNat.toUInt64 >>> 16 &&& (0xFFFF : UInt64)) 16]
+          else []).length +
+          (if (n.toNat.toUInt64 >>> 32 &&& (0xFFFF : UInt64) != 0) = true
+          then [ArmInstr.movk rd (n.toNat.toUInt64 >>> 32 &&& (0xFFFF : UInt64)) 32]
+          else []).length := by
+        simp [List.length_cons]; omega
+      exact heq ▸ h
+    obtain ⟨s4, hSteps4, hs4_rd, hs4_stack, hs4_pc, hs4_other⟩ :=
+      optional_movk_step prog rd (n.toNat.toUInt64 >>> 48 &&& (0xFFFF : UInt64)) 48 s3 _ rfl hCode_k3
+    -- hn64 is now a hypothesis of the theorem
+    -- Helper: any UInt64 equal to n.toNat.toUInt64 converts to n as Int
+    have hToInt : ∀ (u : UInt64), u = n.toNat.toUInt64 → Int.ofNat u.toNat = n := by
+      intro u hu; subst hu
+      simp only [UInt64.toNat, UInt64.ofNat, BitVec.toNat_ofNat]
+      rw [Nat.mod_eq_of_lt hn64]
+      exact_mod_cast Int.toNat_of_nonneg hnn
+    have h0 : (0 : Nat).toUInt64 = (0 : UInt64) := by native_decide
+    have h16 : (16 : Nat).toUInt64 = (16 : UInt64) := by native_decide
+    have h32 : (32 : Nat).toUInt64 = (32 : UInt64) := by native_decide
+    have h48 : (48 : Nat).toUInt64 = (48 : UInt64) := by native_decide
+    -- Build the witness
+    refine ⟨s4, ?_, ?_, ?_, ?_, ?_⟩
+    · -- ArmSteps chain
+      exact (ArmSteps.single hStep1).trans (hSteps2.trans (hSteps3.trans hSteps4))
+    · -- s4.regs rd = n
+      rw [hs4_rd, hs3_rd, hs2_rd]
+      simp only [s1, ArmState.setReg_regs_same, ArmState.nextPC_regs]
+      rw [h0, uint64_shl_zero]
+      -- 8-way case split on which movk instructions are present
+      cases hw1 : (n.toNat.toUInt64 >>> 16 &&& (0xFFFF : UInt64) != 0) <;>
+        cases hw2 : (n.toNat.toUInt64 >>> 32 &&& (0xFFFF : UInt64) != 0) <;>
+        cases hw3 : (n.toNat.toUInt64 >>> 48 &&& (0xFFFF : UInt64) != 0) <;> (
+        simp only [Bool.false_eq_true, ↓reduceIte]
+        -- Reduce insertBits to UInt64 operations (no-op if no insertBits present)
+        try (repeat rw [insertBits_uint64]; simp only [h16, h32, h48])
+        -- Convert (x != 0) = false to x = 0
+        simp [bne] at hw1 hw2 hw3
+        -- Apply the helper to convert goal from Int to UInt64 equality
+        apply hToInt
+        -- Use the appropriate bv_chain lemma
+        first
+        | exact bv_chain_000 n.toNat.toUInt64 hw1 hw2 hw3
+        | exact bv_chain_001 n.toNat.toUInt64 hw1 hw2
+        | exact bv_chain_010 n.toNat.toUInt64 hw1 hw3
+        | exact bv_chain_011 n.toNat.toUInt64 hw1
+        | exact bv_chain_100 n.toNat.toUInt64 hw2 hw3
+        | exact bv_chain_101 n.toNat.toUInt64 hw2
+        | exact bv_chain_110 n.toNat.toUInt64 hw3
+        | exact bv_chain_111 n.toNat.toUInt64)
+    · -- s4.stack = s.stack
+      rw [hs4_stack, hs3_stack, hs2_stack]; simp [s1]
+    · -- s4.pc = startPC + length
+      rw [hfml, hs4_pc, hs3_pc, hs2_pc]
+      simp [List.length_cons]; omega
+    · -- other registers preserved
+      intro r hr; rw [hs4_other r hr, hs3_other r hr, hs2_other r hr]
+      simp [s1, ArmState.setReg, ArmState.nextPC, beq_iff_eq, hr]
 
 /-- Helper: Flags.condHolds matches CmpOp.eval for signed integer comparison. -/
 theorem Flags.condHolds_correct (op : CmpOp) (a b : Int) :
@@ -682,9 +881,68 @@ theorem genBoolExpr_correct (prog : ArmProg) (vm : VarMap)
     obtain ⟨off, hOff⟩ := hVarMap v
     simp only [hOff] at hCode ⊢
     -- Code = [ldr x1 off] ++ loadImm64 x2 n ++ [cmp x1 x2, cset x0 cond]
-    -- Needs loadImm64_correct for x2 (which has sorry for large case),
-    -- then follows the same pattern as genBoolExpr_cmp_correct.
-    sorry
+    subst hPC
+    -- Extract code segments using append splitting
+    have hCodeLdrLoad := hCode.append_left  -- [ldr x1 off] ++ formalLoadImm64 x2 n
+    have hCodeCmpCset := hCode.append_right -- [cmp x1 x2, cset x0 cond]
+    have hCodeLdr := hCodeLdrLoad.append_left  -- [ldr x1 off]
+    have hCodeLoad := hCodeLdrLoad.append_right -- formalLoadImm64 x2 n
+    -- Step 1: ldr x1, [sp, #off]
+    have hLdr := hCodeLdr.head
+    let s1 := s.setReg .x1 (s.stack off) |>.nextPC
+    -- Step 2: loadImm64 loads n into x2
+    have hPC1 : s1.pc = s.pc + 1 := by simp [s1]
+    have hCodeLoad' : CodeAt prog (s.pc + 1) (formalLoadImm64 .x2 n) := by
+      have := hCodeLoad; simp at this; exact this
+    -- 64-bit bound: cmpLit literals must fit in 64 bits for codegen correctness.
+    -- This is a spec gap — the TAC type system doesn't enforce this.
+    have hn64 : n.toNat < 2 ^ 64 := by sorry
+    obtain ⟨s2, hSteps2, hx2, hStack2, hPC2, hRegs2⟩ :=
+      loadImm64_correct prog .x2 n s1 (s.pc + 1) hCodeLoad' hPC1 hn64
+    -- x1 is preserved through loadImm64 (which only writes to x2)
+    have hx1 : s2.regs .x1 = s.stack off := by
+      rw [hRegs2 .x1 (by decide)]; simp [s1]
+    -- Step 3: cmp x1 x2
+    have hCmpPC : s2.pc = s.pc + ([ArmInstr.ldr .x1 off] ++ formalLoadImm64 .x2 n).length := by
+      rw [hPC2]; simp; omega
+    have hCmp := hCodeCmpCset.head
+    rw [← hCmpPC] at hCmp
+    -- Step 4: cset x0 cond
+    have hCset := hCodeCmpCset.tail.head
+    rw [show s.pc + ([ArmInstr.ldr .x1 off] ++ formalLoadImm64 .x2 n).length + 1 =
+        s2.pc + 1 from by rw [hCmpPC]] at hCset
+    -- Extract int witness for v
+    have hIntV : ∃ m, σ v = .int m := by
+      cases hWTBE with | cmpLit hx => exact Value.int_of_typeOf_int (by rw [hTS]; exact hx)
+    obtain ⟨nV, hnV⟩ := hIntV
+    have hvalV := hRel v off hOff
+    -- Length fact independent of op
+    have hLen : ∀ (c : Cond), ([ArmInstr.ldr .x1 off] ++ formalLoadImm64 .x2 n ++
+        [ArmInstr.cmp .x1 .x2, ArmInstr.cset .x0 c]).length =
+        (formalLoadImm64 .x2 n).length + 3 := by
+      intro c; simp [List.length_append, List.length_cons, List.length_nil]
+    -- Case split on op to handle the match in cset and eval
+    -- Precompute facts
+    have hDiff : s2.regs .x1 - s2.regs .x2 = nV - n := by
+      rw [hx1, hx2, hvalV, hnV]; simp [Value.encode]
+    have hToInt : (σ v).toInt = nV := by rw [hnV]; rfl
+    have hCondEq : ∀ (c : Cond) (op : CmpOp),
+        c = (match op with | .eq => Cond.eq | .ne => .ne | .lt => .lt | .le => .le) →
+        (if (Flags.mk (s2.regs .x1 - s2.regs .x2)).condHolds c then (1:Int) else 0) =
+        (if op.eval nV n then 1 else 0) := by
+      intro c op hc; subst hc; simp [hDiff, Flags.condHolds_correct]
+    cases op <;> simp only [] at hCset ⊢ <;> (
+      refine ⟨_, (.step (.ldr .x1 off hLdr) (hSteps2.trans
+        (.step (.cmpRR .x1 .x2 hCmp) (.single (.cset .x0 _ hCset))))), ?_, ?_, ?_⟩)
+    -- 12 goals: 4 × (value, stack, pc)
+    -- value goals
+    all_goals try (simp only [ArmState.setReg_regs_same, ArmState.nextPC_regs,
+                              BoolExpr.eval, hToInt]; exact hCondEq _ _ rfl)
+    -- stack goals
+    all_goals try (intro w woff hv; show s2.stack woff = s.stack woff; rw [hStack2]; rfl)
+    -- pc goals
+    all_goals (simp only [ArmState.setReg, ArmState.nextPC,
+                           List.length_append, List.length_cons, List.length_nil]; omega)
 
 /-- StateRel is preserved when store is updated at `x ↦ w` and stack at `off ↦ w.encode`,
     provided `vm.lookup x = some off` and the VarMap is injective. -/
@@ -763,8 +1021,10 @@ theorem genInstr_correct (prog : ArmProg) (vm : VarMap) (pcMap : Nat → Nat)
       have hCodeR := hCodeInstr.append_right
       have hStr := hCodeR.head
       -- Use loadImm64_correct to load n into x0
-      obtain ⟨s1, hSteps1, hx0, hStack1, hPC1⟩ :=
-        loadImm64_correct prog .x0 n s (pcMap pc) hCodeL hPcRel
+      -- 64-bit bound: const literals must fit in 64 bits for codegen correctness.
+      have hn64 : n.toNat < 2 ^ 64 := by sorry
+      obtain ⟨s1, hSteps1, hx0, hStack1, hPC1, _⟩ :=
+        loadImm64_correct prog .x0 n s (pcMap pc) hCodeL hPcRel hn64
       -- Then str x0, [sp, #offD]
       rw [← hPC1] at hStr
       let s2 := s1.setStack offD (s1.regs .x0) |>.nextPC

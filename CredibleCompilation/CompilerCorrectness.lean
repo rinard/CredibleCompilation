@@ -191,8 +191,8 @@ def SBool.divSafe (σ : Store) : SBool → Prop
   | .bvar _ => True
   | .cmp _ a b => a.divSafe σ ∧ b.divSafe σ
   | .not e => e.divSafe σ
-  | .and a b => a.divSafe σ ∧ b.divSafe σ
-  | .or a b => a.divSafe σ ∧ b.divSafe σ
+  | .and a b => a.divSafe σ ∧ (a.eval σ = true → b.divSafe σ)
+  | .or a b => a.divSafe σ ∧ (a.eval σ = false → b.divSafe σ)
 
 def Stmt.divSafe (fuel : Nat) (σ : Store) : Stmt → Prop
   | .skip => True

@@ -1,6 +1,7 @@
 import CredibleCompilation.WhileLang
 import CredibleCompilation.ExecChecker
 import CredibleCompilation.ConstPropOpt
+import CredibleCompilation.CodeGen
 
 /-!
 # While Language — End-to-end Examples
@@ -182,3 +183,40 @@ def cert := ConstPropOpt.optimize tac
 #eval checkCertificateExec cert
 
 end WhileDiv
+
+-- ============================================================
+-- § 8. Boolean literal assignment
+-- ============================================================
+
+namespace WhileBoolLit
+
+/-- `x := 10; done := false; while (!done) { x := x - 1; if (x == 0) then done := true else skip }` -/
+def prog : Program where
+  decls := [("x", .int), ("done", .bool)]
+  body :=
+    assign "x" (lit 10) ;;
+    bassign "done" (.lit false) ;;
+    loop (.not (.bvar "done"))
+      (assign "x" (bin .sub (var "x") (lit 1)) ;;
+       ite (cmp .eq (var "x") (lit 0))
+         (bassign "done" (.lit true))
+         skip)
+
+#eval prog.typeCheck
+def tac : Prog := prog.compile
+
+#eval tac.code.toList
+#eval do let σ ← prog.interp 1000; return σ "x"
+
+def cert := ConstPropOpt.optimize tac
+#eval checkCertificateExec cert
+#eval checkCertificateVerboseExec cert
+
+-- Generate assembly and run natively
+#eval! generateAsm tac
+#eval! do
+  match generateAsm tac with
+  | some asm => let _ ← assembleAndRun asm "/tmp/boollit.s" "/tmp/boollit.s"; return ()
+  | none => IO.eprintln "codegen failed"
+
+end WhileBoolLit
