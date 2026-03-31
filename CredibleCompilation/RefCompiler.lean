@@ -690,8 +690,15 @@ theorem refCompileBool_correct (sb : SBool) (offset nextTmp : Nat) (σ σ_tac : 
     obtain ⟨σ', hexec, heval, hntmp, hprev⟩ := ih offset nextTmp σ_tac htf hintv hbsafe hagree hcodeE
     rw [hrc] at hexec heval; simp at hexec heval
     exact ⟨σ', hexec, by simp [BoolExpr.eval, SBool.eval, heval], hntmp, hprev⟩
-  | and a b iha ihb => sorry
-  | or a b iha ihb => sorry
+  | and a b iha ihb =>
+    -- Flattened and: codeA ++ [ifgoto not ba falseL] ++ codeB ++ [ifgoto not bb falseL, const 1, goto, const 0]
+    -- Correctness: if a=false, jump to falseL→tR=0; if a=true∧b=false, same;
+    -- if a=true∧b=true, fall through→tR=1. Result (.cmpLit .ne tR 0).eval matches a&&b.
+    sorry
+  | or a b iha ihb =>
+    -- Flattened or: codeA ++ [ifgoto ba trueL] ++ codeB ++ [ifgoto bb trueL, const 0, goto, const 1]
+    -- Symmetric to and: if a=true, jump→tR=1; else check b.
+    sorry
 
 -- ============================================================
 -- § 11. Statement compilation correctness
@@ -2753,8 +2760,10 @@ theorem compileBool_eq_refCompileBool (b : SBool) (o t : Nat) :
   | bvar _ => rfl
   | cmp _ a b => simp only [compileBool, refCompileBool, compileExpr_eq_refCompileExpr]
   | not _ ih => simp only [compileBool, refCompileBool, ih]
-  | and _ _ iha ihb => sorry
-  | or _ _ iha ihb => sorry
+  | and a b iha ihb =>
+    simp only [compileBool, refCompileBool, iha, ihb]
+  | or a b iha ihb =>
+    simp only [compileBool, refCompileBool, iha, ihb]
 
 theorem compileStmt_eq_refCompileStmt (s : Stmt) (o t : Nat) :
     compileStmt s o t = refCompileStmt s o t := by
