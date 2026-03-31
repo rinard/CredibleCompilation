@@ -323,9 +323,11 @@ def SimRel (vm : VarMap) (pcMap : Nat → Nat) (tac_cfg : Cfg) (arm : ArmState) 
 /-- Generate formal ARM64 instructions for loading an immediate.
     Mirrors `loadImm64` in CodeGen.lean. -/
 def formalLoadImm64 (rd : ArmReg) (n : Int) : List ArmInstr :=
-  if -65536 < n && n < 65536 then
+  if n < 0 || (-65536 < n && n < 65536) then
+    -- Small or negative: single mov (ARM assembler handles movn for negatives)
     [.mov rd n]
   else
+    -- Large positive: movz/movk sequence
     let bits : UInt64 := n.toNat.toUInt64
     let w0 := bits &&& 0xFFFF
     let w1 := (bits >>> 16) &&& 0xFFFF
@@ -502,8 +504,8 @@ theorem loadImm64_correct (prog : ArmProg) (rd : ArmReg) (n : Int)
       s'.regs rd = n ∧
       s'.stack = s.stack ∧
       s'.pc = startPC + (formalLoadImm64 rd n).length := by
-  by_cases hsmall : -65536 < n && n < 65536
-  · -- Small immediate: single `mov rd, #n`
+  by_cases hsmall : n < 0 || (-65536 < n && n < 65536)
+  · -- Small or negative: single `mov rd, #n`
     have hformal : formalLoadImm64 rd n = [.mov rd n] := by
       simp [formalLoadImm64, hsmall]
     rw [hformal] at hCode ⊢
@@ -512,10 +514,10 @@ theorem loadImm64_correct (prog : ArmProg) (rd : ArmReg) (n : Int)
     · simp
     · simp
     · simp; subst hPC; rfl
-  · -- Large immediate: movz/movk sequence
-    -- Requires proving that splitting n into 16-bit chunks via UInt64 bitwise ops
-    -- and reassembling via insertBits is the identity. This is a pure bitwise
-    -- arithmetic fact about UInt64 decomposition.
+  · -- Large non-negative: movz/movk sequence
+    -- hsmall : ¬(n < 0 || small range) so n ≥ 0 and n ≥ 65536
+    -- The movz/movk sequence reconstructs n from its UInt64 16-bit chunks.
+    -- This requires proving the bitwise decomposition/reassembly identity.
     sorry
 
 /-- Helper: Flags.condHolds matches CmpOp.eval for signed integer comparison. -/
@@ -593,7 +595,8 @@ theorem genBoolExpr_correct (prog : ArmProg) (vm : VarMap)
     (hCode : CodeAt prog startPC (formalGenBoolExpr vm be))
     (hPC : s.pc = startPC)
     (hVarMap : ∀ v, ∃ off, vm.lookup v = some off)
-    (hIntVars : ∀ v, (∃ off, vm.lookup v = some off) → ∃ n, σ v = .int n) :
+    (Γ : TyCtx) (hTS : TypedStore Γ σ)
+    (hWTBE : WellTypedBoolExpr Γ be) :
     ∃ s', ArmSteps prog s s' ∧
       s'.regs .x0 = (if be.eval σ then (1 : Int) else 0) ∧
       (∀ v off, vm.lookup v = some off → s'.stack off = s.stack off) ∧
@@ -608,8 +611,11 @@ theorem genBoolExpr_correct (prog : ArmProg) (vm : VarMap)
     | none => exact absurd hrv (by obtain ⟨_, h⟩ := hVarMap rv; simp [h])
     | some offR =>
     simp only [hlv, hrv] at hCode ⊢
-    have hIntL := hIntVars lv ⟨offL, hlv⟩
-    have hIntR := hIntVars rv ⟨offR, hrv⟩
+    -- Extract int witnesses from well-typedness
+    have hIntL : ∃ n, σ lv = .int n := by
+      cases hWTBE with | cmp hx hy => exact Value.int_of_typeOf_int (by rw [hTS]; exact hx)
+    have hIntR : ∃ n, σ rv = .int n := by
+      cases hWTBE with | cmp hx hy => exact Value.int_of_typeOf_int (by rw [hTS]; exact hy)
     exact genBoolExpr_cmp_correct prog vm op lv rv σ s startPC offL offR
       hlv hrv hRel hIntL hIntR hCode hPC
   | not e =>
@@ -617,8 +623,9 @@ theorem genBoolExpr_correct (prog : ArmProg) (vm : VarMap)
     -- Code = formalGenBoolExpr vm e ++ [eorImm x0 x0 1]
     have hCodeE := hCode.append_left
     have hCodeEor := hCode.append_right
+    have hWTe : WellTypedBoolExpr Γ e := by cases hWTBE with | not h => exact h
     obtain ⟨s1, hSteps1, hx0, hStack1, hPC1⟩ :=
-      genBoolExpr_correct prog vm e σ s startPC hRel hScratch hCodeE hPC hVarMap hIntVars
+      genBoolExpr_correct prog vm e σ s startPC hRel hScratch hCodeE hPC hVarMap Γ hTS hWTe
     have hEor := hCodeEor.head
     rw [← hPC1] at hEor
     -- After eor: x0 = 1 - x0 (flips 0↔1)
@@ -649,10 +656,14 @@ theorem genBoolExpr_correct (prog : ArmProg) (vm : VarMap)
     · -- value
       simp only [ArmState.setReg, ArmState.nextPC, ArmReg.beq_self, ite_true,
                   BoolExpr.eval, hRel v off hOff]
-      -- Under well-typedness, σ v is a bool. Need ∃ b, σ v = .bool b.
-      -- The hIntVars hypothesis is wrong for bvar (it assumes int).
-      -- This sorry requires a type-aware store hypothesis.
-      sorry
+      -- σ v is a bool by well-typedness
+      have hbool : ∃ b, σ v = .bool b := by
+        cases hWTBE with | bvar hty =>
+        have := hTS v; rw [hty] at this
+        exact Value.bool_of_typeOf_bool this
+      obtain ⟨bv, hbv⟩ := hbool
+      simp only [hbv, Value.encode, Value.toBool]
+      cases bv <;> simp [Int.toNat, Nat.land, Nat.bitwise]
     · intro w woff hv; simp [ArmState.setReg, ArmState.nextPC]
     · simp only [ArmState.setReg, ArmState.nextPC, List.length_cons, List.length_nil]; subst hPC; omega
   | cmpLit op v n =>
@@ -979,9 +990,15 @@ theorem genInstr_correct (prog : ArmProg) (vm : VarMap) (pcMap : Nat → Nat)
     rw [hformal] at hCodeInstr hPcNext
     have hCodeBE := hCodeInstr.append_left
     have hCodeStr := hCodeInstr.append_right
+    -- Extract WellTypedBoolExpr from instruction well-typedness
+    have hWTbe : WellTypedBoolExpr p.tyCtx be := by
+      have hwti := hWT pc hPC_bound
+      have heq := Prog.getElem?_eq_getElem hPC_bound
+      rw [hinstr] at heq; rw [← Option.some.inj heq] at hwti
+      cases hwti with | boolop _ hbe => exact hbe
     obtain ⟨s1, hSteps1, hx0, hStack1, hPC1⟩ :=
       genBoolExpr_correct prog vm be σ s (pcMap pc) hStateRel hScratch hCodeBE hPcRel hVarMap
-        (fun v hv => sorry)
+        p.tyCtx hTS hWTbe
     -- Then str x0, [sp, #offD]
     have hStr := hCodeStr.head; rw [← hPC1] at hStr
     refine ⟨s1.setStack offD (s1.regs .x0) |>.nextPC,
@@ -1006,15 +1023,15 @@ theorem genInstr_correct (prog : ArmProg) (vm : VarMap) (pcMap : Nat → Nat)
       rw [this, hPC1]; omega
   | iftrue hinstr hcond =>
     -- TAC: if cond goto l (taken) → ARM: genBoolExpr ++ [cbnz x0 (pcMap l)]
+    -- Use sorry for WellTypedBoolExpr extraction (inaccessible variable issue)
     have heq : instr = _ := Option.some.inj (hInstr.symm.trans hinstr)
     subst heq
-    -- After subst, instr is gone and hCodeInstr uses the concrete ifgoto
     simp only [formalGenInstr] at hCodeInstr
     have hCodeBE := hCodeInstr.append_left
     have hCodeCbnz := hCodeInstr.append_right
     obtain ⟨s1, hSteps1, hx0, hStack1, hPC1⟩ :=
       genBoolExpr_correct prog vm _ σ s (pcMap pc) hStateRel hScratch hCodeBE hPcRel hVarMap
-        (fun v hv => sorry)
+        p.tyCtx hTS sorry
     have hCbnz := hCodeCbnz.head; rw [← hPC1] at hCbnz
     have hx0_ne : s1.regs .x0 ≠ 0 := by rw [hx0, hcond]; simp
     exact ⟨{ s1 with pc := pcMap _ },
@@ -1029,7 +1046,7 @@ theorem genInstr_correct (prog : ArmProg) (vm : VarMap) (pcMap : Nat → Nat)
     have hCodeCbnz := hCodeInstr.append_right
     obtain ⟨s1, hSteps1, hx0, hStack1, hPC1⟩ :=
       genBoolExpr_correct prog vm _ σ s (pcMap pc) hStateRel hScratch hCodeBE hPcRel hVarMap
-        (fun v hv => sorry)
+        p.tyCtx hTS sorry
     have hCbnz := hCodeCbnz.head; rw [← hPC1] at hCbnz
     have hx0_eq : s1.regs .x0 = 0 := by rw [hx0]; simp [hcond]
     refine ⟨s1.nextPC,
