@@ -63,9 +63,9 @@ infixr:30 " ;; " => Stmt.seq
 /-- Evaluate an arithmetic expression. Returns Int; reads integer
     values from the store via `.toInt`. -/
 def SExpr.eval (σ : Store) : SExpr → Int
-  | .lit n      => n
+  | .lit n      => wrap64 n
   | .var x      => (σ x).toInt
-  | .bin op a b => op.eval (a.eval σ) (b.eval σ)
+  | .bin op a b => wrap64 (op.eval (a.eval σ) (b.eval σ))
 
 /-- Evaluate a boolean expression. -/
 def SBool.eval (σ : Store) : SBool → Bool
@@ -113,7 +113,7 @@ def compileExpr (e : SExpr) (offset nextTmp : Nat) : List TAC × Var × Nat :=
   match e with
   | .lit n =>
     let t := tmpName nextTmp
-    ([.const t (.int n)], t, nextTmp + 1)
+    ([.const t (.int (wrap64 n))], t, nextTmp + 1)
   | .var x => ([], x, nextTmp)
   | .bin op a b =>
     let (codeA, va, tmp1) := compileExpr a offset nextTmp
@@ -182,7 +182,7 @@ def compileStmt (s : Stmt) (offset nextTmp : Nat) : List TAC × Nat :=
   | .skip => ([], nextTmp)
   | .assign x e =>
     match e with
-    | .lit n => ([.const x (.int n)], nextTmp)
+    | .lit n => ([.const x (.int (wrap64 n))], nextTmp)
     | .var y => ([.copy x y], nextTmp)
     | .bin op a b =>
       let (codeA, va, tmp1) := compileExpr a offset nextTmp
@@ -686,7 +686,8 @@ theorem compileExpr_wt (prog : Program)
   induction e generalizing offset nextTmp with
   | lit n =>
     simp only [compileExpr]
-    exact ⟨allWTI_one (.const (by simp [Value.typeOf]; exact (tyCtx_tmp_wt prog hnt _).symm)),
+    exact ⟨allWTI_one (.const (by simp [Value.typeOf]; exact (tyCtx_tmp_wt prog hnt _).symm)
+           (by intro m hm; cases hm; exact wrap64_toNat_lt _)),
            tyCtx_tmp_wt prog hnt _⟩
   | var x =>
     simp only [compileExpr]
@@ -746,7 +747,7 @@ theorem compileBool_wt (prog : Program)
       (offset + (compileBool a offset nextTmp).1.length + 1)
       ((compileBool a offset nextTmp).2.2 + 1)
     simp only [compileBool]
-    refine ⟨?_, .cmpLit (tyCtx_tmp_wt prog hnt _)⟩
+    refine ⟨?_, .cmpLit (tyCtx_tmp_wt prog hnt _) (by decide)⟩
     let tmp1 := (compileBool a offset nextTmp).2.2
     have htR : (Value.int 1).typeOf = prog.tyCtx (tmpName tmp1) := by
       simp [Value.typeOf]; exact (tyCtx_tmp_wt prog hnt tmp1).symm
@@ -756,10 +757,11 @@ theorem compileBool_wt (prog : Program)
       (allWTI_one (.ifgoto (.not ha_ty))))
       hb_wt)
       (allWTI_cons' (.ifgoto (.not hb_ty))
-        (allWTI_cons' (.const htR)
+        (allWTI_cons' (.const htR (by intro m hm; cases hm; decide))
           (allWTI_cons' .goto
-            (allWTI_one (.const htR0)))))
+            (allWTI_one (.const htR0 (by intro m hm; cases hm; decide))))))
   | or a b iha ihb =>
+
     simp [Program.checkSBool, Bool.and_eq_true] at hchk
     obtain ⟨hca, hcb⟩ := hchk
     have ⟨ha_wt, ha_ty⟩ := iha hca offset nextTmp
@@ -767,7 +769,7 @@ theorem compileBool_wt (prog : Program)
       (offset + (compileBool a offset nextTmp).1.length + 1)
       ((compileBool a offset nextTmp).2.2 + 1)
     simp only [compileBool]
-    refine ⟨?_, .cmpLit (tyCtx_tmp_wt prog hnt _)⟩
+    refine ⟨?_, .cmpLit (tyCtx_tmp_wt prog hnt _) (by decide)⟩
     let tmp1 := (compileBool a offset nextTmp).2.2
     have htR : (Value.int 0).typeOf = prog.tyCtx (tmpName tmp1) := by
       simp [Value.typeOf]; exact (tyCtx_tmp_wt prog hnt tmp1).symm
@@ -777,9 +779,9 @@ theorem compileBool_wt (prog : Program)
       (allWTI_one (.ifgoto ha_ty)))
       hb_wt)
       (allWTI_cons' (.ifgoto hb_ty)
-        (allWTI_cons' (.const htR)
+        (allWTI_cons' (.const htR (by intro m hm; cases hm; decide))
           (allWTI_cons' .goto
-            (allWTI_one (.const htR1)))))
+            (allWTI_one (.const htR1 (by intro m hm; cases hm; decide))))))
 
 -- compileStmt produces well-typed instructions
 theorem compileStmt_wt (prog : Program)
@@ -796,7 +798,8 @@ theorem compileStmt_wt (prog : Program)
     cases e with
     | lit n =>
       simp only [compileStmt]
-      exact allWTI_one (.const (by simp [Value.typeOf]; exact hxty.symm))
+      exact allWTI_one (.const (by simp [Value.typeOf]; exact hxty.symm)
+        (by intro m hm; cases hm; exact wrap64_toNat_lt _))
     | var y =>
       simp only [compileStmt]
       simp [Program.checkSExpr] at he
@@ -876,10 +879,10 @@ theorem initCode_wt (prog : Program)
   cases ty with
   | int =>
     simp at hgen; subst hgen
-    exact .const (by simp [Value.typeOf]; exact hty.symm)
+    exact .const (by simp [Value.typeOf]; exact hty.symm) (by intro m hm; cases hm; decide)
   | bool =>
     simp at hgen; subst hgen
-    exact .const (by simp [Value.typeOf]; exact hty.symm)
+    exact .const (by simp [Value.typeOf]; exact hty.symm) (by intro m hm; cases hm)
 
 namespace Program  -- reopen namespace
 

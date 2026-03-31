@@ -164,7 +164,7 @@ def refCompileExpr (e : SExpr) (offset nextTmp : Nat) : List TAC × Var × Nat :
   match e with
   | .lit n =>
     let t := tmpName nextTmp
-    ([.const t (.int n)], t, nextTmp + 1)
+    ([.const t (.int (wrap64 n))], t, nextTmp + 1)
   | .var x => ([], x, nextTmp)
   | .bin op a b =>
     let (codeA, va, tmp1) := refCompileExpr a offset nextTmp
@@ -221,7 +221,7 @@ def refCompileStmt (s : Stmt) (offset nextTmp : Nat) : List TAC × Nat :=
   | .skip => ([], nextTmp)
   | .assign x e =>
     match e with
-    | .lit n => ([.const x (.int n)], nextTmp)
+    | .lit n => ([.const x (.int (wrap64 n))], nextTmp)
     | .var y => ([.copy x y], nextTmp)
     | .bin op a b =>
       let (codeA, va, tmp1) := refCompileExpr a offset nextTmp
@@ -310,7 +310,7 @@ theorem FragExec.single_binop {p : Prog} {pc : Nat} {σ : Store}
     {x : Var} {op : BinOp} {y z : Var} {a b : Int}
     (h : p[pc]? = some (.binop x op y z))
     (hy : σ y = .int a) (hz : σ z = .int b) (hsafe : op.safe a b) :
-    FragExec p pc σ (pc + 1) (σ[x ↦ .int (op.eval a b)]) :=
+    FragExec p pc σ (pc + 1) (σ[x ↦ .int (wrap64 (op.eval a b))]) :=
   Steps.single (Step.binop h hy hz hsafe)
 
 theorem FragExec.single_goto {p : Prog} {pc : Nat} {σ : Store} {l : Label}
@@ -538,7 +538,7 @@ theorem refCompileExpr_correct (e : SExpr) (offset nextTmp : Nat) (σ σ_tac : S
   induction e generalizing offset nextTmp σ_tac with
   | lit n =>
     simp only [refCompileExpr] at hcode ⊢
-    refine ⟨σ_tac[tmpName nextTmp ↦ .int n], FragExec.single_const hcode.head, ?_, ?_, ?_⟩
+    refine ⟨σ_tac[tmpName nextTmp ↦ .int (wrap64 n)], FragExec.single_const hcode.head, ?_, ?_, ?_⟩
     · exact Store.update_self _ _ _
     · intro w hw; exact Store.update_isTmp_ne (tmpName_isTmp nextTmp) hw
     · intro k hk; exact Store.update_tmpName_ne (by omega)
@@ -597,7 +597,7 @@ theorem refCompileExpr_correct (e : SExpr) (offset nextTmp : Nat) (σ σ_tac : S
     have hvb : σ_b vb = .int (b.eval σ) := hval_b
     have hbsafe : op.safe (a.eval σ) (b.eval σ) := SExpr.divSafe_bin_safe hsafe
     have hexec_binop := FragExec.single_binop hbinop hva hvb hbsafe
-    refine ⟨σ_b[tmpName tmp2 ↦ .int (op.eval (a.eval σ) (b.eval σ))],
+    refine ⟨σ_b[tmpName tmp2 ↦ .int (wrap64 (op.eval (a.eval σ) (b.eval σ)))],
             ?_, ?_, ?_, ?_⟩
     · -- FragExec
       have h123 := FragExec.trans' (FragExec.trans' hexec_a hexec_b) hexec_binop
@@ -1045,7 +1045,7 @@ theorem refCompileStmt_correct (s : Stmt) (fuel : Nat) (σ σ' : Store)
     cases e with
     | lit n =>
       dsimp only [refCompileStmt] at hcode ⊢
-      refine ⟨σ_tac[x ↦ .int n], FragExec.single_const hcode.head, ?_⟩
+      refine ⟨σ_tac[x ↦ .int (wrap64 n)], FragExec.single_const hcode.head, ?_⟩
       intro v hv
       simp only [SExpr.eval, Store.update]
       split
@@ -1109,7 +1109,7 @@ theorem refCompileStmt_correct (s : Stmt) (fuel : Nat) (σ σ' : Store)
       have hvb : σ_b vb = .int (b.eval σ) := hval_b
       have hbsafe : op.safe (a.eval σ) (b.eval σ) := SExpr.divSafe_bin_safe hsafe_e
       have hexec_binop := FragExec.single_binop hbinop hva hvb hbsafe
-      refine ⟨σ_b[x ↦ .int (op.eval (a.eval σ) (b.eval σ))], ?_, ?_⟩
+      refine ⟨σ_b[x ↦ .int (wrap64 (op.eval (a.eval σ) (b.eval σ)))], ?_, ?_⟩
       · have h123 := FragExec.trans' (FragExec.trans' hexec_a hexec_b) hexec_binop
         have hlen : offset + (codeA ++ codeB ++ [TAC.binop x op va vb]).length =
             offset + codeA.length + codeB.length + 1 := by

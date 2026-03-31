@@ -133,6 +133,56 @@ theorem TypedStore.update_typed {Γ : TyCtx} {σ : Store} {x : Var} {v : Value}
   · exact hts y
 
 -- ============================================================
+-- § 1b. 64-bit wrapping arithmetic
+-- ============================================================
+
+/-- The 64-bit modulus. -/
+def Word : Int := 2 ^ 64
+
+/-- Wrap an integer to the unsigned 64-bit range `[0, 2^64)`.
+    This models the behavior of ARM64 integer arithmetic. -/
+def wrap64 (n : Int) : Int := ((n % Word) + Word) % Word
+
+theorem wrap64_nonneg (n : Int) : 0 ≤ wrap64 n := Int.emod_nonneg _ (by decide)
+
+theorem wrap64_lt (n : Int) : wrap64 n < Word := by
+  unfold wrap64 Word
+  omega
+
+theorem wrap64_toNat_lt (n : Int) : (wrap64 n).toNat < 2 ^ 64 := by
+  have h1 := wrap64_nonneg n
+  have h2 := wrap64_lt n
+  exact Int.toNat_lt h1 |>.mpr h2
+
+theorem wrap64_idempotent (n : Int) : wrap64 (wrap64 n) = wrap64 n := by
+  unfold wrap64 Word; omega
+
+theorem wrap64_of_nonneg_lt {n : Int} (h1 : 0 ≤ n) (h2 : n < Word) :
+    wrap64 n = n := by
+  unfold wrap64 Word at *; omega
+
+theorem wrap64_add_left (a b : Int) : wrap64 (wrap64 a + b) = wrap64 (a + b) := by
+  unfold wrap64 Word; omega
+
+theorem wrap64_add_right (a b : Int) : wrap64 (a + wrap64 b) = wrap64 (a + b) := by
+  unfold wrap64 Word; omega
+
+theorem wrap64_sub_left (a b : Int) : wrap64 (wrap64 a - b) = wrap64 (a - b) := by
+  unfold wrap64 Word; omega
+
+theorem wrap64_sub_right (a b : Int) : wrap64 (a - wrap64 b) = wrap64 (a - b) := by
+  unfold wrap64 Word; omega
+
+
+/-- Wrap a `Value`, leaving booleans unchanged. -/
+def Value.wrap : Value → Value
+  | .int n  => .int (wrap64 n)
+  | .bool b => .bool b
+
+@[simp] theorem Value.wrap_typeOf (v : Value) : v.wrap.typeOf = v.typeOf := by
+  cases v <;> simp [Value.wrap, Value.typeOf]
+
+-- ============================================================
 -- § 2. Binary operators
 -- ============================================================
 
@@ -189,7 +239,7 @@ def Expr.eval (σ : Store) : Expr → Value
   | .lit n          => .int n
   | .blit b         => .bool b
   | .var x          => σ x
-  | .bin op a b     => .int (op.eval (a.eval σ).toInt (b.eval σ).toInt)
+  | .bin op a b     => .int (wrap64 (op.eval (a.eval σ).toInt (b.eval σ).toInt))
   | .tobool e       => .bool (e.eval σ).toBool
   | .cmpE op a b    => .bool (op.eval (a.eval σ).toInt (b.eval σ).toInt)
   | .cmpLitE op a n => .bool (op.eval (a.eval σ).toInt n)
@@ -322,12 +372,16 @@ inductive WellTypedBoolExpr (Γ : TyCtx) : BoolExpr → Prop where
   | lit    : WellTypedBoolExpr Γ (.lit b)
   | bvar   : Γ x = .bool → WellTypedBoolExpr Γ (.bvar x)
   | cmp    : Γ x = .int → Γ y = .int → WellTypedBoolExpr Γ (.cmp op x y)
-  | cmpLit : Γ x = .int → WellTypedBoolExpr Γ (.cmpLit op x n)
+  | cmpLit : Γ x = .int → n.toNat < 2 ^ 64 → WellTypedBoolExpr Γ (.cmpLit op x n)
   | not    : WellTypedBoolExpr Γ b → WellTypedBoolExpr Γ (.not b)
+
+theorem WellTypedBoolExpr.cmpLit_range {Γ : TyCtx} {op x n}
+    (h : WellTypedBoolExpr Γ (.cmpLit op x n)) : n.toNat < 2 ^ 64 := by
+  cases h with | cmpLit _ h => exact h
 
 /-- Well-typedness for a single TAC instruction. -/
 inductive WellTypedInstr (Γ : TyCtx) : TAC → Prop where
-  | const  : v.typeOf = Γ x → WellTypedInstr Γ (.const x v)
+  | const  : v.typeOf = Γ x → (∀ n, v = .int n → n.toNat < 2 ^ 64) → WellTypedInstr Γ (.const x v)
   | copy   : Γ x = Γ y → WellTypedInstr Γ (.copy x y)
   | binop  : Γ x = .int → Γ y = .int → Γ z = .int →
       WellTypedInstr Γ (.binop x op y z)
@@ -381,7 +435,7 @@ inductive Step (p : Prog) : Cfg → Cfg → Prop where
 
   | binop  {a b : Int} : p[pc]? = some (.binop x op y z) →
       σ y = .int a → σ z = .int b → op.safe a b →
-      Step p (.run pc σ) (.run (pc + 1) (σ[x ↦ .int (op.eval a b)]))
+      Step p (.run pc σ) (.run (pc + 1) (σ[x ↦ .int (wrap64 (op.eval a b))]))
 
   | boolop : p[pc]? = some (.boolop x be) →
       Step p (.run pc σ) (.run (pc + 1) (σ[x ↦ .bool (be.eval σ)]))
@@ -685,11 +739,13 @@ def checkWellTypedBoolExpr (Γ : TyCtx) : BoolExpr → Bool
   | .lit _        => true
   | .bvar x       => decide (Γ x = .bool)
   | .cmp _ x y    => decide (Γ x = .int) && decide (Γ y = .int)
-  | .cmpLit _ x _ => decide (Γ x = .int)
+  | .cmpLit _ x n => decide (Γ x = .int) && decide (n.toNat < (2 ^ 64 : Nat))
   | .not e        => checkWellTypedBoolExpr Γ e
 
 def checkWellTypedInstr (Γ : TyCtx) : TAC → Bool
-  | .const x v     => decide (v.typeOf = Γ x)
+  | .const x v     => decide (v.typeOf = Γ x) && match v with
+    | .int n => decide (n.toNat < (2 ^ 64 : Nat))
+    | .bool _ => true
   | .copy x y      => decide (Γ x = Γ y)
   | .binop x _ y z => decide (Γ x = .int) && decide (Γ y = .int) && decide (Γ z = .int)
   | .boolop x be   => decide (Γ x = .bool) && checkWellTypedBoolExpr Γ be
@@ -708,8 +764,8 @@ theorem checkWellTypedBoolExpr_sound {Γ : TyCtx} {b : BoolExpr}
     simp [checkWellTypedBoolExpr, Bool.and_eq_true, decide_eq_true_eq] at h
     exact .cmp h.1 h.2
   | cmpLit op x n =>
-    simp [checkWellTypedBoolExpr, decide_eq_true_eq] at h
-    exact .cmpLit h
+    simp only [checkWellTypedBoolExpr, Bool.and_eq_true, decide_eq_true_eq] at h
+    exact .cmpLit h.1 h.2
   | not e ih =>
     simp [checkWellTypedBoolExpr] at h; exact .not (ih h)
 
@@ -717,7 +773,13 @@ theorem checkWellTypedInstr_sound {Γ : TyCtx} {instr : TAC}
     (h : checkWellTypedInstr Γ instr = true) : WellTypedInstr Γ instr := by
   cases instr with
   | const x v =>
-    simp [checkWellTypedInstr, decide_eq_true_eq] at h; exact .const h
+    cases v with
+    | int n =>
+      simp only [checkWellTypedInstr, Bool.and_eq_true, decide_eq_true_eq] at h
+      exact .const h.1 (fun m hm => by cases hm; exact h.2)
+    | bool b =>
+      simp only [checkWellTypedInstr, Bool.and_eq_true, decide_eq_true_eq] at h
+      exact .const h.1 (fun _ hm => by cases hm)
   | copy x y =>
     simp [checkWellTypedInstr, decide_eq_true_eq] at h; exact .copy h
   | binop x op y z =>
@@ -765,7 +827,7 @@ theorem type_preservation {Γ : TyCtx} {p : Prog} {pc pc' : Nat} {σ σ' : Store
     have := instr_eq_of_lookup hpc h
     rw [this] at hwti
     match hwti with
-    | .const hv => exact TypedStore.update_typed hts hv
+    | .const hv _ => exact TypedStore.update_typed hts hv
   | copy h =>
     have := instr_eq_of_lookup hpc h
     rw [this] at hwti

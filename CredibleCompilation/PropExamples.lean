@@ -245,10 +245,10 @@ theorem error_pres_ok : checkErrorPreservationProp cert := by
 theorem valid : PCertificateValid cert :=
   { well_typed_orig := by
       intro i hi; simp [cert, origProg] at hi ⊢
-      change i < 4 at hi; interval_cases i <;> constructor <;> rfl
+      change i < 4 at hi; interval_cases i <;> constructor <;> first | rfl | (intro _ h; cases h; decide)
     well_typed_trans := by
       intro i hi; simp [cert, transProg] at hi ⊢
-      change i < 4 at hi; interval_cases i <;> constructor <;> rfl
+      change i < 4 at hi; interval_cases i <;> constructor <;> first | rfl | (intro _ h; cases h; decide)
     same_tyCtx    := rfl
     same_observable := rfl
     start_corr    := start_ok
@@ -410,7 +410,7 @@ theorem transitions_ok : checkAllTransitionsProp cert.tyCtx cert := by
           -- Now hinv_o : σ_o_ "a" = σ_o_ "b", hb : σ_o_ "b" = Value.int av,
           --     hd : σ_o_ "d" = Value.int dv
           have ha : σ_o_ "a" = Value.int av := by rw [hinv_o]
-          exact ⟨σ_o_["c" ↦ Value.int (BinOp.add.eval av dv)],
+          exact ⟨σ_o_["c" ↦ Value.int (wrap64 (BinOp.add.eval av dv))],
                   Steps.single (Step.binop (by native_decide) ha hd hsafe), rfl⟩
         | const h' => simp_all
         | copy h' => simp_all
@@ -515,7 +515,7 @@ def inv : PInvariantMap := fun pc σ =>
   if pc ≥ 1 then
     (∃ xv : Int, σ "x" = .int xv) ∧
     (∃ yv : Int, σ "y" = .int yv) ∧
-    σ "a" = .int ((σ "x").toInt + (σ "y").toInt)
+    σ "a" = .int (wrap64 ((σ "x").toInt + (σ "y").toInt))
   else True
 
 def cert : PCertificate :=
@@ -622,7 +622,7 @@ theorem transitions_ok : checkAllTransitionsProp cert.tyCtx cert := by
         -- After simp_all: hx' : σ_o_ "x" = .int ?, hy' : σ_o_ "y" = .int ?
         -- The goal: ∃ σ_o', orig ⊩ run 0 σ_o_ ⟶* run 1 σ_o' ∧ idStoreRel σ_o' σ_t'_
         have co0 : cert.orig[0]? = some (.binop "a" .add "x" "y") := by native_decide
-        exact ⟨σ_o_["a" ↦ Value.int (BinOp.add.eval _ _)],
+        exact ⟨σ_o_["a" ↦ Value.int (wrap64 (BinOp.add.eval _ _))],
                Steps.single (Step.binop co0 hx' hy' hsafe'), rfl⟩
       | const h' => simp_all | copy h' => simp_all | boolop h' => simp_all
       | goto h' => simp_all | iftrue h' _ => simp_all | iffall h' _ => simp_all
@@ -645,7 +645,7 @@ theorem transitions_ok : checkAllTransitionsProp cert.tyCtx cert := by
         -- After simp_all: ha : σ_o_ "a" = .int (xv+yv), σ_t'_ eliminated
         have co1 : cert.orig[1]? = some (.binop "b" .add "x" "y") := by native_decide
         -- Construct orig step: binop "b" add "x" "y"  (need σ "x", σ "y" = .int)
-        refine ⟨σ_o_["b" ↦ Value.int (BinOp.add.eval xv yv)],
+        refine ⟨σ_o_["b" ↦ Value.int (wrap64 (BinOp.add.eval xv yv))],
                 Steps.single (Step.binop co1 hxv hyv (by simp [BinOp.safe])), ?_⟩
         simp [idStoreRel, BinOp.eval]
       | binop h' _ _ _ => simp_all | const h' => simp_all | boolop h' => simp_all
@@ -662,7 +662,7 @@ theorem transitions_ok : checkAllTransitionsProp cert.tyCtx cert := by
       | binop h' ha' hb' hsafe' =>
         simp_all
         have co2 : cert.orig[2]? = some (.binop "c" .add "a" "b") := by native_decide
-        exact ⟨σ_o_["c" ↦ Value.int (BinOp.add.eval _ _)],
+        exact ⟨σ_o_["c" ↦ Value.int (wrap64 (BinOp.add.eval _ _))],
                Steps.single (Step.binop co2 ha' hb' hsafe'), rfl⟩
       | const h' => simp_all | copy h' => simp_all | boolop h' => simp_all
       | goto h' => simp_all | iftrue h' _ => simp_all | iffall h' _ => simp_all
@@ -712,10 +712,10 @@ theorem error_pres_ok : checkErrorPreservationProp cert := by
 theorem valid : PCertificateValid cert :=
   { well_typed_orig := by
       intro i hi; simp [cert, origProg] at hi ⊢
-      change i < 4 at hi; interval_cases i <;> constructor <;> rfl
+      change i < 4 at hi; interval_cases i <;> constructor <;> first | rfl | (intro _ h; cases h; decide)
     well_typed_trans := by
       intro i hi; simp [cert, transProg] at hi ⊢
-      change i < 4 at hi; interval_cases i <;> constructor <;> rfl
+      change i < 4 at hi; interval_cases i <;> constructor <;> first | rfl | (intro _ h; cases h; decide)
     same_tyCtx    := rfl
     same_observable := rfl
     start_corr    := start_ok

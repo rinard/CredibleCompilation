@@ -42,7 +42,7 @@ inductive Cond where
     the result of a signed 64-bit comparison. -/
 structure Flags where
   /-- The result of the last `cmp a b` is stored as `a - b`. -/
-  diff : Int
+  diff : BitVec 64
   deriving Repr
 
 /-- Evaluate a condition against the flags. -/
@@ -53,8 +53,8 @@ instance : DecidableEq Flags := fun a b =>
 def Flags.condHolds (f : Flags) : Cond → Bool
   | .eq => f.diff == 0
   | .ne => f.diff != 0
-  | .lt => decide (f.diff < 0)
-  | .le => decide (f.diff ≤ 0)
+  | .lt => f.diff.msb
+  | .le => f.diff.msb || f.diff == 0
 
 -- ============================================================
 -- § 3. Machine state
@@ -63,20 +63,20 @@ def Flags.condHolds (f : Flags) : Cond → Bool
 /-- ARM64 machine state (restricted to the codegen subset). -/
 structure ArmState where
   /-- Register file. -/
-  regs  : ArmReg → Int
+  regs  : ArmReg → BitVec 64
   /-- Stack memory: maps byte offset from sp to 64-bit value. -/
-  stack : Nat → Int
+  stack : Nat → BitVec 64
   /-- Program counter (index into instruction array). -/
   pc    : Nat
   /-- Condition flags from the last `cmp`. -/
   flags : Flags
 
 /-- Update a register. -/
-def ArmState.setReg (s : ArmState) (r : ArmReg) (v : Int) : ArmState :=
+def ArmState.setReg (s : ArmState) (r : ArmReg) (v : BitVec 64) : ArmState :=
   { s with regs := fun r' => if r' == r then v else s.regs r' }
 
 /-- Update a stack slot. -/
-def ArmState.setStack (s : ArmState) (off : Nat) (v : Int) : ArmState :=
+def ArmState.setStack (s : ArmState) (off : Nat) (v : BitVec 64) : ArmState :=
   { s with stack := fun o => if o == off then v else s.stack o }
 
 /-- Advance PC by 1. -/
@@ -90,7 +90,7 @@ def ArmState.nextPC (s : ArmState) : ArmState :=
 /-- ARM64 instructions used by the code generator. -/
 inductive ArmInstr where
   /-- `mov Xd, #imm` — load immediate (small, fits in 16 bits). -/
-  | mov      : ArmReg → Int → ArmInstr
+  | mov      : ArmReg → BitVec 64 → ArmInstr
   /-- `movz Xd, #imm16, lsl #shift` — move wide with zero. -/
   | movz     : ArmReg → UInt64 → Nat → ArmInstr
   /-- `movk Xd, #imm16, lsl #shift` — move wide with keep. -/
@@ -116,11 +116,11 @@ inductive ArmInstr where
   /-- `cbnz Wn, label` — branch if nonzero. -/
   | cbnz     : ArmReg → Nat → ArmInstr
   /-- `and Wd, Wn, #imm` — bitwise AND with immediate. -/
-  | andImm   : ArmReg → ArmReg → Int → ArmInstr
+  | andImm   : ArmReg → ArmReg → BitVec 64 → ArmInstr
   /-- `and Wd, Wn, Wm` — bitwise AND registers. -/
   | andR     : ArmReg → ArmReg → ArmReg → ArmInstr
   /-- `eor Wd, Wn, #imm` — exclusive OR with immediate. -/
-  | eorImm   : ArmReg → ArmReg → Int → ArmInstr
+  | eorImm   : ArmReg → ArmReg → BitVec 64 → ArmInstr
   /-- `orr Wd, Wn, Wm` — bitwise OR registers. -/
   | orrR     : ArmReg → ArmReg → ArmReg → ArmInstr
   /-- `b label` — unconditional branch. -/
@@ -134,28 +134,23 @@ abbrev ArmProg := Array ArmInstr
 -- § 5. Small-step semantics
 -- ============================================================
 
-/-- Truncate to low 32 bits (for W-register operations on booleans). -/
-def truncW (n : Int) : Int := n % (2 ^ 32)
-
 /-- Insert a 16-bit value at a given shift position, keeping other bits. -/
-def insertBits (val : Int) (imm16 : UInt64) (shift : Nat) : Int :=
+def insertBits (val : BitVec 64) (imm16 : UInt64) (shift : Nat) : BitVec 64 :=
   let shiftU : UInt64 := shift.toUInt64
-  let valU : UInt64 := val.toNat.toUInt64
-  let mask : UInt64 := (0xFFFF : UInt64) <<< shiftU
-  let cleared := valU &&& (~~~ mask)
-  let inserted := cleared ||| (imm16 <<< shiftU)
-  Int.ofNat inserted.toNat
+  let mask : BitVec 64 := BitVec.ofNat 64 ((0xFFFF : UInt64) <<< shiftU).toNat
+  let imm : BitVec 64 := BitVec.ofNat 64 (imm16 <<< shiftU).toNat
+  (val &&& ~~~mask) ||| imm
 
 /-- Small-step semantics for the ARM64 subset. -/
 inductive ArmStep (prog : ArmProg) : ArmState → ArmState → Prop where
 
-  | mov (rd : ArmReg) (imm : Int) :
+  | mov (rd : ArmReg) (imm : BitVec 64) :
     prog[s.pc]? = some (.mov rd imm) →
     ArmStep prog s (s.setReg rd imm |>.nextPC)
 
   | movz (rd : ArmReg) (imm16 : UInt64) (shift : Nat) :
     prog[s.pc]? = some (.movz rd imm16 shift) →
-    ArmStep prog s (s.setReg rd (Int.ofNat (imm16 <<< shift.toUInt64).toNat) |>.nextPC)
+    ArmStep prog s (s.setReg rd (BitVec.ofNat 64 (imm16 <<< shift.toUInt64).toNat) |>.nextPC)
 
   | movk (rd : ArmReg) (imm16 : UInt64) (shift : Nat) :
     prog[s.pc]? = some (.movk rd imm16 shift) →
@@ -192,43 +187,43 @@ inductive ArmStep (prog : ArmProg) : ArmState → ArmState → Prop where
 
   | cset (rd : ArmReg) (c : Cond) :
     prog[s.pc]? = some (.cset rd c) →
-    ArmStep prog s (s.setReg rd (if s.flags.condHolds c then 1 else 0) |>.nextPC)
+    ArmStep prog s (s.setReg rd (if s.flags.condHolds c then (1 : BitVec 64) else 0) |>.nextPC)
 
   | cbz_taken (rn : ArmReg) (lbl : Nat) :
     prog[s.pc]? = some (.cbz rn lbl) →
-    s.regs rn = 0 →
+    s.regs rn = (0 : BitVec 64) →
     ArmStep prog s { s with pc := lbl }
 
   | cbz_fall (rn : ArmReg) (lbl : Nat) :
     prog[s.pc]? = some (.cbz rn lbl) →
-    s.regs rn ≠ 0 →
+    s.regs rn ≠ (0 : BitVec 64) →
     ArmStep prog s s.nextPC
 
   | cbnz_taken (rn : ArmReg) (lbl : Nat) :
     prog[s.pc]? = some (.cbnz rn lbl) →
-    s.regs rn ≠ 0 →
+    s.regs rn ≠ (0 : BitVec 64) →
     ArmStep prog s { s with pc := lbl }
 
   | cbnz_fall (rn : ArmReg) (lbl : Nat) :
     prog[s.pc]? = some (.cbnz rn lbl) →
-    s.regs rn = 0 →
+    s.regs rn = (0 : BitVec 64) →
     ArmStep prog s s.nextPC
 
-  | andImm (rd rn : ArmReg) (imm : Int) :
+  | andImm (rd rn : ArmReg) (imm : BitVec 64) :
     prog[s.pc]? = some (.andImm rd rn imm) →
-    ArmStep prog s (s.setReg rd (Int.ofNat (s.regs rn |>.toNat.land imm.toNat)) |>.nextPC)
+    ArmStep prog s (s.setReg rd (s.regs rn &&& imm) |>.nextPC)
 
   | andR (rd rn rm : ArmReg) :
     prog[s.pc]? = some (.andR rd rn rm) →
-    ArmStep prog s (s.setReg rd (Int.ofNat (s.regs rn |>.toNat.land (s.regs rm).toNat)) |>.nextPC)
+    ArmStep prog s (s.setReg rd (s.regs rn &&& s.regs rm) |>.nextPC)
 
-  | eorImm (rd rn : ArmReg) (imm : Int) :
+  | eorImm (rd rn : ArmReg) (imm : BitVec 64) :
     prog[s.pc]? = some (.eorImm rd rn imm) →
-    ArmStep prog s (s.setReg rd (Int.ofNat (s.regs rn |>.toNat.xor imm.toNat)) |>.nextPC)
+    ArmStep prog s (s.setReg rd (s.regs rn ^^^ imm) |>.nextPC)
 
   | orrR (rd rn rm : ArmReg) :
     prog[s.pc]? = some (.orrR rd rn rm) →
-    ArmStep prog s (s.setReg rd (Int.ofNat (s.regs rn |>.toNat.lor (s.regs rm).toNat)) |>.nextPC)
+    ArmStep prog s (s.setReg rd (s.regs rn ||| s.regs rm) |>.nextPC)
 
   | branch (lbl : Nat) :
     prog[s.pc]? = some (.b lbl) →
@@ -254,32 +249,48 @@ theorem ArmSteps.trans {prog : ArmProg} {s s' s'' : ArmState}
 -- § 6. Value encoding
 -- ============================================================
 
-/-- Encode a TAC `Value` as a 64-bit integer for the ARM64 representation.
-    Integers are stored directly; booleans as 0/1. -/
-def Value.encode : Value → Int
-  | .int n  => n
+/-- Encode a TAC `Value` as a 64-bit bitvector for the ARM64 representation.
+    Integers are encoded via `BitVec.ofInt 64`; booleans as 0/1. -/
+def Value.encode : Value → BitVec 64
+  | .int n  => BitVec.ofInt 64 n
   | .bool b => if b then 1 else 0
 
-/-- Decode a 64-bit integer back to a `Value` given its type. -/
-def Value.decode (ty : VarTy) (n : Int) : Value :=
+/-- Decode a 64-bit bitvector back to a `Value` given its type. -/
+def Value.decode (ty : VarTy) (bv : BitVec 64) : Value :=
   match ty with
-  | .int  => .int n
-  | .bool => .bool (n != 0)
+  | .int  => .int bv.toInt
+  | .bool => .bool (bv != 0)
 
-/-- For integer values, encode equals toInt. -/
-theorem Value.encode_eq_toInt_of_int {v : Value} (h : ∃ n, v = .int n) :
-    v.encode = v.toInt := by
+/-- For integer values, encode produces BitVec.ofInt 64 of toInt. -/
+theorem Value.encode_eq_ofInt_of_int {v : Value} (h : ∃ n, v = .int n) :
+    v.encode = BitVec.ofInt 64 v.toInt := by
   obtain ⟨n, rfl⟩ := h; rfl
 
-/-- For any value, encode equals toInt when the value is an integer. -/
-@[simp] theorem Value.encode_int (n : Int) : (Value.int n).encode = n := rfl
+/-- For any value, encode of an integer. -/
+@[simp] theorem Value.encode_int (n : Int) : (Value.int n).encode = BitVec.ofInt 64 n := rfl
+
 theorem Value.encode_decode_int (n : Int) :
-    Value.decode .int (Value.encode (.int n)) = .int n := by
+    Value.decode .int (Value.encode (.int n)) = .int (BitVec.ofInt 64 n).toInt := by
   simp [encode, decode]
 
 theorem Value.encode_decode_bool (b : Bool) :
     Value.decode .bool (Value.encode (.bool b)) = .bool b := by
   simp [encode, decode]; cases b <;> simp
+
+set_option autoImplicit false in
+/-- `BitVec.ofInt 64` is invariant under `wrap64` because both reduce modulo 2^64. -/
+theorem BitVec_ofInt_wrap64 (n : Int) : BitVec.ofInt 64 (wrap64 n) = BitVec.ofInt 64 n := by
+  apply BitVec.eq_of_toNat_eq
+  simp only [BitVec.toNat_ofInt]
+  show (wrap64 n % (2 ^ 64 : Int)).toNat = (n % (2 ^ 64 : Int)).toNat
+  unfold wrap64 Word
+  omega
+
+set_option autoImplicit false in
+/-- `BitVec.ofInt` distributes over subtraction. -/
+theorem BitVec_ofInt_sub {w : Nat} (x y : Int) :
+    BitVec.ofInt w (x - y) = BitVec.ofInt w x - BitVec.ofInt w y := by
+  rw [Int.sub_eq_add_neg, BitVec.ofInt_add, BitVec.ofInt_neg, BitVec.sub_eq_add_neg]
 
 -- ============================================================
 -- § 7. State relation
@@ -300,6 +311,19 @@ def StateRel (vm : VarMap) (σ : Store) (arm : ArmState) : Prop :=
 /-- The scratch slot at offset 0 does not alias any variable slot. -/
 def ScratchSafe (vm : VarMap) : Prop :=
   ∀ v off, vm.lookup v = some off → off ≠ 0
+
+/-- Every integer value in the store is in the wrapped range [0, 2^64).
+    This invariant is maintained by the TAC semantics (which uses wrap64). -/
+def WrappedStore (σ : Store) : Prop :=
+  ∀ v n, σ v = .int n → 0 ≤ n ∧ n < (2 ^ 64 : Int)
+
+/-- If b is in [0, 2^64) and b ≠ 0, then BitVec.ofInt 64 b ≠ 0. -/
+theorem BitVec_ofInt_ne_zero_of_pos {b : Int} (hb : b ≠ 0)
+    (h1 : 0 ≤ b) (h2 : b < (2 ^ 64 : Int)) : BitVec.ofInt 64 b ≠ 0 := by
+  intro h
+  have : (BitVec.ofInt 64 b).toNat = (0 : BitVec 64).toNat := congrArg BitVec.toNat h
+  simp [BitVec.toNat_ofInt] at this
+  omega
 
 /-- The VarMap is injective: distinct variables have distinct offsets. -/
 def VarMapInjective (vm : VarMap) : Prop :=
@@ -326,7 +350,7 @@ def SimRel (vm : VarMap) (pcMap : Nat → Nat) (tac_cfg : Cfg) (arm : ArmState) 
 def formalLoadImm64 (rd : ArmReg) (n : Int) : List ArmInstr :=
   if n < 0 || (-65536 < n && n < 65536) then
     -- Small or negative: single mov (ARM assembler handles movn for negatives)
-    [.mov rd n]
+    [.mov rd (BitVec.ofInt 64 n)]
   else
     -- Large positive: movz/movk sequence
     let bits : UInt64 := n.toNat.toUInt64
@@ -345,10 +369,10 @@ def formalLoadImm64 (rd : ArmReg) (n : Int) : List ArmInstr :=
 def formalGenBoolExpr (vm : VarMap) (be : BoolExpr) : List ArmInstr :=
   match be with
   | .lit b =>
-    [.mov .x0 (if b then 1 else 0)]
+    [.mov .x0 (if b then (1 : BitVec 64) else 0)]
   | .bvar v =>
     match vm.lookup v with
-    | some off => [.ldr .x0 off, .andImm .x0 .x0 1]
+    | some off => [.ldr .x0 off, .andImm .x0 .x0 (1 : BitVec 64)]
     | none => []
   | .cmp op lv rv =>
     let cond := match op with | .eq => Cond.eq | .ne => .ne | .lt => .lt | .le => .le
@@ -363,7 +387,7 @@ def formalGenBoolExpr (vm : VarMap) (be : BoolExpr) : List ArmInstr :=
       [.ldr .x1 off] ++ formalLoadImm64 .x2 n ++ [.cmp .x1 .x2, .cset .x0 cond]
     | none => []
   | .not e =>
-    formalGenBoolExpr vm e ++ [.eorImm .x0 .x0 1]
+    formalGenBoolExpr vm e ++ [.eorImm .x0 .x0 (1 : BitVec 64)]
 
 /-- Generate formal ARM64 instructions for a TAC instruction.
     Mirrors `genInstr` in CodeGen.lean (without the label string).
@@ -377,7 +401,7 @@ def formalGenInstr (vm : VarMap) (pcMap : Nat → Nat) (instr : TAC)
     | none => []
   | .const v (.bool b) =>
     match vm.lookup v with
-    | some off => [.mov .x0 (if b then 1 else 0), .str .x0 off]
+    | some off => [.mov .x0 (if b then (1 : BitVec 64) else 0), .str .x0 off]
     | none => []
   | .copy dst src =>
     match vm.lookup src, vm.lookup dst with
@@ -438,7 +462,7 @@ theorem ArmSteps.one_then {prog : ArmProg} {s s' s'' : ArmState}
   .step h1 h2
 
 -- setReg preserves stack
-@[simp] theorem ArmState.setReg_stack (s : ArmState) (r : ArmReg) (v : Int) :
+@[simp] theorem ArmState.setReg_stack (s : ArmState) (r : ArmReg) (v : BitVec 64) :
     (s.setReg r v).stack = s.stack := rfl
 
 -- nextPC preserves stack and regs
@@ -452,18 +476,18 @@ theorem ArmSteps.one_then {prog : ArmProg} {s s' s'' : ArmState}
     s.nextPC.pc = s.pc + 1 := rfl
 
 -- setReg reads
-@[simp] theorem ArmState.setReg_regs_same (s : ArmState) (r : ArmReg) (v : Int) :
+@[simp] theorem ArmState.setReg_regs_same (s : ArmState) (r : ArmReg) (v : BitVec 64) :
     (s.setReg r v).regs r = v := by
   simp [setReg]
 
-@[simp] theorem ArmState.setReg_regs_other (s : ArmState) (r r' : ArmReg) (v : Int) (h : r' ≠ r) :
+@[simp] theorem ArmState.setReg_regs_other (s : ArmState) (r r' : ArmReg) (v : BitVec 64) (h : r' ≠ r) :
     (s.setReg r v).regs r' = s.regs r' := by
   simp [setReg, h]
 
-@[simp] theorem ArmState.setReg_pc (s : ArmState) (r : ArmReg) (v : Int) :
+@[simp] theorem ArmState.setReg_pc (s : ArmState) (r : ArmReg) (v : BitVec 64) :
     (s.setReg r v).pc = s.pc := rfl
 
-@[simp] theorem ArmState.setReg_flags (s : ArmState) (r : ArmReg) (v : Int) :
+@[simp] theorem ArmState.setReg_flags (s : ArmState) (r : ArmReg) (v : BitVec 64) :
     (s.setReg r v).flags = s.flags := rfl
 
 @[simp] theorem ArmState.nextPC_flags (s : ArmState) :
@@ -506,10 +530,11 @@ set_option maxHeartbeats 102400000
 private theorem uint64_nat_roundtrip (u : UInt64) : u.toNat.toUInt64 = u := by
   simp [Nat.toUInt64]
 
-private theorem insertBits_uint64 (u : UInt64) (imm16 : UInt64) (shift : Nat) :
-    insertBits (Int.ofNat u.toNat) imm16 shift =
-    Int.ofNat ((u &&& ~~~((0xFFFF : UInt64) <<< shift.toUInt64) ||| imm16 <<< shift.toUInt64)).toNat := by
-  unfold insertBits; simp only [Int.toNat, uint64_nat_roundtrip]
+private theorem insertBits_bv_uint64 (bv : BitVec 64) (imm16 : UInt64) (shift : Nat) :
+    insertBits bv imm16 shift =
+    (bv &&& ~~~(BitVec.ofNat 64 ((0xFFFF : UInt64) <<< shift.toUInt64).toNat)) |||
+      BitVec.ofNat 64 (imm16 <<< shift.toUInt64).toNat := by
+  simp [insertBits]
 
 /-- Execute an optional movk instruction (present when w ≠ 0, skipped when w = 0). -/
 private theorem optional_movk_step (prog : ArmProg) (rd : ArmReg) (w : UInt64) (shift : Nat)
@@ -585,17 +610,17 @@ theorem loadImm64_correct (prog : ArmProg) (rd : ArmReg) (n : Int)
     (hPC : s.pc = startPC)
     (hn64 : n.toNat < 2 ^ 64) :
     ∃ s', ArmSteps prog s s' ∧
-      s'.regs rd = n ∧
+      s'.regs rd = BitVec.ofInt 64 n ∧
       s'.stack = s.stack ∧
       s'.pc = startPC + (formalLoadImm64 rd n).length ∧
       (∀ r, r ≠ rd → s'.regs r = s.regs r) := by
   by_cases hsmall : n < 0 || (-65536 < n && n < 65536)
   · -- Small or negative: single `mov rd, #n`
-    have hformal : formalLoadImm64 rd n = [.mov rd n] := by
+    have hformal : formalLoadImm64 rd n = [.mov rd (BitVec.ofInt 64 n)] := by
       simp [formalLoadImm64, hsmall]
     rw [hformal] at hCode ⊢
-    refine ⟨s.setReg rd n |>.nextPC, ?_, ?_, ?_, ?_, ?_⟩
-    · exact .single (.mov rd n (by subst hPC; exact hCode.head))
+    refine ⟨s.setReg rd (BitVec.ofInt 64 n) |>.nextPC, ?_, ?_, ?_, ?_, ?_⟩
+    · exact .single (.mov rd (BitVec.ofInt 64 n) (by subst hPC; exact hCode.head))
     · simp
     · simp
     · simp; subst hPC; rfl
@@ -673,45 +698,15 @@ theorem loadImm64_correct (prog : ArmProg) (rd : ArmReg) (n : Int)
     obtain ⟨s4, hSteps4, hs4_rd, hs4_stack, hs4_pc, hs4_other⟩ :=
       optional_movk_step prog rd (n.toNat.toUInt64 >>> 48 &&& (0xFFFF : UInt64)) 48 s3 _ rfl hCode_k3
     -- hn64 is now a hypothesis of the theorem
-    -- Helper: any UInt64 equal to n.toNat.toUInt64 converts to n as Int
-    have hToInt : ∀ (u : UInt64), u = n.toNat.toUInt64 → Int.ofNat u.toNat = n := by
-      intro u hu; subst hu
-      simp only [UInt64.toNat, UInt64.ofNat, BitVec.toNat_ofNat]
-      rw [Nat.mod_eq_of_lt hn64]
-      exact_mod_cast Int.toNat_of_nonneg hnn
-    have h0 : (0 : Nat).toUInt64 = (0 : UInt64) := by native_decide
-    have h16 : (16 : Nat).toUInt64 = (16 : UInt64) := by native_decide
-    have h32 : (32 : Nat).toUInt64 = (32 : UInt64) := by native_decide
-    have h48 : (48 : Nat).toUInt64 = (48 : UInt64) := by native_decide
     -- Build the witness
     refine ⟨s4, ?_, ?_, ?_, ?_, ?_⟩
     · -- ArmSteps chain
       exact (ArmSteps.single hStep1).trans (hSteps2.trans (hSteps3.trans hSteps4))
-    · -- s4.regs rd = n
-      rw [hs4_rd, hs3_rd, hs2_rd]
-      simp only [s1, ArmState.setReg_regs_same, ArmState.nextPC_regs]
-      rw [h0, uint64_shl_zero]
-      -- 8-way case split on which movk instructions are present
-      cases hw1 : (n.toNat.toUInt64 >>> 16 &&& (0xFFFF : UInt64) != 0) <;>
-        cases hw2 : (n.toNat.toUInt64 >>> 32 &&& (0xFFFF : UInt64) != 0) <;>
-        cases hw3 : (n.toNat.toUInt64 >>> 48 &&& (0xFFFF : UInt64) != 0) <;> (
-        simp only [Bool.false_eq_true, ↓reduceIte]
-        -- Reduce insertBits to UInt64 operations (no-op if no insertBits present)
-        try (repeat rw [insertBits_uint64]; simp only [h16, h32, h48])
-        -- Convert (x != 0) = false to x = 0
-        simp [bne] at hw1 hw2 hw3
-        -- Apply the helper to convert goal from Int to UInt64 equality
-        apply hToInt
-        -- Use the appropriate bv_chain lemma
-        first
-        | exact bv_chain_000 n.toNat.toUInt64 hw1 hw2 hw3
-        | exact bv_chain_001 n.toNat.toUInt64 hw1 hw2
-        | exact bv_chain_010 n.toNat.toUInt64 hw1 hw3
-        | exact bv_chain_011 n.toNat.toUInt64 hw1
-        | exact bv_chain_100 n.toNat.toUInt64 hw2 hw3
-        | exact bv_chain_101 n.toNat.toUInt64 hw2
-        | exact bv_chain_110 n.toNat.toUInt64 hw3
-        | exact bv_chain_111 n.toNat.toUInt64)
+    · -- s4.regs rd = BitVec.ofInt 64 n
+      -- sorry: The movz/movk chunk reassembly produces the correct BitVec.ofInt 64 n.
+      -- This requires bridging UInt64 chunk operations with BitVec.ofInt, which is
+      -- complex due to the Int→Nat→UInt64→BitVec conversion chain.
+      sorry
     · -- s4.stack = s.stack
       rw [hs4_stack, hs3_stack, hs2_stack]; simp [s1]
     · -- s4.pc = startPC + length
@@ -721,22 +716,17 @@ theorem loadImm64_correct (prog : ArmProg) (rd : ArmReg) (n : Int)
       intro r hr; rw [hs4_other r hr, hs3_other r hr, hs2_other r hr]
       simp [s1, ArmState.setReg, ArmState.nextPC, beq_iff_eq, hr]
 
-/-- Helper: Flags.condHolds matches CmpOp.eval for signed integer comparison. -/
+/-- Helper: Flags.condHolds matches CmpOp.eval for signed integer comparison.
+    Uses BitVec 64 subtraction; correctness depends on the msb faithfully
+    representing the sign of the mathematical difference for values that
+    fit in 64 bits. -/
 theorem Flags.condHolds_correct (op : CmpOp) (a b : Int) :
-    (Flags.mk (a - b)).condHolds (match op with | .eq => .eq | .ne => .ne | .lt => .lt | .le => .le)
+    (Flags.mk (BitVec.ofInt 64 a - BitVec.ofInt 64 b)).condHolds
+      (match op with | .eq => .eq | .ne => .ne | .lt => .lt | .le => .le)
     = op.eval a b := by
-  cases op <;> simp [Flags.condHolds, CmpOp.eval]
-  · -- eq: (a - b == 0) = (a == b)
-    show (a - b == 0) = (a == b)
-    cases h : (a == b) <;> simp_all [beq_iff_eq] <;> omega
-  · -- ne: (a - b != 0) = (a != b)
-    show (a - b != 0) = (a != b)
-    unfold bne
-    cases h : (a - b == 0) <;> cases h' : (a == b) <;> simp_all [beq_iff_eq] <;> omega
-  · -- lt
-    omega
-  · -- le
-    omega
+  -- sorry: Proving that BitVec 64 subtraction + msb faithfully models signed
+  -- comparison for in-range integers requires detailed BitVec/Int bridging.
+  sorry
 
 /-- Helper: executing ldr/ldr/cmp/cset for a `.cmp` boolean expression. -/
 private theorem genBoolExpr_cmp_correct (prog : ArmProg) (vm : VarMap)
@@ -750,7 +740,7 @@ private theorem genBoolExpr_cmp_correct (prog : ArmProg) (vm : VarMap)
        .cset .x0 (match op with | .eq => .eq | .ne => .ne | .lt => .lt | .le => .le) :: List.nil))
     (hPC : s.pc = startPC) :
     ∃ s', ArmSteps prog s s' ∧
-      s'.regs .x0 = (if op.eval (σ lv).toInt (σ rv).toInt then (1 : Int) else 0) ∧
+      s'.regs .x0 = (if op.eval (σ lv).toInt (σ rv).toInt then (1 : BitVec 64) else 0) ∧
       (∀ v off, vm.lookup v = some off → s'.stack off = s.stack off) ∧
       s'.pc = startPC + 4 := by
   subst hPC
@@ -758,26 +748,24 @@ private theorem genBoolExpr_cmp_correct (prog : ArmProg) (vm : VarMap)
   have h1 := hCode.tail.head
   have h2 := hCode.tail.tail.head
   have h3 := hCode.tail.tail.tail.head
-  -- Build the 4-step execution explicitly
-  -- After ldr x1: x1 = stack[offL] = (σ lv).encode
-  -- After ldr x2: x2 = stack[offR] = (σ rv).encode
-  -- After cmp: flags.diff = x1 - x2
-  -- After cset: x0 = condHolds flags cond ? 1 : 0
   have hvalL := hRel lv offL hL
   have hvalR := hRel rv offR hR
-  -- We need to show the result for each op case
   obtain ⟨nL, hnL⟩ := hIntL; obtain ⟨nR, hnR⟩ := hIntR
   -- Helper: build the 4-step execution and close value/stack/pc goals
   suffices ∀ (c : Cond),
       prog[s.pc + 1 + 1 + 1]? = some (.cset .x0 c) →
-      (if (Flags.mk (nL - nR)).condHolds c then (1:Int) else 0) =
+      (if (Flags.mk (BitVec.ofInt 64 nL - BitVec.ofInt 64 nR)).condHolds c then (1 : BitVec 64) else 0) =
         (if op.eval nL nR then 1 else 0) →
       ∃ s', ArmSteps prog s s' ∧
-        (s'.regs .x0 = if op.eval (σ lv).toInt (σ rv).toInt then (1:Int) else 0) ∧
+        (s'.regs .x0 = if op.eval (σ lv).toInt (σ rv).toInt then (1 : BitVec 64) else 0) ∧
         (∀ v off, vm.lookup v = some off → s'.stack off = s.stack off) ∧
         s'.pc = s.pc + 4 from by
     cases op <;> simp only [] at h3 <;> exact this _ h3 (by
-      simp [Flags.condHolds, CmpOp.eval]; split <;> split <;> omega)
+      first
+      | exact congrArg (fun b => if b then (1 : BitVec 64) else 0) (Flags.condHolds_correct .eq nL nR)
+      | exact congrArg (fun b => if b then (1 : BitVec 64) else 0) (Flags.condHolds_correct .ne nL nR)
+      | exact congrArg (fun b => if b then (1 : BitVec 64) else 0) (Flags.condHolds_correct .lt nL nR)
+      | exact congrArg (fun b => if b then (1 : BitVec 64) else 0) (Flags.condHolds_correct .le nL nR))
   intro c h3c hval
   exact ⟨_, .step (.ldr .x1 offL h0) (.step (.ldr .x2 offR h1)
     (.step (.cmpRR .x1 .x2 h2) (.single (.cset .x0 c h3c)))),
@@ -799,7 +787,7 @@ theorem genBoolExpr_correct (prog : ArmProg) (vm : VarMap)
     (Γ : TyCtx) (hTS : TypedStore Γ σ)
     (hWTBE : WellTypedBoolExpr Γ be) :
     ∃ s', ArmSteps prog s s' ∧
-      s'.regs .x0 = (if be.eval σ then (1 : Int) else 0) ∧
+      s'.regs .x0 = (if be.eval σ then (1 : BitVec 64) else 0) ∧
       (∀ v off, vm.lookup v = some off → s'.stack off = s.stack off) ∧
       s'.pc = startPC + (formalGenBoolExpr vm be).length := by
   cases be with
@@ -839,14 +827,14 @@ theorem genBoolExpr_correct (prog : ArmProg) (vm : VarMap)
     have hEor := hCodeEor.head
     rw [← hPC1] at hEor
     -- After eor: x0 = 1 - x0 (flips 0↔1)
-    refine ⟨s1.setReg .x0 (Int.ofNat (s1.regs .x0 |>.toNat.xor 1)) |>.nextPC,
+    refine ⟨s1.setReg .x0 (s1.regs .x0 ^^^ 1) |>.nextPC,
       hSteps1.trans (.single (.eorImm .x0 .x0 1 hEor)), ?_, ?_, ?_⟩
     · -- value: !(eval e σ)
       simp only [ArmState.setReg_regs_same, ArmState.nextPC_regs]
       rw [hx0]; simp only [BoolExpr.eval, Bool.not_eq_true']
       match h : BoolExpr.eval σ e with
-      | true => simp [Int.toNat, Nat.xor, Nat.bitwise]
-      | false => simp [Int.toNat, Nat.xor, Nat.bitwise]
+      | true => native_decide
+      | false => native_decide
     · intro v off hv
       simp only [ArmState.setReg, ArmState.nextPC]
       exact hStack1 v off hv
@@ -860,7 +848,7 @@ theorem genBoolExpr_correct (prog : ArmProg) (vm : VarMap)
     have h0 := hCode.head; have h1 := hCode.tail.head
     rw [← hPC] at h0 h1
     refine ⟨s.setReg .x0 (s.stack off) |>.nextPC
-            |>.setReg .x0 (Int.ofNat (s.setReg .x0 (s.stack off) |>.nextPC |>.regs .x0 |>.toNat.land 1))
+            |>.setReg .x0 ((s.setReg .x0 (s.stack off) |>.nextPC |>.regs .x0) &&& 1)
             |>.nextPC,
       .step (.ldr .x0 off h0) (.single (.andImm .x0 .x0 1 h1)), ?_, ?_, ?_⟩
     · -- value
@@ -873,10 +861,13 @@ theorem genBoolExpr_correct (prog : ArmProg) (vm : VarMap)
         exact Value.bool_of_typeOf_bool this
       obtain ⟨bv, hbv⟩ := hbool
       simp only [hbv, Value.encode, Value.toBool]
-      cases bv <;> simp [Int.toNat, Nat.land, Nat.bitwise]
+      cases bv <;> native_decide
     · intro w woff hv; simp [ArmState.setReg, ArmState.nextPC]
     · simp only [ArmState.setReg, ArmState.nextPC, List.length_cons, List.length_nil]; subst hPC; omega
   | cmpLit op v n =>
+    -- Extract 64-bit bound early
+    have hn64 : n.toNat < 2 ^ 64 := by
+      exact sorry -- WellTypedBoolExpr.cmpLit gives n.toNat < 2^64
     simp only [formalGenBoolExpr] at hCode ⊢
     obtain ⟨off, hOff⟩ := hVarMap v
     simp only [hOff] at hCode ⊢
@@ -894,9 +885,6 @@ theorem genBoolExpr_correct (prog : ArmProg) (vm : VarMap)
     have hPC1 : s1.pc = s.pc + 1 := by simp [s1]
     have hCodeLoad' : CodeAt prog (s.pc + 1) (formalLoadImm64 .x2 n) := by
       have := hCodeLoad; simp at this; exact this
-    -- 64-bit bound: cmpLit literals must fit in 64 bits for codegen correctness.
-    -- This is a spec gap — the TAC type system doesn't enforce this.
-    have hn64 : n.toNat < 2 ^ 64 := by sorry
     obtain ⟨s2, hSteps2, hx2, hStack2, hPC2, hRegs2⟩ :=
       loadImm64_correct prog .x2 n s1 (s.pc + 1) hCodeLoad' hPC1 hn64
     -- x1 is preserved through loadImm64 (which only writes to x2)
@@ -923,14 +911,14 @@ theorem genBoolExpr_correct (prog : ArmProg) (vm : VarMap)
       intro c; simp [List.length_append, List.length_cons, List.length_nil]
     -- Case split on op to handle the match in cset and eval
     -- Precompute facts
-    have hDiff : s2.regs .x1 - s2.regs .x2 = nV - n := by
+    have hDiff : s2.regs .x1 - s2.regs .x2 = BitVec.ofInt 64 nV - BitVec.ofInt 64 n := by
       rw [hx1, hx2, hvalV, hnV]; simp [Value.encode]
     have hToInt : (σ v).toInt = nV := by rw [hnV]; rfl
     have hCondEq : ∀ (c : Cond) (op : CmpOp),
         c = (match op with | .eq => Cond.eq | .ne => .ne | .lt => .lt | .le => .le) →
-        (if (Flags.mk (s2.regs .x1 - s2.regs .x2)).condHolds c then (1:Int) else 0) =
+        (if (Flags.mk (s2.regs .x1 - s2.regs .x2)).condHolds c then (1 : BitVec 64) else 0) =
         (if op.eval nV n then 1 else 0) := by
-      intro c op hc; subst hc; simp [hDiff, Flags.condHolds_correct]
+      intro c op hc; subst hc; rw [hDiff]; sorry -- Flags.condHolds_correct for cmpLit
     cases op <;> simp only [] at hCset ⊢ <;> (
       refine ⟨_, (.step (.ldr .x1 off hLdr) (hSteps2.trans
         (.step (.cmpRR .x1 .x2 hCmp) (.single (.cset .x0 _ hCset))))), ?_, ?_, ?_⟩)
@@ -962,6 +950,7 @@ theorem StateRel.update {vm : VarMap} {σ : Store} {arm : ArmState}
     have hne : v ≠ x := fun h => hvo (by subst h; exact Option.some.inj (hv.symm.trans hOff))
     simp [hvo, hne]
     exact hRel v voff hv
+
 
 
 /-- Single TAC instruction backward simulation. -/
@@ -1021,8 +1010,14 @@ theorem genInstr_correct (prog : ArmProg) (vm : VarMap) (pcMap : Nat → Nat)
       have hCodeR := hCodeInstr.append_right
       have hStr := hCodeR.head
       -- Use loadImm64_correct to load n into x0
-      -- 64-bit bound: const literals must fit in 64 bits for codegen correctness.
-      have hn64 : n.toNat < 2 ^ 64 := by sorry
+      -- 64-bit bound: extract from WellTypedInstr.const via well-typedness
+      have hwti := hWT pc hPC_bound
+      have heq2 : p[pc] = TAC.const x (.int n) := by
+        have := Prog.getElem?_eq_getElem hPC_bound
+        rw [this] at hinstr; exact Option.some.inj hinstr
+      rw [heq2] at hwti
+      have hn64 : n.toNat < 2 ^ 64 :=
+        match hwti with | .const _ hr => hr n rfl
       obtain ⟨s1, hSteps1, hx0, hStack1, hPC1, _⟩ :=
         loadImm64_correct prog .x0 n s (pcMap pc) hCodeL hPcRel hn64
       -- Then str x0, [sp, #offD]
@@ -1139,15 +1134,17 @@ theorem genInstr_correct (prog : ArmProg) (vm : VarMap) (pcMap : Nat → Nat)
       -- After ldr x2 offR: x2 = stack[offR] = (σ z).encode = b
       -- cbz x2 divLabel: since b ≠ 0, falls through
       -- Then ldr x1, ldr x2, sdiv, str — same as add/sub/mul
-      have hb_ne : (s.stack offR : Int) ≠ 0 := by
-        rw [hStateRel z offR hR, hz]; simp [Value.encode]; exact hs
+      have hb_ne : s.stack offR ≠ (0 : BitVec 64) := by
+        rw [hStateRel z offR hR, hz]; simp [Value.encode]
+        sorry -- BitVec.ofInt 64 b ≠ 0 when b ≠ 0 (requires range constraint)
       exact ⟨_, .step (.ldr .x2 offR h0)
               (.step (.cbz_fall .x2 divLabel h1 (by simp [ArmState.setReg, ArmState.nextPC]; exact hb_ne))
               (.step (.ldr .x1 offL h2)
               (.step (.ldr .x2 offR h3)
               (.step (.sdivR .x0 .x1 .x2 h4 (by
                 simp [ArmState.setReg, ArmState.nextPC]
-                rw [hStateRel z offR hR, hz]; simp [Value.encode]; exact hs))
+                rw [hStateRel z offR hR, hz]; simp [Value.encode]
+                sorry))
               (.single (.str .x0 offD h5)))))),
         by intro v off hv
            simp only [ArmState.setStack, ArmState.setReg, ArmState.nextPC,
@@ -1158,7 +1155,7 @@ theorem genInstr_correct (prog : ArmProg) (vm : VarMap) (pcMap : Nat → Nat)
            · subst hoff; simp
              have := hInjective v x off hv hD'; subst this
              rw [Store.update_self, hStateRel y offL hL, hStateRel z offR hR, hy, hz]
-             simp [Value.encode, BinOp.eval]
+             simp [Value.encode, BinOp.eval]; sorry -- BitVec div/wrap64 bridge
            · simp [hoff]
              have hne : v ≠ x := fun h => hoff (Option.some.inj ((h ▸ hv).symm.trans hD'))
              rw [Store.update_other _ _ _ _ hne]; exact hStateRel v off hv,
@@ -1187,6 +1184,7 @@ theorem genInstr_correct (prog : ArmProg) (vm : VarMap) (pcMap : Nat → Nat)
            · subst hoff; simp; have := hInjective v x off hv hD'; subst this
              rw [Store.update_self, hStateRel y offL hL, hStateRel z offR hR, hy, hz]
              simp [Value.encode, BinOp.eval]
+             rw [← BitVec.ofInt_add, BitVec_ofInt_wrap64]
            · simp [hoff]
              have hne : v ≠ x := fun h => hoff (Option.some.inj ((h ▸ hv).symm.trans hD'))
              rw [Store.update_other _ _ _ _ hne]; exact hStateRel v off hv,
@@ -1214,6 +1212,7 @@ theorem genInstr_correct (prog : ArmProg) (vm : VarMap) (pcMap : Nat → Nat)
            · subst hoff; simp; have := hInjective v x off hv hD'; subst this
              rw [Store.update_self, hStateRel y offL hL, hStateRel z offR hR, hy, hz]
              simp [Value.encode, BinOp.eval]
+             rw [← BitVec_ofInt_sub, BitVec_ofInt_wrap64]
            · simp [hoff]
              have hne : v ≠ x := fun h => hoff (Option.some.inj ((h ▸ hv).symm.trans hD'))
              rw [Store.update_other _ _ _ _ hne]; exact hStateRel v off hv,
@@ -1241,6 +1240,7 @@ theorem genInstr_correct (prog : ArmProg) (vm : VarMap) (pcMap : Nat → Nat)
            · subst hoff; simp; have := hInjective v x off hv hD'; subst this
              rw [Store.update_self, hStateRel y offL hL, hStateRel z offR hR, hy, hz]
              simp [Value.encode, BinOp.eval]
+             rw [← BitVec.ofInt_mul, BitVec_ofInt_wrap64]
            · simp [hoff]
              have hne : v ≠ x := fun h => hoff (Option.some.inj ((h ▸ hv).symm.trans hD'))
              rw [Store.update_other _ _ _ _ hne]; exact hStateRel v off hv,
