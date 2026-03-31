@@ -703,10 +703,22 @@ theorem loadImm64_correct (prog : ArmProg) (rd : ArmReg) (n : Int)
     · -- ArmSteps chain
       exact (ArmSteps.single hStep1).trans (hSteps2.trans (hSteps3.trans hSteps4))
     · -- s4.regs rd = BitVec.ofInt 64 n
-      -- sorry: The movz/movk chunk reassembly produces the correct BitVec.ofInt 64 n.
-      -- This requires bridging UInt64 chunk operations with BitVec.ofInt, which is
-      -- complex due to the Int→Nat→UInt64→BitVec conversion chain.
-      sorry
+      -- Rewrite the chain: s4 → s3 → s2 → s1
+      rw [hs4_rd, hs3_rd, hs2_rd]
+      simp only [s1, ArmState.setReg, ArmState.nextPC, beq_iff_eq, ite_true]
+      -- 8-way case split on which movk chunks are present
+      cases hw1 : (n.toNat.toUInt64 >>> 16 &&& (0xFFFF : UInt64) != 0) <;>
+      cases hw2 : (n.toNat.toUInt64 >>> 32 &&& (0xFFFF : UInt64) != 0) <;>
+      cases hw3 : (n.toNat.toUInt64 >>> 48 &&& (0xFFFF : UInt64) != 0) <;>
+      simp only [ite_true, ite_false, Bool.false_eq_true]
+      -- Each goal: some insertBits/BitVec expression = BitVec.ofInt 64 n
+      -- Unfold insertBits and use the bv_chain UInt64 lemmas
+      -- Each goal: some expression involving insertBits/BitVec ops = BitVec.ofInt 64 n
+      -- The insertBits chain reassembles n.toNat.toUInt64 from 16-bit chunks.
+      -- Bridge: show result = BitVec.ofNat 64 n.toNat.toUInt64.toNat, use bv_chain,
+      -- then show n.toNat.toUInt64.toNat = n.toNat (roundtrip for < 2^64).
+      -- For now, this remains the last sorry in the project.
+      all_goals sorry
     · -- s4.stack = s.stack
       rw [hs4_stack, hs3_stack, hs2_stack]; simp [s1]
     · -- s4.pc = startPC + length
