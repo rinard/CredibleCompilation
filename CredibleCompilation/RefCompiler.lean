@@ -123,6 +123,7 @@ theorem isTmp_false_ne_tmpName {v : Var} {k : Nat} (h : v.isTmp = false) : v ≠
 
 /-- Free variables that appear in `SExpr` positions within a `SBool`. -/
 def SBool.exprFreeVars : SBool → List Var
+  | .lit _      => []
   | .bvar _     => []
   | .cmp _ a b  => a.freeVars ++ b.freeVars
   | .not e      => e.exprFreeVars
@@ -173,6 +174,7 @@ def refCompileExpr (e : SExpr) (offset nextTmp : Nat) : List TAC × Var × Nat :
 
 def refCompileBool (b : SBool) (offset nextTmp : Nat) : List TAC × BoolExpr × Nat :=
   match b with
+  | .lit b => ([], .lit b, nextTmp)
   | .bvar x => ([], .bvar x, nextTmp)
   | .cmp op a b =>
     let (codeA, va, tmp1) := refCompileExpr a offset nextTmp
@@ -333,6 +335,7 @@ theorem FragExec.single_iffalse {p : Prog} {pc : Nat} {σ : Store} {b : BoolExpr
 theorem BoolExpr.eval_agree' (cond : BoolExpr) (σ τ : Store)
     (h : ∀ v ∈ cond.vars, σ v = τ v) : cond.eval σ = cond.eval τ := by
   induction cond with
+  | lit _ => rfl
   | bvar x =>
     simp only [BoolExpr.eval]
     rw [h x (by simp [BoolExpr.vars])]
@@ -396,6 +399,7 @@ theorem refCompileExpr_nextTmp_ge (e : SExpr) (offset nextTmp : Nat) :
 theorem refCompileBool_nextTmp_ge (sb : SBool) (offset nextTmp : Nat) :
     nextTmp ≤ (refCompileBool sb offset nextTmp).2.2 := by
   induction sb generalizing offset nextTmp with
+  | lit _ => simp [refCompileBool]
   | bvar x => simp [refCompileBool]
   | cmp _ a b =>
     dsimp only [refCompileBool]
@@ -447,6 +451,9 @@ theorem refCompileBool_vars_bound (sb : SBool) (offset nextTmp : Nat)
     ∀ v ∈ r.2.1.vars,
       (v.isTmp = false) ∨ (∃ k, nextTmp ≤ k ∧ k < r.2.2 ∧ v = tmpName k) := by
   induction sb generalizing offset nextTmp with
+  | lit _ =>
+    simp only [refCompileBool, BoolExpr.vars]
+    intro v hv; simp at hv
   | bvar x =>
     simp only [refCompileBool, BoolExpr.vars, List.mem_singleton]
     intro v hv; subst hv
@@ -625,6 +632,9 @@ theorem refCompileBool_correct (sb : SBool) (offset nextTmp : Nat) (σ σ_tac : 
       (∀ w, w.isTmp = false → σ' w = σ_tac w) ∧
       (∀ k, k < nextTmp → σ' (tmpName k) = σ_tac (tmpName k)) := by
   induction sb generalizing offset nextTmp σ_tac with
+  | lit b =>
+    simp only [refCompileBool] at hcode ⊢
+    exact ⟨σ_tac, FragExec.rfl' _ _ _, by simp [BoolExpr.eval, SBool.eval], fun w _ => rfl, fun k _ => rfl⟩
   | bvar x =>
     simp only [refCompileBool] at hcode ⊢
     refine ⟨σ_tac, FragExec.rfl' _ _ _, ?_, fun w _ => rfl, fun k _ => rfl⟩
@@ -1326,6 +1336,7 @@ theorem refCompileBool_stuck (sb : SBool) (offset nextTmp : Nat) (σ σ_tac : St
       Step p (Cfg.run pc_s σ_s) (Cfg.error σ_s) ∧
       pc_s < offset + (refCompileBool sb offset nextTmp).1.length := by
   induction sb generalizing offset nextTmp σ_tac with
+  | lit _ => exact absurd trivial hunsafe
   | bvar x => exact absurd trivial hunsafe
   | cmp cop a b =>
     have htf_a : ∀ v ∈ a.freeVars, v.isTmp = false :=
@@ -2764,6 +2775,7 @@ theorem compileExpr_eq_refCompileExpr (e : SExpr) (o t : Nat) :
 theorem compileBool_eq_refCompileBool (b : SBool) (o t : Nat) :
     compileBool b o t = refCompileBool b o t := by
   induction b generalizing o t with
+  | lit _ => rfl
   | bvar _ => rfl
   | cmp _ a b => simp only [compileBool, refCompileBool, compileExpr_eq_refCompileExpr]
   | not _ ih => simp only [compileBool, refCompileBool, ih]

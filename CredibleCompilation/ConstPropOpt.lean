@@ -47,6 +47,7 @@ def cmBeq (a b : ConstMap) : Bool :=
 -- ============================================================
 
 def evalBoolConst (cm : ConstMap) : BoolExpr → Option Bool
+  | .lit b => some b
   | .bvar x =>
     match cmLookup cm x with
     | some (.bool b) => some b

@@ -203,6 +203,7 @@ def Expr.eval (σ : Store) : Expr → Value
 
 /-- Boolean expressions for conditional branches. -/
 inductive BoolExpr where
+  | lit    : Bool → BoolExpr                   -- true / false literal
   | bvar   : Var → BoolExpr                    -- read a boolean variable
   | cmp    : CmpOp → Var → Var → BoolExpr     -- x op y (integer comparison)
   | cmpLit : CmpOp → Var → Int → BoolExpr     -- x op n (variable vs literal)
@@ -212,14 +213,16 @@ inductive BoolExpr where
 /-- Evaluate a boolean expression. Uses `.toInt`/`.toBool` extractors;
     under well-typedness the extractors are faithful. -/
 def BoolExpr.eval (σ : Store) : BoolExpr → Bool
-  | .bvar x       => (σ x).toBool
-  | .cmp op x y   => op.eval (σ x).toInt (σ y).toInt
+  | .lit b         => b
+  | .bvar x        => (σ x).toBool
+  | .cmp op x y    => op.eval (σ x).toInt (σ y).toInt
   | .cmpLit op x n => op.eval (σ x).toInt n
   | .not e         => !e.eval σ
 
 theorem BoolExpr.eval_congr (cond : BoolExpr) (σ τ : Store)
     (hagree : ∀ y, σ y = τ y) : cond.eval σ = cond.eval τ := by
   induction cond with
+  | lit b => simp [BoolExpr.eval]
   | bvar x => simp [BoolExpr.eval, hagree]
   | cmp op x y => simp [BoolExpr.eval, hagree]
   | cmpLit op x n => simp [BoolExpr.eval, hagree]
@@ -227,6 +230,7 @@ theorem BoolExpr.eval_congr (cond : BoolExpr) (σ τ : Store)
 
 /-- Collect all variable names from a boolean expression. -/
 def BoolExpr.vars : BoolExpr → List Var
+  | .lit _        => []
   | .bvar x       => [x]
   | .cmp _ x y    => [x, y]
   | .cmpLit _ x _ => [x]
@@ -315,6 +319,7 @@ def Prog.ofCode (code : Array TAC) : Prog :=
 
 /-- Well-typedness for boolean expressions. -/
 inductive WellTypedBoolExpr (Γ : TyCtx) : BoolExpr → Prop where
+  | lit    : WellTypedBoolExpr Γ (.lit b)
   | bvar   : Γ x = .bool → WellTypedBoolExpr Γ (.bvar x)
   | cmp    : Γ x = .int → Γ y = .int → WellTypedBoolExpr Γ (.cmp op x y)
   | cmpLit : Γ x = .int → WellTypedBoolExpr Γ (.cmpLit op x n)
@@ -677,6 +682,7 @@ def observe (p : Prog) (obs : List Var) (c : Cfg) : Observation :=
 -- ============================================================
 
 def checkWellTypedBoolExpr (Γ : TyCtx) : BoolExpr → Bool
+  | .lit _        => true
   | .bvar x       => decide (Γ x = .bool)
   | .cmp _ x y    => decide (Γ x = .int) && decide (Γ y = .int)
   | .cmpLit _ x _ => decide (Γ x = .int)
@@ -694,6 +700,7 @@ def checkWellTypedInstr (Γ : TyCtx) : TAC → Bool
 theorem checkWellTypedBoolExpr_sound {Γ : TyCtx} {b : BoolExpr}
     (h : checkWellTypedBoolExpr Γ b = true) : WellTypedBoolExpr Γ b := by
   induction b with
+  | lit _ => exact .lit
   | bvar x =>
     simp [checkWellTypedBoolExpr, decide_eq_true_eq] at h
     exact .bvar h

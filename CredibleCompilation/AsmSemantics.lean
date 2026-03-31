@@ -343,6 +343,8 @@ def formalLoadImm64 (rd : ArmReg) (n : Int) : List ArmInstr :=
     Result is left in x0 (0 or 1). Mirrors `genBoolExpr` in CodeGen.lean. -/
 def formalGenBoolExpr (vm : VarMap) (be : BoolExpr) : List ArmInstr :=
   match be with
+  | .lit b =>
+    [.mov .x0 (if b then 1 else 0)]
   | .bvar v =>
     match vm.lookup v with
     | some off => [.ldr .x0 off, .andImm .x0 .x0 1]
@@ -602,6 +604,15 @@ theorem genBoolExpr_correct (prog : ArmProg) (vm : VarMap)
       (∀ v off, vm.lookup v = some off → s'.stack off = s.stack off) ∧
       s'.pc = startPC + (formalGenBoolExpr vm be).length := by
   cases be with
+  | lit b =>
+    simp only [formalGenBoolExpr] at hCode ⊢
+    have h0 := hCode.head
+    rw [← hPC] at h0
+    refine ⟨s.setReg .x0 (if b then 1 else 0) |>.nextPC,
+      .single (.mov .x0 (if b then 1 else 0) h0), ?_, ?_, ?_⟩
+    · simp only [ArmState.setReg_regs_same, ArmState.nextPC_regs, BoolExpr.eval]
+    · intro v off hv; simp [ArmState.setReg, ArmState.nextPC]
+    · simp only [ArmState.setReg, ArmState.nextPC, List.length_cons, List.length_nil]; subst hPC; omega
   | cmp op lv rv =>
     simp only [formalGenBoolExpr] at hCode ⊢
     cases hlv : vm.lookup lv with

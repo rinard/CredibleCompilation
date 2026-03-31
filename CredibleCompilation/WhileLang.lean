@@ -35,7 +35,8 @@ inductive SExpr where
 
 /-- Boolean expressions over arithmetic sub-expressions. -/
 inductive SBool where
-  | bvar : Var → SBool                          -- read a boolean variable
+  | lit  : Bool → SBool                          -- true / false literal
+  | bvar : Var → SBool                           -- read a boolean variable
   | cmp  : CmpOp → SExpr → SExpr → SBool
   | not  : SBool → SBool
   | and  : SBool → SBool → SBool
@@ -68,6 +69,7 @@ def SExpr.eval (σ : Store) : SExpr → Int
 
 /-- Evaluate a boolean expression. -/
 def SBool.eval (σ : Store) : SBool → Bool
+  | .lit b      => b
   | .bvar x     => (σ x).toBool
   | .cmp op a b => op.eval (a.eval σ) (b.eval σ)
   | .not e      => !e.eval σ
@@ -122,6 +124,7 @@ def compileExpr (e : SExpr) (offset nextTmp : Nat) : List TAC × Var × Nat :=
 /-- Compile a boolean expression. Returns (code, BoolExpr, next temp index). -/
 def compileBool (b : SBool) (offset nextTmp : Nat) : List TAC × BoolExpr × Nat :=
   match b with
+  | .lit b => ([], .lit b, nextTmp)
   | .bvar x => ([], .bvar x, nextTmp)
   | .cmp op a b =>
     let (codeA, va, tmp1) := compileExpr a offset nextTmp
@@ -227,6 +230,8 @@ def SExpr.toString : SExpr → String
     s!"({a.toString} {opStr} {b.toString})"
 
 def SBool.toString : SBool → String
+  | .lit true => "true"
+  | .lit false => "false"
   | .bvar x => x
   | .cmp op a b =>
     let opStr := match op with | .eq => "==" | .ne => "!=" | .lt => "<" | .le => "<="
@@ -294,6 +299,7 @@ def checkSExpr (lookup : Var → Option VarTy) : SExpr → Bool
 
 /-- Check that a boolean expression uses properly-typed declared variables. -/
 def checkSBool (lookup : Var → Option VarTy) : SBool → Bool
+  | .lit _ => true
   | .bvar x => lookup x == some .bool
   | .cmp _ a b => checkSExpr lookup a && checkSExpr lookup b
   | .not e => checkSBool lookup e
@@ -709,6 +715,9 @@ theorem compileBool_wt (prog : Program)
     AllWTI prog.tyCtx (compileBool b offset nextTmp).1
     ∧ WellTypedBoolExpr prog.tyCtx (compileBool b offset nextTmp).2.1 := by
   induction b generalizing offset nextTmp with
+  | lit b =>
+    simp only [compileBool]
+    exact ⟨allWTI_nil' _, .lit⟩
   | bvar x =>
     simp only [compileBool]
     constructor
@@ -966,6 +975,7 @@ theorem compileBool_allJumpsLe (b : SBool) (offset nextTmp bound : Nat)
     (hbound : offset + (compileBool b offset nextTmp).1.length ≤ bound) :
     AllJumpsLe bound (compileBool b offset nextTmp).1 := by
   induction b generalizing offset nextTmp bound with
+  | lit _ => exact AllJumpsLe_nil
   | bvar _ => exact AllJumpsLe_nil
   | cmp _ a b =>
     exact AllJumpsLe_of_allSeq (fun instr hmem => by

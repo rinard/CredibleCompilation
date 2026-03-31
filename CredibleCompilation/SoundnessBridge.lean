@@ -314,6 +314,8 @@ private theorem BoolExpr.toSymExpr_sound (be : BoolExpr) (ss : SymStore) (σ₀ 
     (hrepr : ∀ v, (ssGet ss v).eval σ₀ = σ v) :
     (be.toSymExpr ss).eval σ₀ = .bool (be.eval σ) := by
   induction be with
+  | lit b =>
+    simp only [BoolExpr.toSymExpr, Expr.eval, BoolExpr.eval]
   | bvar x =>
     simp only [BoolExpr.toSymExpr, Expr.eval, BoolExpr.eval]
     rw [hrepr x]
@@ -717,6 +719,9 @@ private theorem BoolExpr.symEval_sound (b : BoolExpr) (ss : SymStore) (inv : EIn
     (r : Bool) (heval : b.symEval ss inv = some r) :
     b.eval σ = r := by
   induction b generalizing r with
+  | lit b =>
+    simp only [BoolExpr.symEval] at heval
+    exact Option.some.inj heval
   | bvar x =>
     simp only [BoolExpr.symEval] at heval
     generalize hsx : (ssGet ss x).simplify inv = sx at heval
@@ -1020,6 +1025,9 @@ private theorem BoolExpr.eval_mapVarsRel (b origCond : BoolExpr)
     (hcons : ∀ x, σ_t x = (ssGet (buildSubstMap rel) x).eval σ_o) :
     b.eval σ_t = origCond.eval σ_o := by
   induction b generalizing origCond with
+  | lit b =>
+    simp only [BoolExpr.mapVarsRel] at hmap
+    rw [← Option.some.inj hmap]; simp [BoolExpr.eval]
   | bvar x =>
     simp only [BoolExpr.mapVarsRel] at hmap
     cases hx : relGetOrigExpr rel x <;> simp [hx] at hmap
@@ -1085,6 +1093,7 @@ private theorem branchInfoWithRel_nil (instr : TAC) (pc_t pc_t' : Label) :
     -- With empty relation, mapVarsRel returns some b (identity mapping)
     suffices h : b.mapVarsRel ([] : EExprRel) = some b by simp [h]
     induction b with
+    | lit _ => simp [BoolExpr.mapVarsRel]
     | bvar x => simp [BoolExpr.mapVarsRel, relGetOrigExpr, List.find?]
     | cmp op x y => simp [BoolExpr.mapVarsRel, relGetOrigExpr, List.find?]
     | cmpLit op x n => simp [BoolExpr.mapVarsRel, relGetOrigExpr, List.find?]

@@ -85,6 +85,8 @@ private def loadImm64 (reg : String) (n : Int) : List String :=
 /-- Generate code for a BoolExpr, result in w0 (0 or 1). Clobbers x0-x3. -/
 private partial def genBoolExpr (varMap : List (Var × Nat)) (be : BoolExpr) : List String :=
   match be with
+  | .lit b =>
+    s!"  mov x0, #{if b then 1 else 0}" :: List.nil
   | .bvar v =>
     (loadVar varMap v "x0") :: "  and w0, w0, #1" :: List.nil
   | .cmp op lv rv =>

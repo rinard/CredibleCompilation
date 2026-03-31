@@ -25,6 +25,7 @@ def SExpr.freeVars : SExpr → List Var
   | .bin _ a b => a.freeVars ++ b.freeVars
 
 def SBool.freeVars : SBool → List Var
+  | .lit _ => []
   | .bvar x => [x]
   | .cmp _ a b => a.freeVars ++ b.freeVars
   | .not e => e.freeVars
@@ -60,20 +61,21 @@ theorem SExpr.eval_agree (e : SExpr) (σ τ : Store)
 theorem SBool.eval_agree (sb : SBool) (σ τ : Store)
     (h : ∀ v ∈ sb.freeVars, σ v = τ v) : sb.eval σ = sb.eval τ := by
   induction sb with
+  | lit _ => rfl
   | bvar x =>
     simp only [SBool.eval, SBool.freeVars, List.mem_singleton] at *
     rw [h x rfl]
   | cmp op a b =>
-    simp only [SBool.eval]
+    simp only [SBool.eval, SBool.freeVars] at *
     rw [SExpr.eval_agree a σ τ (fun v hv => h v (List.mem_append_left _ hv)),
         SExpr.eval_agree b σ τ (fun v hv => h v (List.mem_append_right _ hv))]
   | not e ih => simp only [SBool.eval]; rw [ih h]
   | and a b iha ihb =>
-    simp only [SBool.eval]
+    simp only [SBool.eval, SBool.freeVars] at *
     rw [iha (fun v hv => h v (List.mem_append_left _ hv)),
         ihb (fun v hv => h v (List.mem_append_right _ hv))]
   | or a b iha ihb =>
-    simp only [SBool.eval]
+    simp only [SBool.eval, SBool.freeVars] at *
     rw [iha (fun v hv => h v (List.mem_append_left _ hv)),
         ihb (fun v hv => h v (List.mem_append_right _ hv))]
 
@@ -185,6 +187,7 @@ def SExpr.divSafe (σ : Store) : SExpr → Prop
   | .bin _ a b => a.divSafe σ ∧ b.divSafe σ
 
 def SBool.divSafe (σ : Store) : SBool → Prop
+  | .lit _ => True
   | .bvar _ => True
   | .cmp _ a b => a.divSafe σ ∧ b.divSafe σ
   | .not e => e.divSafe σ
@@ -220,6 +223,7 @@ def Stmt.divSafe (fuel : Nat) (σ : Store) : Stmt → Prop
 
 /-- All variables in arithmetic subexpressions of a boolean expression have int values. -/
 def SBool.intTyped (σ : Store) : SBool → Prop
+  | .lit _ => True
   | .bvar _ => True
   | .cmp _ a b => (∀ v ∈ a.freeVars, ∃ n, σ v = .int n) ∧
                   (∀ v ∈ b.freeVars, ∃ n, σ v = .int n)
@@ -289,6 +293,7 @@ private theorem checkSBool_declared {lookup : Var → Option VarTy}
     {b : SBool} (h : Program.checkSBool lookup b = true) :
     ∀ v ∈ b.freeVars, ∃ ty, lookup v = some ty := by
   induction b with
+  | lit _ => intro v hv; simp [SBool.freeVars] at hv
   | bvar x =>
     intro v hv; simp [SBool.freeVars] at hv; subst hv
     simp [Program.checkSBool] at h; exact ⟨.bool, h⟩
@@ -471,6 +476,7 @@ private theorem checkSBool_intTyped
     (hts : TypedStore Γ σ) :
     b.intTyped σ := by
   induction b with
+  | lit _ => trivial
   | bvar _ => trivial
   | cmp _ a b =>
     simp [Program.checkSBool, Bool.and_eq_true] at hchk

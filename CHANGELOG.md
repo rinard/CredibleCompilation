@@ -220,6 +220,26 @@ Made both checkers verify that original and transformed programs have the same o
 - **`soundness_bridge`** and all downstream end-to-end theorems take an extra hypothesis `htyctx : dc.orig.tyCtx = dc.trans.tyCtx` (function equality isn't decidable, so this can't be checked executably).
 - **PropExamples**: `transProg` definitions carry explicit matching `tyCtx`/`observable` (no longer using `Prog.ofCode`).
 
+## 27. Separate typeError from error in Observation (`11c792d` — 2026-03-30)
+
+Split `Observation` and `Behavior` to distinguish runtime errors (div-by-zero) from type errors. This lets the credible compilation framework preserve error-kind distinctions through optimization.
+
+## 28. While language parser + ARM64 codegen (`106b36a`–`9fdc5d6` — 2026-03-30)
+
+Added a string parser for the While language and an ARM64 code generator producing `.s` assembly from TAC programs. Added a compiler executable for end-to-end While-to-ARM64 compilation.
+
+## 29. ARM64 simulation framework + codegen verification (`69d0405`–`07c9718` — 2026-03-30–31)
+
+Built formal ARM64 subset semantics (`ArmSemantics.lean`) and proved correctness of code generation for most TAC instructions: const, copy, binop (all ops including div with cbz guard), boolop, goto, iftrue, iffall, halt, error, binop_typeError. Proved `genBoolExpr_correct` for bvar, cmp, not cases. Added `backward_simulation` theorem. Remaining sorrys: cmpLit (needs loadImm64 large case) and genInstr boolop/ifgoto for and/or scratch slot issue.
+
+## 30. Flatten and/or in TAC boolean expressions (`5569ddf`–`2bdc78c` — 2026-03-31)
+
+Removed `BoolExpr.and`/`BoolExpr.or` constructors. The compiler now flattens `&&`/`||` into short-circuit control flow using `ifgoto` + integer 0/1 constants, producing a `cmpLit .ne tR 0` as the result. Proved `compileBool_wt` and `compileBool_allJumpsLe` for the flattened and/or cases (zero WhileLang sorrys). Proved `compileBool_eq_refCompileBool` for and/or.
+
+## 31. Add true/false boolean literals (uncommitted — 2026-03-31)
+
+Added `lit : Bool → BoolExpr` constructor to the TAC-level `BoolExpr` and `lit : Bool → SBool` constructor to the source-level `SBool`. Updated all pattern matches, evaluators, compilers, type checkers, code generators, optimizations, and proofs across the entire codebase (Semantics, WhileLang, RefCompiler, CompilerCorrectness, CodeGen, AsmSemantics, ConstPropOpt, ExecChecker, SoundnessBridge). No new sorrys introduced.
+
 ---
 
 ## Key theorem locations

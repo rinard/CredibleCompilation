@@ -85,6 +85,7 @@ def ssSet (ss : SymStore) (x : Var) (e : Expr) : SymStore :=
 /-- Convert a BoolExpr to a symbolic Expr by replacing each variable reference
     with its symbolic expression from the store. -/
 def BoolExpr.toSymExpr (ss : SymStore) : BoolExpr → Expr
+  | .lit b         => .blit b
   | .bvar x        => .tobool (ssGet ss x)
   | .cmp op x y    => .cmpE op (ssGet ss x) (ssGet ss y)
   | .cmpLit op x n => .cmpLitE op (ssGet ss x) n
@@ -135,6 +136,7 @@ def Expr.isNonZeroLit : Expr → Bool
 /-- Symbolically evaluate a BoolExpr under a symbolic store and invariant.
     Returns `some true`/`some false` if the result can be determined, `none` otherwise. -/
 def BoolExpr.symEval (ss : SymStore) (inv : EInv) : BoolExpr → Option Bool
+  | .lit b => some b
   | .bvar x =>
     match (ssGet ss x).simplify inv with
     | .blit b => some b
@@ -227,6 +229,7 @@ def relGetOrigExpr (rel : EExprRel) (v : Var) : Expr :=
 /-- Map variables in a BoolExpr through the expression relation.
     Only succeeds if every variable maps to a single variable (`.var v`). -/
 def BoolExpr.mapVarsRel (rel : EExprRel) : BoolExpr → Option BoolExpr
+  | .lit b => some (.lit b)
   | .bvar x =>
     match relGetOrigExpr rel x with
     | .var x' => some (.bvar x')
