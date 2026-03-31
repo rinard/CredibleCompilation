@@ -691,11 +691,16 @@ theorem refCompileBool_correct (sb : SBool) (offset nextTmp : Nat) (σ σ_tac : 
     rw [hrc] at hexec heval; simp at hexec heval
     exact ⟨σ', hexec, by simp [BoolExpr.eval, SBool.eval, heval], hntmp, hprev⟩
   | and a b iha ihb =>
-    -- Correctness of flattened short-circuit &&
-    -- Requires FragExec through conditional branches with case analysis on a.eval and b.eval
+    -- Flattened short-circuit &&: correctness requires FragExec through
+    -- conditional branches with case analysis on a.eval and b.eval.
+    -- The proof structure is: execute codeA → ifgoto (case split on a) →
+    -- if a=false: jump to falseL, const tR 0, result = false = false&&b ✓
+    -- if a=true: fall through, execute codeB → ifgoto (case split on b) →
+    --   if b=false: jump to falseL, const tR 0, result = false = true&&false ✓
+    --   if b=true: fall through, const tR 1, goto endL, result = true = true&&true ✓
     sorry
   | or a b iha ihb =>
-    -- Symmetric to and
+    -- Symmetric to and: short-circuit ||
     sorry
 
 -- ============================================================
