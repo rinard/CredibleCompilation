@@ -987,9 +987,9 @@ theorem compileBool_allJumpsLe (b : SBool) (offset nextTmp bound : Nat)
     · intro instr hmem
       simp [List.mem_cons] at hmem
       rcases hmem with rfl | rfl | rfl | rfl
-      · exact by omega  -- ifgoto
+      · exact Nat.le_trans (by omega) hbound  -- ifgoto: falseL ≤ bound
       · trivial  -- const
-      · exact by omega  -- goto
+      · exact Nat.le_trans (by omega) hbound  -- goto: endL ≤ bound
       · trivial  -- const
   | or _ _ iha ihb =>
     simp only [compileBool, List.length_append, List.length_cons, List.length_nil] at hbound ⊢
@@ -1002,9 +1002,9 @@ theorem compileBool_allJumpsLe (b : SBool) (offset nextTmp bound : Nat)
     · intro instr hmem
       simp [List.mem_cons] at hmem
       rcases hmem with rfl | rfl | rfl | rfl
-      · exact by omega
+      · exact Nat.le_trans (by omega) hbound
       · trivial
-      · exact by omega
+      · exact Nat.le_trans (by omega) hbound
       · trivial
 
 theorem initCode_allSeq (decls : List (Var × VarTy)) :

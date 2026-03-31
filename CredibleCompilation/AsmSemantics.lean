@@ -1022,8 +1022,13 @@ theorem genInstr_correct (prog : ArmProg) (vm : VarMap) (pcMap : Nat → Nat)
       simp [List.length_append] at this
       rw [this, hPC1]; omega
   | iftrue hinstr hcond =>
-    -- TAC: if cond goto l (taken) → ARM: genBoolExpr ++ [cbnz x0 (pcMap l)]
-    -- Use sorry for WellTypedBoolExpr extraction (inaccessible variable issue)
+    -- Extract WellTypedBoolExpr before subst (while instr is still accessible)
+    have hWTi := hWT pc hPC_bound
+    have heq_instr := Prog.getElem?_eq_getElem hPC_bound
+    rw [hinstr] at heq_instr
+    have hinstr_eq := Option.some.inj heq_instr
+    rw [← hinstr_eq] at hWTi
+    have hWTbe := match hWTi with | .ifgoto hbe => hbe
     have heq : instr = _ := Option.some.inj (hInstr.symm.trans hinstr)
     subst heq
     simp only [formalGenInstr] at hCodeInstr
@@ -1031,7 +1036,7 @@ theorem genInstr_correct (prog : ArmProg) (vm : VarMap) (pcMap : Nat → Nat)
     have hCodeCbnz := hCodeInstr.append_right
     obtain ⟨s1, hSteps1, hx0, hStack1, hPC1⟩ :=
       genBoolExpr_correct prog vm _ σ s (pcMap pc) hStateRel hScratch hCodeBE hPcRel hVarMap
-        p.tyCtx hTS sorry
+        p.tyCtx hTS hWTbe
     have hCbnz := hCodeCbnz.head; rw [← hPC1] at hCbnz
     have hx0_ne : s1.regs .x0 ≠ 0 := by rw [hx0, hcond]; simp
     exact ⟨{ s1 with pc := pcMap _ },
