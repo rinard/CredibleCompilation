@@ -691,13 +691,11 @@ theorem refCompileBool_correct (sb : SBool) (offset nextTmp : Nat) (σ σ_tac : 
     rw [hrc] at hexec heval; simp at hexec heval
     exact ⟨σ', hexec, by simp [BoolExpr.eval, SBool.eval, heval], hntmp, hprev⟩
   | and a b iha ihb =>
-    -- Flattened and: codeA ++ [ifgoto not ba falseL] ++ codeB ++ [ifgoto not bb falseL, const 1, goto, const 0]
-    -- Correctness: if a=false, jump to falseL→tR=0; if a=true∧b=false, same;
-    -- if a=true∧b=true, fall through→tR=1. Result (.cmpLit .ne tR 0).eval matches a&&b.
+    -- Correctness of flattened short-circuit &&
+    -- Requires FragExec through conditional branches with case analysis on a.eval and b.eval
     sorry
   | or a b iha ihb =>
-    -- Flattened or: codeA ++ [ifgoto ba trueL] ++ codeB ++ [ifgoto bb trueL, const 0, goto, const 1]
-    -- Symmetric to and: if a=true, jump→tR=1; else check b.
+    -- Symmetric to and
     sorry
 
 -- ============================================================
