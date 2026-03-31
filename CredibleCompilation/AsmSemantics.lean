@@ -315,7 +315,7 @@ def ScratchSafe (vm : VarMap) : Prop :=
 /-- Every integer value in the store is in the wrapped range [0, 2^64).
     This invariant is maintained by the TAC semantics (which uses wrap64). -/
 def WrappedStore (σ : Store) : Prop :=
-  ∀ v n, σ v = .int n → 0 ≤ n ∧ n < (2 ^ 64 : Int)
+  ∀ v n, σ v = .int n → 0 ≤ n ∧ n < (2 ^ 63 : Int)
 
 /-- If b is in [0, 2^64) and b ≠ 0, then BitVec.ofInt 64 b ≠ 0. -/
 theorem BitVec_ofInt_ne_zero_of_pos {b : Int} (hb : b ≠ 0)
@@ -720,13 +720,56 @@ theorem loadImm64_correct (prog : ArmProg) (rd : ArmReg) (n : Int)
     Uses BitVec 64 subtraction; correctness depends on the msb faithfully
     representing the sign of the mathematical difference for values that
     fit in 64 bits. -/
-theorem Flags.condHolds_correct (op : CmpOp) (a b : Int) :
+theorem Flags.condHolds_correct (op : CmpOp) (a b : Int)
+    (ha : 0 ≤ a) (ha' : a < 2 ^ 63) (hb : 0 ≤ b) (hb' : b < 2 ^ 63) :
     (Flags.mk (BitVec.ofInt 64 a - BitVec.ofInt 64 b)).condHolds
       (match op with | .eq => .eq | .ne => .ne | .lt => .lt | .le => .le)
     = op.eval a b := by
-  -- sorry: Proving that BitVec 64 subtraction + msb faithfully models signed
-  -- comparison for in-range integers requires detailed BitVec/Int bridging.
-  sorry
+  simp only [← BitVec_ofInt_sub]
+  have hdiff_range : -(2:Int) ^ 63 < a - b ∧ a - b < 2 ^ 63 := by omega
+  -- Key helper: BitVec.ofInt 64 (a-b) = 0 ↔ a = b (for values in range)
+  have heq_iff : BitVec.ofInt 64 (a - b) = 0 ↔ a = b := by
+    constructor
+    · intro h; have := congrArg BitVec.toNat h
+      simp [BitVec.toNat_ofInt] at this; omega
+    · intro h; subst h; simp
+  -- Key helper: msb = true ↔ a < b (signed interpretation for range)
+  have hmsb_iff : (BitVec.ofInt 64 (a - b)).msb = true ↔ a < b := by
+    simp only [BitVec.msb_eq_decide, BitVec.toNat_ofInt]
+    constructor
+    · intro h; simp at h; omega
+    · intro h; simp; omega
+  cases op <;> simp only [Flags.condHolds, CmpOp.eval]
+  · -- eq
+    show (BitVec.ofInt 64 (a - b) == 0) = (a == b)
+    cases h : (a == b) <;> simp [beq_iff_eq] at h ⊢
+    · intro h'; exact h (heq_iff.mp h')
+    · exact heq_iff.mpr h
+  · -- ne
+    show (BitVec.ofInt 64 (a - b) != 0) = (a != b)
+    unfold bne
+    show (!(BitVec.ofInt 64 (a - b) == 0)) = (!(a == b))
+    congr 1
+    -- reduce to eq case
+    show (BitVec.ofInt 64 (a - b) == 0) = (a == b)
+    cases h : (a == b) <;> simp [beq_iff_eq] at h ⊢
+    · intro h'; exact h (heq_iff.mp h')
+    · subst h; simp [Int.sub_self, BitVec.ofInt]
+  · -- lt
+    show (BitVec.ofInt 64 (a - b)).msb = decide (a < b)
+    cases h : decide (a < b) <;> simp [decide_eq_true_eq, decide_eq_false_iff_not] at h
+    · exact Bool.eq_false_iff.mpr (fun h' => absurd (hmsb_iff.mp h') (by omega))
+    · exact hmsb_iff.mpr h
+  · -- le
+    show ((BitVec.ofInt 64 (a - b)).msb || BitVec.ofInt 64 (a - b) == 0) = decide (a ≤ b)
+    cases h : decide (a ≤ b) <;> simp [decide_eq_true_eq, decide_eq_false_iff_not] at h
+    · have hmsb_f := Bool.eq_false_iff.mpr (fun h' => absurd (hmsb_iff.mp h') (by omega))
+      have heq_f : ¬ BitVec.ofInt 64 (a - b) = 0 := fun h' => absurd (heq_iff.mp h') (by omega)
+      simp only [hmsb_f, Bool.false_or, beq_eq_false_iff_ne.mpr heq_f]
+    · by_cases hab : a = b
+      · subst hab; simp [Int.sub_self, BitVec.ofInt, BitVec.msb]
+      · have hlt : a < b := by omega
+        simp only [hmsb_iff.mpr hlt, Bool.true_or]
 
 /-- Helper: executing ldr/ldr/cmp/cset for a `.cmp` boolean expression. -/
 private theorem genBoolExpr_cmp_correct (prog : ArmProg) (vm : VarMap)
@@ -735,6 +778,7 @@ private theorem genBoolExpr_cmp_correct (prog : ArmProg) (vm : VarMap)
     (hL : vm.lookup lv = some offL) (hR : vm.lookup rv = some offR)
     (hRel : StateRel vm σ s)
     (hIntL : ∃ n, σ lv = .int n) (hIntR : ∃ n, σ rv = .int n)
+    (hWrapped : WrappedStore σ)
     (hCode : CodeAt prog startPC
       (.ldr .x1 offL :: .ldr .x2 offR :: .cmp .x1 .x2 ::
        .cset .x0 (match op with | .eq => .eq | .ne => .ne | .lt => .lt | .le => .le) :: List.nil))
@@ -751,6 +795,8 @@ private theorem genBoolExpr_cmp_correct (prog : ArmProg) (vm : VarMap)
   have hvalL := hRel lv offL hL
   have hvalR := hRel rv offR hR
   obtain ⟨nL, hnL⟩ := hIntL; obtain ⟨nR, hnR⟩ := hIntR
+  have ⟨hLge, hLlt⟩ := hWrapped lv nL hnL
+  have ⟨hRge, hRlt⟩ := hWrapped rv nR hnR
   -- Helper: build the 4-step execution and close value/stack/pc goals
   suffices ∀ (c : Cond),
       prog[s.pc + 1 + 1 + 1]? = some (.cset .x0 c) →
@@ -762,10 +808,10 @@ private theorem genBoolExpr_cmp_correct (prog : ArmProg) (vm : VarMap)
         s'.pc = s.pc + 4 from by
     cases op <;> simp only [] at h3 <;> exact this _ h3 (by
       first
-      | exact congrArg (fun b => if b then (1 : BitVec 64) else 0) (Flags.condHolds_correct .eq nL nR)
-      | exact congrArg (fun b => if b then (1 : BitVec 64) else 0) (Flags.condHolds_correct .ne nL nR)
-      | exact congrArg (fun b => if b then (1 : BitVec 64) else 0) (Flags.condHolds_correct .lt nL nR)
-      | exact congrArg (fun b => if b then (1 : BitVec 64) else 0) (Flags.condHolds_correct .le nL nR))
+      | exact congrArg (fun b => if b then (1 : BitVec 64) else 0) (Flags.condHolds_correct .eq nL nR hLge hLlt hRge hRlt)
+      | exact congrArg (fun b => if b then (1 : BitVec 64) else 0) (Flags.condHolds_correct .ne nL nR hLge hLlt hRge hRlt)
+      | exact congrArg (fun b => if b then (1 : BitVec 64) else 0) (Flags.condHolds_correct .lt nL nR hLge hLlt hRge hRlt)
+      | exact congrArg (fun b => if b then (1 : BitVec 64) else 0) (Flags.condHolds_correct .le nL nR hLge hLlt hRge hRlt))
   intro c h3c hval
   exact ⟨_, .step (.ldr .x1 offL h0) (.step (.ldr .x2 offR h1)
     (.step (.cmpRR .x1 .x2 h2) (.single (.cset .x0 c h3c)))),
@@ -785,7 +831,8 @@ theorem genBoolExpr_correct (prog : ArmProg) (vm : VarMap)
     (hPC : s.pc = startPC)
     (hVarMap : ∀ v, ∃ off, vm.lookup v = some off)
     (Γ : TyCtx) (hTS : TypedStore Γ σ)
-    (hWTBE : WellTypedBoolExpr Γ be) :
+    (hWTBE : WellTypedBoolExpr Γ be)
+    (hWrapped : WrappedStore σ) :
     ∃ s', ArmSteps prog s s' ∧
       s'.regs .x0 = (if be.eval σ then (1 : BitVec 64) else 0) ∧
       (∀ v off, vm.lookup v = some off → s'.stack off = s.stack off) ∧
@@ -815,7 +862,7 @@ theorem genBoolExpr_correct (prog : ArmProg) (vm : VarMap)
     have hIntR : ∃ n, σ rv = .int n := by
       cases hWTBE with | cmp hx hy => exact Value.int_of_typeOf_int (by rw [hTS]; exact hy)
     exact genBoolExpr_cmp_correct prog vm op lv rv σ s startPC offL offR
-      hlv hrv hRel hIntL hIntR hCode hPC
+      hlv hrv hRel hIntL hIntR hWrapped hCode hPC
   | not e =>
     simp only [formalGenBoolExpr] at hCode ⊢
     -- Code = formalGenBoolExpr vm e ++ [eorImm x0 x0 1]
@@ -823,7 +870,7 @@ theorem genBoolExpr_correct (prog : ArmProg) (vm : VarMap)
     have hCodeEor := hCode.append_right
     have hWTe : WellTypedBoolExpr Γ e := by cases hWTBE with | not h => exact h
     obtain ⟨s1, hSteps1, hx0, hStack1, hPC1⟩ :=
-      genBoolExpr_correct prog vm e σ s startPC hRel hScratch hCodeE hPC hVarMap Γ hTS hWTe
+      genBoolExpr_correct prog vm e σ s startPC hRel hScratch hCodeE hPC hVarMap Γ hTS hWTe hWrapped
     have hEor := hCodeEor.head
     rw [← hPC1] at hEor
     -- After eor: x0 = 1 - x0 (flips 0↔1)
@@ -967,6 +1014,7 @@ theorem genInstr_correct (prog : ArmProg) (vm : VarMap) (pcMap : Nat → Nat)
     (cfg' : Cfg) (hStep : p ⊩ Cfg.run pc σ ⟶ cfg')
     (hVarMap : ∀ v, ∃ off, vm.lookup v = some off)
     (hCodeInstr : CodeAt prog (pcMap pc) (formalGenInstr vm pcMap instr haltLabel divLabel))
+    (hWrapped : WrappedStore σ)
     (hPcNext : ∀ pc' σ', cfg' = .run pc' σ' →
       pcMap pc' = pcMap pc + (formalGenInstr vm pcMap instr haltLabel divLabel).length) :
     ∃ s', ArmSteps prog s s' ∧ SimRel vm pcMap cfg' s' := by
@@ -1134,9 +1182,11 @@ theorem genInstr_correct (prog : ArmProg) (vm : VarMap) (pcMap : Nat → Nat)
       -- After ldr x2 offR: x2 = stack[offR] = (σ z).encode = b
       -- cbz x2 divLabel: since b ≠ 0, falls through
       -- Then ldr x1, ldr x2, sdiv, str — same as add/sub/mul
+      have ⟨hb_nn, hb_lt⟩ := hWrapped z b hz
+      have hb_ne0 : b ≠ 0 := by unfold BinOp.safe at hs; exact hs
       have hb_ne : s.stack offR ≠ (0 : BitVec 64) := by
         rw [hStateRel z offR hR, hz]; simp [Value.encode]
-        sorry -- BitVec.ofInt 64 b ≠ 0 when b ≠ 0 (requires range constraint)
+        exact BitVec_ofInt_ne_zero_of_pos hb_ne0 hb_nn (by omega)
       exact ⟨_, .step (.ldr .x2 offR h0)
               (.step (.cbz_fall .x2 divLabel h1 (by simp [ArmState.setReg, ArmState.nextPC]; exact hb_ne))
               (.step (.ldr .x1 offL h2)
@@ -1144,7 +1194,7 @@ theorem genInstr_correct (prog : ArmProg) (vm : VarMap) (pcMap : Nat → Nat)
               (.step (.sdivR .x0 .x1 .x2 h4 (by
                 simp [ArmState.setReg, ArmState.nextPC]
                 rw [hStateRel z offR hR, hz]; simp [Value.encode]
-                sorry))
+                exact BitVec_ofInt_ne_zero_of_pos hb_ne0 hb_nn (by omega)))
               (.single (.str .x0 offD h5)))))),
         by intro v off hv
            simp only [ArmState.setStack, ArmState.setReg, ArmState.nextPC,
@@ -1269,7 +1319,7 @@ theorem genInstr_correct (prog : ArmProg) (vm : VarMap) (pcMap : Nat → Nat)
       cases hwti with | boolop _ hbe => exact hbe
     obtain ⟨s1, hSteps1, hx0, hStack1, hPC1⟩ :=
       genBoolExpr_correct prog vm be σ s (pcMap pc) hStateRel hScratch hCodeBE hPcRel hVarMap
-        p.tyCtx hTS hWTbe
+        p.tyCtx hTS hWTbe hWrapped
     -- Then str x0, [sp, #offD]
     have hStr := hCodeStr.head; rw [← hPC1] at hStr
     refine ⟨s1.setStack offD (s1.regs .x0) |>.nextPC,
@@ -1307,7 +1357,7 @@ theorem genInstr_correct (prog : ArmProg) (vm : VarMap) (pcMap : Nat → Nat)
     have hCodeCbnz := hCodeInstr.append_right
     obtain ⟨s1, hSteps1, hx0, hStack1, hPC1⟩ :=
       genBoolExpr_correct prog vm _ σ s (pcMap pc) hStateRel hScratch hCodeBE hPcRel hVarMap
-        p.tyCtx hTS hWTbe
+        p.tyCtx hTS hWTbe hWrapped
     have hCbnz := hCodeCbnz.head; rw [← hPC1] at hCbnz
     have hx0_ne : s1.regs .x0 ≠ 0 := by rw [hx0, hcond]; simp
     exact ⟨{ s1 with pc := pcMap _ },
@@ -1327,7 +1377,7 @@ theorem genInstr_correct (prog : ArmProg) (vm : VarMap) (pcMap : Nat → Nat)
     have hCodeCbnz := hCodeInstr.append_right
     obtain ⟨s1, hSteps1, hx0, hStack1, hPC1⟩ :=
       genBoolExpr_correct prog vm _ σ s (pcMap pc) hStateRel hScratch hCodeBE hPcRel hVarMap
-        p.tyCtx hTS hWTbe
+        p.tyCtx hTS hWTbe hWrapped
     have hCbnz := hCodeCbnz.head; rw [← hPC1] at hCbnz
     have hx0_eq : s1.regs .x0 = 0 := by rw [hx0]; simp [hcond]
     refine ⟨s1.nextPC,
@@ -1358,9 +1408,10 @@ theorem backward_simulation (p : Prog) (armProg : ArmProg)
     (haltLabel divLabel : Nat)
     (instr : TAC) (hInstr : p[pc]? = some instr)
     (hCode : CodeAt armProg (pcMap pc) (formalGenInstr vm pcMap instr haltLabel divLabel))
+    (hWrapped : WrappedStore σ)
     (hPcNext : ∀ pc' σ', cfg' = .run pc' σ' →
       pcMap pc' = pcMap pc + (formalGenInstr vm pcMap instr haltLabel divLabel).length) :
     ∃ s', ArmSteps armProg s s' ∧ SimRel vm pcMap cfg' s' :=
   genInstr_correct armProg vm pcMap p pc σ s haltLabel divLabel
     instr hInstr hRel hScratch hInjective hWT hTS hPC cfg' hStep hVarMap
-    hCode hPcNext
+    hCode hWrapped hPcNext
