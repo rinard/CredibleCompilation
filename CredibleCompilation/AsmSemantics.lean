@@ -1043,7 +1043,12 @@ theorem genInstr_correct (prog : ArmProg) (vm : VarMap) (pcMap : Nat → Nat)
       hSteps1.trans (.single (.cbnz_taken .x0 _ hCbnz hx0_ne)),
       ⟨fun v off hv => (hStack1 v off hv).trans (hStateRel v off hv), rfl⟩⟩
   | iffall hinstr hcond =>
-    -- TAC: if cond goto l (not taken) → ARM: genBoolExpr ++ [cbnz x0 (pcMap l)]
+    -- Extract WellTypedBoolExpr before subst
+    have hWTi := hWT pc hPC_bound
+    have heq_instr := Prog.getElem?_eq_getElem hPC_bound
+    rw [hinstr] at heq_instr
+    rw [← Option.some.inj heq_instr] at hWTi
+    have hWTbe := match hWTi with | .ifgoto hbe => hbe
     have heq : instr = _ := Option.some.inj (hInstr.symm.trans hinstr)
     subst heq
     simp only [formalGenInstr] at hCodeInstr hPcNext
@@ -1051,7 +1056,7 @@ theorem genInstr_correct (prog : ArmProg) (vm : VarMap) (pcMap : Nat → Nat)
     have hCodeCbnz := hCodeInstr.append_right
     obtain ⟨s1, hSteps1, hx0, hStack1, hPC1⟩ :=
       genBoolExpr_correct prog vm _ σ s (pcMap pc) hStateRel hScratch hCodeBE hPcRel hVarMap
-        p.tyCtx hTS sorry
+        p.tyCtx hTS hWTbe
     have hCbnz := hCodeCbnz.head; rw [← hPC1] at hCbnz
     have hx0_eq : s1.regs .x0 = 0 := by rw [hx0]; simp [hcond]
     refine ⟨s1.nextPC,

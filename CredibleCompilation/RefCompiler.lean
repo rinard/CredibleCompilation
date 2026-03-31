@@ -1368,8 +1368,12 @@ theorem refCompileBool_stuck (sb : SBool) (offset nextTmp : Nat) (σ σ_tac : St
     obtain ⟨pc_s, σ_s, hfrag, hstuck, hlt⟩ := ih offset nextTmp σ_tac htf hintv hunsafe hagree hcodeE
     rw [hrc] at hlt; simp at hlt
     exact ⟨pc_s, σ_s, hfrag, hstuck, hlt⟩
-  | and a b iha ihb => sorry
-  | or a b iha ihb => sorry
+  | and a b iha ihb =>
+    -- Flattened and: stuck in codeA (if ¬a.divSafe) or codeB (if a.divSafe ∧ ¬b.divSafe)
+    -- In both cases, the stuck PC is within the generated code bounds
+    sorry
+  | or a b iha ihb =>
+    sorry
 
 -- ============================================================
 -- § 15. Statement stuck theorem
