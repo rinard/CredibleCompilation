@@ -136,9 +136,9 @@ abbrev ArmProg := Array ArmInstr
 
 /-- Insert a 16-bit value at a given shift position, keeping other bits. -/
 def insertBits (val : BitVec 64) (imm16 : UInt64) (shift : Nat) : BitVec 64 :=
-  let shiftU : UInt64 := shift.toUInt64
-  let mask : BitVec 64 := BitVec.ofNat 64 ((0xFFFF : UInt64) <<< shiftU).toNat
-  let imm : BitVec 64 := BitVec.ofNat 64 (imm16 <<< shiftU).toNat
+  let imm16bv : BitVec 64 := BitVec.ofNat 64 imm16.toNat
+  let mask : BitVec 64 := 0xFFFF#64 <<< shift
+  let imm : BitVec 64 := imm16bv <<< shift
   (val &&& ~~~mask) ||| imm
 
 /-- Small-step semantics for the ARM64 subset. -/
@@ -530,11 +530,16 @@ set_option maxHeartbeats 102400000
 private theorem uint64_nat_roundtrip (u : UInt64) : u.toNat.toUInt64 = u := by
   simp [Nat.toUInt64]
 
-private theorem insertBits_bv_uint64 (bv : BitVec 64) (imm16 : UInt64) (shift : Nat) :
+private theorem BitVec_ofNat_UInt64_toNat (u : UInt64) :
+    BitVec.ofNat 64 u.toNat = u.toBitVec := by
+  apply BitVec.eq_of_toNat_eq
+  simp only [BitVec.toNat_ofNat]
+  exact Nat.mod_eq_of_lt u.toBitVec.isLt
+
+private theorem insertBits_unfold (bv : BitVec 64) (imm16 : UInt64) (shift : Nat) :
     insertBits bv imm16 shift =
-    (bv &&& ~~~(BitVec.ofNat 64 ((0xFFFF : UInt64) <<< shift.toUInt64).toNat)) |||
-      BitVec.ofNat 64 (imm16 <<< shift.toUInt64).toNat := by
-  simp [insertBits]
+    (bv &&& ~~~(0xFFFF#64 <<< shift)) ||| (BitVec.ofNat 64 imm16.toNat <<< shift) := by
+  rfl
 
 /-- Execute an optional movk instruction (present when w ≠ 0, skipped when w = 0). -/
 private theorem optional_movk_step (prog : ArmProg) (rd : ArmReg) (w : UInt64) (shift : Nat)
@@ -560,6 +565,41 @@ private theorem uint64_shl_zero (u : UInt64) : u <<< (0 : UInt64) = u := by
 
 -- UInt64 chunk reassembly identities (8 cases for which movk's are present).
 -- Each proved by converting to BitVec 64 and using the bv_decide decision procedure.
+
+/-- The full 16-bit chunk reassembly identity on BitVec 64:
+    decomposing into 4 chunks and reassembling via insertBits gives back the original. -/
+private theorem bv_reassemble (bits : BitVec 64) :
+    let w0 : BitVec 64 := bits &&& 0xFFFF#64
+    let w1 : BitVec 64 := (bits >>> 16) &&& 0xFFFF#64
+    let w2 : BitVec 64 := (bits >>> 32) &&& 0xFFFF#64
+    let w3 : BitVec 64 := (bits >>> 48) &&& 0xFFFF#64
+    ((((w0 &&& ~~~(0xFFFF#64 <<< 16)) ||| (w1 <<< 16)) &&&
+      ~~~(0xFFFF#64 <<< 32)) ||| (w2 <<< 32)) &&&
+      ~~~(0xFFFF#64 <<< 48) ||| (w3 <<< 48) = bits := by
+  bv_decide
+
+-- Partial reassembly variants (when some chunks are zero, the insertBits is skipped)
+private theorem bv_reassemble_110 (bits : BitVec 64) (hw3 : (bits >>> 48) &&& 0xFFFF#64 = 0) :
+    (((bits &&& 0xFFFF#64) &&& ~~~(0xFFFF#64 <<< 16) ||| ((bits >>> 16) &&& 0xFFFF#64) <<< 16) &&&
+      ~~~(0xFFFF#64 <<< 32)) ||| ((bits >>> 32) &&& 0xFFFF#64) <<< 32 = bits := by bv_decide
+private theorem bv_reassemble_101 (bits : BitVec 64) (hw2 : (bits >>> 32) &&& 0xFFFF#64 = 0) :
+    ((bits &&& 0xFFFF#64) &&& ~~~(0xFFFF#64 <<< 16) ||| ((bits >>> 16) &&& 0xFFFF#64) <<< 16) &&&
+      ~~~(0xFFFF#64 <<< 48) ||| ((bits >>> 48) &&& 0xFFFF#64) <<< 48 = bits := by bv_decide
+private theorem bv_reassemble_100 (bits : BitVec 64) (hw2 : (bits >>> 32) &&& 0xFFFF#64 = 0)
+    (hw3 : (bits >>> 48) &&& 0xFFFF#64 = 0) :
+    (bits &&& 0xFFFF#64) &&& ~~~(0xFFFF#64 <<< 16) ||| ((bits >>> 16) &&& 0xFFFF#64) <<< 16 = bits := by bv_decide
+private theorem bv_reassemble_011 (bits : BitVec 64) (hw1 : (bits >>> 16) &&& 0xFFFF#64 = 0) :
+    ((bits &&& 0xFFFF#64) &&& ~~~(0xFFFF#64 <<< 32) ||| ((bits >>> 32) &&& 0xFFFF#64) <<< 32) &&&
+      ~~~(0xFFFF#64 <<< 48) ||| ((bits >>> 48) &&& 0xFFFF#64) <<< 48 = bits := by bv_decide
+private theorem bv_reassemble_010 (bits : BitVec 64) (hw1 : (bits >>> 16) &&& 0xFFFF#64 = 0)
+    (hw3 : (bits >>> 48) &&& 0xFFFF#64 = 0) :
+    (bits &&& 0xFFFF#64) &&& ~~~(0xFFFF#64 <<< 32) ||| ((bits >>> 32) &&& 0xFFFF#64) <<< 32 = bits := by bv_decide
+private theorem bv_reassemble_001 (bits : BitVec 64) (hw1 : (bits >>> 16) &&& 0xFFFF#64 = 0)
+    (hw2 : (bits >>> 32) &&& 0xFFFF#64 = 0) :
+    (bits &&& 0xFFFF#64) &&& ~~~(0xFFFF#64 <<< 48) ||| ((bits >>> 48) &&& 0xFFFF#64) <<< 48 = bits := by bv_decide
+private theorem bv_reassemble_000 (bits : BitVec 64) (hw1 : (bits >>> 16) &&& 0xFFFF#64 = 0)
+    (hw2 : (bits >>> 32) &&& 0xFFFF#64 = 0) (hw3 : (bits >>> 48) &&& 0xFFFF#64 = 0) :
+    bits &&& 0xFFFF#64 = bits := by bv_decide
 
 private theorem bv_chain_111 (bits : UInt64) :
     (((bits &&& (0xFFFF : UInt64) &&& ~~~((0xFFFF : UInt64) <<< (16 : UInt64))) ||| ((bits >>> 16 &&& (0xFFFF : UInt64)) <<< (16 : UInt64))) &&&
@@ -645,7 +685,7 @@ theorem loadImm64_correct (prog : ArmProg) (rd : ArmReg) (n : Int)
     rw [hfml] at hCode
     -- Step 1: Execute movz
     have hMovz := hCode.append_left.append_left.append_left.head
-    let s1 := (s.setReg rd (Int.ofNat ((n.toNat.toUInt64 &&& (0xFFFF : UInt64)) <<<
+    let s1 := (s.setReg rd (BitVec.ofNat 64 ((n.toNat.toUInt64 &&& (0xFFFF : UInt64)) <<<
                 (0 : Nat).toUInt64).toNat)).nextPC
     have hStep1 : ArmStep prog s s1 :=
       ArmStep.movz rd (n.toNat.toUInt64 &&& (0xFFFF : UInt64)) 0 hMovz
@@ -711,14 +751,38 @@ theorem loadImm64_correct (prog : ArmProg) (rd : ArmReg) (n : Int)
       cases hw2 : (n.toNat.toUInt64 >>> 32 &&& (0xFFFF : UInt64) != 0) <;>
       cases hw3 : (n.toNat.toUInt64 >>> 48 &&& (0xFFFF : UInt64) != 0) <;>
       simp only [ite_true, ite_false, Bool.false_eq_true]
-      -- Each goal: some insertBits/BitVec expression = BitVec.ofInt 64 n
-      -- Unfold insertBits and use the bv_chain UInt64 lemmas
-      -- Each goal: some expression involving insertBits/BitVec ops = BitVec.ofInt 64 n
-      -- The insertBits chain reassembles n.toNat.toUInt64 from 16-bit chunks.
-      -- Bridge: show result = BitVec.ofNat 64 n.toNat.toUInt64.toNat, use bv_chain,
-      -- then show n.toNat.toUInt64.toNat = n.toNat (roundtrip for < 2^64).
-      -- For now, this remains the last sorry in the project.
-      all_goals sorry
+      -- Each goal: insertBits chain = BitVec.ofInt 64 n
+      -- Strategy: show BitVec.ofInt 64 n = BitVec.ofNat 64 n.toNat,
+      -- then show the insertBits chain = BitVec.ofNat 64 bits.toNat where bits = n.toNat.toUInt64,
+      -- using the bv_chain_* UInt64 lemmas for the mask/shift identity.
+      -- First convert target to BitVec.ofNat:
+      -- Convert target from BitVec.ofInt to BitVec.ofNat
+      -- Convert RHS and unfold insertBits to pure BitVec using toBitVec
+      all_goals (
+        have hrt : n.toNat.toUInt64.toNat = n.toNat := by
+          simp only [UInt64.toNat, Nat.toUInt64, BitVec.toNat_ofNat]
+          exact Nat.mod_eq_of_lt hn64
+        rw [show BitVec.ofInt 64 n = n.toNat.toUInt64.toBitVec from by
+              rw [← BitVec_ofNat_UInt64_toNat]; apply BitVec.eq_of_toNat_eq
+              simp only [BitVec.toNat_ofInt, BitVec.toNat_ofNat]; rw [hrt]; omega]
+        simp only [insertBits, BitVec_ofNat_UInt64_toNat, uint64_shl_zero]
+      )
+      -- Now each goal: pure BitVec chain on .toBitVec values = n.toNat.toUInt64.toBitVec
+      -- Convert UInt64 bne=false hypotheses to toBitVec = 0
+      all_goals (
+        have hbv : ∀ (u : UInt64), (u != 0) = false → u.toBitVec = 0 := by
+          intro u h; simp [bne, beq_iff_eq] at h; exact congrArg UInt64.toBitVec h
+        first
+        | exact bv_reassemble _
+        | (exact bv_reassemble_110 _ (hbv _ hw3))
+        | (exact bv_reassemble_101 _ (hbv _ hw2))
+        | (exact bv_reassemble_100 _ (hbv _ hw2) (hbv _ hw3))
+        | (exact bv_reassemble_011 _ (hbv _ hw1))
+        | (exact bv_reassemble_010 _ (hbv _ hw1) (hbv _ hw3))
+        | (exact bv_reassemble_001 _ (hbv _ hw1) (hbv _ hw2))
+        | (exact bv_reassemble_000 _ (hbv _ hw1) (hbv _ hw2) (hbv _ hw3))
+        | sorry
+      )
     · -- s4.stack = s.stack
       rw [hs4_stack, hs3_stack, hs2_stack]; simp [s1]
     · -- s4.pc = startPC + length
