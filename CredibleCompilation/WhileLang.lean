@@ -484,9 +484,9 @@ private theorem initCode_length (decls : List (Var × VarTy)) :
     that already holds `v`, so the store is unchanged. -/
 theorem compile_initExec (prog : Program)
     (hnd : noDups (prog.decls.map Prod.fst) = true) :
-    prog.compile ⊩ Cfg.run 0 prog.initStore ⟶* Cfg.run prog.decls.length prog.initStore := by
+    prog.compile ⊩ Cfg.run 0 prog.initStore ArrayMem.init ⟶* Cfg.run prog.decls.length prog.initStore ArrayMem.init := by
   suffices h : ∀ (k : Nat), k ≤ prog.decls.length →
-      prog.compile ⊩ Cfg.run 0 prog.initStore ⟶* Cfg.run k prog.initStore from
+      prog.compile ⊩ Cfg.run 0 prog.initStore ArrayMem.init ⟶* Cfg.run k prog.initStore ArrayMem.init from
     h prog.decls.length (Nat.le_refl _)
   intro k hk
   induction k with
@@ -498,8 +498,8 @@ theorem compile_initExec (prog : Program)
     have hmem_decl : prog.decls[k] ∈ prog.decls := List.getElem_mem hk_lt
     have hval := initStore_declared prog hmem_decl hnd
     -- The const step is a no-op because the value is already present
-    have hstep : Step prog.compile (.run k prog.initStore)
-        (.run (k + 1) prog.initStore) := by
+    have hstep : Step prog.compile (.run k prog.initStore ArrayMem.init)
+        (.run (k + 1) prog.initStore ArrayMem.init) := by
       -- Normalize get/getElem
       have hget : prog.decls.get ⟨k, hk_lt⟩ = prog.decls[k] := rfl
       rw [hget] at hval
@@ -514,7 +514,7 @@ theorem compile_initExec (prog : Program)
           rw [List.getElem?_append_left (by rw [initCode_length]; omega)]
           simp only [initCode, List.getElem?_map, List.getElem?_eq_getElem hk_lt,
             Option.map_some, hty]
-        have := Step.const hinst (σ := prog.initStore)
+        have := Step.const hinst (σ := prog.initStore) (am := ArrayMem.init)
         rwa [Store.update_of_eq _ _ _ hval] at this
       | bool =>
         simp only [hty, VarTy.defaultVal] at hval
@@ -525,7 +525,7 @@ theorem compile_initExec (prog : Program)
           rw [List.getElem?_append_left (by rw [initCode_length]; omega)]
           simp only [initCode, List.getElem?_map, List.getElem?_eq_getElem hk_lt,
             Option.map_some, hty]
-        have := Step.const hinst (σ := prog.initStore)
+        have := Step.const hinst (σ := prog.initStore) (am := ArrayMem.init)
         rwa [Store.update_of_eq _ _ _ hval] at this
     exact Steps.trans ih_steps (Steps.step hstep Steps.refl)
 
@@ -910,8 +910,8 @@ theorem no_type_stuck (prog : Program)
     (htc : prog.typeCheck = true)
     (σ : Store) (hts : TypedStore prog.tyCtx σ)
     (pc : Nat) (hpc : pc < prog.compile.size) :
-    ∃ c', Step prog.compile (Cfg.run pc σ) c' :=
-  Step.progress prog.compile pc σ prog.tyCtx hpc
+    ∀ am, ∃ c', Step prog.compile (Cfg.run pc σ am) c' :=
+  fun am => Step.progress prog.compile pc σ am prog.tyCtx hpc
     (prog.compile_wellTyped htc) hts
 
 -- ============================================================
@@ -1101,7 +1101,7 @@ private theorem stepClosed_of_allJumpsLe {code : List TAC} {p : Prog}
   have hlen : p.size = code.length + 1 := by simp [Prog.size, hcode]
   constructor
   · omega
-  · intro pc pc' σ σ' hpc hstep
+  · intro pc pc' σ σ' am am' hpc hstep
     obtain ⟨instr, hinstr, hmem⟩ := Step.mem_successors hstep
     rw [hlen] at hpc ⊢
     rw [show p[pc]? = (code ++ [TAC.halt])[pc]? from by
@@ -1113,6 +1113,8 @@ private theorem stepClosed_of_allJumpsLe {code : List TAC} {p : Prog}
       have hj := hjumps instr hmem_code
       cases instr with
       | const _ _ | copy _ _ | binop _ _ _ _ | boolop _ _ =>
+        simp [TAC.successors] at hmem; omega
+      | arrLoad _ _ _ | arrStore _ _ _ =>
         simp [TAC.successors] at hmem; omega
       | goto l => simp [TAC.successors] at hmem; subst hmem; exact Nat.lt_of_le_of_lt hj (by omega)
       | ifgoto _ l =>

@@ -294,36 +294,36 @@ theorem CodeAt.intro {c₁ c₂ : List TAC} {p : Prog} {offset : Nat}
 -- § 4. FragExec single-step helpers
 -- ============================================================
 
-theorem FragExec.single_const {p : Prog} {pc : Nat} {σ : Store} {x : Var} {v : Value}
+theorem FragExec.single_const {p : Prog} {pc : Nat} {σ : Store} {am : ArrayMem} {x : Var} {v : Value}
     (h : p[pc]? = some (.const x v)) :
-    FragExec p pc σ (pc + 1) (σ[x ↦ v]) :=
+    FragExec p pc σ (pc + 1) (σ[x ↦ v]) am am :=
   Steps.single (Step.const h)
 
-theorem FragExec.single_copy {p : Prog} {pc : Nat} {σ : Store} {x y : Var}
+theorem FragExec.single_copy {p : Prog} {pc : Nat} {σ : Store} {am : ArrayMem} {x y : Var}
     (h : p[pc]? = some (.copy x y)) :
-    FragExec p pc σ (pc + 1) (σ[x ↦ σ y]) :=
+    FragExec p pc σ (pc + 1) (σ[x ↦ σ y]) am am :=
   Steps.single (Step.copy h)
 
-theorem FragExec.single_binop {p : Prog} {pc : Nat} {σ : Store}
+theorem FragExec.single_binop {p : Prog} {pc : Nat} {σ : Store} {am : ArrayMem}
     {x : Var} {op : BinOp} {y z : Var} {a b : BitVec 64}
     (h : p[pc]? = some (.binop x op y z))
     (hy : σ y = .int a) (hz : σ z = .int b) (hsafe : op.safe a b) :
-    FragExec p pc σ (pc + 1) (σ[x ↦ .int (op.eval a b)]) :=
+    FragExec p pc σ (pc + 1) (σ[x ↦ .int (op.eval a b)]) am am :=
   Steps.single (Step.binop h hy hz hsafe)
 
-theorem FragExec.single_goto {p : Prog} {pc : Nat} {σ : Store} {l : Label}
+theorem FragExec.single_goto {p : Prog} {pc : Nat} {σ : Store} {am : ArrayMem} {l : Label}
     (h : p[pc]? = some (.goto l)) :
-    FragExec p pc σ l σ :=
+    FragExec p pc σ l σ am am :=
   Steps.single (Step.goto h)
 
-theorem FragExec.single_iftrue {p : Prog} {pc : Nat} {σ : Store} {b : BoolExpr} {l : Label}
+theorem FragExec.single_iftrue {p : Prog} {pc : Nat} {σ : Store} {am : ArrayMem} {b : BoolExpr} {l : Label}
     (h : p[pc]? = some (.ifgoto b l)) (hb : b.eval σ = true) :
-    FragExec p pc σ l σ :=
+    FragExec p pc σ l σ am am :=
   Steps.single (Step.iftrue h hb)
 
-theorem FragExec.single_iffalse {p : Prog} {pc : Nat} {σ : Store} {b : BoolExpr} {l : Label}
+theorem FragExec.single_iffalse {p : Prog} {pc : Nat} {σ : Store} {am : ArrayMem} {b : BoolExpr} {l : Label}
     (h : p[pc]? = some (.ifgoto b l)) (hb : b.eval σ = false) :
-    FragExec p pc σ (pc + 1) σ :=
+    FragExec p pc σ (pc + 1) σ am am :=
   Steps.single (Step.iffall h hb)
 
 -- ============================================================

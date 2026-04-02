@@ -553,18 +553,18 @@ theorem Program.typeCheck_intTyped (prog : Program) (h : prog.typeCheck = true)
 -- § 5. Fragment execution
 -- ============================================================
 
-abbrev FragExec (p : Prog) (pc : Nat) (σ : Store) (pc' : Nat) (σ' : Store) : Prop :=
-  p ⊩ Cfg.run pc σ ⟶* Cfg.run pc' σ'
+abbrev FragExec (p : Prog) (pc : Nat) (σ : Store) (pc' : Nat) (σ' : Store) (am am' : ArrayMem) : Prop :=
+  p ⊩ Cfg.run pc σ am ⟶* Cfg.run pc' σ' am'
 
-theorem FragExec.rfl' (p : Prog) (pc : Nat) (σ : Store) :
-    FragExec p pc σ pc σ := Steps.refl
+theorem FragExec.rfl' (p : Prog) (pc : Nat) (σ : Store) (am : ArrayMem) :
+    FragExec p pc σ pc σ am am := Steps.refl
 
-theorem FragExec.trans' {p : Prog} {pc₁ pc₂ pc₃ : Nat} {σ₁ σ₂ σ₃ : Store}
-    (h₁ : FragExec p pc₁ σ₁ pc₂ σ₂) (h₂ : FragExec p pc₂ σ₂ pc₃ σ₃) :
-    FragExec p pc₁ σ₁ pc₃ σ₃ := Steps.trans h₁ h₂
+theorem FragExec.trans' {p : Prog} {pc₁ pc₂ pc₃ : Nat} {σ₁ σ₂ σ₃ : Store} {am₁ am₂ am₃ : ArrayMem}
+    (h₁ : FragExec p pc₁ σ₁ pc₂ σ₂ am₁ am₂) (h₂ : FragExec p pc₂ σ₂ pc₃ σ₃ am₂ am₃) :
+    FragExec p pc₁ σ₁ pc₃ σ₃ am₁ am₃ := Steps.trans h₁ h₂
 
-theorem FragExec.toHalt {p : Prog} {pc pc' : Nat} {σ σ' : Store}
-    (hfrag : FragExec p pc σ pc' σ')
+theorem FragExec.toHalt {p : Prog} {pc pc' : Nat} {σ σ' : Store} {am am' : ArrayMem}
+    (hfrag : FragExec p pc σ pc' σ' am am')
     (hhalt : p[pc']? = some .halt) :
-    p ⊩ Cfg.run pc σ ⟶* Cfg.halt σ' :=
+    p ⊩ Cfg.run pc σ am ⟶* Cfg.halt σ' am' :=
   Steps.trans hfrag (Steps.single (.halt hhalt))

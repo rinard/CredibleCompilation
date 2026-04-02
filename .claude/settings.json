@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(/tmp/explore_str36.lean:*)",
+      "Bash(/tmp/explore_str37.lean:*)",
+      "Bash(ls /Users/mr/.elan/toolchains/leanprover--lean4---v4.28.0/lib/lean/Init/Data/String*)",
+      "Bash(/tmp/explore_str38.lean:*)",
+      "Bash(/tmp/explore_str41.lean:*)",
+      "Bash(/tmp/explore_str42.lean:*)",
+      "Bash(/tmp/explore_str43.lean:*)",
+      "Bash(/tmp/explore_str44.lean:*)",
+      "Bash(/tmp/explore_str45.lean:*)",
+      "Bash(/tmp/explore_str56.lean:*)",
+      "Bash(grep -rn \"inductive Step\" /Users/mr/CredibleCompilation/CredibleCompilation/*.lean)",
+      "Bash(git stash:*)"
+    ]
+  }
+}

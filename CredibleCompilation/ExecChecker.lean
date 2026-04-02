@@ -118,6 +118,7 @@ def execPath (orig : Prog) (ss : SymStore) (pc : Label) : List Label → SymStor
 def successors (instr : TAC) (pc : Label) : List Label :=
   match instr with
   | .const _ _ | .copy _ _ | .binop _ _ _ _ | .boolop _ _ => [pc + 1]
+  | .arrLoad _ _ _ | .arrStore _ _ _ => [pc + 1]
   | .goto l        => [l]
   | .ifgoto _ l    => [l, pc + 1]
   | .halt          => []
@@ -171,6 +172,8 @@ def collectAllVars (p1 p2 : Prog) : List Var :=
     | .copy x y      => [x, y]
     | .binop x _ y z => [x, y, z]
     | .boolop x _    => [x]
+    | .arrLoad x _ idx => [x, idx]
+    | .arrStore _ idx val => [idx, val]
     | .ifgoto b _    => b.vars
     | _              => []
   let go (code : Array TAC) := code.toList.foldl (fun acc i => acc ++ extract i) ([] : List Var)
@@ -280,7 +283,8 @@ def buildInstrCerts1to1 (trans : Prog) : Array EInstrCert :=
   let arr := (List.range trans.size).map fun i =>
     match trans[i]? with
     | some .halt => { pc_orig := i, transitions := ([] : List ETransCorr) }
-    | some (.const _ _) | some (.copy _ _) | some (.binop _ _ _ _) | some (.boolop _ _) =>
+    | some (.const _ _) | some (.copy _ _) | some (.binop _ _ _ _) | some (.boolop _ _)
+    | some (.arrLoad _ _ _) | some (.arrStore _ _ _) =>
       { pc_orig := i, transitions := [{ origLabels := [i + 1] }] }
     | some (.goto l) =>
       { pc_orig := i, transitions := [{ origLabels := [l] }] }
@@ -397,6 +401,7 @@ def checkHaltObservableExec (cert : ECertificate) : Bool :=
 def computeNextPC (instr : TAC) (pc : Label) (ss : SymStore) (inv : EInv) : Option Label :=
   match instr with
   | .const _ _ | .copy _ _ | .binop _ _ _ _ | .boolop _ _ => some (pc + 1)
+  | .arrLoad _ _ _ | .arrStore _ _ _ => some (pc + 1)
   | .goto l => some l
   | .ifgoto b l =>
     match b.symEval ss inv with
@@ -580,10 +585,10 @@ def checkCertificateVerboseExec (cert : ECertificate) : List (String × Bool) :=
     - Otherwise returns `nothing`. -/
 def observeExec (cert : ECertificate) (c : Cfg) : Observation :=
   match c with
-  | .halt σ      => Observation.halt (cert.observable.map fun v => (v, σ v))
-  | .error _     => Observation.error
-  | .typeError _ => Observation.typeError
-  | .run pc σ    =>
+  | .halt σ _      => Observation.halt (cert.observable.map fun v => (v, σ v))
+  | .error _ _     => Observation.error
+  | .typeError _ _ => Observation.typeError
+  | .run pc σ _    =>
     match cert.trans[pc]? with
     | some .halt => Observation.halt (cert.observable.map fun v => (v, σ v))
     | some _     => Observation.nothing

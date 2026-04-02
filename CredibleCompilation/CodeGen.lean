@@ -31,6 +31,10 @@ private def collectVars (p : Prog) : List Var :=
                           let b := if a.contains y then a else a ++ [y]
                           if b.contains z then b else b ++ [z]
     | .boolop x _      => if acc.contains x then acc else acc ++ [x]
+    | .arrLoad x _ idx => let a := if acc.contains x then acc else acc ++ [x]
+                          if a.contains idx then a else a ++ [idx]
+    | .arrStore _ idx val => let a := if acc.contains idx then acc else acc ++ [idx]
+                             if a.contains val then a else a ++ [val]
     | .goto _          => acc
     | .ifgoto _ _      => acc
     | .halt            => acc
@@ -135,6 +139,10 @@ private def genInstr (varMap : List (Var × Nat)) (pc : Nat) (instr : TAC) : Lis
     genBoolExpr varMap be ++ (s!"  cbnz w0, .L{l}" :: List.nil)
   | .halt =>
     "  b .Lhalt" :: List.nil
+  | .arrLoad _ _ _ =>
+    "  // TODO: arrLoad" :: List.nil
+  | .arrStore _ _ _ =>
+    "  // TODO: arrStore" :: List.nil
 
 -- ============================================================
 -- § 5. Program codegen
