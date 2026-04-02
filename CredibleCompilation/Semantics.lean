@@ -20,9 +20,10 @@ Note: Lean reserves `⊢`, so we use `⊩` as the program-turnstile.
 abbrev Var   := String
 abbrev Label := Nat        -- program counter / jump target
 
-/-- Runtime values: either an integer or a boolean. -/
+/-- Runtime values: either a 64-bit integer or a boolean.
+    Integers use `BitVec 64` to match ARM64 register semantics. -/
 inductive Value where
-  | int  : Int → Value
+  | int  : BitVec 64 → Value
   | bool : Bool → Value
   deriving Repr, DecidableEq, Inhabited
 
@@ -35,14 +36,14 @@ namespace VarTy
 
 /-- The default `Value` for a variable type: `0` for int, `false` for bool. -/
 def defaultVal : VarTy → Value
-  | .int  => .int 0
+  | .int  => .int (0 : BitVec 64)
   | .bool => .bool false
 
 end VarTy
 
 namespace Value
 
-def toInt : Value → Int
+def toInt : Value → BitVec 64
   | .int n  => n
   | .bool _ => 0
 
@@ -64,9 +65,9 @@ theorem bool_of_typeOf_bool {v : Value} (h : v.typeOf = .bool) : ∃ b, v = .boo
   | int _ => simp [typeOf] at h
   | bool b => exact ⟨b, rfl⟩
 
-@[simp] theorem toInt_int (n : Int) : (Value.int n).toInt = n := rfl
+@[simp] theorem toInt_int (n : BitVec 64) : (Value.int n).toInt = n := rfl
 @[simp] theorem toBool_bool (b : Bool) : (Value.bool b).toBool = b := rfl
-@[simp] theorem typeOf_int (n : Int) : (Value.int n).typeOf = .int := rfl
+@[simp] theorem typeOf_int (n : BitVec 64) : (Value.int n).typeOf = .int := rfl
 @[simp] theorem typeOf_bool (b : Bool) : (Value.bool b).typeOf = .bool := rfl
 
 end Value
@@ -84,7 +85,7 @@ def TypedStore (Γ : TyCtx) (σ : Store) : Prop :=
 
 namespace Store
 
-def init : Store := fun _ => .int 0
+def init : Store := fun _ => .int (0 : BitVec 64)
 
 /-- Functional update  σ[x ↦ v] -/
 def update (σ : Store) (x : Var) (v : Value) : Store :=
@@ -133,74 +134,24 @@ theorem TypedStore.update_typed {Γ : TyCtx} {σ : Store} {x : Var} {v : Value}
   · exact hts y
 
 -- ============================================================
--- § 1b. 64-bit wrapping arithmetic
--- ============================================================
-
-/-- The 64-bit modulus. -/
-def Word : Int := 2 ^ 64
-
-/-- Wrap an integer to the unsigned 64-bit range `[0, 2^64)`.
-    This models the behavior of ARM64 integer arithmetic. -/
-def wrap64 (n : Int) : Int := ((n % Word) + Word) % Word
-
-theorem wrap64_nonneg (n : Int) : 0 ≤ wrap64 n := Int.emod_nonneg _ (by decide)
-
-theorem wrap64_lt (n : Int) : wrap64 n < Word := by
-  unfold wrap64 Word
-  omega
-
-theorem wrap64_toNat_lt (n : Int) : (wrap64 n).toNat < 2 ^ 64 := by
-  have h1 := wrap64_nonneg n
-  have h2 := wrap64_lt n
-  exact Int.toNat_lt h1 |>.mpr h2
-
-theorem wrap64_idempotent (n : Int) : wrap64 (wrap64 n) = wrap64 n := by
-  unfold wrap64 Word; omega
-
-theorem wrap64_of_nonneg_lt {n : Int} (h1 : 0 ≤ n) (h2 : n < Word) :
-    wrap64 n = n := by
-  unfold wrap64 Word at *; omega
-
-theorem wrap64_add_left (a b : Int) : wrap64 (wrap64 a + b) = wrap64 (a + b) := by
-  unfold wrap64 Word; omega
-
-theorem wrap64_add_right (a b : Int) : wrap64 (a + wrap64 b) = wrap64 (a + b) := by
-  unfold wrap64 Word; omega
-
-theorem wrap64_sub_left (a b : Int) : wrap64 (wrap64 a - b) = wrap64 (a - b) := by
-  unfold wrap64 Word; omega
-
-theorem wrap64_sub_right (a b : Int) : wrap64 (a - wrap64 b) = wrap64 (a - b) := by
-  unfold wrap64 Word; omega
-
-
-/-- Wrap a `Value`, leaving booleans unchanged. -/
-def Value.wrap : Value → Value
-  | .int n  => .int (wrap64 n)
-  | .bool b => .bool b
-
-@[simp] theorem Value.wrap_typeOf (v : Value) : v.wrap.typeOf = v.typeOf := by
-  cases v <;> simp [Value.wrap, Value.typeOf]
-
--- ============================================================
 -- § 2. Binary operators
 -- ============================================================
 
 inductive BinOp | add | sub | mul | div deriving Repr, DecidableEq
 
-def BinOp.eval : BinOp → Int → Int → Int
+def BinOp.eval : BinOp → BitVec 64 → BitVec 64 → BitVec 64
   | .add, a, b => a + b
   | .sub, a, b => a - b
   | .mul, a, b => a * b
-  | .div, a, b => a / b
+  | .div, a, b => BitVec.sdiv a b
 
 /-- An operation is safe if it will not cause the program to get stuck.
     Only `div` can fault — when the divisor is zero. -/
-def BinOp.safe : BinOp → Int → Int → Prop
+def BinOp.safe : BinOp → BitVec 64 → BitVec 64 → Prop
   | .div, _, b => b ≠ 0
   | _, _, _    => True
 
-instance {op : BinOp} {a b : Int} : Decidable (op.safe a b) := by
+instance {op : BinOp} {a b : BitVec 64} : Decidable (op.safe a b) := by
   unfold BinOp.safe; cases op <;> exact inferInstance
 
 -- ============================================================
@@ -209,11 +160,11 @@ instance {op : BinOp} {a b : Int} : Decidable (op.safe a b) := by
 
 inductive CmpOp | eq | ne | lt | le deriving Repr, DecidableEq
 
-def CmpOp.eval : CmpOp → Int → Int → Bool
+def CmpOp.eval : CmpOp → BitVec 64 → BitVec 64 → Bool
   | .eq, a, b => a == b
   | .ne, a, b => a != b
-  | .lt, a, b => decide (a < b)
-  | .le, a, b => decide (a ≤ b)
+  | .lt, a, b => BitVec.slt a b
+  | .le, a, b => BitVec.sle a b
 
 -- ============================================================
 -- § 2b. Expressions over stores
@@ -222,14 +173,14 @@ def CmpOp.eval : CmpOp → Int → Int → Bool
 /-- Expressions that can be evaluated in a store. Used to describe
     how transformed-program variables map to original-program values. -/
 inductive Expr where
-  | lit    : Int → Expr
+  | lit    : BitVec 64 → Expr
   | blit   : Bool → Expr
   | var    : Var → Expr
   | bin    : BinOp → Expr → Expr → Expr
   -- Symbolic boolean expression constructors (for tracking boolop results)
   | tobool  : Expr → Expr                  -- .bool (e.eval σ).toBool
   | cmpE    : CmpOp → Expr → Expr → Expr  -- .bool (op.eval (a.eval σ).toInt (b.eval σ).toInt)
-  | cmpLitE : CmpOp → Expr → Int → Expr   -- .bool (op.eval (a.eval σ).toInt n)
+  | cmpLitE : CmpOp → Expr → BitVec 64 → Expr   -- .bool (op.eval (a.eval σ).toInt n)
   | notE    : Expr → Expr                  -- .bool (!(e.eval σ).toBool)
   | andE    : Expr → Expr → Expr           -- .bool ((a.eval σ).toBool && (b.eval σ).toBool)
   | orE     : Expr → Expr → Expr           -- .bool ((a.eval σ).toBool || (b.eval σ).toBool)
@@ -239,7 +190,7 @@ def Expr.eval (σ : Store) : Expr → Value
   | .lit n          => .int n
   | .blit b         => .bool b
   | .var x          => σ x
-  | .bin op a b     => .int (wrap64 (op.eval (a.eval σ).toInt (b.eval σ).toInt))
+  | .bin op a b     => .int (op.eval (a.eval σ).toInt (b.eval σ).toInt)
   | .tobool e       => .bool (e.eval σ).toBool
   | .cmpE op a b    => .bool (op.eval (a.eval σ).toInt (b.eval σ).toInt)
   | .cmpLitE op a n => .bool (op.eval (a.eval σ).toInt n)
@@ -256,7 +207,7 @@ inductive BoolExpr where
   | lit    : Bool → BoolExpr                   -- true / false literal
   | bvar   : Var → BoolExpr                    -- read a boolean variable
   | cmp    : CmpOp → Var → Var → BoolExpr     -- x op y (integer comparison)
-  | cmpLit : CmpOp → Var → Int → BoolExpr     -- x op n (variable vs literal)
+  | cmpLit : CmpOp → Var → BitVec 64 → BoolExpr     -- x op n (variable vs literal)
   | not    : BoolExpr → BoolExpr
   deriving Repr, DecidableEq
 
@@ -372,16 +323,12 @@ inductive WellTypedBoolExpr (Γ : TyCtx) : BoolExpr → Prop where
   | lit    : WellTypedBoolExpr Γ (.lit b)
   | bvar   : Γ x = .bool → WellTypedBoolExpr Γ (.bvar x)
   | cmp    : Γ x = .int → Γ y = .int → WellTypedBoolExpr Γ (.cmp op x y)
-  | cmpLit : Γ x = .int → n.toNat < 2 ^ 64 → WellTypedBoolExpr Γ (.cmpLit op x n)
+  | cmpLit : Γ x = .int → 0 ≤ n.toInt → n.toInt < 2 ^ 63 → WellTypedBoolExpr Γ (.cmpLit op x n)
   | not    : WellTypedBoolExpr Γ b → WellTypedBoolExpr Γ (.not b)
-
-theorem WellTypedBoolExpr.cmpLit_range {Γ : TyCtx} {op x n}
-    (h : WellTypedBoolExpr Γ (.cmpLit op x n)) : n.toNat < 2 ^ 64 := by
-  cases h with | cmpLit _ h => exact h
 
 /-- Well-typedness for a single TAC instruction. -/
 inductive WellTypedInstr (Γ : TyCtx) : TAC → Prop where
-  | const  : v.typeOf = Γ x → (∀ n, v = .int n → n.toNat < 2 ^ 64) → WellTypedInstr Γ (.const x v)
+  | const  : v.typeOf = Γ x → WellTypedInstr Γ (.const x v)
   | copy   : Γ x = Γ y → WellTypedInstr Γ (.copy x y)
   | binop  : Γ x = .int → Γ y = .int → Γ z = .int →
       WellTypedInstr Γ (.binop x op y z)
@@ -433,9 +380,9 @@ inductive Step (p : Prog) : Cfg → Cfg → Prop where
   | copy   : p[pc]? = some (.copy x y) →
       Step p (.run pc σ) (.run (pc + 1) (σ[x ↦ σ y]))
 
-  | binop  {a b : Int} : p[pc]? = some (.binop x op y z) →
+  | binop  {a b : BitVec 64} : p[pc]? = some (.binop x op y z) →
       σ y = .int a → σ z = .int b → op.safe a b →
-      Step p (.run pc σ) (.run (pc + 1) (σ[x ↦ .int (wrap64 (op.eval a b))]))
+      Step p (.run pc σ) (.run (pc + 1) (σ[x ↦ .int (op.eval a b)]))
 
   | boolop : p[pc]? = some (.boolop x be) →
       Step p (.run pc σ) (.run (pc + 1) (σ[x ↦ .bool (be.eval σ)]))
@@ -452,7 +399,7 @@ inductive Step (p : Prog) : Cfg → Cfg → Prop where
   | halt   : p[pc]? = some .halt →
       Step p (.run pc σ) (.halt σ)
 
-  | error  {a b : Int} : p[pc]? = some (.binop x op y z) →
+  | error  {a b : BitVec 64} : p[pc]? = some (.binop x op y z) →
       σ y = .int a → σ z = .int b → ¬ op.safe a b →
       Step p (.run pc σ) (.error σ)
 
@@ -739,13 +686,11 @@ def checkWellTypedBoolExpr (Γ : TyCtx) : BoolExpr → Bool
   | .lit _        => true
   | .bvar x       => decide (Γ x = .bool)
   | .cmp _ x y    => decide (Γ x = .int) && decide (Γ y = .int)
-  | .cmpLit _ x n => decide (Γ x = .int) && decide (n.toNat < (2 ^ 64 : Nat))
+  | .cmpLit _ x n => decide (Γ x = .int) && decide (0 ≤ n.toInt) && decide (n.toInt < 2 ^ 63)
   | .not e        => checkWellTypedBoolExpr Γ e
 
 def checkWellTypedInstr (Γ : TyCtx) : TAC → Bool
-  | .const x v     => decide (v.typeOf = Γ x) && match v with
-    | .int n => decide (n.toNat < (2 ^ 64 : Nat))
-    | .bool _ => true
+  | .const x v     => decide (v.typeOf = Γ x)
   | .copy x y      => decide (Γ x = Γ y)
   | .binop x _ y z => decide (Γ x = .int) && decide (Γ y = .int) && decide (Γ z = .int)
   | .boolop x be   => decide (Γ x = .bool) && checkWellTypedBoolExpr Γ be
@@ -765,7 +710,7 @@ theorem checkWellTypedBoolExpr_sound {Γ : TyCtx} {b : BoolExpr}
     exact .cmp h.1 h.2
   | cmpLit op x n =>
     simp only [checkWellTypedBoolExpr, Bool.and_eq_true, decide_eq_true_eq] at h
-    exact .cmpLit h.1 h.2
+    exact .cmpLit h.1.1 h.1.2 h.2
   | not e ih =>
     simp [checkWellTypedBoolExpr] at h; exact .not (ih h)
 
@@ -773,13 +718,8 @@ theorem checkWellTypedInstr_sound {Γ : TyCtx} {instr : TAC}
     (h : checkWellTypedInstr Γ instr = true) : WellTypedInstr Γ instr := by
   cases instr with
   | const x v =>
-    cases v with
-    | int n =>
-      simp only [checkWellTypedInstr, Bool.and_eq_true, decide_eq_true_eq] at h
-      exact .const h.1 (fun m hm => by cases hm; exact h.2)
-    | bool b =>
-      simp only [checkWellTypedInstr, Bool.and_eq_true, decide_eq_true_eq] at h
-      exact .const h.1 (fun _ hm => by cases hm)
+    simp only [checkWellTypedInstr, decide_eq_true_eq] at h
+    exact .const h
   | copy x y =>
     simp [checkWellTypedInstr, decide_eq_true_eq] at h; exact .copy h
   | binop x op y z =>
@@ -827,7 +767,7 @@ theorem type_preservation {Γ : TyCtx} {p : Prog} {pc pc' : Nat} {σ σ' : Store
     have := instr_eq_of_lookup hpc h
     rw [this] at hwti
     match hwti with
-    | .const hv _ => exact TypedStore.update_typed hts hv
+    | .const hv => exact TypedStore.update_typed hts hv
   | copy h =>
     have := instr_eq_of_lookup hpc h
     rw [this] at hwti
@@ -927,7 +867,7 @@ def sumProg : Prog := .ofCode #[
   TAC.goto   0                            -- 4
 ]
 
-def sumStore (n : Int) : Store :=
+def sumStore (n : BitVec 64) : Store :=
   Store.init |>.update "n"   (.int n)
              |>.update "acc" (.int 0)
              |>.update "one" (.int 1)

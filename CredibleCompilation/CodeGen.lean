@@ -63,9 +63,9 @@ private def storeVar (varMap : List (Var × Nat)) (v : Var) (reg : String) : Str
 
 /-- Load an arbitrary 64-bit integer into a register.
     Uses `mov` for small values, `movz`/`movk` sequence for large ones. -/
-private def loadImm64 (reg : String) (n : Int) : List String :=
-  if -65536 < n && n < 65536 then
-    s!"  mov {reg}, #{n}" :: List.nil
+private def loadImm64 (reg : String) (n : BitVec 64) : List String :=
+  if n.toInt.natAbs < 65536 then
+    s!"  mov {reg}, #{n.toInt}" :: List.nil
   else
     let bits : UInt64 := n.toNat.toUInt64
     let w0 := bits &&& 0xFFFF

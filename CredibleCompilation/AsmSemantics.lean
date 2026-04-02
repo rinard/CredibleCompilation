@@ -542,7 +542,30 @@ private theorem optional_movk_step (prog : ArmProg) (rd : ArmReg) (w : UInt64) (
 private theorem uint64_shl_zero (u : UInt64) : u <<< (0 : UInt64) = u := by
   apply UInt64.eq_of_toBitVec_eq; simp
 
-set_option maxHeartbeats 800000 in
+-- Bridge: convert UInt64 .toBitVec expressions to pure BitVec for bv_reassemble
+private theorem uint64_toBitVec_chunk0 (u : UInt64) :
+    (u &&& (0xFFFF : UInt64)).toBitVec = u.toBitVec &&& 0xFFFF#64 := rfl
+private theorem uint64_toBitVec_chunk16 (u : UInt64) :
+    (u >>> (16:UInt64) &&& (0xFFFF:UInt64)).toBitVec = (u.toBitVec >>> 16) &&& 0xFFFF#64 := by
+  show (UInt64.shiftRight u 16 &&& 0xFFFF).toBitVec = _; unfold UInt64.shiftRight
+  simp only [show (UInt64.mod 16 64).toBitVec = (16 : BitVec 64) from by native_decide]; rfl
+private theorem uint64_toBitVec_chunk32 (u : UInt64) :
+    (u >>> (32:UInt64) &&& (0xFFFF:UInt64)).toBitVec = (u.toBitVec >>> 32) &&& 0xFFFF#64 := by
+  show (UInt64.shiftRight u 32 &&& 0xFFFF).toBitVec = _; unfold UInt64.shiftRight
+  simp only [show (UInt64.mod 32 64).toBitVec = (32 : BitVec 64) from by native_decide]; rfl
+private theorem uint64_toBitVec_chunk48 (u : UInt64) :
+    (u >>> (48:UInt64) &&& (0xFFFF:UInt64)).toBitVec = (u.toBitVec >>> 48) &&& 0xFFFF#64 := by
+  show (UInt64.shiftRight u 48 &&& 0xFFFF).toBitVec = _; unfold UInt64.shiftRight
+  simp only [show (UInt64.mod 48 64).toBitVec = (48 : BitVec 64) from by native_decide]; rfl
+private theorem uint64_bne_false_toBitVec (u : UInt64) (h : (u != 0) = false) :
+    u.toBitVec = 0 := by
+  simp [bne, beq_iff_eq] at h; exact congrArg UInt64.toBitVec h
+
+-- Roundtrip: u.toBitVec.toNat.toUInt64 = u (matches the syntactic form after insertBits simp)
+private theorem uint64_toBitVec_toNat_roundtrip (u : UInt64) :
+    u.toBitVec.toNat.toUInt64 = u := uint64_nat_roundtrip u
+
+set_option maxHeartbeats 40000000 in
 theorem loadImm64_correct (prog : ArmProg) (rd : ArmReg) (n : BitVec 64)
     (s : ArmState) (startPC : Nat)
     (hCode : CodeAt prog startPC (formalLoadImm64 rd n))
@@ -656,13 +679,40 @@ theorem loadImm64_correct (prog : ArmProg) (rd : ArmReg) (n : BitVec 64)
               simp only [BitVec.toNat_ofNat]; omega]
         simp only [insertBits, BitVec_ofNat_UInt64_toNat, uint64_shl_zero]
       )
-      -- Now each goal: pure BitVec chain on .toBitVec values = n.toNat.toUInt64.toBitVec
-      -- Convert UInt64 bne=false hypotheses to toBitVec = 0
+      -- Each goal has .toBitVec.toNat.toUInt64 roundtrip. Collapse and apply helper.
       all_goals (
-        have hbv : ∀ (u : UInt64), (u != 0) = false → u.toBitVec = 0 := by
-          intro u h; simp [bne, beq_iff_eq] at h; exact congrArg UInt64.toBitVec h
-        sorry -- bv_reassemble lemmas timeout; pre-existing issue
+        rw [uint64_toBitVec_toNat_roundtrip]
+        try rw [show Nat.toUInt64 0 = (0 : UInt64) from rfl, uint64_shl_zero]
+        rw [uint64_toBitVec_chunk0]
+        try rw [uint64_toBitVec_chunk16]
+        try rw [uint64_toBitVec_chunk32]
+        try rw [uint64_toBitVec_chunk48]
       )
+      -- After rw, goals are pure BitVec: bv_reassemble variants.
+      -- Dispatch per case (after `cases` the context is small enough).
+      -- hw1/hw2/hw3 have been specialized to true/false per case.
+      -- false cases: need zero-chunk hypotheses.
+      -- The 8-way split goes: fff, fft, ftf, ftt, tff, tft, ttf, ttt
+      · exact bv_reassemble_000 _
+          (by rw [← uint64_toBitVec_chunk16]; exact uint64_bne_false_toBitVec _ hw1)
+          (by rw [← uint64_toBitVec_chunk32]; exact uint64_bne_false_toBitVec _ hw2)
+          (by rw [← uint64_toBitVec_chunk48]; exact uint64_bne_false_toBitVec _ hw3)
+      · exact bv_reassemble_001 _
+          (by rw [← uint64_toBitVec_chunk16]; exact uint64_bne_false_toBitVec _ hw1)
+          (by rw [← uint64_toBitVec_chunk32]; exact uint64_bne_false_toBitVec _ hw2)
+      · exact bv_reassemble_010 _
+          (by rw [← uint64_toBitVec_chunk16]; exact uint64_bne_false_toBitVec _ hw1)
+          (by rw [← uint64_toBitVec_chunk48]; exact uint64_bne_false_toBitVec _ hw3)
+      · exact bv_reassemble_011 _
+          (by rw [← uint64_toBitVec_chunk16]; exact uint64_bne_false_toBitVec _ hw1)
+      · exact bv_reassemble_100 _
+          (by rw [← uint64_toBitVec_chunk32]; exact uint64_bne_false_toBitVec _ hw2)
+          (by rw [← uint64_toBitVec_chunk48]; exact uint64_bne_false_toBitVec _ hw3)
+      · exact bv_reassemble_101 _
+          (by rw [← uint64_toBitVec_chunk32]; exact uint64_bne_false_toBitVec _ hw2)
+      · exact bv_reassemble_110 _
+          (by rw [← uint64_toBitVec_chunk48]; exact uint64_bne_false_toBitVec _ hw3)
+      · exact bv_reassemble _
     · -- s4.stack = s.stack
       rw [hs4_stack, hs3_stack, hs2_stack]; simp [s1]
     · -- s4.pc = startPC + length
@@ -682,10 +732,40 @@ theorem Flags.condHolds_correct (op : CmpOp) (a b : BitVec 64)
       (match op with | .eq => .eq | .ne => .ne | .lt => .lt | .le => .le)
     = op.eval a b := by
   have hdiff_range : -(2:Int) ^ 63 < a.toInt - b.toInt ∧ a.toInt - b.toInt < 2 ^ 63 := by omega
-  -- Key helper: (a - b) = 0 ↔ a = b
-  sorry -- Proof needs bmod reasoning with BitVec.toInt_sub and range hypotheses.
-        -- The eq/ne cases are straightforward via bv_omega.
-        -- The lt/le cases require: (a-b).msb ↔ a.toInt < b.toInt (given range [0, 2^63)).
+  -- Derive toNat bounds from toInt bounds
+  have ha_nat : a.toNat < 2 ^ 63 := by
+    have := BitVec.toInt_eq_msb_cond (x := a); split at this <;> omega
+  have hb_nat : b.toNat < 2 ^ 63 := by
+    have := BitVec.toInt_eq_msb_cond (x := b); split at this <;> omega
+  -- toInt = toNat when msb = false (i.e., value < 2^63)
+  have ha_int : a.toInt = (a.toNat : Int) := by
+    rw [BitVec.toInt_eq_msb_cond]; simp [BitVec.msb_eq_decide]; omega
+  have hb_int : b.toInt = (b.toNat : Int) := by
+    rw [BitVec.toInt_eq_msb_cond]; simp [BitVec.msb_eq_decide]; omega
+  cases op <;> simp only [Flags.condHolds, CmpOp.eval]
+  · -- eq: (a - b == 0) = (a == b)
+    apply Bool.eq_iff_iff.mpr; constructor
+    · intro h; exact decide_eq_true (by have := of_decide_eq_true h; bv_omega)
+    · intro h; exact decide_eq_true (by have := of_decide_eq_true h; bv_omega)
+  · -- ne: (a - b != 0) = (a != b)
+    unfold bne; congr 1
+    apply Bool.eq_iff_iff.mpr; constructor
+    · intro h; exact decide_eq_true (by have := of_decide_eq_true h; bv_omega)
+    · intro h; exact decide_eq_true (by have := of_decide_eq_true h; bv_omega)
+  · -- lt: (a - b).msb = a.slt b
+    apply Bool.eq_iff_iff.mpr
+    simp only [BitVec.msb_eq_toNat, BitVec.toNat_sub, ge_iff_le, decide_eq_true_eq,
+        BitVec.slt_iff_toInt_lt, ha_int, hb_int]
+    omega
+  · -- le: (a - b).msb || (a - b) == 0 = a.sle b
+    have heq_iff : ((a - b) == (0 : BitVec 64)) = true ↔ a.toNat = b.toNat :=
+      ⟨fun h => by have := of_decide_eq_true h; bv_omega,
+       fun h => decide_eq_true (by bv_omega)⟩
+    apply Bool.eq_iff_iff.mpr
+    simp only [Bool.or_eq_true, BitVec.msb_eq_toNat, BitVec.toNat_sub, ge_iff_le,
+        decide_eq_true_eq, BitVec.sle_iff_toInt_le, ha_int, hb_int]
+    rw [heq_iff]
+    omega
 
 /-- Helper: executing ldr/ldr/cmp/cset for a `.cmp` boolean expression. -/
 private theorem genBoolExpr_cmp_correct (prog : ArmProg) (vm : VarMap)
@@ -862,8 +942,11 @@ theorem genBoolExpr_correct (prog : ArmProg) (vm : VarMap)
     rw [show s.pc + ([ArmInstr.ldr .x1 off] ++ formalLoadImm64 .x2 n).length + 1 =
         s2.pc + 1 from by rw [hCmpPC]] at hCset
     -- Extract int witness for v
+    -- Extract int witness, and range on literal n, from well-typedness
     have hIntV : ∃ m, σ v = .int m := by
-      cases hWTBE with | cmpLit hx => exact Value.int_of_typeOf_int (by rw [hTS]; exact hx)
+      cases hWTBE with | cmpLit hx _ _ => exact Value.int_of_typeOf_int (by rw [hTS]; exact hx)
+    have hn_lo : 0 ≤ n.toInt := by cases hWTBE with | cmpLit _ h _ => exact h
+    have hn_hi : n.toInt < 2 ^ 63 := by cases hWTBE with | cmpLit _ _ h => exact h
     obtain ⟨nV, hnV⟩ := hIntV
     have hvalV := hRel v off hOff
     -- Length fact independent of op
@@ -881,7 +964,9 @@ theorem genBoolExpr_correct (prog : ArmProg) (vm : VarMap)
         (if (Flags.mk (s2.regs .x1 - s2.regs .x2)).condHolds c then (1 : BitVec 64) else 0) =
         (if op.eval nV n then 1 else 0) := by
       intro c op hc; subst hc; rw [hDiff]
-      sorry -- Flags.condHolds_correct: need range proof for cmpLit literal n
+      have ⟨hnV_lo, hnV_hi⟩ := hWrapped v nV hnV
+      exact congrArg (fun b => if b then (1 : BitVec 64) else 0)
+        (Flags.condHolds_correct op nV n hnV_lo hnV_hi hn_lo hn_hi)
     cases op <;> simp only [] at hCset ⊢ <;> (
       refine ⟨_, (.step (.ldr .x1 off hLdr) (hSteps2.trans
         (.step (.cmpRR .x1 .x2 hCmp) (.single (.cset .x0 _ hCset))))), ?_, ?_, ?_⟩)

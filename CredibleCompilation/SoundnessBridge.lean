@@ -137,22 +137,17 @@ private theorem Expr.reassoc_sound (op : BinOp) (a b : Expr) (σ : Store) :
   split
   · -- (na - x) + nb → (na + nb) - x
     rename_i na x nb
-    simp only [Expr.eval, BinOp.eval, Value.toInt]
-    congr 1; rw [wrap64_add_left]; congr 1; ring
+    simp only [Expr.eval, BinOp.eval, Value.toInt]; congr 1; bv_omega
   · -- (na - x) - nb → (na - nb) - x
     rename_i na x nb
-    simp only [Expr.eval, BinOp.eval, Value.toInt]
-    congr 1; rw [wrap64_sub_left]; congr 1; ring
+    simp only [Expr.eval, BinOp.eval, Value.toInt]; congr 1; bv_omega
   · rename_i na x nb
-    simp only [Expr.eval, BinOp.eval, Value.toInt]
-    congr 1; rw [wrap64_sub_right]; congr 1; ring
+    simp only [Expr.eval, BinOp.eval, Value.toInt]; congr 1; bv_omega
   · rename_i na nb x
-    simp only [Expr.eval, BinOp.eval, Value.toInt]
-    congr 1; rw [wrap64_sub_right]; congr 1; ring
+    simp only [Expr.eval, BinOp.eval, Value.toInt]; congr 1; bv_omega
   · -- na - (x - nb) → (na + nb) - x
     rename_i na x nb
-    simp only [Expr.eval, BinOp.eval, Value.toInt]
-    congr 1; rw [wrap64_sub_right]; congr 1; ring
+    simp only [Expr.eval, BinOp.eval, Value.toInt]; congr 1; bv_omega
   · rfl
 
 /-- Simplification preserves semantics: evaluating `e.simplify inv` in `σ`
@@ -376,12 +371,12 @@ theorem execSymbolic_sound (ss : SymStore) (instr : TAC)
   | binop dest op a b =>
     simp only [execSymbolic]
     -- Extract int witnesses from hstep (Step.binop requires σ a = .int _ and σ b = .int _)
-    obtain ⟨ia, ib, hia, hib, hsafe⟩ : ∃ ia ib : Int, σ a = .int ia ∧ σ b = .int ib ∧ op.safe ia ib := by
+    obtain ⟨ia, ib, hia, hib, hsafe⟩ : ∃ ia ib : BitVec 64, σ a = .int ia ∧ σ b = .int ib ∧ op.safe ia ib := by
       cases hstep <;> simp_all
-    have hstep' : Step prog (Cfg.run pc σ) (Cfg.run (pc + 1) (σ[dest ↦ .int (wrap64 (op.eval ia ib))])) :=
+    have hstep' : Step prog (Cfg.run pc σ) (Cfg.run (pc + 1) (σ[dest ↦ .int (op.eval ia ib)])) :=
       Step.binop hinstr hia hib hsafe
     have := step_det _ hstep'
-    have hσ' : σ' = σ[dest ↦ .int (wrap64 (op.eval ia ib))] := (Cfg.run.inj this).2.symm
+    have hσ' : σ' = σ[dest ↦ .int (op.eval ia ib)] := (Cfg.run.inj this).2.symm
     rw [hσ']
     by_cases hvd : v = dest
     · rw [hvd, ssGet_ssSet_same]
@@ -824,10 +819,10 @@ private theorem execPath_sound_gen (orig : Prog) (ss : SymStore) (inv : EInv)
             have hinstr_eq : orig[pc] = .binop x op y z :=
               Option.some.inj ((Array.getElem?_eq_getElem hpc_lt).symm.trans horig_opt)
             rw [hinstr_eq] at hwti
-            obtain ⟨a, hya⟩ : ∃ a : Int, σ y = .int a := by
+            obtain ⟨a, hya⟩ : ∃ a : BitVec 64, σ y = .int a := by
               cases hwti with | binop _ hy _ =>
               exact Value.int_of_typeOf_int (by rw [hts y]; exact hy)
-            obtain ⟨b, hzb⟩ : ∃ b : Int, σ z = .int b := by
+            obtain ⟨b, hzb⟩ : ∃ b : BitVec 64, σ z = .int b := by
               cases hwti with | binop _ _ hz =>
               exact Value.int_of_typeOf_int (by rw [hts z]; exact hz)
             have hsafe : op.safe a b := by
@@ -845,7 +840,7 @@ private theorem execPath_sound_gen (orig : Prog) (ss : SymStore) (inv : EInv)
                   rw [hzb] at hzval; exact Value.int.inj hzval ▸ hne
                 | _ => simp at hsafe_check
               | add | sub | mul => trivial
-            exact ⟨σ[x ↦ .int (wrap64 (op.eval a b))], Step.binop horig_opt hya hzb hsafe,
+            exact ⟨σ[x ↦ .int (op.eval a b)], Step.binop horig_opt hya hzb hsafe,
               execSymbolic_sound ss _ σ₀ σ _ pc _ orig hrepr (Step.binop horig_opt hya hzb hsafe) horig_opt⟩
           | boolop x be =>
             simp [computeNextPC] at hnext_opt

@@ -57,7 +57,7 @@ def Expr.simplify (inv : EInv) : Expr → Expr
     | none   => .var v
   | .bin op a b =>
     match a.simplify inv, b.simplify inv with
-    | .lit na, .lit nb => .lit (wrap64 (op.eval na nb))
+    | .lit na, .lit nb => .lit (op.eval na nb)
     | a', b'           => Expr.reassoc op a' b'
   | .tobool e       => .tobool e
   | .cmpE op a b    => .cmpE op a b

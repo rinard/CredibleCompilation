@@ -60,12 +60,12 @@ infixr:30 " ;; " => Stmt.seq
 -- § 2. Direct interpretation (for testing / specification)
 -- ============================================================
 
-/-- Evaluate an arithmetic expression. Returns Int; reads integer
+/-- Evaluate an arithmetic expression. Returns BitVec 64; reads integer
     values from the store via `.toInt`. -/
-def SExpr.eval (σ : Store) : SExpr → Int
-  | .lit n      => wrap64 n
+def SExpr.eval (σ : Store) : SExpr → BitVec 64
+  | .lit n      => BitVec.ofInt 64 n
   | .var x      => (σ x).toInt
-  | .bin op a b => wrap64 (op.eval (a.eval σ) (b.eval σ))
+  | .bin op a b => op.eval (a.eval σ) (b.eval σ)
 
 /-- Evaluate a boolean expression. -/
 def SBool.eval (σ : Store) : SBool → Bool
@@ -113,7 +113,7 @@ def compileExpr (e : SExpr) (offset nextTmp : Nat) : List TAC × Var × Nat :=
   match e with
   | .lit n =>
     let t := tmpName nextTmp
-    ([.const t (.int (wrap64 n))], t, nextTmp + 1)
+    ([.const t (.int (BitVec.ofInt 64 n))], t, nextTmp + 1)
   | .var x => ([], x, nextTmp)
   | .bin op a b =>
     let (codeA, va, tmp1) := compileExpr a offset nextTmp
@@ -154,9 +154,9 @@ def compileBool (b : SBool) (offset nextTmp : Nat) : List TAC × BoolExpr × Nat
       [TAC.ifgoto (.not ba) falseL] ++
       codeB ++
       [TAC.ifgoto (.not bb) falseL,
-       TAC.const tR (.int 1),
+       TAC.const tR (.int (1 : BitVec 64)),
        TAC.goto endL,
-       TAC.const tR (.int 0)]
+       TAC.const tR (.int (0 : BitVec 64))]
     (code, .cmpLit .ne tR 0, tmp2)
   | .or a b =>
     -- Flatten a || b: if a goto true; if b goto true; tR := 0; goto end; true: tR := 1; end:
@@ -170,9 +170,9 @@ def compileBool (b : SBool) (offset nextTmp : Nat) : List TAC × BoolExpr × Nat
       [TAC.ifgoto ba trueL] ++
       codeB ++
       [TAC.ifgoto bb trueL,
-       TAC.const tR (.int 0),
+       TAC.const tR (.int (0 : BitVec 64)),
        TAC.goto endL,
-       TAC.const tR (.int 1)]
+       TAC.const tR (.int (1 : BitVec 64))]
     (code, .cmpLit .ne tR 0, tmp2)
 
 /-- Compile a statement. Returns (code, next temp index).
@@ -182,7 +182,7 @@ def compileStmt (s : Stmt) (offset nextTmp : Nat) : List TAC × Nat :=
   | .skip => ([], nextTmp)
   | .assign x e =>
     match e with
-    | .lit n => ([.const x (.int (wrap64 n))], nextTmp)
+    | .lit n => ([.const x (.int (BitVec.ofInt 64 n))], nextTmp)
     | .var y => ([.copy x y], nextTmp)
     | .bin op a b =>
       let (codeA, va, tmp1) := compileExpr a offset nextTmp
@@ -331,7 +331,7 @@ def typeCheck (prog : Program) : Bool :=
 private def initCode (decls : List (Var × VarTy)) : List TAC :=
   decls.map fun (x, ty) =>
     match ty with
-    | .int  => .const x (.int 0)
+    | .int  => .const x (.int (0 : BitVec 64))
     | .bool => .const x (.bool false)
 
 /-- Compile a typed program: initialize declared variables, then compile body.
@@ -353,7 +353,7 @@ def compile (prog : Program) : Prog :=
 def initStore (prog : Program) : Store :=
   prog.decls.foldl (fun σ (x, ty) =>
     match ty with
-    | .int  => σ[x ↦ .int 0]
+    | .int  => σ[x ↦ .int (0 : BitVec 64)]
     | .bool => σ[x ↦ .bool false]) Store.init
 
 /-- Interpret a typed program. Starts from the declaration-initialized store,
@@ -370,7 +370,7 @@ def interp (prog : Program) (fuel : Nat)
 -- The fold step for initStore
 private def initFold (σ : Store) (p : Var × VarTy) : Store :=
   match p.2 with
-  | .int  => σ[p.1 ↦ .int 0]
+  | .int  => σ[p.1 ↦ .int (0 : BitVec 64)]
   | .bool => σ[p.1 ↦ .bool false]
 
 -- `contains` false implies not a member (for Var = String with LawfulBEq)
@@ -686,8 +686,7 @@ theorem compileExpr_wt (prog : Program)
   induction e generalizing offset nextTmp with
   | lit n =>
     simp only [compileExpr]
-    exact ⟨allWTI_one (.const (by simp [Value.typeOf]; exact (tyCtx_tmp_wt prog hnt _).symm)
-           (by intro m hm; cases hm; exact wrap64_toNat_lt _)),
+    exact ⟨allWTI_one (.const (by simp [Value.typeOf]; exact (tyCtx_tmp_wt prog hnt _).symm)),
            tyCtx_tmp_wt prog hnt _⟩
   | var x =>
     simp only [compileExpr]
@@ -747,7 +746,7 @@ theorem compileBool_wt (prog : Program)
       (offset + (compileBool a offset nextTmp).1.length + 1)
       ((compileBool a offset nextTmp).2.2 + 1)
     simp only [compileBool]
-    refine ⟨?_, .cmpLit (tyCtx_tmp_wt prog hnt _) (by decide)⟩
+    refine ⟨?_, .cmpLit (tyCtx_tmp_wt prog hnt _) (by native_decide) (by native_decide)⟩
     let tmp1 := (compileBool a offset nextTmp).2.2
     have htR : (Value.int 1).typeOf = prog.tyCtx (tmpName tmp1) := by
       simp [Value.typeOf]; exact (tyCtx_tmp_wt prog hnt tmp1).symm
@@ -757,9 +756,9 @@ theorem compileBool_wt (prog : Program)
       (allWTI_one (.ifgoto (.not ha_ty))))
       hb_wt)
       (allWTI_cons' (.ifgoto (.not hb_ty))
-        (allWTI_cons' (.const htR (by intro m hm; cases hm; decide))
+        (allWTI_cons' (.const htR)
           (allWTI_cons' .goto
-            (allWTI_one (.const htR0 (by intro m hm; cases hm; decide))))))
+            (allWTI_one (.const htR0)))))
   | or a b iha ihb =>
 
     simp [Program.checkSBool, Bool.and_eq_true] at hchk
@@ -769,7 +768,7 @@ theorem compileBool_wt (prog : Program)
       (offset + (compileBool a offset nextTmp).1.length + 1)
       ((compileBool a offset nextTmp).2.2 + 1)
     simp only [compileBool]
-    refine ⟨?_, .cmpLit (tyCtx_tmp_wt prog hnt _) (by decide)⟩
+    refine ⟨?_, .cmpLit (tyCtx_tmp_wt prog hnt _) (by native_decide) (by native_decide)⟩
     let tmp1 := (compileBool a offset nextTmp).2.2
     have htR : (Value.int 0).typeOf = prog.tyCtx (tmpName tmp1) := by
       simp [Value.typeOf]; exact (tyCtx_tmp_wt prog hnt tmp1).symm
@@ -779,9 +778,9 @@ theorem compileBool_wt (prog : Program)
       (allWTI_one (.ifgoto ha_ty)))
       hb_wt)
       (allWTI_cons' (.ifgoto hb_ty)
-        (allWTI_cons' (.const htR (by intro m hm; cases hm; decide))
+        (allWTI_cons' (.const htR)
           (allWTI_cons' .goto
-            (allWTI_one (.const htR1 (by intro m hm; cases hm; decide))))))
+            (allWTI_one (.const htR1)))))
 
 -- compileStmt produces well-typed instructions
 theorem compileStmt_wt (prog : Program)
@@ -798,8 +797,7 @@ theorem compileStmt_wt (prog : Program)
     cases e with
     | lit n =>
       simp only [compileStmt]
-      exact allWTI_one (.const (by simp [Value.typeOf]; exact hxty.symm)
-        (by intro m hm; cases hm; exact wrap64_toNat_lt _))
+      exact allWTI_one (.const (by simp [Value.typeOf]; exact hxty.symm))
     | var y =>
       simp only [compileStmt]
       simp [Program.checkSExpr] at he
@@ -879,10 +877,10 @@ theorem initCode_wt (prog : Program)
   cases ty with
   | int =>
     simp at hgen; subst hgen
-    exact .const (by simp [Value.typeOf]; exact hty.symm) (by intro m hm; cases hm; decide)
+    exact .const (by simp [Value.typeOf]; exact hty.symm)
   | bool =>
     simp at hgen; subst hgen
-    exact .const (by simp [Value.typeOf]; exact hty.symm) (by intro m hm; cases hm)
+    exact .const (by simp [Value.typeOf]; exact hty.symm)
 
 namespace Program  -- reopen namespace
 
