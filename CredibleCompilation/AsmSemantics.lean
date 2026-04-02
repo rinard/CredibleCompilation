@@ -672,12 +672,12 @@ theorem loadImm64_correct (prog : ArmProg) (rd : ArmReg) (n : BitVec 64)
       -- Strategy: show n = n.toNat.toUInt64.toBitVec, then use bv_reassemble lemmas
       all_goals (
         have hrt : n.toNat.toUInt64.toNat = n.toNat := by
-          simp only [UInt64.toNat, Nat.toUInt64, BitVec.toNat_ofNat]
+          simp only [UInt64.toNat, Nat.toUInt64]
           exact Nat.mod_eq_of_lt hn64
         rw [show n = n.toNat.toUInt64.toBitVec from by
               rw [← BitVec_ofNat_UInt64_toNat]; apply BitVec.eq_of_toNat_eq
               simp only [BitVec.toNat_ofNat]; omega]
-        simp only [insertBits, BitVec_ofNat_UInt64_toNat, uint64_shl_zero]
+        simp only [insertBits, BitVec_ofNat_UInt64_toNat]
       )
       -- Each goal has .toBitVec.toNat.toUInt64 roundtrip. Collapse and apply helper.
       all_goals (
@@ -1199,7 +1199,7 @@ theorem genInstr_correct (prog : ArmProg) (vm : VarMap) (pcMap : Nat → Nat)
         by intro v off hv
            simp only [ArmState.setStack, ArmState.setReg, ArmState.nextPC,
                        ArmReg.beq_self, ArmReg.x0_ne_x1, ArmReg.x0_ne_x2,
-                       ArmReg.x1_ne_x2, ArmReg.x2_ne_x0, ArmReg.x2_ne_x1,
+                       ArmReg.x1_ne_x2, ArmReg.x2_ne_x1,
                        ite_true, ite_false, Bool.false_eq_true]
            by_cases hoff : off = offD
            · subst hoff; simp

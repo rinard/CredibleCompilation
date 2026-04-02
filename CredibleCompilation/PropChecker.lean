@@ -1109,7 +1109,7 @@ theorem credible_compilation_soundness
     match b with
     | .halts σ_t => ∃ σ_o, haltsWithResult cert.orig 0 σ₀ σ_o ∧
         ∀ v ∈ cert.observable, σ_t v = σ_o v
-    | .errors σ_e => ∃ σ_o, cert.orig ⊩ Cfg.run 0 σ₀ ⟶* Cfg.error σ_o
+    | .errors _σ_e => ∃ σ_o, cert.orig ⊩ Cfg.run 0 σ₀ ⟶* Cfg.error σ_o
     | .typeErrors _ => False
     | .diverges => ∃ f, IsInfiniteExec cert.orig f ∧ f 0 = Cfg.run 0 σ₀ := by
   cases b with
@@ -1135,7 +1135,7 @@ theorem credible_compilation_total
       match b with
       | .halts σ_t => ∃ σ_o, haltsWithResult cert.orig 0 σ₀ σ_o ∧
           ∀ v ∈ cert.observable, σ_t v = σ_o v
-      | .errors σ_e => ∃ σ_o, cert.orig ⊩ Cfg.run 0 σ₀ ⟶* Cfg.error σ_o
+      | .errors _σ_e => ∃ σ_o, cert.orig ⊩ Cfg.run 0 σ₀ ⟶* Cfg.error σ_o
       | .typeErrors _ => False
       | .diverges => ∃ f, IsInfiniteExec cert.orig f ∧ f 0 = Cfg.run 0 σ₀ := by
   obtain ⟨b, hb⟩ := has_behavior cert.trans σ₀ hvalid.step_closed
