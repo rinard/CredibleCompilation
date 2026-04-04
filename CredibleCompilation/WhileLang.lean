@@ -28,9 +28,10 @@ with a complete correctness proof and zero sorry holes.
 
 /-- Arithmetic expressions (tree-structured, unlike TAC operands). -/
 inductive SExpr where
-  | lit  : Int → SExpr
-  | var  : Var → SExpr
-  | bin  : BinOp → SExpr → SExpr → SExpr
+  | lit     : Int → SExpr
+  | var     : Var → SExpr
+  | bin     : BinOp → SExpr → SExpr → SExpr
+  | arrRead : ArrayName → SExpr → SExpr          -- arr[idx]
   deriving Repr
 
 /-- Boolean expressions over arithmetic sub-expressions. -/
@@ -45,12 +46,13 @@ inductive SBool where
 
 /-- Statements. -/
 inductive Stmt where
-  | skip    : Stmt
-  | assign  : Var → SExpr → Stmt                -- integer assignment
-  | bassign : Var → SBool → Stmt                -- boolean assignment
-  | seq     : Stmt → Stmt → Stmt
-  | ite     : SBool → Stmt → Stmt → Stmt        -- if-then-else
-  | loop    : SBool → Stmt → Stmt
+  | skip     : Stmt
+  | assign   : Var → SExpr → Stmt               -- integer assignment
+  | bassign  : Var → SBool → Stmt               -- boolean assignment
+  | arrWrite : ArrayName → SExpr → SExpr → Stmt -- arr[idx] := val
+  | seq      : Stmt → Stmt → Stmt
+  | ite      : SBool → Stmt → Stmt → Stmt       -- if-then-else
+  | loop     : SBool → Stmt → Stmt
   deriving Repr
 
 -- Syntactic sugar
@@ -62,36 +64,38 @@ infixr:30 " ;; " => Stmt.seq
 
 /-- Evaluate an arithmetic expression. Returns BitVec 64; reads integer
     values from the store via `.toInt`. -/
-def SExpr.eval (σ : Store) : SExpr → BitVec 64
+def SExpr.eval (σ : Store) (am : ArrayMem) : SExpr → BitVec 64
   | .lit n      => BitVec.ofInt 64 n
   | .var x      => (σ x).toInt
-  | .bin op a b => op.eval (a.eval σ) (b.eval σ)
+  | .bin op a b => op.eval (a.eval σ am) (b.eval σ am)
+  | .arrRead arr idx => am.read arr (idx.eval σ am).toNat
 
 /-- Evaluate a boolean expression. -/
-def SBool.eval (σ : Store) : SBool → Bool
+def SBool.eval (σ : Store) (am : ArrayMem) : SBool → Bool
   | .lit b      => b
   | .bvar x     => (σ x).toBool
-  | .cmp op a b => op.eval (a.eval σ) (b.eval σ)
-  | .not e      => !e.eval σ
-  | .and a b    => a.eval σ && b.eval σ
-  | .or a b     => a.eval σ || b.eval σ
+  | .cmp op a b => op.eval (a.eval σ am) (b.eval σ am)
+  | .not e      => !e.eval σ am
+  | .and a b    => a.eval σ am && b.eval σ am
+  | .or a b     => a.eval σ am || b.eval σ am
 
 /-- Interpret a statement directly, with a fuel bound to ensure termination. -/
-def Stmt.interp (fuel : Nat) (σ : Store) : Stmt → Option Store
-  | .skip        => some σ
-  | .assign x e  => some (σ[x ↦ .int (e.eval σ)])
-  | .bassign x b => some (σ[x ↦ .bool (b.eval σ)])
-  | .seq s1 s2   => do let σ' ← s1.interp fuel σ; s2.interp fuel σ'
+def Stmt.interp (fuel : Nat) (σ : Store) (am : ArrayMem) : Stmt → Option (Store × ArrayMem)
+  | .skip        => some (σ, am)
+  | .assign x e  => some (σ[x ↦ .int (e.eval σ am)], am)
+  | .bassign x b => some (σ[x ↦ .bool (b.eval σ am)], am)
+  | .arrWrite arr idx val => some (σ, am.write arr (idx.eval σ am).toNat (val.eval σ am))
+  | .seq s1 s2   => do let (σ', am') ← s1.interp fuel σ am; s2.interp fuel σ' am'
   | .ite b s1 s2 =>
-    if b.eval σ then s1.interp fuel σ else s2.interp fuel σ
+    if b.eval σ am then s1.interp fuel σ am else s2.interp fuel σ am
   | .loop b body =>
     match fuel with
     | 0 => none  -- out of fuel
     | fuel' + 1 =>
-      if b.eval σ then do
-        let σ' ← body.interp fuel' σ
-        (Stmt.loop b body).interp fuel' σ'
-      else some σ
+      if b.eval σ am then do
+        let (σ', am') ← body.interp fuel' σ am
+        (Stmt.loop b body).interp fuel' σ' am'
+      else some (σ, am)
 
 -- ============================================================
 -- § 3. Compiler: While language → TAC (pure functional)
@@ -120,6 +124,10 @@ def compileExpr (e : SExpr) (offset nextTmp : Nat) : List TAC × Var × Nat :=
     let (codeB, vb, tmp2) := compileExpr b (offset + codeA.length) tmp1
     let t := tmpName tmp2
     (codeA ++ codeB ++ [.binop t op va vb], t, tmp2 + 1)
+  | .arrRead arr idx =>
+    let (codeIdx, vIdx, tmp1) := compileExpr idx offset nextTmp
+    let t := tmpName tmp1
+    (codeIdx ++ [.arrLoad t arr vIdx], t, tmp1 + 1)
 
 /-- Compile a boolean expression. Returns (code, BoolExpr, next temp index). -/
 def compileBool (b : SBool) (offset nextTmp : Nat) : List TAC × BoolExpr × Nat :=
@@ -188,9 +196,17 @@ def compileStmt (s : Stmt) (offset nextTmp : Nat) : List TAC × Nat :=
       let (codeA, va, tmp1) := compileExpr a offset nextTmp
       let (codeB, vb, tmp2) := compileExpr b (offset + codeA.length) tmp1
       (codeA ++ codeB ++ [.binop x op va vb], tmp2)
+    | .arrRead arr idx =>
+      let (codeIdx, vIdx, tmp1) := compileExpr idx offset nextTmp
+      let t := tmpName tmp1
+      (codeIdx ++ [.arrLoad t arr vIdx, .copy x t], tmp1 + 1)
   | .bassign x b =>
     let (code, be, tmp') := compileBool b offset nextTmp
     (code ++ [.boolop x be], tmp')
+  | .arrWrite arr idx val =>
+    let (codeIdx, vIdx, tmp1) := compileExpr idx offset nextTmp
+    let (codeVal, vVal, tmp2) := compileExpr val (offset + codeIdx.length) tmp1
+    (codeIdx ++ codeVal ++ [.arrStore arr vIdx vVal], tmp2)
   | .seq s1 s2 =>
     let (code1, tmp1) := compileStmt s1 offset nextTmp
     let (code2, tmp2) := compileStmt s2 (offset + code1.length) tmp1
@@ -228,6 +244,7 @@ def SExpr.toString : SExpr → String
   | .bin op a b =>
     let opStr := match op with | .add => "+" | .sub => "-" | .mul => "*" | .div => "/"
     s!"({a.toString} {opStr} {b.toString})"
+  | .arrRead arr idx => s!"{arr}[{idx.toString}]"
 
 def SBool.toString : SBool → String
   | .lit true => "true"
@@ -244,6 +261,7 @@ def Stmt.toString : Stmt → String
   | .skip => "skip"
   | .assign x e => s!"{x} := {e.toString}"
   | .bassign x b => s!"{x} := {b.toString}"
+  | .arrWrite arr idx val => s!"{arr}[{idx.toString}] := {val.toString}"
   | .seq s1 s2 => s!"{s1.toString};\n{s2.toString}"
   | .ite b s1 s2 => s!"if {b.toString} then\n  {s1.toString}\nelse\n  {s2.toString}"
   | .loop b body => s!"while {b.toString} do\n  {body.toString}"
@@ -296,6 +314,7 @@ def checkSExpr (lookup : Var → Option VarTy) : SExpr → Bool
   | .lit _ => true
   | .var x => lookup x == some .int
   | .bin _ a b => checkSExpr lookup a && checkSExpr lookup b
+  | .arrRead _arr idx => checkSExpr lookup idx
 
 /-- Check that a boolean expression uses properly-typed declared variables. -/
 def checkSBool (lookup : Var → Option VarTy) : SBool → Bool
@@ -311,6 +330,7 @@ def checkStmt (lookup : Var → Option VarTy) : Stmt → Bool
   | .skip => true
   | .assign x e => lookup x == some .int && checkSExpr lookup e
   | .bassign x b => lookup x == some .bool && checkSBool lookup b
+  | .arrWrite _arr idx val => checkSExpr lookup idx && checkSExpr lookup val
   | .seq s1 s2 => checkStmt lookup s1 && checkStmt lookup s2
   | .ite b s1 s2 => checkSBool lookup b && checkStmt lookup s1 && checkStmt lookup s2
   | .loop b body => checkSBool lookup b && checkStmt lookup body
@@ -359,9 +379,9 @@ def initStore (prog : Program) : Store :=
 /-- Interpret a typed program. Starts from the declaration-initialized store,
     with optional input overrides. -/
 def interp (prog : Program) (fuel : Nat)
-    (inputs : List (Var × Value) := []) : Option Store :=
+    (inputs : List (Var × Value) := []) : Option (Store × ArrayMem) :=
   let σ₀ := inputs.foldl (fun σ (x, v) => σ[x ↦ v]) prog.initStore
-  prog.body.interp fuel σ₀
+  prog.body.interp fuel σ₀ ArrayMem.init
 
 -- ============================================================
 -- § 5d. initStore is well-typed
@@ -706,6 +726,12 @@ theorem compileExpr_wt (prog : Program)
     · exact allWTI_append3 ha_wt hb_wt
         (allWTI_one (.binop (tyCtx_tmp_wt prog hnt _) ha_ty hb_ty))
     · exact tyCtx_tmp_wt prog hnt _
+  | arrRead _arr idx ih =>
+    simp [Program.checkSExpr] at hchk
+    have ⟨hi_wt, hi_ty⟩ := ih hchk offset nextTmp
+    simp only [compileExpr]
+    exact ⟨allWTI_append' hi_wt (allWTI_one (.arrLoad (tyCtx_tmp_wt prog hnt _) hi_ty)),
+           tyCtx_tmp_wt prog hnt _⟩
 
 -- compileBool produces well-typed instructions and a WellTypedBoolExpr
 theorem compileBool_wt (prog : Program)
@@ -813,6 +839,14 @@ theorem compileStmt_wt (prog : Program)
       simp only [compileStmt]
       exact allWTI_append3 ha_wt hb_wt
         (allWTI_one (.binop hxty ha_ty hb_ty))
+    | arrRead _arr idx =>
+      simp [Program.checkSExpr] at he
+      have ⟨hi_wt, hi_ty⟩ := compileExpr_wt prog hnt idx he offset nextTmp
+      simp only [compileStmt]
+      have htmp_ty := tyCtx_tmp_wt prog hnt (compileExpr idx offset nextTmp).2.2
+      exact allWTI_append' hi_wt
+        (allWTI_cons' (.arrLoad htmp_ty hi_ty)
+          (allWTI_one (.copy (by rw [hxty, htmp_ty]))))
   | bassign x b =>
     simp [Program.checkStmt, Bool.and_eq_true] at hchk
     obtain ⟨hx, hb⟩ := hchk
@@ -820,6 +854,15 @@ theorem compileStmt_wt (prog : Program)
     have ⟨hb_wt, hb_ty⟩ := compileBool_wt prog hnt b hb offset nextTmp
     simp only [compileStmt]
     exact allWTI_append' hb_wt (allWTI_one (.boolop hxty hb_ty))
+  | arrWrite _arr idx val =>
+    simp [Program.checkStmt, Bool.and_eq_true] at hchk
+    obtain ⟨hi, hv⟩ := hchk
+    have ⟨hi_wt, hi_ty⟩ := compileExpr_wt prog hnt idx hi offset nextTmp
+    have ⟨hv_wt, hv_ty⟩ := compileExpr_wt prog hnt val hv
+      (offset + (compileExpr idx offset nextTmp).1.length)
+      (compileExpr idx offset nextTmp).2.2
+    simp only [compileStmt]
+    exact allWTI_append3 hi_wt hv_wt (allWTI_one (.arrStore hi_ty hv_ty))
   | seq s1 s2 ih1 ih2 =>
     simp [Program.checkStmt, Bool.and_eq_true] at hchk
     obtain ⟨hc1, hc2⟩ := hchk
@@ -953,7 +996,8 @@ theorem AllJumpsLe_single_ifgoto {be : BoolExpr} (hle : l ≤ bound) :
 /-- Code with no goto/ifgoto/halt satisfies AllJumpsLe for any bound. -/
 def IsSeqInstr (instr : TAC) : Prop :=
   match instr with
-  | .const _ _ | .copy _ _ | .binop _ _ _ _ | .boolop _ _ => True
+  | .const _ _ | .copy _ _ | .binop _ _ _ _ | .boolop _ _
+  | .arrLoad _ _ _ | .arrStore _ _ _ => True
   | _ => False
 
 theorem AllJumpsLe_of_allSeq {code : List TAC}
@@ -970,6 +1014,11 @@ theorem compileExpr_allSeq (e : SExpr) (offset nextTmp : Nat) :
     rcases hmem with ha | hb | rfl
     · exact iha _ _ instr ha
     · exact ihb _ _ instr hb
+    · trivial
+  | arrRead _ idx ih =>
+    intro instr hmem; simp [compileExpr, List.mem_append] at hmem
+    rcases hmem with hi | rfl
+    · exact ih _ _ instr hi
     · trivial
 
 theorem compileBool_allJumpsLe (b : SBool) (offset nextTmp bound : Nat)
@@ -1040,11 +1089,25 @@ theorem compileStmt_allJumpsLe (s : Stmt) (offset nextTmp : Nat) :
         · exact compileExpr_allSeq a _ _ instr ha
         · exact compileExpr_allSeq b _ _ instr hb
         · trivial)
+    | arrRead _ idx =>
+      exact AllJumpsLe_of_allSeq (by
+        intro instr hmem; simp [compileStmt, List.mem_append] at hmem
+        rcases hmem with hi | rfl | rfl
+        · exact compileExpr_allSeq idx _ _ instr hi
+        · trivial
+        · trivial)
   | bassign _ b =>
     simp only [compileStmt, List.length_append, List.length_singleton]
     exact AllJumpsLe_append
       (AllJumpsLe_mono (compileBool_allJumpsLe b offset nextTmp _ (Nat.le_refl _)) (by omega))
       (AllJumpsLe_of_allSeq (fun instr hmem => by simp at hmem; subst hmem; trivial))
+  | arrWrite _ idx val =>
+    exact AllJumpsLe_of_allSeq (by
+      intro instr hmem; simp [compileStmt, List.mem_append] at hmem
+      rcases hmem with hi | hv | rfl
+      · exact compileExpr_allSeq idx _ _ instr hi
+      · exact compileExpr_allSeq val _ _ instr hv
+      · trivial)
   | seq s1 s2 ih1 ih2 =>
     simp only [compileStmt, List.length_append]
     exact AllJumpsLe_append (AllJumpsLe_mono (ih1 offset nextTmp) (by omega))

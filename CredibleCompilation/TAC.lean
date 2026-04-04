@@ -41,6 +41,11 @@ inductive TAC where
   | arrStore : ArrayName → Var → Var → TAC       -- arr[idx] := val
   deriving Repr, DecidableEq
 
+/-- A scalar instruction is one that does not touch ArrayMem. -/
+def TAC.isScalar : TAC → Bool
+  | .const .. | .copy .. | .binop .. | .boolop .. | .goto .. | .ifgoto .. | .halt => true
+  | .arrLoad .. | .arrStore .. => false
+
 /-- A program: TAC code together with its type context and observable variables. -/
 structure Prog where
   code       : Array TAC
@@ -54,6 +59,10 @@ instance : GetElem Prog Nat TAC (fun p i => i < p.code.size) where
   getElem p i h := p.code[i]
 
 def Prog.size (p : Prog) : Nat := p.code.size
+
+/-- A program has no array instructions. -/
+def NoArrayInstrs (p : Prog) : Prop :=
+  ∀ (i : Nat) (hi : i < p.code.size), p.code[i].isScalar = true
 
 @[simp] theorem Prog.getElem_eq (p : Prog) (i : Nat) (h : i < p.code.size) :
     p[i] = p.code[i] := rfl
@@ -75,6 +84,15 @@ theorem Prog.getElem?_none {p : Prog} {i : Nat} (h : ¬ i < p.size) :
   · rw [Prog.getElem?_eq_getElem h, Array.getElem?_eq_getElem h]; rfl
   · rw [Prog.getElem?_none h]
     simp [getElem?, h]
+
+theorem NoArrayInstrs.isScalar_of_getElem? {p : Prog} {pc : Nat} {instr : TAC}
+    (hNoArr : NoArrayInstrs p) (h : p[pc]? = some instr) : instr.isScalar = true := by
+  have hpc : pc < p.size := by
+    rw [getElem?_eq_some_iff] at h; exact h.1
+  have heq : p[pc] = instr :=
+    Option.some.inj ((Prog.getElem?_eq_getElem hpc).symm.trans h)
+  show instr.isScalar = true
+  rw [← heq, Prog.getElem_eq]; exact hNoArr pc hpc
 
 theorem Prog.getElem?_eq_some_iff {p : Prog} {i : Nat} {v : TAC} :
     p[i]? = some v ↔ ∃ h : i < p.size, p[i] = v := by

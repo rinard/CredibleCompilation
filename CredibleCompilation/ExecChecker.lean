@@ -65,6 +65,7 @@ def Expr.simplify (inv : EInv) : Expr → Expr
   | .notE e         => .notE e
   | .andE a b       => .andE a b
   | .orE a b        => .orE a b
+  | .arrRead arr idx => .arrRead arr (idx.simplify inv)
 
 -- ============================================================
 -- § 3. Symbolic execution
@@ -91,25 +92,42 @@ def BoolExpr.toSymExpr (ss : SymStore) : BoolExpr → Expr
   | .cmpLit op x n => .cmpLitE op (ssGet ss x) n
   | .not e         => .notE (e.toSymExpr ss)
 
+/-- Symbolic array memory: tracks array writes as a list of (array, index, value) triples.
+    Most recent writes are at the head. -/
+abbrev SymArrayMem := List (ArrayName × Expr × Expr)
+
+/-- Look up an array read in the symbolic array memory.
+    Returns the written value if the array and index match, otherwise `.arrRead`. -/
+def samGet (sam : SymArrayMem) (arr : ArrayName) (idx : Expr) : Expr :=
+  match sam.find? (fun (a, i, _) => a == arr && i == idx) with
+  | some (_, _, v) => v
+  | none => .arrRead arr idx
+
 /-- Symbolically execute one TAC instruction.
-    Expressions in the resulting store reference the *initial* variable values. -/
-def execSymbolic (ss : SymStore) (instr : TAC) : SymStore :=
+    Expressions in the resulting store reference the *initial* variable values.
+    Returns updated (SymStore, SymArrayMem). -/
+def execSymbolic (ss : SymStore) (sam : SymArrayMem) (instr : TAC) : SymStore × SymArrayMem :=
   match instr with
-  | .const x (.int n)  => ssSet ss x (.lit n)
-  | .const x (.bool b) => ssSet ss x (.blit b)
-  | .boolop x be    => ssSet ss x (be.toSymExpr ss)
-  | .copy x y       => ssSet ss x (ssGet ss y)
-  | .binop x op y z => ssSet ss x (.bin op (ssGet ss y) (ssGet ss z))
-  | _               => ss
+  | .const x (.int n)  => (ssSet ss x (.lit n), sam)
+  | .const x (.bool b) => (ssSet ss x (.blit b), sam)
+  | .boolop x be    => (ssSet ss x (be.toSymExpr ss), sam)
+  | .copy x y       => (ssSet ss x (ssGet ss y), sam)
+  | .binop x op y z => (ssSet ss x (.bin op (ssGet ss y) (ssGet ss z)), sam)
+  | .arrLoad x arr idx => (ssSet ss x (samGet sam arr (ssGet ss idx)), sam)
+  | .arrStore arr idx val => (ss, (arr, ssGet ss idx, ssGet ss val) :: sam)
+  | _               => (ss, sam)
 
 /-- Symbolically execute along a path of labels in the original program.
     At each label, look up the instruction and execute it symbolically. -/
-def execPath (orig : Prog) (ss : SymStore) (pc : Label) : List Label → SymStore
-  | []             => ss
+def execPath (orig : Prog) (ss : SymStore) (sam : SymArrayMem) (pc : Label) :
+    List Label → SymStore × SymArrayMem
+  | []             => (ss, sam)
   | nextPC :: rest =>
     match orig[pc]? with
-    | some instr => execPath orig (execSymbolic ss instr) nextPC rest
-    | none       => ss
+    | some instr =>
+      let (ss', sam') := execSymbolic ss sam instr
+      execPath orig ss' sam' nextPC rest
+    | none       => (ss, sam)
 
 -- ============================================================
 -- § 4. Instruction helpers
@@ -132,7 +150,7 @@ def Expr.isNonZeroLit : Expr → Bool
   | .lit _ => true
   | .blit true => true
   | .blit false | .var _ | .bin _ _ _ => false
-  | .tobool _ | .cmpE _ _ _ | .cmpLitE _ _ _ | .notE _ | .andE _ _ | .orE _ _ => false
+  | .tobool _ | .cmpE _ _ _ | .cmpLitE _ _ _ | .notE _ | .andE _ _ | .orE _ _ | .arrRead _ _ => false
 
 /-- Symbolically evaluate a BoolExpr under a symbolic store and invariant.
     Returns `some true`/`some false` if the result can be determined, `none` otherwise. -/
@@ -349,13 +367,14 @@ def Expr.substSym (ss : SymStore) : Expr → Expr
   | .notE e         => .notE (e.substSym ss)
   | .andE a b       => .andE (a.substSym ss) (b.substSym ss)
   | .orE a b        => .orE (a.substSym ss) (b.substSym ss)
+  | .arrRead arr idx => .arrRead arr (idx.substSym ss)
 
 /-- Check that a single invariant atom `(x, e)` is preserved by an instruction.
     Uses symbolic execution: the post-value of `x` and the post-value of `e`
     (with each variable replaced by its symbolic post-value) must be equal
     when simplified under the pre-invariant. -/
 def checkInvAtom (inv_pre : EInv) (instr : TAC) (atom : Var × Expr) : Bool :=
-  let ss := execSymbolic ([] : SymStore) instr
+  let (ss, _) := execSymbolic ([] : SymStore) ([] : SymArrayMem) instr
   let lhs := (ssGet ss atom.1).simplify inv_pre
   let rhs := (atom.2.substSym ss).simplify inv_pre
   lhs == rhs
@@ -421,13 +440,22 @@ def checkBinopSafe (instr : TAC) (ss : SymStore) (inv : EInv) : Bool :=
     | _ => false
   | _ => true
 
+/-- Check that an arrLoad/arrStore instruction's index doesn't alias any existing SAM entry
+    for the same array.  Uses simplification under the invariant to compare indices. -/
+def checkInstrAliasOk (instr : TAC) (ss : SymStore) (sam : SymArrayMem) (inv : EInv) : Bool :=
+  match instr with
+  | .arrLoad _ arr idx | .arrStore arr idx _ =>
+    let idx_sym := ssGet ss idx
+    sam.all fun (a, i, _) =>
+      !(a == arr) || (i == idx_sym) ||
+      match i.simplify inv, idx_sym.simplify inv with
+      | .lit n, .lit m => !(n == m)
+      | _, _ => false
+  | _ => true
+
 /-- Verify that the original path is structurally valid:
-    at each PC, the instruction's successor matches the next label.
-    `branchInfo` provides the mapped boolean condition and branch direction from the
-    transformed instruction's ifgoto, used as a fallback when symbolic analysis
-    of the original ifgoto is inconclusive (both programs check the same condition
-    and stores agree via the expression relation). Only applies to the first step. -/
-def checkOrigPath (orig : Prog) (ss : SymStore) (inv : EInv)
+    at each PC, the instruction's successor matches the next label. -/
+def checkOrigPath (orig : Prog) (ss : SymStore) (sam : SymArrayMem) (inv : EInv)
     (pc : Label) (labels : List Label) (pc_next : Label)
     (branchInfo : Option (BoolExpr × Bool) := none) : Bool :=
   match labels with
@@ -438,14 +466,14 @@ def checkOrigPath (orig : Prog) (ss : SymStore) (inv : EInv)
       let pcOk := match computeNextPC instr pc ss inv with
         | some pc' => pc' == nextPC
         | none =>
-          -- Fallback: if the original ifgoto has the same condition (mapped through
-          -- the relation), use the branch direction from the transformed side
           match branchInfo, instr with
           | some (origCond, true),  .ifgoto b l => b == origCond && nextPC == l
           | some (origCond, false), .ifgoto b _ => b == origCond && nextPC == pc + 1
           | _, _ => false
-      pcOk && checkBinopSafe instr ss inv &&
-      checkOrigPath orig (execSymbolic ss instr) inv nextPC rest pc_next none
+      let aliasOk := checkInstrAliasOk instr ss sam inv
+      let (ss', sam') := execSymbolic ss sam instr
+      pcOk && aliasOk && checkBinopSafe instr ss inv &&
+      checkOrigPath orig ss' sam' inv nextPC rest pc_next none
     | none => false
 
 /-- Check expression relation consistency via symbolic execution.
@@ -456,14 +484,20 @@ def checkOrigPath (orig : Prog) (ss : SymStore) (inv : EInv)
 def checkRelConsistency
     (orig : Prog) (pc_orig : Label) (origLabels : List Label) (transInstr : TAC)
     (inv_orig : EInv) (rel_pre rel_post : EExprRel) (allVars : List Var) : Bool :=
-  let origSS := execPath orig ([] : SymStore) pc_orig origLabels
-  let transSS := execSymbolic ([] : SymStore) transInstr
+  let (origSS, origSAM) := execPath orig ([] : SymStore) ([] : SymArrayMem) pc_orig origLabels
+  let (transSS, transSAM) := execSymbolic ([] : SymStore) ([] : SymArrayMem) transInstr
   let preSubst := buildSubstMap rel_pre
   let postSubst := buildSubstMap rel_post
-  (allVars ++ preSubst.map Prod.fst ++ postSubst.map Prod.fst).all fun v =>
+  let varCheck := (allVars ++ preSubst.map Prod.fst ++ postSubst.map Prod.fst).all fun v =>
     let origVal := (ssGet postSubst v).substSym origSS |>.simplify inv_orig
     let transVal := (ssGet transSS v).substSym preSubst |>.simplify inv_orig
     origVal == transVal
+  let amCheck := origSAM.length == transSAM.length &&
+    (origSAM.zip transSAM).all fun ((a_o, i_o, v_o), (a_t, i_t, v_t)) =>
+      a_o == a_t &&
+      i_o.simplify inv_orig == (i_t.substSym preSubst).simplify inv_orig &&
+      v_o.simplify inv_orig == (v_t.substSym preSubst).simplify inv_orig
+  varCheck && amCheck
 
 /-- **Condition 3**: Every transition in the transformed program has a
     corresponding original-program path with consistent variable effects. -/
@@ -490,7 +524,7 @@ def checkAllTransitionsExec (cert : ECertificate) : Bool :=
           ic.transitions.any fun tc =>
             tc.rel == ic.rel &&
             tc.rel_next == ic'.rel &&
-            checkOrigPath cert.orig ([] : SymStore) (cert.inv_orig.getD ic.pc_orig ([] : EInv))
+            checkOrigPath cert.orig ([] : SymStore) ([] : SymArrayMem) (cert.inv_orig.getD ic.pc_orig ([] : EInv))
               ic.pc_orig tc.origLabels ic'.pc_orig branchInfo &&
             checkRelConsistency cert.orig ic.pc_orig tc.origLabels instr
               (cert.inv_orig.getD ic.pc_orig ([] : EInv))
@@ -546,6 +580,23 @@ def checkDivPreservationExec (cert : ECertificate) : Bool :=
       | _ => false
     | _ => true
 
+/-- Check that a program contains no array instructions (arrLoad/arrStore). -/
+def checkNoArrayInstrs (p : Prog) : Bool :=
+  p.code.all TAC.isScalar
+
+/-- Check that all invariant expressions are arrRead-free. -/
+def checkNoArrReadInInvs (invs : Array EInv) : Bool :=
+  invs.all fun inv => inv.all fun (_, e) => !e.hasArrRead
+
+/-- Check that all original-side expressions in relations are arrRead-free.
+    buildSubstMap extracts the first element of (e_o, .var v) pairs, so we check e_o. -/
+def checkNoArrReadInRels (certs : Array EInstrCert) : Bool :=
+  certs.all fun ic =>
+    ic.rel.all (fun (e, _) => !e.hasArrRead) &&
+    ic.transitions.all fun tc =>
+      tc.rel.all (fun (e, _) => !e.hasArrRead) &&
+      tc.rel_next.all (fun (e, _) => !e.hasArrRead)
+
 /-- Check all certificate conditions. Returns `true` iff the certificate is valid. -/
 def checkCertificateExec (cert : ECertificate) : Bool :=
   checkWellTypedProg cert.orig.tyCtx cert.orig &&
@@ -555,6 +606,9 @@ def checkCertificateExec (cert : ECertificate) : Bool :=
   checkInvariantsAtStartExec cert &&
   checkRelAtStartExec cert &&
   checkInvariantsPreservedExec cert &&
+  checkNoArrReadInInvs cert.inv_orig &&
+  checkNoArrReadInInvs cert.inv_trans &&
+  checkNoArrReadInRels cert.instrCerts &&
   checkAllTransitionsExec cert &&
   checkHaltCorrespondenceExec cert &&
   checkHaltObservableExec cert &&
@@ -571,6 +625,8 @@ def checkCertificateVerboseExec (cert : ECertificate) : List (String × Bool) :=
     ("invariants_at_start",   checkInvariantsAtStartExec cert),
     ("rel_at_start",          checkRelAtStartExec cert),
     ("invariants_preserved",  checkInvariantsPreservedExec cert),
+    ("no_arrread_inv_orig",   checkNoArrReadInInvs cert.inv_orig),
+    ("no_arrread_inv_trans",  checkNoArrReadInInvs cert.inv_trans),
     ("all_transitions",       checkAllTransitionsExec cert),
     ("halt_correspondence",   checkHaltCorrespondenceExec cert),
     ("halt_observable",       checkHaltObservableExec cert),

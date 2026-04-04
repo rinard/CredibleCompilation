@@ -214,19 +214,59 @@ inductive Expr where
   | notE    : Expr → Expr                  -- .bool (!(e.eval σ).toBool)
   | andE    : Expr → Expr → Expr           -- .bool ((a.eval σ).toBool && (b.eval σ).toBool)
   | orE     : Expr → Expr → Expr           -- .bool ((a.eval σ).toBool || (b.eval σ).toBool)
+  -- Symbolic array read (for tracking arrLoad results)
+  | arrRead : ArrayName → Expr → Expr      -- .int (am.read arr (idx.eval σ am).toInt.toNat)
   deriving Repr, DecidableEq
 
-def Expr.eval (σ : Store) : Expr → Value
+def Expr.eval (σ : Store) (am : ArrayMem) : Expr → Value
   | .lit n          => .int n
   | .blit b         => .bool b
   | .var x          => σ x
-  | .bin op a b     => .int (op.eval (a.eval σ).toInt (b.eval σ).toInt)
-  | .tobool e       => .bool (e.eval σ).toBool
-  | .cmpE op a b    => .bool (op.eval (a.eval σ).toInt (b.eval σ).toInt)
-  | .cmpLitE op a n => .bool (op.eval (a.eval σ).toInt n)
-  | .notE e         => .bool (!(e.eval σ).toBool)
-  | .andE a b       => .bool ((a.eval σ).toBool && (b.eval σ).toBool)
-  | .orE a b        => .bool ((a.eval σ).toBool || (b.eval σ).toBool)
+  | .bin op a b     => .int (op.eval (a.eval σ am).toInt (b.eval σ am).toInt)
+  | .tobool e       => .bool (e.eval σ am).toBool
+  | .cmpE op a b    => .bool (op.eval (a.eval σ am).toInt (b.eval σ am).toInt)
+  | .cmpLitE op a n => .bool (op.eval (a.eval σ am).toInt n)
+  | .notE e         => .bool (!(e.eval σ am).toBool)
+  | .andE a b       => .bool ((a.eval σ am).toBool && (b.eval σ am).toBool)
+  | .orE a b        => .bool ((a.eval σ am).toBool || (b.eval σ am).toBool)
+  | .arrRead arr idx => .int (am.read arr (idx.eval σ am).toInt.toNat)
+
+/-- Does an expression contain any `arrRead` sub-expression? -/
+def Expr.hasArrRead : Expr → Bool
+  | .lit _ | .blit _ | .var _ => false
+  | .bin _ a b     => a.hasArrRead || b.hasArrRead
+  | .tobool e      => e.hasArrRead
+  | .cmpE _ a b    => a.hasArrRead || b.hasArrRead
+  | .cmpLitE _ a _ => a.hasArrRead
+  | .notE e        => e.hasArrRead
+  | .andE a b      => a.hasArrRead || b.hasArrRead
+  | .orE a b       => a.hasArrRead || b.hasArrRead
+  | .arrRead _ _   => true
+
+/-- For arrRead-free expressions, evaluation is independent of the array memory. -/
+theorem Expr.eval_noArrRead (e : Expr) (σ : Store) (am₁ am₂ : ArrayMem)
+    (h : e.hasArrRead = false) : e.eval σ am₁ = e.eval σ am₂ := by
+  induction e with
+  | lit _ | blit _ | var _ => rfl
+  | bin _ a b iha ihb =>
+    simp only [hasArrRead, Bool.or_eq_false_iff] at h
+    simp only [Expr.eval]; rw [iha h.1, ihb h.2]
+  | tobool e ih =>
+    simp only [hasArrRead] at h; simp only [Expr.eval]; rw [ih h]
+  | cmpE _ a b iha ihb =>
+    simp only [hasArrRead, Bool.or_eq_false_iff] at h
+    simp only [Expr.eval]; rw [iha h.1, ihb h.2]
+  | cmpLitE _ a _ ih =>
+    simp only [hasArrRead] at h; simp only [Expr.eval]; rw [ih h]
+  | notE e ih =>
+    simp only [hasArrRead] at h; simp only [Expr.eval]; rw [ih h]
+  | andE a b iha ihb =>
+    simp only [hasArrRead, Bool.or_eq_false_iff] at h
+    simp only [Expr.eval]; rw [iha h.1, ihb h.2]
+  | orE a b iha ihb =>
+    simp only [hasArrRead, Bool.or_eq_false_iff] at h
+    simp only [Expr.eval]; rw [iha h.1, ihb h.2]
+  | arrRead _ _ => simp [hasArrRead] at h
 
 -- ============================================================
 -- § 2c. Boolean expressions

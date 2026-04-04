@@ -47,16 +47,88 @@ private theorem orig_eq_of_beq {orig : Prog} {pc : Label} {instr : TAC}
 -- § 1. Lifting EInv to Prop
 -- ============================================================
 
-/-- A `EInv` as a proposition: every atom `(x, e)` asserts `σ x = e.eval σ`. -/
+/-- A `EInv` as a proposition: every atom `(x, e)` asserts `σ x = e.eval σ am`. -/
 def EInv.toProp (inv : EInv) : PInvariant :=
-  fun σ => ∀ p ∈ inv, σ p.1 = p.2.eval σ
+  fun σ am => ∀ p ∈ inv, σ p.1 = p.2.eval σ am
 
-theorem EInv.toProp_nil : EInv.toProp [] = fun _ => True := by
-  funext σ; simp [EInv.toProp]
+theorem EInv.toProp_nil : EInv.toProp [] = fun _ _ => True := by
+  funext σ am; simp [EInv.toProp]
 
 theorem EInv.toProp_cons (x : Var) (e : Expr) (rest : EInv) :
-    EInv.toProp ((x, e) :: rest) = fun σ => σ x = e.eval σ ∧ EInv.toProp rest σ := by
-  funext σ; simp [EInv.toProp]
+    EInv.toProp ((x, e) :: rest) = fun σ am => σ x = e.eval σ am ∧ EInv.toProp rest σ am := by
+  funext σ am; simp [EInv.toProp]
+
+/-- If all invariant atoms are arrRead-free, the invariant holds at any array memory. -/
+theorem EInv.toProp_am_indep (inv : EInv) (σ : Store) (am₁ am₂ : ArrayMem)
+    (hnoarr : inv.all (fun (_, e) => !e.hasArrRead) = true)
+    (hinv : EInv.toProp inv σ am₁) :
+    EInv.toProp inv σ am₂ := by
+  intro p hp
+  have := hinv p hp
+  rw [List.all_eq_true] at hnoarr
+  have hna := hnoarr p hp
+  simp at hna
+  rw [this, Expr.eval_noArrRead p.2 σ am₁ am₂ hna]
+
+/-- SamCoherent relates the symbolic array memory to the runtime array memory
+    via a chain of writes.  Most-recent write is at the head. -/
+inductive SamCoherent : SymArrayMem → Store → ArrayMem → ArrayMem → Prop where
+  | nil {σ₀ : Store} {am : ArrayMem} : SamCoherent [] σ₀ am am
+  | cons {rest : SymArrayMem} {σ₀ : Store} {am₀ am_prev am : ArrayMem}
+         (arr : ArrayName) (idx_e val_e : Expr) (bv : BitVec 64)
+         (hprev : SamCoherent rest σ₀ am₀ am_prev)
+         (hvalint : val_e.eval σ₀ am₀ = .int bv)
+         (hwrite : am = am_prev.write arr (idx_e.eval σ₀ am₀).toInt.toNat bv) :
+    SamCoherent ((arr, idx_e, val_e) :: rest) σ₀ am₀ am
+
+theorem samCoherent_nil (σ₀ : Store) (am : ArrayMem) :
+    SamCoherent [] σ₀ am am := .nil
+
+private theorem samGet_cons (arr_h : ArrayName) (idx_h val_h : Expr) (rest : SymArrayMem)
+    (arr : ArrayName) (idx : Expr) :
+    samGet ((arr_h, idx_h, val_h) :: rest) arr idx =
+    if arr_h == arr && idx_h == idx then val_h else samGet rest arr idx := by
+  simp only [samGet, List.find?]
+  cases arr_h == arr && idx_h == idx <;> simp
+
+/-- samGet_sound: under a no-alias condition, `samGet` at am₀ gives the same as
+    reading the current runtime am.  Proved by induction on the SAM list.
+    Well-typing (values are .int) is encoded in SamCoherent.cons. -/
+theorem samGet_sound (sam : SymArrayMem) (σ₀ : Store) (am₀ am : ArrayMem)
+    (hcoh : SamCoherent sam σ₀ am₀ am)
+    (arr : ArrayName) (idx_expr : Expr)
+    (hnoalias : ∀ a i v, (a, i, v) ∈ sam → a = arr → ¬(i == idx_expr) →
+      (i.eval σ₀ am₀).toInt.toNat ≠ (idx_expr.eval σ₀ am₀).toInt.toNat) :
+    (samGet sam arr idx_expr).eval σ₀ am₀ =
+    Value.int (am.read arr (idx_expr.eval σ₀ am₀).toInt.toNat) := by
+  induction sam generalizing am with
+  | nil => cases hcoh; simp [samGet, List.find?, Expr.eval]
+  | cons entry rest ih =>
+    obtain ⟨arr_h, idx_h, val_h⟩ := entry
+    match hcoh with
+    | .cons _ _ _ bv hprev hvalint hwrite =>
+    rw [samGet_cons]
+    by_cases hmatch : (arr_h == arr && idx_h == idx_expr) = true
+    · -- Match case: head entry matches
+      simp [hmatch]
+      simp [Bool.and_eq_true] at hmatch
+      have harr : arr_h = arr := hmatch.1
+      have hidx : idx_h = idx_expr := hmatch.2
+      rw [hwrite, harr, hidx, ArrayMem.read_write_same, hvalint]
+    · -- Non-match case: recurse into rest
+      simp [hmatch]
+      have ih_noalias : ∀ a i v, (a, i, v) ∈ rest → a = arr → ¬(i == idx_expr) →
+          (i.eval σ₀ am₀).toInt.toNat ≠ (idx_expr.eval σ₀ am₀).toInt.toNat :=
+        fun a i v hmem ha hi => hnoalias a i v (List.Mem.tail _ hmem) ha hi
+      rw [ih _ hprev ih_noalias]
+      congr 1; rw [hwrite]
+      by_cases harr : arr_h = arr
+      · have hidx_ne : ¬(idx_h == idx_expr) := by
+          intro h; exact hmatch (by simp [beq_iff_eq.mpr harr, h])
+        have hsem_ne := hnoalias arr_h idx_h val_h (List.Mem.head _) harr hidx_ne
+        subst harr
+        exact (ArrayMem.read_write_ne_idx _ _ _ _ _ hsem_ne.symm).symm
+      · exact (ArrayMem.read_write_ne_arr _ _ _ _ _ _ (fun h => harr h.symm)).symm
 
 -- ============================================================
 -- § 2. Translation: ECertificate → PCertificate
@@ -64,10 +136,10 @@ theorem EInv.toProp_cons (x : Var) (e : Expr) (rest : EInv) :
 
 /-- Convert an executable expression relation to a Prop-level store relation.
     Uses `buildSubstMap` to create a total store relation: for every variable `v`,
-    `σ_t v = (ssGet (buildSubstMap rel) v).eval σ_o`.
+    `σ_t v = (ssGet (buildSubstMap rel) v).eval σ_o am_o`.
     Empty relations yield identity (σ_o = σ_t). -/
 def eRelToStoreRel (rel : EExprRel) : PStoreRel :=
-  fun σ_o σ_t => ∀ v, σ_t v = (ssGet (buildSubstMap rel) v).eval σ_o
+  fun σ_o am_o σ_t _am_t => ∀ v, σ_t v = (ssGet (buildSubstMap rel) v).eval σ_o am_o
 
 /-- Lift an executable certificate to a Prop-based certificate. -/
 def toPCertificate (dc : ECertificate) : PCertificate :=
@@ -109,10 +181,10 @@ def toPCertificate (dc : ECertificate) : PCertificate :=
 -- § 3. lookupExpr soundness
 -- ============================================================
 
-theorem lookupExpr_sound (inv : EInv) (v : Var) (e : Expr) (σ : Store)
+theorem lookupExpr_sound (inv : EInv) (v : Var) (e : Expr) (σ : Store) (am : ArrayMem)
     (hlook : lookupExpr inv v = some e)
-    (hinv : EInv.toProp inv σ) :
-    σ v = e.eval σ := by
+    (hinv : EInv.toProp inv σ am) :
+    σ v = e.eval σ am := by
   induction inv with
   | nil => simp [lookupExpr] at hlook
   | cons p rest ih =>
@@ -126,13 +198,14 @@ theorem lookupExpr_sound (inv : EInv) (v : Var) (e : Expr) (σ : Store)
     · simp [hxv] at hlook
       exact ih hlook hinv.2
 
+
 -- ============================================================
 -- § 4. Expr.simplify soundness
 -- ============================================================
 
 /-- Reassociation preserves semantics. -/
-private theorem Expr.reassoc_sound (op : BinOp) (a b : Expr) (σ : Store) :
-    (Expr.reassoc op a b).eval σ = (Expr.bin op a b).eval σ := by
+private theorem Expr.reassoc_sound (op : BinOp) (a b : Expr) (σ : Store) (am : ArrayMem) :
+    (Expr.reassoc op a b).eval σ am = (Expr.bin op a b).eval σ am := by
   unfold Expr.reassoc
   split
   · -- (na - x) + nb → (na + nb) - x
@@ -152,9 +225,9 @@ private theorem Expr.reassoc_sound (op : BinOp) (a b : Expr) (σ : Store) :
 
 /-- Simplification preserves semantics: evaluating `e.simplify inv` in `σ`
     gives the same result as evaluating `e` in `σ`, provided `σ` satisfies `inv`. -/
-theorem Expr.simplify_sound (inv : EInv) (e : Expr) (σ : Store)
-    (hinv : EInv.toProp inv σ) :
-    (e.simplify inv).eval σ = e.eval σ := by
+theorem Expr.simplify_sound (inv : EInv) (e : Expr) (σ : Store) (am : ArrayMem)
+    (hinv : EInv.toProp inv σ am) :
+    (e.simplify inv).eval σ am = e.eval σ am := by
   induction e with
   | lit n => simp [Expr.simplify, Expr.eval]
   | blit b => simp [Expr.simplify, Expr.eval]
@@ -163,7 +236,8 @@ theorem Expr.simplify_sound (inv : EInv) (e : Expr) (σ : Store)
     split
     · case h_1 e hlook =>
       simp only [Expr.eval]
-      exact (lookupExpr_sound inv v e σ hlook hinv).symm
+      have h := lookupExpr_sound inv v e σ am hlook hinv
+      exact h.symm
     · case h_2 =>
       simp [Expr.eval]
   | bin op a b iha ihb =>
@@ -174,8 +248,8 @@ theorem Expr.simplify_sound (inv : EInv) (e : Expr) (σ : Store)
       rw [heqa] at iha; rw [heqb] at ihb
       simp only [Expr.eval] at iha ihb
       congr 1
-      rw [show (a.eval σ).toInt = na from by rw [← iha]; rfl,
-          show (b.eval σ).toInt = nb from by rw [← ihb]; rfl]
+      rw [show (a.eval σ am).toInt = na from by rw [← iha]; rfl,
+          show (b.eval σ am).toInt = nb from by rw [← ihb]; rfl]
     · case h_2 =>
       rw [Expr.reassoc_sound]
       simp only [Expr.eval]
@@ -186,6 +260,9 @@ theorem Expr.simplify_sound (inv : EInv) (e : Expr) (σ : Store)
   | notE _ => rfl
   | andE _ _ => rfl
   | orE _ _ => rfl
+  | arrRead arr idx ih =>
+    simp only [Expr.simplify, Expr.eval]
+    rw [ih]
 
 -- ============================================================
 -- § 5. Easy soundness lemmas
@@ -207,12 +284,12 @@ theorem checkStartCorrespondenceExec_sound (dc : ECertificate)
       simp only [toPCertificate, Array.getD, dif_pos hbound]
       rw [show dc.instrCerts.getInternal 0 hbound = ic from hget]
       exact hpc
-    · -- ∀ σ, storeRel σ σ
+    · -- ∀ σ am, storeRel σ am σ am
       have hrel_ic : ic.rel = [] := by
         have : (dc.instrCerts.getD 0 default).rel = ic.rel := by
           simp [Array.getD, dif_pos hbound, hget]
         rw [this] at hrel0; exact hrel0
-      intro σ v
+      intro σ am v
       simp only [Array.getD, dif_pos hbound]
       rw [show dc.instrCerts.getInternal 0 hbound = ic from hget]
       simp [hrel_ic, buildSubstMap, ssGet, Expr.eval]
@@ -231,10 +308,10 @@ theorem checkInvariantsAtStartExec_sound (dc : ECertificate)
     revert h1; cases dc.inv_orig.getD 0 ([] : EInv) <;> simp [List.isEmpty]
   have htrans_nil : dc.inv_trans.getD 0 ([] : EInv) = [] := by
     revert h2; cases dc.inv_trans.getD 0 ([] : EInv) <;> simp [List.isEmpty]
-  refine ⟨fun σ => ?_, fun σ => ?_⟩
-  · change (dc.inv_trans.getD 0 ([] : EInv)).toProp σ
+  refine ⟨fun σ am => ?_, fun σ am => ?_⟩
+  · change (dc.inv_trans.getD 0 ([] : EInv)).toProp σ am
     rw [htrans_nil]; simp [EInv.toProp]
-  · change (dc.inv_orig.getD 0 ([] : EInv)).toProp σ
+  · change (dc.inv_orig.getD 0 ([] : EInv)).toProp σ am
     rw [horig_nil]; simp [EInv.toProp]
 
 /-- **Condition 4a**: checkHaltCorrespondenceExec → checkHaltCorrespondenceProp -/
@@ -259,7 +336,7 @@ theorem checkHaltCorrespondenceExec_sound (dc : ECertificate)
 theorem checkHaltObservableExec_sound (dc : ECertificate)
     (h : checkHaltObservableExec dc = true) :
     checkHaltObservableProp (toPCertificate dc) := by
-  intro pc_t σ_t σ_o hhalt
+  intro pc_t σ_t σ_o am_t am_o hhalt
   dsimp only [toPCertificate, eRelToStoreRel]
   intro hcons v hv
   -- From checker: ic.rel has an identity pair (.var v, .var v) for observable v at halt
@@ -271,7 +348,7 @@ theorem checkHaltObservableExec_sound (dc : ECertificate)
   -- hany : ssGet (buildSubstMap ic.rel) v == .var v = true
   -- So ssGet (buildSubstMap ic.rel) v = .var v
   have hid := beq_iff_eq.mp hany
-  -- hcons v : σ_t v = (ssGet (buildSubstMap ic.rel) v).eval σ_o
+  -- hcons v : σ_t v = (ssGet (buildSubstMap ic.rel) v).eval σ_o am_o
   rw [hcons v, hid]
   simp [Expr.eval]
 
@@ -306,8 +383,9 @@ theorem ssGet_ssSet_other (ss : SymStore) (x y : Var) (e : Expr) (hne : y ≠ x)
   rw [step1, find_filter_ne ss x y hne]
 
 private theorem BoolExpr.toSymExpr_sound (be : BoolExpr) (ss : SymStore) (σ₀ σ : Store)
-    (hrepr : ∀ v, (ssGet ss v).eval σ₀ = σ v) :
-    (be.toSymExpr ss).eval σ₀ = .bool (be.eval σ) := by
+    (am : ArrayMem)
+    (hrepr : ∀ v, (ssGet ss v).eval σ₀ am = σ v) :
+    (be.toSymExpr ss).eval σ₀ am = .bool (be.eval σ) := by
   induction be with
   | lit b =>
     simp only [BoolExpr.toSymExpr, Expr.eval, BoolExpr.eval]
@@ -328,12 +406,13 @@ private theorem BoolExpr.toSymExpr_sound (be : BoolExpr) (ss : SymStore) (σ₀ 
     the relationship between an initial store `σ₀` and a current store `σ`,
     then after executing `instr`, the updated symbolic store correctly represents
     the relationship with the post-store `σ'`. -/
-theorem execSymbolic_sound (ss : SymStore) (instr : TAC)
-    (σ₀ σ σ' : Store) (pc pc' : Label) (prog : Prog)
-    (hrepr : ∀ v, (ssGet ss v).eval σ₀ = σ v)
+theorem execSymbolic_sound (ss : SymStore) (sam : SymArrayMem) (instr : TAC)
+    (σ₀ σ σ' : Store) (pc pc' : Label) (prog : Prog) (am : ArrayMem)
+    (hrepr : ∀ v, (ssGet ss v).eval σ₀ am = σ v)
     (hstep : Step prog (Cfg.run pc σ _sbam) (Cfg.run pc' σ' _sbam'))
-    (hinstr : prog[pc]? = some instr) :
-    ∀ v, (ssGet (execSymbolic ss instr) v).eval σ₀ = σ' v := by
+    (hinstr : prog[pc]? = some instr)
+    (hscalar : instr.isScalar = true) :
+    ∀ v, (ssGet (execSymbolic ss sam instr).1 v).eval σ₀ am = σ' v := by
   have step_det : ∀ c, Step prog (Cfg.run pc σ _sbam) c → c = Cfg.run pc' σ' _sbam' :=
     fun c hc => Step.deterministic hc hstep
   intro v
@@ -381,9 +460,9 @@ theorem execSymbolic_sound (ss : SymStore) (instr : TAC)
     by_cases hvd : v = dest
     · rw [hvd, ssGet_ssSet_same]
       simp only [Expr.eval, Store.update_self]
-      have ha : ((ssGet ss a).eval σ₀).toInt = ia := by
+      have ha : ((ssGet ss a).eval σ₀ am).toInt = ia := by
         rw [hrepr a, hia]; rfl
-      have hb : ((ssGet ss b).eval σ₀).toInt = ib := by
+      have hb : ((ssGet ss b).eval σ₀ am).toInt = ib := by
         rw [hrepr b, hib]; rfl
       rw [ha, hb]
     · rw [ssGet_ssSet_other _ _ _ _ hvd, hrepr]
@@ -396,7 +475,7 @@ theorem execSymbolic_sound (ss : SymStore) (instr : TAC)
     by_cases hvd : v = dest
     · rw [hvd, ssGet_ssSet_same]
       simp only [Store.update_self]
-      exact BoolExpr.toSymExpr_sound be ss σ₀ σ hrepr
+      exact BoolExpr.toSymExpr_sound be ss σ₀ σ am hrepr
     · rw [ssGet_ssSet_other _ _ _ _ hvd, hrepr]
       exact (Store.update_other σ dest v _ hvd).symm
   | goto l =>
@@ -418,27 +497,33 @@ theorem execSymbolic_sound (ss : SymStore) (instr : TAC)
     have := step_det _ (Step.halt hinstr)
     exact Cfg.noConfusion this
   | arrLoad dest arr idx =>
-    simp only [execSymbolic]
-    sorry
+    exact absurd hscalar (by simp [TAC.isScalar])
   | arrStore arr idx val =>
     simp only [execSymbolic]
-    sorry
+    -- arrStore only changes ArrayMem, not Store: σ' = σ
+    obtain ⟨idxVal, hv⟩ : ∃ idxVal : BitVec 64, σ idx = .int idxVal := by
+      revert hstep; generalize _sbam = am; generalize _sbam' = am'; intro hstep; cases hstep <;> simp_all
+    obtain ⟨vv, hvv⟩ : ∃ vv : BitVec 64, σ val = .int vv := by
+      revert hstep; generalize _sbam = am; generalize _sbam' = am'; intro hstep; cases hstep <;> simp_all
+    have := step_det _ (Step.arrStore hinstr hv hvv)
+    have hσ' : σ' = σ := (Cfg.run.inj this).2.1.symm
+    rw [hσ']; exact hrepr v
 
 /-- Empty expression relation yields identity store relation. -/
-private theorem eRelToStoreRel_nil : eRelToStoreRel [] = fun σ_o σ_t => σ_o = σ_t := by
-  funext σ_o σ_t; simp [eRelToStoreRel, buildSubstMap, ssGet]
+private theorem eRelToStoreRel_nil : eRelToStoreRel [] = fun σ_o _am_o σ_t _am_t => σ_o = σ_t := by
+  funext σ_o am_o σ_t am_t; simp [eRelToStoreRel, buildSubstMap, ssGet, Expr.eval]
   constructor
-  · intro h; funext v; simp [Expr.eval] at h; exact (h v).symm
-  · intro h v; rw [h]; simp [Expr.eval]
+  · intro h; funext v; exact (h v).symm
+  · intro h v; rw [h]
 
 /-- Identity store relation from empty expression relation means stores are equal. -/
-private theorem eRelToStoreRel_nil_eq {σ₁ σ₂ : Store} (h : eRelToStoreRel [] σ₁ σ₂) :
-    σ₁ = σ₂ := by
+private theorem eRelToStoreRel_nil_eq {σ₁ σ₂ : Store} {am₁ am₂ : ArrayMem}
+    (h : eRelToStoreRel [] σ₁ am₁ σ₂ am₂) : σ₁ = σ₂ := by
   rw [eRelToStoreRel_nil] at h; exact h
 
 /-- Initial symbolic store represents identity: ssGet [] v evaluates to σ v. -/
-private theorem ssGet_nil (σ : Store) (v : Var) :
-    (ssGet ([] : SymStore) v).eval σ = σ v := by
+private theorem ssGet_nil (σ : Store) (am : ArrayMem) (v : Var) :
+    (ssGet ([] : SymStore) v).eval σ am = σ v := by
   simp [ssGet, List.find?, Expr.eval]
 
 /-- ssGet on empty store returns .var v. -/
@@ -471,6 +556,7 @@ private theorem Expr.substSym_nil : ∀ (e : Expr), e.substSym ([] : SymStore) =
   | notE e ih => simp [Expr.substSym, ih]
   | andE a b iha ihb => simp [Expr.substSym, iha, ihb]
   | orE a b iha ihb => simp [Expr.substSym, iha, ihb]
+  | arrRead arr idx ih => simp [Expr.substSym, ih]
 
 -- ============================================================
 -- § 6b. Expr.substSym soundness
@@ -479,8 +565,9 @@ private theorem Expr.substSym_nil : ∀ (e : Expr), e.substSym ([] : SymStore) =
 /-- Substituting variables in `e` with their symbolic post-values and evaluating
     at the initial store `σ₀` equals evaluating `e` at the post-store `σ'`. -/
 theorem Expr.substSym_sound (ss : SymStore) (e : Expr) (σ₀ σ' : Store)
-    (hrepr : ∀ v, (ssGet ss v).eval σ₀ = σ' v) :
-    (e.substSym ss).eval σ₀ = e.eval σ' := by
+    (am : ArrayMem)
+    (hrepr : ∀ v, (ssGet ss v).eval σ₀ am = σ' v) :
+    (e.substSym ss).eval σ₀ am = e.eval σ' am := by
   induction e with
   | lit n => simp [Expr.substSym, Expr.eval]
   | blit b => simp [Expr.substSym, Expr.eval]
@@ -499,6 +586,8 @@ theorem Expr.substSym_sound (ss : SymStore) (e : Expr) (σ₀ σ' : Store)
     simp only [Expr.substSym, Expr.eval]; rw [iha, ihb]
   | orE a b iha ihb =>
     simp only [Expr.substSym, Expr.eval]; rw [iha, ihb]
+  | arrRead arr idx ih =>
+    simp only [Expr.substSym, Expr.eval]; rw [ih]
 
 -- ============================================================
 -- § 6b. PInvariant preservation soundness
@@ -513,32 +602,68 @@ theorem Expr.substSym_sound (ss : SymStore) (e : Expr) (σ₀ σ' : Store)
 theorem checkInvAtom_sound (inv_pre : EInv) (instr : TAC) (atom : Var × Expr)
     (σ σ' : Store) (pc pc' : Label) (prog : Prog) {am am' : ArrayMem}
     (hcheck : checkInvAtom inv_pre instr atom = true)
-    (hinv : EInv.toProp inv_pre σ)
+    (hinv : EInv.toProp inv_pre σ am)
     (hstep : Step prog (Cfg.run pc σ am) (Cfg.run pc' σ' am'))
-    (hinstr : prog[pc]? = some instr) :
-    σ' atom.1 = atom.2.eval σ' := by
+    (hinstr : prog[pc]? = some instr)
+    (hnoarr : atom.2.hasArrRead = false) :
+    σ' atom.1 = atom.2.eval σ' am' := by
   obtain ⟨x, e⟩ := atom; simp only
   -- checkInvAtom gives us BEq equality of simplified expressions
   simp only [checkInvAtom] at hcheck
   have hbeq := beq_iff_eq.mp hcheck
-  -- execSymbolic_sound: symbolic store tracks the step
-  have hrepr : ∀ v, (ssGet (execSymbolic ([] : SymStore) instr) v).eval σ = σ' v :=
-    execSymbolic_sound [] instr σ σ σ' pc pc' prog (ssGet_nil σ) hstep hinstr
-  -- Simplify_sound on both sides (evaluated at σ, which satisfies inv_pre)
+  -- Build hrepr with runtime am: symbolic store tracks the step
+  have hrepr : ∀ v, (ssGet ((execSymbolic ([] : SymStore) ([] : SymArrayMem) instr).1) v).eval σ am = σ' v := by
+    by_cases hscalar : instr.isScalar = true
+    · exact execSymbolic_sound ([] : SymStore) ([] : SymArrayMem) instr σ σ σ' pc pc' prog am
+        (ssGet_nil σ am) hstep hinstr hscalar
+    · cases instr with
+      | arrStore arr idx val =>
+        simp only [execSymbolic]
+        have step_det : ∀ c, Step prog (Cfg.run pc σ am) c → c = Cfg.run pc' σ' am' :=
+          fun c hc => Step.deterministic hc hstep
+        obtain ⟨idxVal, hv⟩ : ∃ idxVal : BitVec 64, σ idx = .int idxVal := by
+          revert hstep; intro hstep; cases hstep <;> simp_all
+        obtain ⟨vv, hvv⟩ : ∃ vv : BitVec 64, σ val = .int vv := by
+          revert hstep; intro hstep; cases hstep <;> simp_all
+        have := step_det _ (Step.arrStore hinstr hv hvv)
+        have hσ' : σ' = σ := (Cfg.run.inj this).2.1.symm
+        rw [hσ']; exact ssGet_nil σ am
+      | arrLoad dest arr idx =>
+        simp only [execSymbolic, Prod.fst]
+        have step_det : ∀ c, Step prog (Cfg.run pc σ am) c → c = Cfg.run pc' σ' am' :=
+          fun c hc => Step.deterministic hc hstep
+        obtain ⟨idxVal, hidx⟩ : ∃ idxVal : BitVec 64, σ idx = .int idxVal := by
+          revert hstep; intro hstep; cases hstep <;> simp_all
+        have := step_det _ (Step.arrLoad hinstr hidx)
+        have hσ' : σ' = σ[dest ↦ .int (am.read arr idxVal.toNat)] :=
+          (Cfg.run.inj this).2.1.symm
+        intro v
+        by_cases hvd : v = dest
+        · rw [hvd, ssGet_ssSet_same, hσ']
+          simp only [samGet, List.find?, Expr.eval, ssGet, List.find?, Expr.eval, Store.update_self]
+          rw [hidx]; simp [Value.toInt]
+        · rw [ssGet_ssSet_other _ _ _ _ hvd, hσ', ssGet_nil]
+          exact (Store.update_other σ dest v _ hvd).symm
+      | _ => exact absurd rfl hscalar
+  -- Build the chain using am, then bridge to am'.
   have hlhs := Expr.simplify_sound inv_pre
-    (ssGet (execSymbolic ([] : SymStore) instr) x) σ hinv
+    (ssGet ((execSymbolic ([] : SymStore) ([] : SymArrayMem) instr).1) x) σ am hinv
   have hrhs := Expr.simplify_sound inv_pre
-    (e.substSym (execSymbolic ([] : SymStore) instr)) σ hinv
-  -- substSym_sound: substituting and evaluating at σ equals evaluating at σ'
-  have hsub := Expr.substSym_sound (execSymbolic ([] : SymStore) instr) e σ σ' hrepr
-  -- Chain: σ' x = ... = e.eval σ'
-  calc σ' x
-      = (ssGet (execSymbolic ([] : SymStore) instr) x).eval σ := (hrepr x).symm
-    _ = ((ssGet (execSymbolic ([] : SymStore) instr) x).simplify inv_pre).eval σ := hlhs.symm
-    _ = ((e.substSym (execSymbolic ([] : SymStore) instr)).simplify inv_pre).eval σ := by
-          rw [hbeq]
-    _ = (e.substSym (execSymbolic ([] : SymStore) instr)).eval σ := hrhs
-    _ = e.eval σ' := hsub
+    (e.substSym ((execSymbolic ([] : SymStore) ([] : SymArrayMem) instr).1)) σ am hinv
+  have hsub := Expr.substSym_sound ((execSymbolic ([] : SymStore) ([] : SymArrayMem) instr).1) e σ σ'
+    am hrepr
+  -- Chain: σ' x = ... = e.eval σ' am
+  have hchain : σ' x = e.eval σ' am :=
+    calc σ' x
+        = (ssGet ((execSymbolic ([] : SymStore) ([] : SymArrayMem) instr).1) x).eval σ am := (hrepr x).symm
+      _ = ((ssGet ((execSymbolic ([] : SymStore) ([] : SymArrayMem) instr).1) x).simplify inv_pre).eval σ am := hlhs.symm
+      _ = ((e.substSym ((execSymbolic ([] : SymStore) ([] : SymArrayMem) instr).1)).simplify inv_pre).eval σ am := by
+            rw [hbeq]
+      _ = (e.substSym ((execSymbolic ([] : SymStore) ([] : SymArrayMem) instr).1)).eval σ am := hrhs
+      _ = e.eval σ' am := hsub
+  -- Bridge: e.eval σ' am = e.eval σ' am' via arrRead-free
+  rw [hchain]
+  exact Expr.eval_noArrRead e σ' am am' hnoarr
 
 /-- Extract instruction from a step to a run configuration. -/
 theorem step_run_instr {p : Prog} {pc pc' : Label} {σ σ' : Store} {am am' : ArrayMem}
@@ -578,15 +703,47 @@ private theorem and_true_split {a b : Bool} (h : (a && b) = true) :
   simp [Bool.and_eq_true] at h; exact h
 
 /-- Helper: checkProg soundness for one program/invariant pair. -/
+private theorem noArrRead_of_inv_all (inv : Array EInv)
+    (hnoarr : checkNoArrReadInInvs inv = true)
+    (l : Nat) :
+    (inv.getD l ([] : EInv)).all (fun (_, e) => !e.hasArrRead) = true := by
+  unfold checkNoArrReadInInvs at hnoarr
+  by_cases hlt : l < inv.size
+  · have hgetD : inv.getD l ([] : EInv) = inv[l] := by simp [Array.getD, hlt]
+    rw [hgetD]; exact (Array.all_eq_true.mp hnoarr) l hlt
+  · have hgetD : inv.getD l ([] : EInv) = [] := by simp [Array.getD, Nat.not_lt.mp hlt]
+    rw [hgetD]; rfl
+
+private theorem noArrRead_of_inv (inv : Array EInv)
+    (hnoarr : checkNoArrReadInInvs inv = true)
+    (l : Nat) (atom : Var × Expr) (hmem : atom ∈ inv.getD l ([] : EInv)) :
+    atom.2.hasArrRead = false := by
+  unfold checkNoArrReadInInvs at hnoarr
+  by_cases hlt : l < inv.size
+  · -- inv.getD l [] = inv[l] when l < inv.size
+    have hgetD : inv.getD l ([] : EInv) = inv[l] := by simp [Array.getD, hlt]
+    rw [hgetD] at hmem
+    -- Extract from inv.all
+    have hall : (inv[l]).all (fun x => !x.2.hasArrRead) = true :=
+      (Array.all_eq_true.mp hnoarr) l hlt
+    rw [List.all_eq_true] at hall
+    have := hall atom hmem
+    simp [Bool.not_eq_true] at this
+    exact this
+  · -- l ≥ inv.size → inv.getD l [] = []
+    have hgetD : inv.getD l ([] : EInv) = [] := by simp [Array.getD, Nat.not_lt.mp hlt]
+    rw [hgetD] at hmem; exact absurd hmem (by simp)
+
 private theorem checkProg_sound (prog : Prog) (inv : Array EInv)
     (h : (List.range prog.size).all (fun pc =>
       match prog[pc]? with
       | some instr =>
         (successors instr pc).all fun pc' =>
           (inv.getD pc' ([] : EInv)).all (checkInvAtom (inv.getD pc ([] : EInv)) instr)
-      | none => true) = true) :
+      | none => true) = true)
+    (hnoarr : checkNoArrReadInInvs inv = true) :
     PInvariantMap.preserved (fun l => (inv.getD l ([] : EInv)).toProp) prog := by
-  intro pc σ hinvpc pc' σ' am am' hstep
+  intro pc σ am hinvpc pc' σ' am' hstep
   obtain ⟨instr, hinstr⟩ := step_run_instr hstep
   have hbound := bound_of_getElem? hinstr
   rw [List.all_eq_true] at h
@@ -596,19 +753,20 @@ private theorem checkProg_sound (prog : Prog) (inv : Array EInv)
   have hsucc := step_successor hstep hinstr
   have hpc' := hpc pc' hsucc
   rw [List.all_eq_true] at hpc'
-  -- hpc' : ∀ atom ∈ (inv.getD pc' []), checkInvAtom (inv.getD pc []) instr atom = true
   intro atom hatom
   exact checkInvAtom_sound (inv.getD pc ([] : EInv)) instr atom σ σ' pc pc' prog
-    (hpc' atom hatom) hinvpc hstep hinstr
+    (hpc' atom hatom) hinvpc hstep hinstr (noArrRead_of_inv inv hnoarr pc' atom hatom)
 
 /-- **Condition 2b**: checkInvariantsPreservedExec → checkInvariantsPreservedProp -/
 theorem checkInvariantsPreservedExec_sound (dc : ECertificate)
-    (h : checkInvariantsPreservedExec dc = true) :
+    (h : checkInvariantsPreservedExec dc = true)
+    (hnoarr_orig : checkNoArrReadInInvs dc.inv_orig = true)
+    (hnoarr_trans : checkNoArrReadInInvs dc.inv_trans = true) :
     checkInvariantsPreservedProp (toPCertificate dc) := by
   unfold checkInvariantsPreservedExec at h
   have ⟨h1, h2⟩ := and_true_split h
-  exact ⟨checkProg_sound dc.orig dc.inv_orig h1,
-         checkProg_sound dc.trans dc.inv_trans h2⟩
+  exact ⟨checkProg_sound dc.orig dc.inv_orig h1 hnoarr_orig,
+         checkProg_sound dc.trans dc.inv_trans h2 hnoarr_trans⟩
 
 /-- Variable names appearing in an instruction (matching collectAllVars.extract). -/
 private def instrVars (instr : TAC) : List Var :=
@@ -666,9 +824,10 @@ private theorem getElem?_mem_toList {arr : Prog} {i : Nat} {x : TAC}
   exact heq ▸ Array.getElem_mem_toList (h := hb)
 
 /-- If v is not the dest of instr, execSymbolic preserves ssGet v. -/
-private theorem execSymbolic_preserves_var (ss : SymStore) (instr : TAC) (v : Var)
+private theorem execSymbolic_preserves_var (ss : SymStore) (sam : SymArrayMem)
+    (instr : TAC) (v : Var)
     (hv : v ∉ instrVars instr) :
-    ssGet (execSymbolic ss instr) v = ssGet ss v := by
+    ssGet (execSymbolic ss sam instr).1 v = ssGet ss v := by
   cases instr with
   | const x n =>
     simp [instrVars] at hv
@@ -684,23 +843,24 @@ private theorem execSymbolic_preserves_var (ss : SymStore) (instr : TAC) (v : Va
   | goto _ => rfl
   | ifgoto _ _ => simp only [execSymbolic]
   | halt => rfl
-  | arrLoad _ _ _ => rfl
+  | arrLoad x _ idx =>
+    simp [instrVars] at hv; simp only [execSymbolic]; exact ssGet_ssSet_other ss x v _ hv.1
   | arrStore _ _ _ => rfl
 
 /-- If v is not the dest of any instruction in the program, execPath preserves ssGet v. -/
-private theorem execPath_preserves_var (orig : Prog) (ss : SymStore) (pc : Label)
-    (labels : List Label) (v : Var)
+private theorem execPath_preserves_var (orig : Prog) (ss : SymStore) (sam : SymArrayMem)
+    (pc : Label) (labels : List Label) (v : Var)
     (hv : ∀ (l : Label) (instr : TAC), orig[l]? = some instr → v ∉ instrVars instr) :
-    ssGet (execPath orig ss pc labels) v = ssGet ss v := by
-  induction labels generalizing ss pc with
+    ssGet (execPath orig ss sam pc labels).1 v = ssGet ss v := by
+  induction labels generalizing ss sam pc with
   | nil => rfl
   | cons nextPC rest ih =>
     simp only [execPath]
     cases horig : orig[pc]? with
     | none => rfl
     | some instr =>
-      have h1 := execSymbolic_preserves_var ss instr v (hv pc instr horig)
-      have h2 := ih (execSymbolic ss instr) nextPC
+      have h1 := execSymbolic_preserves_var ss sam instr v (hv pc instr horig)
+      have h2 := ih (execSymbolic ss sam instr).1 (execSymbolic ss sam instr).2 nextPC
       exact h2.trans h1
 
 /-- If `isNonZeroLit e = true`, then either `e = .lit n` for some `n ≠ 0`,
@@ -717,14 +877,14 @@ private theorem isNonZeroLit_sound {e : Expr} (h : e.isNonZeroLit = true) :
     | false => simp [Expr.isNonZeroLit] at h
   | var => simp [Expr.isNonZeroLit] at h
   | bin => simp [Expr.isNonZeroLit] at h
-  | tobool _ | cmpE _ _ _ | cmpLitE _ _ _ | notE _ | andE _ _ | orE _ _ => simp [Expr.isNonZeroLit] at h
+  | tobool _ | cmpE _ _ _ | cmpLitE _ _ _ | notE _ | andE _ _ | orE _ _ | arrRead _ _ => simp [Expr.isNonZeroLit] at h
 
 /-- Soundness of `BoolExpr.symEval`: if symbolic evaluation returns a result,
     it agrees with runtime evaluation. -/
 private theorem BoolExpr.symEval_sound (b : BoolExpr) (ss : SymStore) (inv : EInv)
-    (σ₀ σ : Store)
-    (hrepr : ∀ v, (ssGet ss v).eval σ₀ = σ v)
-    (hinv : EInv.toProp inv σ₀)
+    (σ₀ σ : Store) (am : ArrayMem)
+    (hrepr : ∀ v, (ssGet ss v).eval σ₀ am = σ v)
+    (hinv : EInv.toProp inv σ₀ am)
     (r : Bool) (heval : b.symEval ss inv = some r) :
     b.eval σ = r := by
   induction b generalizing r with
@@ -737,7 +897,7 @@ private theorem BoolExpr.symEval_sound (b : BoolExpr) (ss : SymStore) (inv : EIn
     cases sx <;> simp at heval
     case blit b =>
       simp [BoolExpr.eval]
-      have hxa := Expr.simplify_sound inv (ssGet ss x) σ₀ hinv
+      have hxa := Expr.simplify_sound inv (ssGet ss x) σ₀ am hinv
       rw [hsx, Expr.eval] at hxa
       rw [← hrepr x, ← hxa]
       simp [Value.toBool, heval]
@@ -749,8 +909,8 @@ private theorem BoolExpr.symEval_sound (b : BoolExpr) (ss : SymStore) (inv : EIn
     cases sx <;> cases sy <;> simp at heval
     case lit.lit a b =>
       simp [BoolExpr.eval]
-      have hxa := Expr.simplify_sound inv (ssGet ss x) σ₀ hinv
-      have hya := Expr.simplify_sound inv (ssGet ss y) σ₀ hinv
+      have hxa := Expr.simplify_sound inv (ssGet ss x) σ₀ am hinv
+      have hya := Expr.simplify_sound inv (ssGet ss y) σ₀ am hinv
       rw [hsx, Expr.eval] at hxa; rw [hsy, Expr.eval] at hya
       rw [← hrepr x, ← hxa, ← hrepr y, ← hya]
       exact heval
@@ -760,7 +920,7 @@ private theorem BoolExpr.symEval_sound (b : BoolExpr) (ss : SymStore) (inv : EIn
     cases sx <;> simp at heval
     case lit a =>
       simp [BoolExpr.eval]
-      have hxa := Expr.simplify_sound inv (ssGet ss x) σ₀ hinv
+      have hxa := Expr.simplify_sound inv (ssGet ss x) σ₀ am hinv
       rw [hsx, Expr.eval] at hxa
       rw [← hrepr x, ← hxa]
       exact heval
@@ -772,27 +932,59 @@ private theorem BoolExpr.symEval_sound (b : BoolExpr) (ss : SymStore) (inv : EIn
       simp [BoolExpr.eval, this]
       exact heval
 
+/-- From checkInstrAliasOk for arrLoad, derive the no-alias condition for samGet_sound. -/
+private theorem checkInstrAliasOk_arrLoad_noalias
+    (ss : SymStore) (sam : SymArrayMem) (inv : EInv)
+    (x : Var) (arr : ArrayName) (idx : Var)
+    (σ₀ : Store) (am₀ : ArrayMem)
+    (hinv : EInv.toProp inv σ₀ am₀)
+    (halias : checkInstrAliasOk (.arrLoad x arr idx) ss sam inv = true) :
+    ∀ a i v, (a, i, v) ∈ sam → a = arr → ¬(i == ssGet ss idx) →
+      (i.eval σ₀ am₀).toInt.toNat ≠ ((ssGet ss idx).eval σ₀ am₀).toInt.toNat := by
+  intro a ie ve hmem ha hne
+  simp only [checkInstrAliasOk, List.all_eq_true] at halias
+  have hentry := halias (a, ie, ve) hmem
+  simp only [ha, beq_self_eq_true, Bool.not_true, Bool.false_or] at hentry
+  -- hentry now: (ie == ssGet ss idx || match ...) = true
+  rw [show (ie == ssGet ss idx) = false from Bool.eq_false_iff.mpr hne] at hentry
+  simp only [Bool.false_or] at hentry
+  -- hentry: match ie.simplify inv, (ssGet ss idx).simplify inv with | .lit n, .lit m => !(n==m) | _ => false = true
+  generalize hsi : ie.simplify inv = si at hentry
+  generalize hsk : (ssGet ss idx).simplify inv = sk at hentry
+  match si, sk, hentry with
+  | .lit n, .lit m, hlit =>
+    simp only [Bool.not_eq_true', beq_eq_false_iff_ne] at hlit
+    have hs1 := (Expr.simplify_sound inv ie σ₀ am₀ hinv).symm
+    have hs2 := (Expr.simplify_sound inv (ssGet ss idx) σ₀ am₀ hinv).symm
+    rw [hsi, Expr.eval] at hs1; rw [hsk, Expr.eval] at hs2
+    rw [hs1, hs2]; simp [Value.toInt]
+    exact fun h => hlit (BitVec.eq_of_toNat_eq h)
+
 /-- Generalized path execution soundness with arbitrary initial symbolic store.
     The path check includes symbolic branch-direction verification for ifgoto.
     `branchInfo` provides the branch direction for the first step's ifgoto when
     symbolic analysis is inconclusive. `hbranch` guarantees the runtime store
     matches the branch direction. -/
-private theorem execPath_sound_gen (orig : Prog) (ss : SymStore) (inv : EInv)
+private theorem execPath_sound_gen (orig : Prog) (ss : SymStore) (sam : SymArrayMem) (inv : EInv)
     (σ₀ σ : Store) (pc : Label) (labels : List Label) (pc' : Label)
     (branchInfo : Option (BoolExpr × Bool))
-    (am : ArrayMem)
+    (am₀ am : ArrayMem)
     (Γ : TyCtx) (hwtp : WellTypedProg Γ orig) (hts : TypedStore Γ σ)
-    (hrepr : ∀ v, (ssGet ss v).eval σ₀ = σ v)
-    (hinv : EInv.toProp inv σ₀)
-    (hpath : checkOrigPath orig ss inv pc labels pc' branchInfo = true)
+    (hrepr : ∀ v, (ssGet ss v).eval σ₀ am₀ = σ v)
+    (hinv : EInv.toProp inv σ₀ am₀)
+    (hsamCoh : SamCoherent sam σ₀ am₀ am)
+    (hInvNoArrRead : inv.all (fun (_, e) => !e.hasArrRead) = true)
+    (hpath : checkOrigPath orig ss sam inv pc labels pc' branchInfo = true)
     (hbranch : ∀ cond taken, branchInfo = some (cond, taken) →
         cond.eval σ = taken) :
     ∃ σ' am', Steps orig (Cfg.run pc σ am) (Cfg.run pc' σ' am') ∧
-          ∀ v, (ssGet (execPath orig ss pc labels) v).eval σ₀ = σ' v := by
-  induction labels generalizing pc σ ss branchInfo am with
+          (∀ v, (ssGet (execPath orig ss sam pc labels).1 v).eval σ₀ am₀ = σ' v) ∧
+          SamCoherent (execPath orig ss sam pc labels).2 σ₀ am₀ am' := by
+  induction labels generalizing pc σ ss sam branchInfo am with
   | nil =>
     simp only [checkOrigPath, beq_iff_eq] at hpath
-    exact ⟨σ, am, hpath ▸ Steps.refl, hrepr⟩
+    simp only [execPath]
+    exact ⟨σ, am, hpath ▸ Steps.refl, hrepr, hsamCoh⟩
   | cons nextPC rest ih =>
     unfold checkOrigPath at hpath
     -- Extract the instruction at pc
@@ -801,15 +993,19 @@ private theorem execPath_sound_gen (orig : Prog) (ss : SymStore) (inv : EInv)
     | none => simp at hpath
     | some instr =>
       rw [Bool.and_eq_true] at hpath
-      have ⟨h12, hpath_inner⟩ := hpath
+      have ⟨h123, hpath_inner⟩ := hpath
+      rw [Bool.and_eq_true] at h123
+      have ⟨h12, hsafe_check⟩ := h123
       rw [Bool.and_eq_true] at h12
-      have ⟨hnext_eq, hsafe_check⟩ := h12
+      have ⟨hnext_eq, halias_check⟩ := h12
       -- Extract computeNextPC result
       generalize hnext_opt : computeNextPC instr pc ss inv = opt_next at hnext_eq
-      -- Construct the step + symbolic tracking
-      have ⟨σ₁, am₁, hstep_orig, hrepr'⟩ : ∃ σ₁ am₁,
+      -- Construct the step + symbolic tracking (hrepr'/hinv at am₀, hsamCoh₁ for new am₁)
+      have ⟨σ₁, am₁, hstep_orig, hrepr', hinv₁, hsamCoh₁⟩ : ∃ σ₁ am₁,
           Step orig (Cfg.run pc σ am) (Cfg.run nextPC σ₁ am₁) ∧
-          ∀ v, (ssGet (execSymbolic ss instr) v).eval σ₀ = σ₁ v := by
+          (∀ v, (ssGet (execSymbolic ss sam instr).1 v).eval σ₀ am₀ = σ₁ v) ∧
+          EInv.toProp inv σ₀ am₀ ∧
+          SamCoherent (execSymbolic ss sam instr).2 σ₀ am₀ am₁ := by
         cases opt_next with
         | some nextPC' =>
           have hpc_eq : nextPC = nextPC' := (beq_iff_eq.mp hnext_eq).symm
@@ -819,18 +1015,34 @@ private theorem execPath_sound_gen (orig : Prog) (ss : SymStore) (inv : EInv)
             simp [computeNextPC] at hnext_opt
             rw [hnext_opt.symm]
             have hs : Step orig (.run pc σ am) (.run (pc + 1) (σ[x ↦ n]) am) := Step.const horig_opt
-            exact ⟨σ[x ↦ n], am, hs,
-              execSymbolic_sound (_sbam := am) (_sbam' := am) ss _ σ₀ σ _ pc _ orig hrepr hs horig_opt⟩
+            cases n with
+            | int k =>
+              exact ⟨σ[x ↦ .int k], am, hs, (fun v => by
+                simp only [execSymbolic]
+                by_cases hvd : v = x
+                · rw [hvd, ssGet_ssSet_same]; simp [Expr.eval, Store.update_self]
+                · rw [ssGet_ssSet_other _ _ _ _ hvd, hrepr]
+                  exact (Store.update_other σ x v _ hvd).symm), hinv, hsamCoh⟩
+            | bool b =>
+              exact ⟨σ[x ↦ .bool b], am, hs, (fun v => by
+                simp only [execSymbolic]
+                by_cases hvd : v = x
+                · rw [hvd, ssGet_ssSet_same]; simp [Expr.eval, Store.update_self]
+                · rw [ssGet_ssSet_other _ _ _ _ hvd, hrepr]
+                  exact (Store.update_other σ x v _ hvd).symm), hinv, hsamCoh⟩
           | copy x y =>
             simp [computeNextPC] at hnext_opt
             rw [hnext_opt.symm]
             have hs : Step orig (.run pc σ am) (.run (pc + 1) (σ[x ↦ σ y]) am) := Step.copy horig_opt
-            exact ⟨σ[x ↦ σ y], am, hs,
-              execSymbolic_sound (_sbam := am) (_sbam' := am) ss _ σ₀ σ _ pc _ orig hrepr hs horig_opt⟩
+            exact ⟨σ[x ↦ σ y], am, hs, (fun v => by
+              simp only [execSymbolic]
+              by_cases hvd : v = x
+              · rw [hvd, ssGet_ssSet_same, hrepr]; exact (Store.update_self σ x (σ y)).symm
+              · rw [ssGet_ssSet_other _ _ _ _ hvd, hrepr]
+                exact (Store.update_other σ x v _ hvd).symm), hinv, hsamCoh⟩
           | binop x op y z =>
             simp [computeNextPC] at hnext_opt
             rw [hnext_opt.symm]
-            -- Derive int witnesses from well-typedness
             have hpc_lt : pc < orig.size := bound_of_getElem? horig_opt
             have hwti := hwtp pc hpc_lt
             have hinstr_eq : orig[pc] = .binop x op y z :=
@@ -851,7 +1063,7 @@ private theorem execPath_sound_gen (orig : Prog) (ss : SymStore) (inv : EInv)
                 | lit n =>
                   simp at hsafe_check
                   have hne : n ≠ 0 := hsafe_check
-                  have hsimp := Expr.simplify_sound inv (ssGet ss z) σ₀ hinv
+                  have hsimp := Expr.simplify_sound inv (ssGet ss z) σ₀ am₀ hinv
                   rw [hz_simp, Expr.eval] at hsimp
                   have hzval : σ z = .int n := by rw [← hrepr z]; exact hsimp.symm
                   rw [hzb] at hzval; exact Value.int.inj hzval ▸ hne
@@ -859,24 +1071,37 @@ private theorem execPath_sound_gen (orig : Prog) (ss : SymStore) (inv : EInv)
               | add | sub | mul => trivial
             have hs : Step orig (.run pc σ am) (.run (pc + 1) (σ[x ↦ .int (op.eval a b)]) am) :=
               Step.binop horig_opt hya hzb hsafe
-            exact ⟨σ[x ↦ .int (op.eval a b)], am, hs,
-              execSymbolic_sound (_sbam := am) (_sbam' := am) ss _ σ₀ σ _ pc _ orig hrepr hs horig_opt⟩
+            exact ⟨σ[x ↦ .int (op.eval a b)], am, hs, (fun v => by
+              simp only [execSymbolic]
+              by_cases hvd : v = x
+              · rw [hvd, ssGet_ssSet_same]
+                simp only [Expr.eval, Store.update_self]
+                have ha : ((ssGet ss y).eval σ₀ am₀).toInt = a := by
+                  rw [hrepr y, hya]; rfl
+                have hb : ((ssGet ss z).eval σ₀ am₀).toInt = b := by
+                  rw [hrepr z, hzb]; rfl
+                rw [ha, hb]
+              · rw [ssGet_ssSet_other _ _ _ _ hvd, hrepr]
+                exact (Store.update_other σ x v _ hvd).symm), hinv, hsamCoh⟩
           | boolop x be =>
             simp [computeNextPC] at hnext_opt
             rw [hnext_opt.symm]
             have hs : Step orig (.run pc σ am) (.run (pc + 1) (σ[x ↦ .bool (be.eval σ)]) am) := Step.boolop horig_opt
-            exact ⟨σ[x ↦ .bool (be.eval σ)], am, hs,
-              execSymbolic_sound (_sbam := am) (_sbam' := am) ss _ σ₀ σ _ pc _ orig hrepr hs horig_opt⟩
+            exact ⟨σ[x ↦ .bool (be.eval σ)], am, hs, (fun v => by
+              simp only [execSymbolic]
+              by_cases hvd : v = x
+              · rw [hvd, ssGet_ssSet_same]; simp only [Store.update_self]
+                exact BoolExpr.toSymExpr_sound be ss σ₀ σ am₀ hrepr
+              · rw [ssGet_ssSet_other _ _ _ _ hvd, hrepr]
+                exact (Store.update_other σ x v _ hvd).symm), hinv, hsamCoh⟩
           | goto l =>
             simp [computeNextPC] at hnext_opt
             rw [hnext_opt.symm]
             have hs : Step orig (.run pc σ am) (.run l σ am) := Step.goto horig_opt
-            exact ⟨σ, am, hs,
-              execSymbolic_sound (_sbam := am) (_sbam' := am) ss _ σ₀ σ σ pc l orig hrepr hs horig_opt⟩
+            exact ⟨σ, am, hs, (fun v => by simp only [execSymbolic]; exact hrepr v), hinv, hsamCoh⟩
           | ifgoto b l =>
-            have hexec_id : execSymbolic ss (.ifgoto b l) = ss := rfl
+            have hexec_id : (execSymbolic ss sam (.ifgoto b l)).1 = ss := rfl
             simp only [computeNextPC] at hnext_opt
-            -- computeNextPC returned some, so b.symEval returned some
             cases hsym : b.symEval ss inv <;> simp [hsym] at hnext_opt
             case some r =>
               cases r with
@@ -884,24 +1109,71 @@ private theorem execPath_sound_gen (orig : Prog) (ss : SymStore) (inv : EInv)
                 simp at hnext_opt
                 have hpc_eq : nextPC = l := hnext_opt.symm
                 rw [hpc_eq]
-                have heval := BoolExpr.symEval_sound b ss inv σ₀ σ hrepr hinv true hsym
-                exact ⟨σ, am, Step.iftrue horig_opt heval, hexec_id ▸ hrepr⟩
+                have heval := BoolExpr.symEval_sound b ss inv σ₀ σ am₀ hrepr hinv true hsym
+                exact ⟨σ, am, Step.iftrue horig_opt heval, hexec_id ▸ hrepr, hinv, hsamCoh⟩
               | false =>
                 simp at hnext_opt
                 have hpc_eq : nextPC = pc + 1 := hnext_opt.symm
                 rw [hpc_eq]
-                have heval := BoolExpr.symEval_sound b ss inv σ₀ σ hrepr hinv false hsym
-                exact ⟨σ, am, Step.iffall horig_opt heval, hexec_id ▸ hrepr⟩
+                have heval := BoolExpr.symEval_sound b ss inv σ₀ σ am₀ hrepr hinv false hsym
+                exact ⟨σ, am, Step.iffall horig_opt heval, hexec_id ▸ hrepr, hinv, hsamCoh⟩
           | halt =>
             simp [computeNextPC] at hnext_opt
           | arrLoad x arr idx =>
             simp [computeNextPC] at hnext_opt
             rw [hnext_opt.symm]
-            sorry
+            have hpc_lt : pc < orig.size := bound_of_getElem? horig_opt
+            have hwti := hwtp pc hpc_lt
+            have hinstr_eq : orig[pc] = .arrLoad x arr idx :=
+              Option.some.inj ((Array.getElem?_eq_getElem hpc_lt).symm.trans horig_opt)
+            rw [hinstr_eq] at hwti
+            obtain ⟨idxVal, hidxVal⟩ : ∃ idxVal : BitVec 64, σ idx = .int idxVal := by
+              cases hwti with | arrLoad _ hidx =>
+              exact Value.int_of_typeOf_int (by rw [hts idx]; exact hidx)
+            have hs : Step orig (.run pc σ am) (.run (pc + 1) (σ[x ↦ .int (am.read arr idxVal.toNat)]) am) :=
+              Step.arrLoad horig_opt hidxVal
+            -- arrLoad: execSymbolic returns ssSet ss x (samGet sam arr (ssGet ss idx))
+            exact ⟨σ[x ↦ .int (am.read arr idxVal.toNat)], am, hs, (fun v => by
+              show (ssGet (ssSet ss x (samGet sam arr (ssGet ss idx))) v).eval σ₀ am₀ = _
+              by_cases hvx : v = x
+              · rw [hvx, ssGet_ssSet_same]
+                simp only [Store.update_self]
+                have hsc := samGet_sound sam σ₀ am₀ am hsamCoh arr (ssGet ss idx)
+                  (checkInstrAliasOk_arrLoad_noalias ss sam inv x arr idx σ₀ am₀ hinv halias_check)
+                rw [hsc]; congr 1
+                have hidx_eval : (ssGet ss idx).eval σ₀ am₀ = σ idx := hrepr idx
+                rw [hidx_eval, hidxVal]; simp [Value.toInt]
+              · rw [ssGet_ssSet_other _ _ _ _ hvx]
+                have hupd := Store.update_other σ x v (.int (am.read arr idxVal.toNat)) hvx
+                rw [hupd]; exact hrepr v), hinv, hsamCoh⟩
           | arrStore arr idx val =>
             simp [computeNextPC] at hnext_opt
             rw [hnext_opt.symm]
-            sorry
+            have hpc_lt : pc < orig.size := bound_of_getElem? horig_opt
+            have hwti := hwtp pc hpc_lt
+            have hinstr_eq : orig[pc] = .arrStore arr idx val :=
+              Option.some.inj ((Array.getElem?_eq_getElem hpc_lt).symm.trans horig_opt)
+            rw [hinstr_eq] at hwti
+            obtain ⟨idxVal, hidxVal⟩ : ∃ idxVal : BitVec 64, σ idx = .int idxVal := by
+              cases hwti with | arrStore hidx _ =>
+              exact Value.int_of_typeOf_int (by rw [hts idx]; exact hidx)
+            obtain ⟨vv, hvv⟩ : ∃ vv : BitVec 64, σ val = .int vv := by
+              cases hwti with | arrStore _ hval =>
+              exact Value.int_of_typeOf_int (by rw [hts val]; exact hval)
+            have hs : Step orig (.run pc σ am) (.run (pc + 1) σ (am.write arr idxVal.toNat vv)) :=
+              Step.arrStore horig_opt hidxVal hvv
+            -- arrStore: ss unchanged, σ unchanged. hrepr at am₀ transfers trivially.
+            have hexec : (execSymbolic ss sam (.arrStore arr idx val)).1 = ss := rfl
+            have hval_eval : (ssGet ss val).eval σ₀ am₀ = .int vv := by
+              rw [hrepr val, hvv]
+            have hwrite_eq : am.write arr idxVal.toNat vv =
+                am.write arr ((ssGet ss idx).eval σ₀ am₀).toInt.toNat vv := by
+              have h1 : (ssGet ss idx).eval σ₀ am₀ = .int idxVal := by
+                rw [hrepr idx, hidxVal]
+              simp [h1, Value.toInt]
+            exact ⟨σ, am.write arr idxVal.toNat vv, hs,
+              (fun v => by rw [hexec]; exact hrepr v), hinv,
+              SamCoherent.cons arr (ssGet ss idx) (ssGet ss val) vv hsamCoh hval_eval hwrite_eq⟩
         | none =>
           -- computeNextPC returned none; use branchInfo fallback
           cases hbi : branchInfo with
@@ -911,8 +1183,7 @@ private theorem execPath_sound_gen (orig : Prog) (ss : SymStore) (inv : EInv)
             obtain ⟨origCond, taken⟩ := bi
             cases instr with
             | ifgoto b l_orig =>
-              have hexec_id : execSymbolic ss (.ifgoto b l_orig) = ss := rfl
-              -- The fallback checks b == origCond
+              have hexec_id : (execSymbolic ss sam (.ifgoto b l_orig)).1 = ss := rfl
               cases taken with
               | true =>
                 have hfb : (b == origCond && nextPC == l_orig) = true := by
@@ -922,7 +1193,7 @@ private theorem execPath_sound_gen (orig : Prog) (ss : SymStore) (inv : EInv)
                 have hpc_eq := beq_iff_eq.mp hpc_eq; subst hpc_eq
                 have heval : b.eval σ = true := by
                   rw [hbeq]; exact hbranch origCond true (hbi ▸ rfl)
-                exact ⟨σ, am, Step.iftrue horig_opt heval, hexec_id ▸ hrepr⟩
+                exact ⟨σ, am, Step.iftrue horig_opt heval, hexec_id ▸ hrepr, hinv, hsamCoh⟩
               | false =>
                 have hfb : (b == origCond && nextPC == pc + 1) = true := by
                   revert hnext_eq; rw [hbi]; simp
@@ -931,42 +1202,49 @@ private theorem execPath_sound_gen (orig : Prog) (ss : SymStore) (inv : EInv)
                 have hpc_eq := beq_iff_eq.mp hpc_eq; subst hpc_eq
                 have heval : b.eval σ = false := by
                   rw [hbeq]; exact hbranch origCond false (hbi ▸ rfl)
-                exact ⟨σ, am, Step.iffall horig_opt heval, hexec_id ▸ hrepr⟩
+                exact ⟨σ, am, Step.iffall horig_opt heval, hexec_id ▸ hrepr, hinv, hsamCoh⟩
             | _ =>
               exfalso; revert hnext_eq; rw [hbi]; cases taken <;> simp
       -- Recursive step (branchInfo = none for rest)
-      have hexec : execPath orig ss pc (nextPC :: rest) =
-          execPath orig (execSymbolic ss instr) nextPC rest := by
-        simp [execPath, horig_opt]
+      have hexec : ∀ v, ssGet (execPath orig ss sam pc (nextPC :: rest)).1 v =
+          ssGet (execPath orig (execSymbolic ss sam instr).1 (execSymbolic ss sam instr).2 nextPC rest).1 v := by
+        intro v; simp [execPath, horig_opt]
       have hts₁ : TypedStore Γ σ₁ :=
         type_preservation hwtp hts (bound_of_getElem? horig_opt) hstep_orig
-      obtain ⟨σ', am', hsteps_rest, hrepr_final⟩ :=
-        ih (execSymbolic ss instr) σ₁ nextPC none am₁ hts₁ hrepr'
-          hpath_inner (fun _ _ h => by simp at h)
-      exact ⟨σ', am', Steps.step hstep_orig hsteps_rest, hexec ▸ hrepr_final⟩
+      obtain ⟨σ', am', hsteps_rest, hrepr_final, hsamCoh'⟩ :=
+        ih (execSymbolic ss sam instr).1 (execSymbolic ss sam instr).2 σ₁ nextPC none am₁ hts₁ hrepr'
+          hsamCoh₁ hpath_inner (fun _ _ h => by simp at h)
+      have hexec_sam : (execPath orig ss sam pc (nextPC :: rest)).2 =
+          (execPath orig (execSymbolic ss sam instr).1 (execSymbolic ss sam instr).2 nextPC rest).2 := by
+        simp [execPath, horig_opt]
+      refine ⟨σ', am', Steps.step hstep_orig hsteps_rest, fun v => ?_, hexec_sam ▸ hsamCoh'⟩
+      rw [hexec v]; exact hrepr_final v
 
-/-- Path execution soundness: specialization with empty initial symbolic store. -/
+/-- Path execution soundness: specialization with empty initial symbolic store.
+    With empty ss/sam and am₀ = am, the conclusion evaluates at the initial am. -/
 private theorem execPath_sound (orig : Prog) (inv : EInv) (σ : Store)
     (pc : Label) (labels : List Label) (pc' : Label)
     (branchInfo : Option (BoolExpr × Bool))
     (am : ArrayMem)
     (Γ : TyCtx) (hwtp : WellTypedProg Γ orig) (hts : TypedStore Γ σ)
-    (hrepr : ∀ v, (ssGet ([] : SymStore) v).eval σ = σ v)
-    (hinv : EInv.toProp inv σ)
-    (hpath : checkOrigPath orig ([] : SymStore) inv pc labels pc' branchInfo = true)
+    (hrepr : ∀ v, (ssGet ([] : SymStore) v).eval σ am = σ v)
+    (hinv : EInv.toProp inv σ am)
+    (hInvNoArrRead : inv.all (fun (_, e) => !e.hasArrRead) = true)
+    (hpath : checkOrigPath orig ([] : SymStore) ([] : SymArrayMem) inv pc labels pc' branchInfo = true)
     (hbranch : ∀ cond taken, branchInfo = some (cond, taken) →
         cond.eval σ = taken) :
     ∃ σ' am', Steps orig (Cfg.run pc σ am) (Cfg.run pc' σ' am') ∧
-          ∀ v, (ssGet (execPath orig ([] : SymStore) pc labels) v).eval σ = σ' v :=
-  execPath_sound_gen orig ([] : SymStore) inv σ σ pc labels pc' branchInfo am
-    Γ hwtp hts hrepr hinv hpath hbranch
+          (∀ v, (ssGet (execPath orig ([] : SymStore) ([] : SymArrayMem) pc labels).1 v).eval σ am = σ' v) ∧
+          SamCoherent (execPath orig ([] : SymStore) ([] : SymArrayMem) pc labels).2 σ am am' :=
+  execPath_sound_gen orig ([] : SymStore) ([] : SymArrayMem) inv σ σ pc labels pc' branchInfo am am
+    Γ hwtp hts hrepr hinv (samCoherent_nil σ am) hInvNoArrRead hpath hbranch
 
 /-- If the store relation holds (∀ x, σ_t x = (ssGet ss x).eval σ_o), then evaluating
     `e` at `σ_t` equals evaluating `e.substSym ss` at `σ_o`. Follows from `substSym_sound`. -/
-theorem Expr.substSym_consistent (ss : SymStore) (e : Expr) (σ_o σ_t : Store)
-    (hcons : ∀ x, σ_t x = (ssGet ss x).eval σ_o) :
-    e.eval σ_t = (e.substSym ss).eval σ_o :=
-  (Expr.substSym_sound ss e σ_o σ_t (fun v => (hcons v).symm)).symm
+theorem Expr.substSym_consistent (ss : SymStore) (e : Expr) (σ_o σ_t : Store) (am : ArrayMem)
+    (hcons : ∀ x, σ_t x = (ssGet ss x).eval σ_o am) :
+    e.eval σ_t am = (e.substSym ss).eval σ_o am :=
+  (Expr.substSym_sound ss e σ_o σ_t am (fun v => (hcons v).symm)).symm
 
 /-- BEq on Expr implies equality. -/
 private theorem expr_beq_eq {e₁ e₂ : Expr} (h : (e₁ == e₂) = true) : e₁ = e₂ :=
@@ -1041,13 +1319,18 @@ private theorem relGetOrigExpr_eq_ssGet_buildSubstMap (rel : EExprRel) (x : Var)
         rw [beq_eq_false_iff_ne]; exact Expr.noConfusion
       simp only [relGetOrigExpr, List.find?, buildSubstMap, List.filterMap, hbeq]
       exact ih
+    | arrRead arr idx =>
+      have hbeq : (Expr.arrRead arr idx == Expr.var x) = false := by
+        rw [beq_eq_false_iff_ne]; exact Expr.noConfusion
+      simp only [relGetOrigExpr, List.find?, buildSubstMap, List.filterMap, hbeq]
+      exact ih
 
 /-- If `b.mapVarsRel rel = some origCond`, then `b.eval σ_t = origCond.eval σ_o`
     when the store relation holds through `buildSubstMap`. -/
 private theorem BoolExpr.eval_mapVarsRel (b origCond : BoolExpr)
-    (rel : EExprRel) (σ_t σ_o : Store)
+    (rel : EExprRel) (σ_t σ_o : Store) (am : ArrayMem)
     (hmap : b.mapVarsRel rel = some origCond)
-    (hcons : ∀ x, σ_t x = (ssGet (buildSubstMap rel) x).eval σ_o) :
+    (hcons : ∀ x, σ_t x = (ssGet (buildSubstMap rel) x).eval σ_o am) :
     b.eval σ_t = origCond.eval σ_o := by
   induction b generalizing origCond with
   | lit b =>
@@ -1169,8 +1452,8 @@ private theorem branchInfo_of_step {prog : Prog} {pc pc' : Label} {σ σ' : Stor
 private theorem branchInfo_of_step_with_rel {prog : Prog} {pc pc' : Label} {σ_t σ_t' : Store} {am_t am_t' : ArrayMem}
     {instr : TAC} (hinstr : prog[pc]? = some instr)
     (hstep : Step prog (Cfg.run pc σ_t am_t) (Cfg.run pc' σ_t' am_t'))
-    {rel : EExprRel} {σ_o : Store}
-    (hcons : ∀ x, σ_t x = (ssGet (buildSubstMap rel) x).eval σ_o)
+    {rel : EExprRel} {σ_o : Store} {am_o : ArrayMem}
+    (hcons : ∀ x, σ_t x = (ssGet (buildSubstMap rel) x).eval σ_o am_o)
     {origCond : BoolExpr} {taken : Bool}
     (hbi : branchInfoWithRel instr rel pc pc' = some (origCond, taken)) :
     origCond.eval σ_o = taken := by
@@ -1189,22 +1472,119 @@ private theorem branchInfo_of_step_with_rel {prog : Prog} {pc pc' : Label} {σ_t
           simp [transBranchInfo, hguard]
         have hbranch := branchInfo_of_step hinstr hstep htbi
         -- Transfer via eval_mapVarsRel: b.eval σ_t = origCond'.eval σ_o
-        have heval := BoolExpr.eval_mapVarsRel b origCond' rel σ_t σ_o hmap hcons
+        have heval := BoolExpr.eval_mapVarsRel b origCond' rel σ_t σ_o am_o hmap hcons
         rw [← heval]; exact hbranch
       · simp [hguard] at hbi
   | _ => simp [branchInfoWithRel] at hbi
 
+/-- ssGet from an arrRead-free SymStore returns arrRead-free expressions. -/
+private theorem ssGet_noArrRead_of_all (ss : SymStore) (v : Var)
+    (hall : ss.all (fun (_, e) => !e.hasArrRead) = true) :
+    (ssGet ss v).hasArrRead = false := by
+  unfold ssGet
+  generalize hfind : ss.find? (fun p => p.1 == v) = result
+  cases result with
+  | none => simp [Expr.hasArrRead]
+  | some entry =>
+    have hmem : entry ∈ ss := List.mem_of_find?_eq_some hfind
+    rw [List.all_eq_true] at hall
+    have h := hall entry hmem; simp at h; exact h
+
+/-- buildSubstMap preserves arrRead-freeness from the original-side expressions. -/
+private theorem buildSubstMap_noArrRead (rel : EExprRel)
+    (hnoarr : rel.all (fun (e, _) => !e.hasArrRead) = true) :
+    (buildSubstMap rel).all (fun (_, e) => !e.hasArrRead) = true := by
+  rw [List.all_eq_true]; intro ⟨w, e⟩ hmem
+  simp only [buildSubstMap, List.mem_filterMap] at hmem
+  obtain ⟨⟨e_o, e_t⟩, hmem_rel, hsome⟩ := hmem
+  rw [List.all_eq_true] at hnoarr
+  cases e_t with
+  | var x => simp at hsome; obtain ⟨rfl, rfl⟩ := hsome; exact hnoarr _ hmem_rel
+  | _ => simp at hsome
+
+/-- If all original-side expressions in a relation are arrRead-free,
+    then ssGet of the corresponding buildSubstMap is arrRead-free for any variable. -/
+private theorem ssGet_buildSubstMap_noArrRead (rel : EExprRel) (v : Var)
+    (hnoarr : rel.all (fun (e, _) => !e.hasArrRead) = true) :
+    (ssGet (buildSubstMap rel) v).hasArrRead = false :=
+  ssGet_noArrRead_of_all _ v (buildSubstMap_noArrRead rel hnoarr)
+
+/-- BoolExpr.toSymExpr on the empty store is arrRead-free. -/
+private theorem BoolExpr.toSymExpr_nil_noArrRead (be : BoolExpr) :
+    (be.toSymExpr ([] : SymStore)).hasArrRead = false := by
+  induction be with
+  | lit _ => simp [BoolExpr.toSymExpr, Expr.hasArrRead]
+  | bvar x => simp [BoolExpr.toSymExpr, Expr.hasArrRead, ssGet_nil_var]
+  | cmp _ x y => simp [BoolExpr.toSymExpr, Expr.hasArrRead, ssGet_nil_var]
+  | cmpLit _ x _ => simp [BoolExpr.toSymExpr, Expr.hasArrRead, ssGet_nil_var]
+  | not _ ih => simp [BoolExpr.toSymExpr, Expr.hasArrRead, ih]
+
+/-- ssGet from ssSet on [] is arrRead-free when the stored expression is. -/
+private theorem ssGet_ssSet_nil_noArrRead (x : Var) (e : Expr) (v : Var)
+    (he : e.hasArrRead = false) :
+    (ssGet (ssSet ([] : SymStore) x e) v).hasArrRead = false := by
+  by_cases hv : v = x
+  · subst hv; rw [ssGet_ssSet_same]; exact he
+  · rw [ssGet_ssSet_other _ _ _ _ hv, ssGet_nil_var]; simp [Expr.hasArrRead]
+
+/-- If SamCoherent relates the empty SAM, the array memory is unchanged. -/
+private theorem samCoherent_nil_am_eq {σ : Store} {am am' : ArrayMem}
+    (h : SamCoherent [] σ am am') : am' = am := by
+  cases h; rfl
+
+/-- Extract index/value types from an arrStore step that produces Cfg.run. -/
+private theorem arrStore_step_values {p : Prog} {pc pc' : Nat} {σ σ' : Store} {am am' : ArrayMem}
+    {arr : ArrayName} {idx val : Var}
+    (hinstr : p[pc]? = some (.arrStore arr idx val))
+    (hstep : Step p (Cfg.run pc σ am) (Cfg.run pc' σ' am')) :
+    ∃ iv vv : BitVec 64, σ idx = .int iv ∧ σ val = .int vv ∧
+      am' = am.write arr iv.toNat vv ∧ σ' = σ := by
+  cases hstep with
+  | arrStore h hidx hval =>
+    rw [hinstr] at h; cases h; exact ⟨_, _, hidx, hval, rfl, rfl⟩
+  | _ => all_goals simp_all
+
+/-- A non-arrStore step preserves array memory. -/
+private theorem step_am_preserved {p : Prog} {pc pc' : Nat} {σ σ' : Store} {am am' : ArrayMem}
+    (hstep : Step p (Cfg.run pc σ am) (Cfg.run pc' σ' am'))
+    (h : ∀ arr idx val, p[pc]? ≠ some (.arrStore arr idx val)) : am' = am := by
+  cases hstep with
+  | arrStore hinstr _ _ => exact absurd hinstr (h _ _ _)
+  | _ => rfl
+
+private theorem checkRelConsistency_amCheck
+    (orig : Prog) (pc_orig : Label) (origLabels : List Label) (transInstr : TAC)
+    (inv_orig : EInv) (rel_pre rel_post : EExprRel) (allVars : List Var)
+    (h : checkRelConsistency orig pc_orig origLabels transInstr inv_orig rel_pre rel_post allVars = true) :
+    (execPath orig ([] : SymStore) ([] : SymArrayMem) pc_orig origLabels).2.length =
+      (execSymbolic ([] : SymStore) ([] : SymArrayMem) transInstr).2.length ∧
+    ((execPath orig ([] : SymStore) ([] : SymArrayMem) pc_orig origLabels).2.zip
+      (execSymbolic ([] : SymStore) ([] : SymArrayMem) transInstr).2).all
+      (fun ((a_o, i_o, v_o), (a_t, i_t, v_t)) =>
+        a_o == a_t &&
+        i_o.simplify inv_orig == (i_t.substSym (buildSubstMap rel_pre)).simplify inv_orig &&
+        v_o.simplify inv_orig == (v_t.substSym (buildSubstMap rel_pre)).simplify inv_orig) = true := by
+  unfold checkRelConsistency at h
+  rw [Bool.and_eq_true] at h
+  have ham := h.2
+  rw [Bool.and_eq_true] at ham
+  exact ⟨beq_iff_eq.mp ham.1, ham.2⟩
+
+set_option maxHeartbeats 400000 in
 /-- Soundness of checkTransitionRelProp from the Bool checks.
     Given: checkOrigPath and checkRelConsistency both pass, the original path
     produces steps reaching the target with store relation preserved.
     Supports non-trivial expression relations. -/
 private theorem transRel_sound (dc : ECertificate)
     (hwtp : WellTypedProg dc.tyCtx dc.orig)
+    (hnoarr_orig : checkNoArrReadInInvs dc.inv_orig = true)
     (pc_t pc_t' : Label)
     (dic : EInstrCert) (dtc : ETransCorr) (instr : TAC)
     (pc_o' : Label)
+    (hnoarr_rel : dtc.rel.all (fun (e, _) => !e.hasArrRead) = true)
+    (hnoarr_rel_next : dtc.rel_next.all (fun (e, _) => !e.hasArrRead) = true)
     (hinstr : dc.trans[pc_t]? = some instr)
-    (hpath : checkOrigPath dc.orig ([] : SymStore) (dc.inv_orig.getD dic.pc_orig ([] : EInv))
+    (hpath : checkOrigPath dc.orig ([] : SymStore) ([] : SymArrayMem) (dc.inv_orig.getD dic.pc_orig ([] : EInv))
       dic.pc_orig dtc.origLabels pc_o'
       (branchInfoWithRel instr dtc.rel pc_t pc_t') = true)
     (hrelcheck : checkRelConsistency
@@ -1218,64 +1598,196 @@ private theorem transRel_sound (dc : ECertificate)
       { origLabels := dtc.origLabels
         storeRel := eRelToStoreRel dtc.rel
         storeRel_next := eRelToStoreRel dtc.rel_next } := by
-  intro σ_t σ_t' σ_o am_t am_t' hinv_t hinv_o hcons hts_o hstep
-  -- hcons : eRelToStoreRel dtc.rel σ_o σ_t, i.e. ∀ x, σ_t x = (ssGet (buildSubstMap dtc.rel) x).eval σ_o
-  change ∀ x, σ_t x = (ssGet (buildSubstMap dtc.rel) x).eval σ_o at hcons
+  intro σ_t σ_t' σ_o am_t am_t' am_o hinv_t hinv_o hcons ham_eq hts_o hstep
+  -- hcons : eRelToStoreRel dtc.rel σ_o am_o σ_t am_t, i.e. ∀ x, σ_t x = (ssGet (buildSubstMap dtc.rel) x).eval σ_o am_o
+  change ∀ x, σ_t x = (ssGet (buildSubstMap dtc.rel) x).eval σ_o am_o at hcons
   -- Branch info transfers through the relation
   have hbranch_orig : ∀ cond taken,
       branchInfoWithRel instr dtc.rel pc_t pc_t' = some (cond, taken) →
       cond.eval σ_o = taken :=
     fun cond taken hbi => branchInfo_of_step_with_rel hinstr hstep hcons hbi
   -- Execute original path from σ_o
-  obtain ⟨σ_o', am_o', horig_steps, horig_repr⟩ := execPath_sound dc.orig
+  obtain ⟨σ_o', am_o', horig_steps, horig_repr, hsamCoh_orig⟩ := execPath_sound dc.orig
     (dc.inv_orig.getD dic.pc_orig ([] : EInv)) σ_o
     dic.pc_orig dtc.origLabels pc_o'
     (branchInfoWithRel instr dtc.rel pc_t pc_t')
-    ArrayMem.init
-    dc.tyCtx hwtp hts_o (ssGet_nil σ_o) hinv_o hpath hbranch_orig
+    am_o
+    dc.tyCtx hwtp hts_o (ssGet_nil σ_o am_o) hinv_o
+    (noArrRead_of_inv_all dc.inv_orig hnoarr_orig dic.pc_orig)
+    hpath hbranch_orig
+  -- Prove am_t' = am_o' (uses separate helper to avoid large context)
+  have ham_eq' : am_t' = am_o' := by
+    have ⟨hlen_eq, hzip_check⟩ := checkRelConsistency_amCheck dc.orig dic.pc_orig dtc.origLabels instr
+      (dc.inv_orig.getD dic.pc_orig ([] : EInv)) dtc.rel dtc.rel_next
+      (collectAllVars dc.orig dc.trans) hrelcheck
+    by_cases hinstr_arr : ∃ arr idx val, instr = .arrStore arr idx val
+    · -- arrStore case: both sides write the same thing
+      obtain ⟨arr, idx, val, rfl⟩ := hinstr_arr
+      obtain ⟨idxVal, vv, hidxV, hvv, ham_t'_eq, _⟩ :=
+        arrStore_step_values hinstr hstep
+      -- origSAM must be a singleton (transSAM has length 1)
+      simp only [execSymbolic] at hlen_eq hzip_check
+      obtain ⟨⟨a_o, i_o, v_o⟩, horigSAM_eq⟩ :
+          ∃ e, (execPath dc.orig ([] : SymStore) ([] : SymArrayMem) dic.pc_orig dtc.origLabels).2 = [e] := by
+        match hm : (execPath dc.orig ([] : SymStore) ([] : SymArrayMem) dic.pc_orig dtc.origLabels).2 with
+        | [] => simp_all [List.length]
+        | [e] => exact ⟨e, rfl⟩
+        | _ :: _ :: _ => simp_all [List.length]
+      rw [horigSAM_eq] at hzip_check
+      have hsamCoh_eq : SamCoherent [(a_o, i_o, v_o)] σ_o am_o am_o' := horigSAM_eq ▸ hsamCoh_orig
+      simp only [List.zip_cons_cons, List.zip_nil_right, List.all_cons, List.all_nil,
+        Bool.and_true] at hzip_check
+      have hzc := hzip_check
+      rw [Bool.and_eq_true] at hzc
+      have h12 := hzc.1; have hv_match := hzc.2
+      rw [Bool.and_eq_true] at h12
+      have harr_eq : a_o = arr := beq_iff_eq.mp h12.1
+      have hidx_eq := beq_iff_eq.mp h12.2
+      have hval_eq := beq_iff_eq.mp hv_match
+      cases hsamCoh_eq with
+      | cons _ _ _ bv_o hprev hvalint hwrite =>
+        cases hprev
+        have inv_def := dc.inv_orig.getD dic.pc_orig ([] : EInv)
+        set inv_e := dc.inv_orig.getD dic.pc_orig ([] : EInv)
+        have hidx_sem : i_o.eval σ_o am_o = σ_t idx :=
+          calc i_o.eval σ_o am_o
+              = (i_o.simplify inv_e).eval σ_o am_o :=
+                  (Expr.simplify_sound inv_e i_o σ_o am_o hinv_o).symm
+            _ = (((ssGet ([] : SymStore) idx).substSym (buildSubstMap dtc.rel)).simplify inv_e).eval σ_o am_o :=
+                  by rw [hidx_eq]
+            _ = ((ssGet ([] : SymStore) idx).substSym (buildSubstMap dtc.rel)).eval σ_o am_o :=
+                  Expr.simplify_sound inv_e _ σ_o am_o hinv_o
+            _ = (ssGet ([] : SymStore) idx).eval σ_t am_o :=
+                  Expr.substSym_sound _ _ σ_o σ_t am_o (fun w => (hcons w).symm)
+            _ = σ_t idx := by simp [ssGet, List.find?, Expr.eval]
+        have hval_sem : v_o.eval σ_o am_o = σ_t val :=
+          calc v_o.eval σ_o am_o
+              = (v_o.simplify inv_e).eval σ_o am_o :=
+                  (Expr.simplify_sound inv_e v_o σ_o am_o hinv_o).symm
+            _ = (((ssGet ([] : SymStore) val).substSym (buildSubstMap dtc.rel)).simplify inv_e).eval σ_o am_o :=
+                  by rw [hval_eq]
+            _ = ((ssGet ([] : SymStore) val).substSym (buildSubstMap dtc.rel)).eval σ_o am_o :=
+                  Expr.simplify_sound inv_e _ σ_o am_o hinv_o
+            _ = (ssGet ([] : SymStore) val).eval σ_t am_o :=
+                  Expr.substSym_sound _ _ σ_o σ_t am_o (fun w => (hcons w).symm)
+            _ = σ_t val := by simp [ssGet, List.find?, Expr.eval]
+        -- Chain: am_t' = am_t.write ... = am_o.write ... = am_o'
+        have hvv_eq : vv = bv_o := by
+          have := hval_sem; rw [hvv] at this; rw [this] at hvalint
+          exact Value.int.inj hvalint
+        rw [ham_t'_eq, ham_eq, hwrite, harr_eq, hidx_sem, hidxV, hvv_eq]
+        simp [Value.toInt]
+    · -- Non-arrStore: AM unchanged on both sides
+      push_neg at hinstr_arr
+      have ham_t : am_t' = am_t := step_am_preserved hstep (fun a i v h =>
+        hinstr_arr a i v (by rw [hinstr] at h; exact Option.some.inj h))
+      have htransSAM_nil : (execSymbolic ([] : SymStore) ([] : SymArrayMem) instr).2 = [] := by
+        cases instr with
+        | arrStore a i v => exact absurd rfl (hinstr_arr a i v)
+        | const x v => cases v <;> rfl
+        | _ => rfl
+      rw [htransSAM_nil] at hlen_eq
+      have horigSAM_nil : (execPath dc.orig ([] : SymStore) ([] : SymArrayMem) dic.pc_orig dtc.origLabels).2 = [] := by
+        match hm : (execPath dc.orig ([] : SymStore) ([] : SymArrayMem) dic.pc_orig dtc.origLabels).2 with
+        | [] => rfl
+        | _ :: _ => simp_all [List.length]
+      have ham_o : am_o' = am_o :=
+        samCoherent_nil_am_eq (show SamCoherent [] σ_o am_o am_o' by rw [← horigSAM_nil]; exact hsamCoh_orig)
+      rw [ham_t, ham_o, ham_eq]
   -- Prove store relation holds at the target: eRelToStoreRel dtc.rel_next σ_o' σ_t'
-  refine ⟨σ_o', am_o', horig_steps, ?_⟩
-  -- Goal: ∀ v, σ_t' v = (ssGet (buildSubstMap dtc.rel_next) v).eval σ_o'
+  refine ⟨σ_o', am_o', horig_steps, ?_, ham_eq'⟩
+  -- Goal: ∀ v, σ_t' v = (ssGet (buildSubstMap dtc.rel_next) v).eval σ_o' am_o'
   intro v
   -- Abbreviations
-  let origSS := execPath dc.orig ([] : SymStore) dic.pc_orig dtc.origLabels
-  let transSS := execSymbolic ([] : SymStore) instr
+  let origSS := (execPath dc.orig ([] : SymStore) ([] : SymArrayMem) dic.pc_orig dtc.origLabels).1
+  let transSS := (execSymbolic ([] : SymStore) ([] : SymArrayMem) instr).1
   let preSubst := buildSubstMap dtc.rel
   let postSubst := buildSubstMap dtc.rel_next
   let inv := dc.inv_orig.getD dic.pc_orig ([] : EInv)
   let allVars := collectAllVars dc.orig dc.trans
   -- execSymbolic_sound: transSS tracks the transformed step
-  have htrans_repr : ∀ w, (ssGet transSS w).eval σ_t = σ_t' w :=
-    execSymbolic_sound ([] : SymStore) instr σ_t σ_t σ_t' pc_t pc_t' dc.trans
-      (ssGet_nil σ_t) hstep hinstr
-  -- preSubst soundness: (ssGet preSubst w).eval σ_o = σ_t w
-  have hpre_sound : ∀ w, (ssGet preSubst w).eval σ_o = σ_t w :=
+  have htrans_repr : ∀ w, (ssGet transSS w).eval σ_t am_t = σ_t' w := by
+    by_cases hscalar : instr.isScalar = true
+    · exact execSymbolic_sound ([] : SymStore) ([] : SymArrayMem) instr σ_t σ_t σ_t' pc_t pc_t' dc.trans am_t
+        (ssGet_nil σ_t am_t) hstep hinstr hscalar
+    · cases instr with
+      | arrStore arr idx val =>
+        show ∀ w, (ssGet (execSymbolic ([] : SymStore) ([] : SymArrayMem) (.arrStore arr idx val)).1 w).eval σ_t am_t = σ_t' w
+        simp only [execSymbolic]
+        have step_det : ∀ c, Step dc.trans (Cfg.run pc_t σ_t am_t) c → c = Cfg.run pc_t' σ_t' am_t' :=
+          fun c hc => Step.deterministic hc hstep
+        obtain ⟨idxVal, hv⟩ : ∃ idxVal : BitVec 64, σ_t idx = .int idxVal := by
+          revert hstep; intro hstep; cases hstep <;> simp_all
+        obtain ⟨vv, hvv⟩ : ∃ vv : BitVec 64, σ_t val = .int vv := by
+          revert hstep; intro hstep; cases hstep <;> simp_all
+        have := step_det _ (Step.arrStore hinstr hv hvv)
+        have hσ' : σ_t' = σ_t := (Cfg.run.inj this).2.1.symm
+        rw [hσ']; exact ssGet_nil σ_t am_t
+      | arrLoad dest arr idx =>
+        -- arrLoad on transformed side: uses am_t for consistency with relation
+        show ∀ w, (ssGet (ssSet [] dest (.arrRead arr (ssGet [] idx))) w).eval σ_t am_t = σ_t' w
+        have step_det : ∀ c, Step dc.trans (Cfg.run pc_t σ_t am_t) c → c = Cfg.run pc_t' σ_t' am_t' :=
+          fun c hc => Step.deterministic hc hstep
+        obtain ⟨idxVal, hidx⟩ : ∃ idxVal : BitVec 64, σ_t idx = .int idxVal := by
+          revert hstep; intro hstep; cases hstep <;> simp_all
+        have := step_det _ (Step.arrLoad hinstr hidx)
+        have hσ' : σ_t' = σ_t[dest ↦ .int (am_t.read arr idxVal.toNat)] :=
+          (Cfg.run.inj this).2.1.symm
+        intro w
+        by_cases hwd : w = dest
+        · -- v = dest: symbolic store has .arrRead arr (.var idx)
+          rw [hwd, ssGet_ssSet_same]
+          simp only [Expr.eval, ssGet_nil, Expr.eval]
+          rw [hidx]; simp [Value.toInt, hσ', Store.update_self]
+        · rw [ssGet_ssSet_other _ _ _ _ hwd, hσ', ssGet_nil]
+          exact (Store.update_other σ_t dest w _ hwd).symm
+      | _ => exact absurd rfl hscalar
+  -- preSubst soundness: (ssGet preSubst w).eval σ_o am_o = σ_t w
+  have hpre_sound : ∀ w, (ssGet preSubst w).eval σ_o am_o = σ_t w :=
     fun w => (hcons w).symm
-  -- substSym_sound for preSubst: for any expr e, (e.substSym preSubst).eval σ_o = e.eval σ_t
-  have hpre_subst : ∀ (e : Expr), (e.substSym preSubst).eval σ_o = e.eval σ_t :=
-    fun e => Expr.substSym_sound preSubst e σ_o σ_t hpre_sound
+  -- substSym_sound for preSubst: for any expr e, (e.substSym preSubst).eval σ_o am_o = e.eval σ_t am_o
+  have hpre_subst : ∀ (e : Expr), (e.substSym preSubst).eval σ_o am_o = e.eval σ_t am_o :=
+    fun e => Expr.substSym_sound preSubst e σ_o σ_t am_o hpre_sound
   -- Classify v: either in the checked variable set or not in any program variable
   by_cases hmem : v ∈ allVars ++ preSubst.map Prod.fst ++ postSubst.map Prod.fst
   · -- Case 1: v is in the checked set — use the checker result
     -- Extract the checker guarantee for v
     unfold checkRelConsistency at hrelcheck
+    rw [Bool.and_eq_true] at hrelcheck
     rw [List.all_eq_true] at hrelcheck
-    have hcheck_v := hrelcheck v hmem
+    have hcheck_v := hrelcheck.1 v hmem
     have hbeq := beq_iff_eq.mp hcheck_v
     -- hbeq : ((ssGet postSubst v).substSym origSS).simplify inv =
     --         ((ssGet transSS v).substSym preSubst).simplify inv
     -- By simplify_sound (σ_o satisfies inv):
-    have hlhs := Expr.simplify_sound inv ((ssGet postSubst v).substSym origSS) σ_o hinv_o
-    have hrhs := Expr.simplify_sound inv ((ssGet transSS v).substSym preSubst) σ_o hinv_o
-    -- Chain the equalities
+    have hlhs := Expr.simplify_sound inv ((ssGet postSubst v).substSym origSS) σ_o am_o hinv_o
+    have hrhs := Expr.simplify_sound inv ((ssGet transSS v).substSym preSubst) σ_o am_o hinv_o
+    -- Chain the equalities.
+    -- htrans_repr evaluates at am_t, hpre_subst at am_o, horig_repr at am_o'.
+    -- The checker compares simplified expressions (syntactically), which bridge across ams.
+    -- For arrRead-free expressions these all agree; for arrRead expressions Part B fixes this.
+    -- horig_repr now evaluates at am_o (fixed initial am), so substSym_sound gives am_o
+    have horig_subst : ∀ (e : Expr), (e.substSym origSS).eval σ_o am_o = e.eval σ_o' am_o :=
+      fun e => Expr.substSym_sound origSS e σ_o σ_o' am_o horig_repr
+    -- preSubst soundness at am_o: (e.substSym preSubst).eval σ_o am_o = e.eval σ_t am_o
+    have hpre_subst_ao : ∀ (e : Expr), (e.substSym preSubst).eval σ_o am_o = e.eval σ_t am_o :=
+      fun e => Expr.substSym_sound preSubst e σ_o σ_t am_o hpre_sound
+    -- The chain goes entirely through am_o (fixed array mem):
+    -- htrans_repr at am_t, then bridge am_t→am_o, then all at am_o, then bridge am_o→am_o'
+    -- Bridge am_t→am_o: use ham_eq (am_t = am_o)
+    -- Bridge am_o→am_o' for postSubst (arrRead-free from checkNoArrReadInRels)
+    have hpostSubst_noarr : (ssGet postSubst v).hasArrRead = false :=
+      ssGet_buildSubstMap_noArrRead dtc.rel_next v hnoarr_rel_next
     calc σ_t' v
-        = (ssGet transSS v).eval σ_t := (htrans_repr v).symm
-      _ = ((ssGet transSS v).substSym preSubst).eval σ_o := (hpre_subst _).symm
-      _ = (((ssGet transSS v).substSym preSubst).simplify inv).eval σ_o := hrhs.symm
-      _ = (((ssGet postSubst v).substSym origSS).simplify inv).eval σ_o := by rw [hbeq]
-      _ = ((ssGet postSubst v).substSym origSS).eval σ_o := hlhs
-      _ = (ssGet postSubst v).eval σ_o' :=
-            Expr.substSym_sound origSS (ssGet postSubst v) σ_o σ_o' horig_repr
+        = (ssGet transSS v).eval σ_t am_t := (htrans_repr v).symm
+      _ = (ssGet transSS v).eval σ_t am_o := by rw [ham_eq]
+      _ = ((ssGet transSS v).substSym preSubst).eval σ_o am_o := (hpre_subst_ao _).symm
+      _ = (((ssGet transSS v).substSym preSubst).simplify inv).eval σ_o am_o := hrhs.symm
+      _ = (((ssGet postSubst v).substSym origSS).simplify inv).eval σ_o am_o := by rw [hbeq]
+      _ = ((ssGet postSubst v).substSym origSS).eval σ_o am_o := hlhs
+      _ = (ssGet postSubst v).eval σ_o' am_o := horig_subst _
+      _ = (ssGet postSubst v).eval σ_o' am_o' :=
+            Expr.eval_noArrRead _ σ_o' am_o am_o' hpostSubst_noarr
   · -- Case 2: v not in any program variable or relation key
     -- v ∉ allVars, v ∉ preSubst keys, v ∉ postSubst keys
     simp only [List.mem_append, not_or] at hmem
@@ -1292,28 +1804,27 @@ private theorem transRel_sound (dc : ECertificate)
       exact hv_allvars (instrVars_sub_collectAllVars_right dc.orig dc.trans instr
         (getElem?_mem_toList hinstr) v hv)
     have htrans_id : ssGet transSS v = Expr.var v := by
-      show ssGet (execSymbolic ([] : SymStore) instr) v = Expr.var v
-      rw [execSymbolic_preserves_var ([] : SymStore) instr v hv_trans]
+      show ssGet ((execSymbolic ([] : SymStore) ([] : SymArrayMem) instr).1) v = Expr.var v
+      rw [execSymbolic_preserves_var ([] : SymStore) ([] : SymArrayMem) instr v hv_trans]
       exact ssGet_nil_var v
     -- v not in any instruction of orig: origSS preserves v
     have horig_id : ssGet origSS v = Expr.var v := by
-      show ssGet (execPath dc.orig ([] : SymStore) dic.pc_orig dtc.origLabels) v = Expr.var v
-      rw [execPath_preserves_var dc.orig ([] : SymStore) dic.pc_orig dtc.origLabels v
+      show ssGet (execPath dc.orig ([] : SymStore) ([] : SymArrayMem) dic.pc_orig dtc.origLabels).1 v = Expr.var v
+      rw [execPath_preserves_var dc.orig ([] : SymStore) ([] : SymArrayMem) dic.pc_orig dtc.origLabels v
         (fun l instr' hinstr' hv => hv_allvars
           (instrVars_sub_collectAllVars_left dc.orig dc.trans instr'
             (getElem?_mem_toList hinstr') v hv))]
       exact ssGet_nil_var v
-    -- Chain: σ_t' v = σ_t v = σ_o v = σ_o' v = (.var v).eval σ_o'
+    -- Chain: σ_t' v = σ_t v = σ_o v = σ_o' v = (.var v).eval σ_o' am_o'
     calc σ_t' v
-        = (ssGet transSS v).eval σ_t := (htrans_repr v).symm
-      _ = (Expr.var v).eval σ_t := by rw [htrans_id]
+        = (ssGet transSS v).eval σ_t am_t := (htrans_repr v).symm
+      _ = (Expr.var v).eval σ_t am_t := by rw [htrans_id]
       _ = σ_t v := by simp [Expr.eval]
       _ = σ_o v := hσ_eq
-      _ = (Expr.var v).eval σ_o := by simp [Expr.eval]
-      _ = (ssGet origSS v).eval σ_o := by rw [horig_id]
+      _ = (ssGet origSS v).eval σ_o am_o := by rw [horig_id]; simp [Expr.eval]
       _ = σ_o' v := horig_repr v
-      _ = (Expr.var v).eval σ_o' := by simp [Expr.eval]
-      _ = (ssGet postSubst v).eval σ_o' := by rw [hpost_id]
+      _ = (Expr.var v).eval σ_o' am_o' := by simp [Expr.eval]
+      _ = (ssGet postSubst v).eval σ_o' am_o' := by rw [hpost_id]
 
 /-- Extract Bool information from checkAllTransitionsExec for a specific step. -/
 private theorem extractTransCheck (dc : ECertificate)
@@ -1326,7 +1837,7 @@ private theorem extractTransCheck (dc : ECertificate)
     ∃ dtc ∈ dic.transitions,
       dtc.rel = dic.rel ∧
       dtc.rel_next = (dc.instrCerts.getD pc_t' default).rel ∧
-      checkOrigPath dc.orig ([] : SymStore) (dc.inv_orig.getD dic.pc_orig ([] : EInv))
+      checkOrigPath dc.orig ([] : SymStore) ([] : SymArrayMem) (dc.inv_orig.getD dic.pc_orig ([] : EInv))
         dic.pc_orig dtc.origLabels (dc.instrCerts.getD pc_t' default).pc_orig
         (branchInfoWithRel instr dic.rel pc_t pc_t') = true ∧
       checkRelConsistency
@@ -1386,6 +1897,8 @@ private theorem array_getD_of_getElem? {α : Type} {arr : Array α} {n : Nat} {v
 /-- **Condition 3**: checkAllTransitionsExec → checkAllTransitionsProp -/
 theorem checkAllTransitionsExec_sound (dc : ECertificate)
     (hwtp : WellTypedProg dc.tyCtx dc.orig)
+    (hnoarr_orig : checkNoArrReadInInvs dc.inv_orig = true)
+    (hnoarr_rels : checkNoArrReadInRels dc.instrCerts = true)
     (h : checkAllTransitionsExec dc = true) :
     checkAllTransitionsProp dc.tyCtx (toPCertificate dc) := by
   intro pc_t σ_t σ_t' pc_t' am_t am_t' hstep
@@ -1417,13 +1930,27 @@ theorem checkAllTransitionsExec_sound (dc : ECertificate)
     exact congrArg eRelToStoreRel hrel_next_eq
   -- 3. checkTransitionRelProp
   · -- Use the branchInfo with the actual rel (dtc.rel = dic.rel)
-    have hpath' : checkOrigPath dc.orig ([] : SymStore) (dc.inv_orig.getD dic.pc_orig ([] : EInv))
+    have hpath' : checkOrigPath dc.orig ([] : SymStore) ([] : SymArrayMem) (dc.inv_orig.getD dic.pc_orig ([] : EInv))
         dic.pc_orig dtc.origLabels (dc.instrCerts.getD pc_t' default).pc_orig
         (branchInfoWithRel instr dtc.rel pc_t pc_t') = true := by
       rw [hrel_eq]; exact hpath
     simp only [toPCertificate, hgetD]
-    exact transRel_sound dc hwtp pc_t pc_t' dic dtc instr
+    -- Extract arrRead-free conditions for dtc's relations from hnoarr_rels
+    have hnoarr_dtc : dtc.rel.all (fun (e, _) => !e.hasArrRead) = true ∧
+        dtc.rel_next.all (fun (e, _) => !e.hasArrRead) = true := by
+      unfold checkNoArrReadInRels at hnoarr_rels
+      have hbound := bound_of_getElem? hdic
+      have hget := (Array.getElem?_eq_some_iff.mp hdic).2
+      have hic := (Array.all_eq_true.mp hnoarr_rels) pc_t hbound
+      rw [hget, Bool.and_eq_true] at hic
+      have htrans_all := List.all_eq_true.mp hic.2 dtc hdtc_mem
+      rw [Bool.and_eq_true] at htrans_all
+      exact htrans_all
+    have hnoarr_dtc_rel := hnoarr_dtc.1
+    have hnoarr_dtc_rel_next := hnoarr_dtc.2
+    exact transRel_sound dc hwtp hnoarr_orig pc_t pc_t' dic dtc instr
       ((dc.instrCerts.getD pc_t' default).pc_orig)
+      hnoarr_dtc_rel hnoarr_dtc_rel_next
       hinstr hpath' hrelcheck
 
 -- ============================================================
@@ -1489,7 +2016,7 @@ private theorem nonterm_inner (dc : ECertificate)
 theorem checkNonterminationExec_sound (dc : ECertificate)
     (h : checkNonterminationExec dc = true) :
     checkNonterminationProp (toPCertificate dc) := by
-  intro pc_t pc_t' σ_t σ_t' σ_o am_t _ _ _ hexec horig_eq
+  intro pc_t pc_t' σ_t σ_t' σ_o am_t am_o _ _ _ hexec horig_eq
   obtain ⟨c', hstep, am_t', hc'⟩ := hexec; subst hc'
   dsimp only [toPCertificate] at horig_eq ⊢
   obtain ⟨instr, hinstr⟩ := step_run_instr hstep
@@ -1508,7 +2035,7 @@ theorem checkNonterminationExec_sound (dc : ECertificate)
 theorem checkDivPreservationExec_sound (dc : ECertificate)
     (h : checkDivPreservationExec dc = true) :
     checkErrorPreservationProp (toPCertificate dc) := by
-  intro pc_t σ_t σ_o am_t hpc hrel hinv_t hinv_o herr_step
+  intro pc_t σ_t σ_o am_t am_o hpc hrel hinv_t hinv_o herr_step
   -- Extract the check result for this specific pc_t
   have hmem : pc_t ∈ List.range dc.trans.size := List.mem_range.mpr hpc
   have hcheck := (List.all_eq_true.mp h) pc_t hmem
@@ -1540,7 +2067,7 @@ theorem checkDivPreservationExec_sound (dc : ECertificate)
         have hy' : σ_o y' = .int a := by rw [← hrel_y, hya]
         have hz' : σ_o z' = .int b := by rw [← hrel_z, hzb]
         -- Construct Step.error on the original side
-        exact ⟨σ_o, ArrayMem.init, Steps.step (Step.error horig hy' hz' hunsafe) .refl⟩
+        exact ⟨σ_o, am_o, Steps.step (Step.error horig hy' hz' hunsafe) .refl⟩
       | _ => simp at hcheck
 
 -- ============================================================
@@ -1593,24 +2120,27 @@ theorem soundness_bridge
     (dc : ECertificate) (h : checkCertificateExec dc = true)
     (htyctx : dc.orig.tyCtx = dc.trans.tyCtx) :
     PCertificateValid (toPCertificate dc) := by
-  -- checkCertificateExec is: wt_orig && wt_trans && same_obs && c1 && c2 && c3 && c4 && c5 && c6 && c7 && c8_div && c9
-  -- && is left-associative, so decompose from right to left
+  -- checkCertificateExec is: wt_orig && wt_trans && same_obs && c1..c12
+  -- && is left-associative, so decompose from right to left (15 conjuncts, 14 steps)
   unfold checkCertificateExec at h
-  have ⟨h22, h10⟩ := and_true_of_and_eq_true h     -- h10 = checkSuccessorsInBounds
-  have ⟨h21, h9⟩  := and_true_of_and_eq_true h22   -- h9  = checkDivPreservationExec
-  have ⟨h20, h8⟩  := and_true_of_and_eq_true h21
-  have ⟨h19, h7⟩  := and_true_of_and_eq_true h20
-  have ⟨h18, h6⟩  := and_true_of_and_eq_true h19
-  have ⟨h17, h5⟩  := and_true_of_and_eq_true h18
-  have ⟨h16, h4⟩  := and_true_of_and_eq_true h17
-  have ⟨h15, h3⟩  := and_true_of_and_eq_true h16
-  have ⟨h14, h2⟩  := and_true_of_and_eq_true h15
-  have ⟨h13, h1⟩  := and_true_of_and_eq_true h14
-  have ⟨h12, hobs_eq⟩ := and_true_of_and_eq_true h13
-  have ⟨hwt_orig, hwt_trans⟩ := and_true_of_and_eq_true h12
+  have ⟨ha, h_bounds⟩     := and_true_of_and_eq_true h
+  have ⟨hb, h_div⟩        := and_true_of_and_eq_true ha
+  have ⟨hc, h_nonterm⟩    := and_true_of_and_eq_true hb
+  have ⟨hd, h_haltobs⟩    := and_true_of_and_eq_true hc
+  have ⟨he, h_haltcorr⟩   := and_true_of_and_eq_true hd
+  have ⟨hf, h_trans⟩      := and_true_of_and_eq_true he
+  have ⟨hf2, h_noarr_rels⟩ := and_true_of_and_eq_true hf
+  have ⟨hg, h_noarr_t⟩    := and_true_of_and_eq_true hf2
+  have ⟨hh, h_noarr_o⟩    := and_true_of_and_eq_true hg
+  have ⟨hi, h_invpres⟩    := and_true_of_and_eq_true hh
+  have ⟨hj, h_relstart⟩   := and_true_of_and_eq_true hi
+  have ⟨hk, h_invstart⟩   := and_true_of_and_eq_true hj
+  have ⟨hl, h_startcorr⟩  := and_true_of_and_eq_true hk
+  have ⟨hm, hobs_eq⟩      := and_true_of_and_eq_true hl
+  have ⟨hwt_orig, hwt_trans⟩ := and_true_of_and_eq_true hm
   -- Derive rel=[] at start from checkRelAtStartExec (h3)
   have hrel0 : (dc.instrCerts.getD 0 default).rel = [] := by
-    revert h3; simp only [checkRelAtStartExec]
+    revert h_relstart; simp only [checkRelAtStartExec]
     cases (dc.instrCerts.getD 0 default).rel with
     | nil => intro; rfl
     | cons => simp [List.isEmpty]
@@ -1621,15 +2151,15 @@ theorem soundness_bridge
     same_observable  := by
       simp [toPCertificate]
       exact beq_iff_eq.mp hobs_eq
-    start_corr    := checkStartCorrespondenceExec_sound dc h1 hrel0
-    start_inv     := checkInvariantsAtStartExec_sound dc h2
-    inv_preserved := checkInvariantsPreservedExec_sound dc h4
-    transitions   := checkAllTransitionsExec_sound dc (checkWellTypedProg_sound hwt_orig) h5
-    halt_corr     := checkHaltCorrespondenceExec_sound dc h6
-    halt_obs      := checkHaltObservableExec_sound dc h7
-    nonterm       := checkNonterminationExec_sound dc h8
-    error_pres    := checkDivPreservationExec_sound dc h9
-    step_closed   := checkSuccessorsInBounds_sound dc h10
+    start_corr    := checkStartCorrespondenceExec_sound dc h_startcorr hrel0
+    start_inv     := checkInvariantsAtStartExec_sound dc h_invstart
+    inv_preserved := checkInvariantsPreservedExec_sound dc h_invpres h_noarr_o h_noarr_t
+    transitions   := checkAllTransitionsExec_sound dc (checkWellTypedProg_sound hwt_orig) h_noarr_o h_noarr_rels h_trans
+    halt_corr     := checkHaltCorrespondenceExec_sound dc h_haltcorr
+    halt_obs      := checkHaltObservableExec_sound dc h_haltobs
+    nonterm       := checkNonterminationExec_sound dc h_nonterm
+    error_pres    := checkDivPreservationExec_sound dc h_div
+    step_closed   := checkSuccessorsInBounds_sound dc h_bounds
   }
 
 -- ============================================================
@@ -1802,6 +2332,6 @@ theorem exec_diverge_preservation
     (htyctx : dc.orig.tyCtx = dc.trans.tyCtx)
     (f : Nat → Cfg) (σ₀ : Store) (hts₀ : TypedStore dc.tyCtx σ₀)
     (hinf : IsInfiniteExec dc.trans f)
-    (hf0 : ∃ am₀, f 0 = Cfg.run 0 σ₀ am₀) :
-    ∃ g : Nat → Cfg, IsInfiniteExec dc.orig g ∧ ∃ am₀, g 0 = Cfg.run 0 σ₀ am₀ :=
+    (hf0 : f 0 = Cfg.run 0 σ₀ ArrayMem.init) :
+    ∃ g : Nat → Cfg, IsInfiniteExec dc.orig g ∧ g 0 = Cfg.run 0 σ₀ ArrayMem.init :=
   soundness_diverge (toPCertificate dc) (soundness_bridge dc h htyctx) f σ₀ hts₀ hinf hf0

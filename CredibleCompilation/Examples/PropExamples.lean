@@ -20,9 +20,9 @@ conditions (`PCertificateValid`).
 -- Helpers
 -- ============================================================
 
-def idStoreRel : PStoreRel := fun σ_o σ_t => σ_o = σ_t
+def idStoreRel : PStoreRel := fun σ_o _am_o σ_t _am_t => σ_o = σ_t
 
-theorem idStoreRel_refl (σ : Store) : idStoreRel σ σ := rfl
+theorem idStoreRel_refl (σ : Store) (am : ArrayMem) : idStoreRel σ am σ am := rfl
 
 def defaultInstrCert : PInstrCert :=
   { pc_orig := 0, storeRel := idStoreRel, transitions := [] }
@@ -74,7 +74,7 @@ def transProg : Prog :=
       TAC.halt                       -- 3
     ], tyCtx := fun _ => .int, observable := ["z"] }
 
-def inv : PInvariantMap := fun pc σ =>
+def inv : PInvariantMap := fun pc σ _am =>
   (if pc ≥ 1 then σ "x" = .int 7 else True) ∧
   (if pc ≥ 2 then σ "y" = .int 7 else True)
 
@@ -100,7 +100,7 @@ def cert : PCertificate :=
     measure := fun _ _ => 0 }
 
 theorem start_ok : checkStartCorrespondenceProp cert :=
-  ⟨rfl, idStoreRel_refl⟩
+  ⟨rfl, fun σ am => idStoreRel_refl σ am⟩
 
 theorem inv_ok : checkInvariantsPreservedProp cert := by sorry
 theorem halt_corr_ok : checkHaltCorrespondenceProp cert := by
@@ -111,7 +111,7 @@ theorem halt_obs_ok : checkHaltObservableProp cert := by sorry
 theorem transitions_ok : checkAllTransitionsProp cert.tyCtx cert := by sorry
 theorem nonterm_ok : checkNonterminationProp cert := by sorry
 theorem start_inv_ok : checkInvariantsAtStartProp cert := by
-  exact ⟨fun σ => ⟨trivial, trivial⟩, fun σ => ⟨trivial, trivial⟩⟩
+  exact ⟨fun σ _am => ⟨trivial, trivial⟩, fun σ _am => ⟨trivial, trivial⟩⟩
 theorem error_pres_ok : checkErrorPreservationProp cert := by sorry
 theorem valid : PCertificateValid cert := by sorry
 end Example1
@@ -145,7 +145,7 @@ def transProg : Prog :=
     ], tyCtx := fun _ => .int, observable := ["c"] }
 
 /-- `a = b` at labels ≥ 1 (after the copy). -/
-def inv : PInvariantMap := fun pc σ =>
+def inv : PInvariantMap := fun pc σ _am =>
   if pc ≥ 1 then σ "a" = σ "b" else True
 
 def cert : PCertificate :=
@@ -168,7 +168,7 @@ def cert : PCertificate :=
     measure := fun _ _ => 0 }
 
 theorem start_ok : checkStartCorrespondenceProp cert :=
-  ⟨rfl, idStoreRel_refl⟩
+  ⟨rfl, fun σ am => idStoreRel_refl σ am⟩
 
 theorem inv_ok : checkInvariantsPreservedProp cert := by
   sorry
@@ -184,7 +184,7 @@ theorem transitions_ok : checkAllTransitionsProp cert.tyCtx cert := by
 theorem nonterm_ok : checkNonterminationProp cert := by
   sorry
 theorem start_inv_ok : checkInvariantsAtStartProp cert := by
-  exact ⟨fun σ => trivial, fun σ => trivial⟩
+  exact ⟨fun σ _am => trivial, fun σ _am => trivial⟩
 theorem error_pres_ok : checkErrorPreservationProp cert := by sorry
 theorem valid : PCertificateValid cert := by sorry
 end Example2
@@ -218,7 +218,7 @@ def transProg : Prog :=
       TAC.halt                          -- 3
     ], tyCtx := fun _ => .int, observable := ["c"] }
 
-def inv : PInvariantMap := fun pc σ =>
+def inv : PInvariantMap := fun pc σ _am =>
   if pc ≥ 1 then
     (∃ xv : BitVec 64, σ "x" = .int xv) ∧
     (∃ yv : BitVec 64, σ "y" = .int yv) ∧
@@ -247,7 +247,7 @@ def cert : PCertificate :=
     measure := fun _ _ => 0 }
 
 theorem start_ok : checkStartCorrespondenceProp cert :=
-  ⟨rfl, idStoreRel_refl⟩
+  ⟨rfl, fun σ am => idStoreRel_refl σ am⟩
 
 theorem inv_ok : checkInvariantsPreservedProp cert := by
   sorry
@@ -263,7 +263,7 @@ theorem transitions_ok : checkAllTransitionsProp cert.tyCtx cert := by
 theorem nonterm_ok : checkNonterminationProp cert := by
   sorry
 theorem start_inv_ok : checkInvariantsAtStartProp cert := by
-  exact ⟨fun σ => trivial, fun σ => trivial⟩
+  exact ⟨fun σ _am => trivial, fun σ _am => trivial⟩
 theorem error_pres_ok : checkErrorPreservationProp cert := by sorry
 theorem valid : PCertificateValid cert := by sorry
 end Example3
@@ -298,7 +298,7 @@ def transProg : Prog :=
       TAC.halt                       -- 2
     ], tyCtx := fun _ => .int, observable := ["y"] }
 
-def inv : PInvariantMap := fun pc σ =>
+def inv : PInvariantMap := fun pc σ _am =>
   if pc ≥ 1 then σ "x" = .int 5 else True
 
 def cert : PCertificate :=

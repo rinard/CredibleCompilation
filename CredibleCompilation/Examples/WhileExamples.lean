@@ -30,7 +30,7 @@ def tac : Prog := { compile prog with observable := ["s"] }
 
 -- Compile and verify
 #eval tac.code.toList
-#eval do let σ ← Stmt.interp 1000 (fun v => if v == "n" then .int 10 else .int 0) prog; return σ "s"
+#eval do let (σ, _) ← Stmt.interp 1000 (fun v => if v == "n" then .int 10 else .int 0) ArrayMem.init prog; return σ "s"
 
 -- Optimize with constant propagation, then check
 def cert := ConstPropOpt.optimize tac
@@ -55,7 +55,7 @@ def prog : Stmt :=
 def tac : Prog := { compile prog with observable := ["r"] }
 
 #eval tac.code.toList
-#eval do let σ ← Stmt.interp 1000 (fun v => if v == "n" then .int 5 else .int 0) prog; return σ "r"
+#eval do let (σ, _) ← Stmt.interp 1000 (fun v => if v == "n" then .int 5 else .int 0) ArrayMem.init prog; return σ "r"
 
 def cert := ConstPropOpt.optimize tac
 #eval checkCertificateExec cert
@@ -78,7 +78,7 @@ def prog : Stmt :=
 def tac : Prog := { compile prog with observable := ["m"] }
 
 #eval tac.code.toList
-#eval do let σ ← Stmt.interp 100 (fun v => if v == "a" then .int 3 else if v == "b" then .int 7 else .int 0) prog; return σ "m"
+#eval do let (σ, _) ← Stmt.interp 100 (fun v => if v == "a" then .int 3 else if v == "b" then .int 7 else .int 0) ArrayMem.init prog; return σ "m"
 
 def cert := ConstPropOpt.optimize tac
 #eval checkCertificateExec cert
@@ -100,7 +100,7 @@ def prog : Stmt :=
 def tac : Prog := { compile prog with observable := ["y"] }
 
 #eval tac.code.toList
-#eval do let σ ← Stmt.interp 100 (fun _ => .int 0) prog; return σ "y"
+#eval do let (σ, _) ← Stmt.interp 100 (fun _ => .int 0) ArrayMem.init prog; return σ "y"
 
 -- Constant propagation should fold this aggressively
 def cert := ConstPropOpt.optimize tac
@@ -157,7 +157,7 @@ def prog : Stmt :=
 def tac : Prog := { compile prog with observable := ["s"] }
 
 #eval tac.code.toList
-#eval do let σ ← Stmt.interp 10000 (fun v => if v == "n" then .int 3 else .int 0) prog; return σ "s"
+#eval do let (σ, _) ← Stmt.interp 10000 (fun v => if v == "n" then .int 3 else .int 0) ArrayMem.init prog; return σ "s"
 
 def cert := ConstPropOpt.optimize tac
 #eval checkCertificateExec cert
@@ -206,7 +206,7 @@ def prog : Program where
 def tac : Prog := prog.compile
 
 #eval tac.code.toList
-#eval do let σ ← prog.interp 1000; return σ "x"
+#eval do let (σ, _) ← prog.interp 1000; return σ "x"
 
 def cert := ConstPropOpt.optimize tac
 #eval checkCertificateExec cert
@@ -220,3 +220,61 @@ def cert := ConstPropOpt.optimize tac
   | none => IO.eprintln "codegen failed"
 
 end WhileBoolLit
+
+-- ============================================================
+-- § 9. Array sum
+-- ============================================================
+
+namespace WhileArraySum
+
+/-- `s := 0; i := 0; while (i < n) { s := s + a[i]; i := i + 1 }` -/
+def prog : Stmt :=
+  assign "s" (lit 0) ;;
+  assign "i" (lit 0) ;;
+  loop (cmp .lt (var "i") (var "n"))
+    (assign "s" (bin .add (var "s") (arrRead "a" (var "i"))) ;;
+     assign "i" (bin .add (var "i") (lit 1)))
+
+def tac : Prog := { compile prog with observable := ["s"] }
+
+#eval tac.code.toList
+
+-- Sum a[0..2] = 10 + 20 + 30 = 60
+#eval do
+  let am := ArrayMem.init |>.write "a" 0 10 |>.write "a" 1 20 |>.write "a" 2 30
+  let (σ, _) ← Stmt.interp 1000 (fun v => if v == "n" then .int 3 else .int 0) am prog
+  return σ "s"
+
+def cert := ConstPropOpt.optimize tac
+#eval checkCertificateExec cert
+#eval checkCertificateVerboseExec cert
+
+end WhileArraySum
+
+-- ============================================================
+-- § 10. Array init (write)
+-- ============================================================
+
+namespace WhileArrayInit
+
+/-- `i := 0; while (i < n) { a[i] := i * i; i := i + 1 }` -/
+def prog : Stmt :=
+  assign "i" (lit 0) ;;
+  loop (cmp .lt (var "i") (var "n"))
+    (Stmt.arrWrite "a" (var "i") (bin .mul (var "i") (var "i")) ;;
+     assign "i" (bin .add (var "i") (lit 1)))
+
+def tac : Prog := { compile prog with observable := ["i"] }
+
+#eval tac.code.toList
+
+-- After init: a[0]=0, a[1]=1, a[2]=4
+#eval do
+  let (_, am) ← Stmt.interp 1000 (fun v => if v == "n" then .int 3 else .int 0) ArrayMem.init prog
+  return (am.read "a" 0, am.read "a" 1, am.read "a" 2)
+
+def cert := ConstPropOpt.optimize tac
+#eval checkCertificateExec cert
+#eval checkCertificateVerboseExec cert
+
+end WhileArrayInit

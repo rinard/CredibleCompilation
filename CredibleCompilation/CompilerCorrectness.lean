@@ -23,6 +23,7 @@ def SExpr.freeVars : SExpr → List Var
   | .lit _ => []
   | .var x => [x]
   | .bin _ a b => a.freeVars ++ b.freeVars
+  | .arrRead _ idx => idx.freeVars
 
 def SBool.freeVars : SBool → List Var
   | .lit _ => []
@@ -36,6 +37,7 @@ def Stmt.allVars : Stmt → List Var
   | .skip => []
   | .assign x e => x :: e.freeVars
   | .bassign x b => x :: b.freeVars
+  | .arrWrite _ idx val => idx.freeVars ++ val.freeVars
   | .seq s₁ s₂ => s₁.allVars ++ s₂.allVars
   | .ite b s₁ s₂ => b.freeVars ++ s₁.allVars ++ s₂.allVars
   | .loop b body => b.freeVars ++ body.allVars
@@ -46,8 +48,8 @@ def Stmt.tmpFree (s : Stmt) : Prop := ∀ v ∈ s.allVars, v.isTmp = false
 -- § 2. Expression evaluation congruence
 -- ============================================================
 
-theorem SExpr.eval_agree (e : SExpr) (σ τ : Store)
-    (h : ∀ v ∈ e.freeVars, σ v = τ v) : e.eval σ = e.eval τ := by
+theorem SExpr.eval_agree (e : SExpr) (σ τ : Store) (am : ArrayMem)
+    (h : ∀ v ∈ e.freeVars, σ v = τ v) : e.eval σ am = e.eval τ am := by
   induction e with
   | lit _ => rfl
   | var x =>
@@ -57,9 +59,12 @@ theorem SExpr.eval_agree (e : SExpr) (σ τ : Store)
     simp only [SExpr.eval]
     rw [iha (fun v hv => h v (List.mem_append_left _ hv)),
         ihb (fun v hv => h v (List.mem_append_right _ hv))]
+  | arrRead _ idx ih =>
+    simp only [SExpr.eval]
+    rw [ih h]
 
-theorem SBool.eval_agree (sb : SBool) (σ τ : Store)
-    (h : ∀ v ∈ sb.freeVars, σ v = τ v) : sb.eval σ = sb.eval τ := by
+theorem SBool.eval_agree (sb : SBool) (σ τ : Store) (am : ArrayMem)
+    (h : ∀ v ∈ sb.freeVars, σ v = τ v) : sb.eval σ am = sb.eval τ am := by
   induction sb with
   | lit _ => rfl
   | bvar x =>
@@ -67,8 +72,8 @@ theorem SBool.eval_agree (sb : SBool) (σ τ : Store)
     rw [h x rfl]
   | cmp op a b =>
     simp only [SBool.eval, SBool.freeVars] at *
-    rw [SExpr.eval_agree a σ τ (fun v hv => h v (List.mem_append_left _ hv)),
-        SExpr.eval_agree b σ τ (fun v hv => h v (List.mem_append_right _ hv))]
+    rw [SExpr.eval_agree a σ τ am (fun v hv => h v (List.mem_append_left _ hv)),
+        SExpr.eval_agree b σ τ am (fun v hv => h v (List.mem_append_right _ hv))]
   | not e ih => simp only [SBool.eval]; rw [ih h]
   | and a b iha ihb =>
     simp only [SBool.eval, SBool.freeVars] at *
@@ -79,141 +84,158 @@ theorem SBool.eval_agree (sb : SBool) (σ τ : Store)
     rw [iha (fun v hv => h v (List.mem_append_left _ hv)),
         ihb (fun v hv => h v (List.mem_append_right _ hv))]
 
-theorem SExpr.eval_tmpAgree (e : SExpr) (σ τ : Store)
+theorem SExpr.eval_tmpAgree (e : SExpr) (σ τ : Store) (am : ArrayMem)
     (hagree : ∀ v, v.isTmp = false → σ v = τ v)
     (htf : ∀ v ∈ e.freeVars, v.isTmp = false) :
-    e.eval σ = e.eval τ :=
-  SExpr.eval_agree e σ τ (fun v hv => hagree v (htf v hv))
+    e.eval σ am = e.eval τ am :=
+  SExpr.eval_agree e σ τ am (fun v hv => hagree v (htf v hv))
 
-theorem SBool.eval_tmpAgree (sb : SBool) (σ τ : Store)
+theorem SBool.eval_tmpAgree (sb : SBool) (σ τ : Store) (am : ArrayMem)
     (hagree : ∀ v, v.isTmp = false → σ v = τ v)
     (htf : ∀ v ∈ sb.freeVars, v.isTmp = false) :
-    sb.eval σ = sb.eval τ :=
-  SBool.eval_agree sb σ τ (fun v hv => hagree v (htf v hv))
+    sb.eval σ am = sb.eval τ am :=
+  SBool.eval_agree sb σ τ am (fun v hv => hagree v (htf v hv))
 
 -- ============================================================
 -- § 3. Interpreter congruence on tmp-free programs
 -- ============================================================
 
-theorem Stmt.interp_tmpAgree (s : Stmt) (fuel : Nat) (σ τ : Store)
+theorem Stmt.interp_tmpAgree (s : Stmt) (fuel : Nat) (σ τ : Store) (am : ArrayMem)
     (hagree : ∀ v, v.isTmp = false → σ v = τ v)
     (htf : s.tmpFree)
-    (σ' : Store) (h : s.interp fuel σ = some σ') :
-    ∃ τ', s.interp fuel τ = some τ' ∧
-      (∀ v, v.isTmp = false → σ' v = τ' v) := by
-  induction s generalizing fuel σ τ σ' with
+    (σ' : Store) (am' : ArrayMem) (h : s.interp fuel σ am = some (σ', am')) :
+    ∃ τ' am'', s.interp fuel τ am = some (τ', am'') ∧
+      (∀ v, v.isTmp = false → σ' v = τ' v) ∧ am'' = am' := by
+  induction s generalizing fuel σ τ σ' am am' with
   | skip =>
-    simp only [Stmt.interp, Option.some.injEq] at h; subst h
-    exact ⟨τ, by simp [Stmt.interp], hagree⟩
+    simp only [Stmt.interp, Option.some.injEq, Prod.mk.injEq] at h
+    obtain ⟨rfl, rfl⟩ := h
+    exact ⟨τ, am, by simp [Stmt.interp], hagree, rfl⟩
   | assign x e =>
-    simp only [Stmt.interp, Option.some.injEq] at h; subst h
-    refine ⟨τ[x ↦ .int (e.eval τ)], by simp [Stmt.interp], ?_⟩
+    simp only [Stmt.interp, Option.some.injEq, Prod.mk.injEq] at h
+    obtain ⟨rfl, rfl⟩ := h
+    refine ⟨τ[x ↦ .int (e.eval τ am)], am, by simp [Stmt.interp], ?_, rfl⟩
     intro v hv; simp only [Store.update]
     split
-    · exact congrArg (Value.int ·) (SExpr.eval_tmpAgree e σ τ hagree
+    · exact congrArg (Value.int ·) (SExpr.eval_tmpAgree e σ τ am hagree
         (fun w hw => htf w (List.mem_cons_of_mem x hw)))
     · exact hagree v hv
   | bassign x b =>
-    simp only [Stmt.interp, Option.some.injEq] at h; subst h
-    refine ⟨τ[x ↦ .bool (b.eval τ)], by simp [Stmt.interp], ?_⟩
+    simp only [Stmt.interp, Option.some.injEq, Prod.mk.injEq] at h
+    obtain ⟨rfl, rfl⟩ := h
+    refine ⟨τ[x ↦ .bool (b.eval τ am)], am, by simp [Stmt.interp], ?_, rfl⟩
     intro v hv; simp only [Store.update]
     split
-    · exact congrArg (Value.bool ·) (SBool.eval_tmpAgree b σ τ hagree
+    · exact congrArg (Value.bool ·) (SBool.eval_tmpAgree b σ τ am hagree
         (fun w hw => htf w (List.mem_cons_of_mem x hw)))
     · exact hagree v hv
+  | arrWrite arr idx val =>
+    simp only [Stmt.interp, Option.some.injEq, Prod.mk.injEq] at h
+    obtain ⟨rfl, rfl⟩ := h
+    have htf_idx : ∀ v ∈ idx.freeVars, v.isTmp = false :=
+      fun v hv => htf v (List.mem_append_left _ hv)
+    have htf_val : ∀ v ∈ val.freeVars, v.isTmp = false :=
+      fun v hv => htf v (List.mem_append_right _ hv)
+    refine ⟨τ, am.write arr (idx.eval τ am).toNat (val.eval τ am), by simp [Stmt.interp], hagree, ?_⟩
+    rw [SExpr.eval_tmpAgree idx σ τ am hagree htf_idx,
+        SExpr.eval_tmpAgree val σ τ am hagree htf_val]
   | seq s₁ s₂ ih₁ ih₂ =>
     simp only [Stmt.interp] at h
-    cases hq : s₁.interp fuel σ with
+    cases hq : s₁.interp fuel σ am with
     | none => simp [hq] at h
-    | some σ₁ =>
+    | some p₁ =>
       simp [hq] at h
       have htf₁ : s₁.tmpFree := fun v hv => htf v (List.mem_append_left _ hv)
       have htf₂ : s₂.tmpFree := fun v hv => htf v (List.mem_append_right _ hv)
-      obtain ⟨τ₁, hτ₁, hagree₁⟩ := ih₁ fuel σ τ hagree htf₁ σ₁ hq
-      obtain ⟨τ', hτ', hagree'⟩ := ih₂ fuel σ₁ τ₁ hagree₁ htf₂ σ' h
-      refine ⟨τ', ?_, hagree'⟩
+      obtain ⟨τ₁, am₁, hτ₁, hagree₁, ham₁⟩ := ih₁ fuel σ τ am hagree htf₁ p₁.1 p₁.2 hq
+      subst ham₁
+      obtain ⟨τ', am'', hτ', hagree', ham'⟩ := ih₂ fuel p₁.1 τ₁ p₁.2 hagree₁ htf₂ σ' am' h
+      refine ⟨τ', am'', ?_, hagree', ham'⟩
       simp only [Stmt.interp]; rw [hτ₁]; simp [hτ']
   | ite b s₁ s₂ ih₁ ih₂ =>
-    have hbool : b.eval σ = b.eval τ := SBool.eval_tmpAgree b σ τ hagree
+    have hbool : b.eval σ am = b.eval τ am := SBool.eval_tmpAgree b σ τ am hagree
       (fun v hv => htf v (List.mem_append_left _ (List.mem_append_left _ hv)))
-    cases hb : b.eval σ with
+    cases hb : b.eval σ am with
     | true =>
       simp only [Stmt.interp, hb] at h
       have htf₁ : s₁.tmpFree :=
         fun v hv => htf v (List.mem_append_left _ (List.mem_append_right _ hv))
-      obtain ⟨τ', hτ', hagree'⟩ := ih₁ fuel σ τ hagree htf₁ σ' h
-      exact ⟨τ', by simp [Stmt.interp, ← hbool, hb, hτ'], hagree'⟩
+      obtain ⟨τ', am'', hτ', hagree', ham'⟩ := ih₁ fuel σ τ am hagree htf₁ σ' am' h
+      exact ⟨τ', am'', by simp [Stmt.interp, ← hbool, hb, hτ'], hagree', ham'⟩
     | false =>
       simp only [Stmt.interp, hb, Bool.false_eq_true, ite_false] at h
       have htf₂ : s₂.tmpFree :=
         fun v hv => htf v (List.mem_append_right _ hv)
-      obtain ⟨τ', hτ', hagree'⟩ := ih₂ fuel σ τ hagree htf₂ σ' h
-      refine ⟨τ', ?_, hagree'⟩
+      obtain ⟨τ', am'', hτ', hagree', ham'⟩ := ih₂ fuel σ τ am hagree htf₂ σ' am' h
+      refine ⟨τ', am'', ?_, hagree', ham'⟩
       simp only [Stmt.interp, ← hbool, hb, Bool.false_eq_true, ite_false]
       exact hτ'
   | loop b body ih =>
-    induction fuel generalizing σ τ σ' with
+    induction fuel generalizing σ τ σ' am am' with
     | zero => simp [Stmt.interp] at h
     | succ fuel' ihf =>
-      have hbool : b.eval σ = b.eval τ := SBool.eval_tmpAgree b σ τ hagree
+      have hbool : b.eval σ am = b.eval τ am := SBool.eval_tmpAgree b σ τ am hagree
         (fun v hv => htf v (List.mem_append_left _ hv))
-      cases hb : b.eval σ with
+      cases hb : b.eval σ am with
       | true =>
         simp only [Stmt.interp, hb] at h
-        cases hq : body.interp fuel' σ with
+        cases hq : body.interp fuel' σ am with
         | none => simp [hq] at h
-        | some σ₁ =>
+        | some p₁ =>
           simp [hq] at h
           have htf_body : body.tmpFree :=
             fun v hv => htf v (List.mem_append_right _ hv)
-          obtain ⟨τ₁, hτ₁, hagree₁⟩ := ih fuel' σ τ hagree htf_body σ₁ hq
-          obtain ⟨τ', hτ', hagree'⟩ := ihf σ₁ τ₁ hagree₁ σ' h
-          refine ⟨τ', ?_, hagree'⟩
+          obtain ⟨τ₁, am₁, hτ₁, hagree₁, ham₁⟩ := ih fuel' σ τ am hagree htf_body p₁.1 p₁.2 hq
+          subst ham₁
+          obtain ⟨τ', am'', hτ', hagree', ham'⟩ := ihf p₁.1 τ₁ p₁.2 hagree₁ σ' am' h
+          refine ⟨τ', am'', ?_, hagree', ham'⟩
           simp only [Stmt.interp, ← hbool, hb]; rw [hτ₁]; simp [hτ']
       | false =>
-        simp only [Stmt.interp, hb, Bool.false_eq_true, ite_false, Option.some.injEq] at h
-        subst h
-        refine ⟨τ, ?_, hagree⟩
+        simp only [Stmt.interp, hb, Bool.false_eq_true, ite_false, Option.some.injEq, Prod.mk.injEq] at h
+        obtain ⟨rfl, rfl⟩ := h
+        refine ⟨τ, am, ?_, hagree, rfl⟩
         simp only [Stmt.interp, ← hbool, hb, Bool.false_eq_true, ite_false]
 
 -- ============================================================
 -- § 4. Division safety
 -- ============================================================
 
-def SExpr.divSafe (σ : Store) : SExpr → Prop
+def SExpr.divSafe (σ : Store) (am : ArrayMem) : SExpr → Prop
   | .lit _ => True
   | .var _ => True
-  | .bin .div a b => a.divSafe σ ∧ b.divSafe σ ∧ b.eval σ ≠ 0
-  | .bin _ a b => a.divSafe σ ∧ b.divSafe σ
+  | .bin .div a b => a.divSafe σ am ∧ b.divSafe σ am ∧ b.eval σ am ≠ 0
+  | .bin _ a b => a.divSafe σ am ∧ b.divSafe σ am
+  | .arrRead _ idx => idx.divSafe σ am
 
-def SBool.divSafe (σ : Store) : SBool → Prop
+def SBool.divSafe (σ : Store) (am : ArrayMem) : SBool → Prop
   | .lit _ => True
   | .bvar _ => True
-  | .cmp _ a b => a.divSafe σ ∧ b.divSafe σ
-  | .not e => e.divSafe σ
-  | .and a b => a.divSafe σ ∧ (a.eval σ = true → b.divSafe σ)
-  | .or a b => a.divSafe σ ∧ (a.eval σ = false → b.divSafe σ)
+  | .cmp _ a b => a.divSafe σ am ∧ b.divSafe σ am
+  | .not e => e.divSafe σ am
+  | .and a b => a.divSafe σ am ∧ (a.eval σ am = true → b.divSafe σ am)
+  | .or a b => a.divSafe σ am ∧ (a.eval σ am = false → b.divSafe σ am)
 
-def Stmt.divSafe (fuel : Nat) (σ : Store) : Stmt → Prop
+def Stmt.divSafe (fuel : Nat) (σ : Store) (am : ArrayMem) : Stmt → Prop
   | .skip => True
-  | .assign _ e => e.divSafe σ
-  | .bassign _ b => b.divSafe σ
+  | .assign _ e => e.divSafe σ am
+  | .bassign _ b => b.divSafe σ am
+  | .arrWrite _ idx val => idx.divSafe σ am ∧ val.divSafe σ am
   | .seq s₁ s₂ =>
-    s₁.divSafe fuel σ ∧
-    match s₁.interp fuel σ with
-    | some σ' => s₂.divSafe fuel σ'
+    s₁.divSafe fuel σ am ∧
+    match s₁.interp fuel σ am with
+    | some (σ', am') => s₂.divSafe fuel σ' am'
     | none => True
   | .ite b s₁ s₂ =>
-    b.divSafe σ ∧ (if b.eval σ then s₁.divSafe fuel σ else s₂.divSafe fuel σ)
+    b.divSafe σ am ∧ (if b.eval σ am then s₁.divSafe fuel σ am else s₂.divSafe fuel σ am)
   | .loop b body =>
     match fuel with
     | 0 => True
     | fuel' + 1 =>
-      b.divSafe σ ∧
-      if b.eval σ then
-        body.divSafe fuel' σ ∧
-        match body.interp fuel' σ with
-        | some σ' => (Stmt.loop b body).divSafe fuel' σ'
+      b.divSafe σ am ∧
+      if b.eval σ am then
+        body.divSafe fuel' σ am ∧
+        match body.interp fuel' σ am with
+        | some (σ', am') => (Stmt.loop b body).divSafe fuel' σ' am'
         | none => True
       else True
 
@@ -234,26 +256,28 @@ def SBool.intTyped (σ : Store) : SBool → Prop
 /-- All arithmetic-position variables in a statement have int values in σ.
     Mirrors `Stmt.divSafe`: for sequential/branching statements, uses the
     post-execution store for subsequent parts. -/
-def Stmt.intTyped (fuel : Nat) (σ : Store) : Stmt → Prop
+def Stmt.intTyped (fuel : Nat) (σ : Store) (am : ArrayMem) : Stmt → Prop
   | .skip => True
   | .assign _ e => ∀ v ∈ e.freeVars, ∃ n, σ v = .int n
   | .bassign _ b => b.intTyped σ
+  | .arrWrite _ idx val => (∀ v ∈ idx.freeVars, ∃ n, σ v = .int n) ∧
+                           (∀ v ∈ val.freeVars, ∃ n, σ v = .int n)
   | .seq s₁ s₂ =>
-    s₁.intTyped fuel σ ∧
-    match s₁.interp fuel σ with
-    | some σ' => s₂.intTyped fuel σ'
+    s₁.intTyped fuel σ am ∧
+    match s₁.interp fuel σ am with
+    | some (σ', am') => s₂.intTyped fuel σ' am'
     | none => True
   | .ite b s₁ s₂ =>
-    b.intTyped σ ∧ (if b.eval σ then s₁.intTyped fuel σ else s₂.intTyped fuel σ)
+    b.intTyped σ ∧ (if b.eval σ am then s₁.intTyped fuel σ am else s₂.intTyped fuel σ am)
   | .loop b body =>
     match fuel with
     | 0 => True
     | fuel' + 1 =>
       b.intTyped σ ∧
-      if b.eval σ then
-        body.intTyped fuel' σ ∧
-        match body.interp fuel' σ with
-        | some σ' => (Stmt.loop b body).intTyped fuel' σ'
+      if b.eval σ am then
+        body.intTyped fuel' σ am ∧
+        match body.interp fuel' σ am with
+        | some (σ', am') => (Stmt.loop b body).intTyped fuel' σ' am'
         | none => True
       else True
 
@@ -287,6 +311,9 @@ private theorem checkSExpr_declared {lookup : Var → Option VarTy}
     rcases hv with ha | hb
     · exact iha h.1 v ha
     · exact ihb h.2 v hb
+  | arrRead _ idx ih =>
+    simp [Program.checkSExpr] at h
+    intro v hv; exact ih h v hv
 
 /-- All variables in a well-typed boolean expression are declared. -/
 private theorem checkSBool_declared {lookup : Var → Option VarTy}
@@ -337,6 +364,12 @@ private theorem checkStmt_declared {lookup : Var → Option VarTy}
     rcases hv with rfl | hb
     · exact ⟨.bool, h.1⟩
     · exact checkSBool_declared h.2 v hb
+  | arrWrite _ idx val =>
+    simp [Program.checkStmt, Bool.and_eq_true] at h
+    intro v hv; simp [Stmt.allVars] at hv
+    rcases hv with hi | hv
+    · exact checkSExpr_declared h.1 v hi
+    · exact checkSExpr_declared h.2 v hv
   | seq s1 s2 ih1 ih2 =>
     simp [Program.checkStmt, Bool.and_eq_true] at h
     intro v hv; simp [Stmt.allVars] at hv
@@ -386,40 +419,42 @@ private theorem lookup_tyCtx {lookup : Var → Option VarTy} {Γ : TyCtx}
 /-- Source-level type preservation: interpreting a well-typed statement
     preserves TypedStore. -/
 theorem Stmt.interp_preserves_typedStore
-    {s : Stmt} {fuel : Nat} {σ σ' : Store} {Γ : TyCtx}
+    {s : Stmt} {fuel : Nat} {σ σ' : Store} {am am' : ArrayMem} {Γ : TyCtx}
     {lookup : Var → Option VarTy}
     (hcompat : ∀ x ty, lookup x = some ty → Γ x = ty)
     (hchk : Program.checkStmt lookup s = true)
     (hts : TypedStore Γ σ)
-    (hinterp : s.interp fuel σ = some σ') :
+    (hinterp : s.interp fuel σ am = some (σ', am')) :
     TypedStore Γ σ' := by
-  induction s generalizing fuel σ σ' with
+  induction s generalizing fuel σ σ' am am' with
   | skip =>
-    simp [Stmt.interp] at hinterp; subst hinterp; exact hts
+    simp [Stmt.interp] at hinterp; obtain ⟨rfl, _⟩ := hinterp; exact hts
   | assign x e =>
-    simp [Stmt.interp] at hinterp; subst hinterp
+    simp [Stmt.interp] at hinterp; obtain ⟨rfl, _⟩ := hinterp
     simp [Program.checkStmt, Bool.and_eq_true] at hchk
     intro y; simp [Store.update]; split
     · case isTrue heq => simp [heq, Value.typeOf_int, hcompat _ .int hchk.1]
     · case isFalse => exact hts y
   | bassign x b =>
-    simp [Stmt.interp] at hinterp; subst hinterp
+    simp [Stmt.interp] at hinterp; obtain ⟨rfl, _⟩ := hinterp
     simp [Program.checkStmt, Bool.and_eq_true] at hchk
     intro y; simp [Store.update]; split
     · case isTrue heq => simp [heq, Value.typeOf_bool, hcompat _ .bool hchk.1]
     · case isFalse => exact hts y
+  | arrWrite _ _ _ =>
+    simp [Stmt.interp] at hinterp; obtain ⟨rfl, _⟩ := hinterp; exact hts
   | seq s1 s2 ih1 ih2 =>
     simp [Program.checkStmt, Bool.and_eq_true] at hchk
     simp [Stmt.interp] at hinterp
-    cases hq : s1.interp fuel σ with
+    cases hq : s1.interp fuel σ am with
     | none => simp [hq] at hinterp
-    | some σ₁ =>
+    | some p₁ =>
       simp [hq] at hinterp
       exact ih2 hchk.2 (ih1 hchk.1 hts hq) hinterp
   | ite b s1 s2 ih1 ih2 =>
     simp [Program.checkStmt, Bool.and_eq_true] at hchk
     obtain ⟨⟨_, h1⟩, h2⟩ := hchk
-    cases hcond : b.eval σ with
+    cases hcond : b.eval σ am with
     | true =>
       simp [Stmt.interp, hcond] at hinterp
       exact ih1 h1 hts hinterp
@@ -427,18 +462,18 @@ theorem Stmt.interp_preserves_typedStore
       simp [Stmt.interp, hcond] at hinterp
       exact ih2 h2 hts hinterp
   | loop b body ih =>
-    induction fuel generalizing σ σ' with
+    induction fuel generalizing σ σ' am am' with
     | zero => simp [Stmt.interp] at hinterp
     | succ fuel' ihf =>
       simp [Program.checkStmt, Bool.and_eq_true] at hchk
-      cases hcond : b.eval σ with
+      cases hcond : b.eval σ am with
       | false =>
-        simp [Stmt.interp, hcond] at hinterp; subst hinterp; exact hts
+        simp [Stmt.interp, hcond] at hinterp; obtain ⟨rfl, _⟩ := hinterp; exact hts
       | true =>
         simp [Stmt.interp, hcond] at hinterp
-        cases hq : body.interp fuel' σ with
+        cases hq : body.interp fuel' σ am with
         | none => simp [hq] at hinterp
-        | some σ₁ =>
+        | some p₁ =>
           simp [hq] at hinterp
           exact ihf (ih hchk.2 hts hq) hinterp
 
@@ -466,6 +501,9 @@ private theorem checkSExpr_intVars
     rcases hv with ha | hb
     · exact iha hchk.1 v ha
     · exact ihb hchk.2 v hb
+  | arrRead _ idx ih =>
+    simp [Program.checkSExpr] at hchk
+    intro v hv; exact ih hchk v hv
 
 /-- If `checkSBool lookup b = true` and `TypedStore Γ σ` with compatible lookup/Γ,
     then `b.intTyped σ`. -/
@@ -492,12 +530,12 @@ private theorem checkSBool_intTyped
 /-- If `checkStmt lookup s = true`, `TypedStore Γ σ`, and lookup/Γ are compatible,
     then `s.intTyped fuel σ`. -/
 theorem checkStmt_intTyped
-    (lookup : Var → Option VarTy) (Γ : TyCtx) (σ : Store) (s : Stmt) (fuel : Nat)
+    (lookup : Var → Option VarTy) (Γ : TyCtx) (σ : Store) (am : ArrayMem) (s : Stmt) (fuel : Nat)
     (hcompat : ∀ x ty, lookup x = some ty → Γ x = ty)
     (hchk : Program.checkStmt lookup s = true)
     (hts : TypedStore Γ σ) :
-    s.intTyped fuel σ := by
-  induction s generalizing fuel σ with
+    s.intTyped fuel σ am := by
+  induction s generalizing fuel σ am with
   | skip => simp [Stmt.intTyped]
   | assign x e =>
     simp [Program.checkStmt, Bool.and_eq_true] at hchk
@@ -507,44 +545,48 @@ theorem checkStmt_intTyped
     simp [Program.checkStmt, Bool.and_eq_true] at hchk
     simp [Stmt.intTyped]
     exact checkSBool_intTyped hcompat hchk.2 hts
+  | arrWrite _ idx val =>
+    simp [Program.checkStmt, Bool.and_eq_true] at hchk
+    simp [Stmt.intTyped]
+    exact ⟨checkSExpr_intVars hcompat hchk.1 hts, checkSExpr_intVars hcompat hchk.2 hts⟩
   | seq s1 s2 ih1 ih2 =>
     simp [Program.checkStmt, Bool.and_eq_true] at hchk
     simp only [Stmt.intTyped]
-    refine ⟨ih1 σ fuel hchk.1 hts, ?_⟩
-    cases hq : s1.interp fuel σ with
+    refine ⟨ih1 σ am fuel hchk.1 hts, ?_⟩
+    cases hq : s1.interp fuel σ am with
     | none => simp [hq]
-    | some σ₁ =>
-        exact ih2 σ₁ fuel hchk.2 (Stmt.interp_preserves_typedStore hcompat hchk.1 hts hq)
+    | some p₁ =>
+        exact ih2 p₁.1 p₁.2 fuel hchk.2 (Stmt.interp_preserves_typedStore hcompat hchk.1 hts hq)
   | ite b s1 s2 ih1 ih2 =>
     simp [Program.checkStmt, Bool.and_eq_true] at hchk
     obtain ⟨⟨hb, h1⟩, h2⟩ := hchk
     simp only [Stmt.intTyped]
     refine ⟨checkSBool_intTyped hcompat hb hts, ?_⟩
-    cases b.eval σ <;> simp
-    · exact ih2 σ fuel h2 hts
-    · exact ih1 σ fuel h1 hts
+    cases b.eval σ am <;> simp
+    · exact ih2 σ am fuel h2 hts
+    · exact ih1 σ am fuel h1 hts
   | loop b body ih =>
-    induction fuel generalizing σ with
+    induction fuel generalizing σ am with
     | zero => simp [Stmt.intTyped]
     | succ fuel' ihf =>
       simp [Program.checkStmt, Bool.and_eq_true] at hchk
       simp only [Stmt.intTyped]
       refine ⟨checkSBool_intTyped hcompat hchk.1 hts, ?_⟩
-      cases hcond : b.eval σ <;> simp [hcond]
-      refine ⟨ih σ fuel' hchk.2 hts, ?_⟩
-      cases hq : body.interp fuel' σ with
+      cases hcond : b.eval σ am <;> simp [hcond]
+      refine ⟨ih σ am fuel' hchk.2 hts, ?_⟩
+      cases hq : body.interp fuel' σ am with
       | none => simp [hq]
-      | some σ₁ =>
+      | some p₁ =>
         simp [hq]
-        exact ihf σ₁ (Stmt.interp_preserves_typedStore hcompat hchk.2 hts hq)
+        exact ihf p₁.1 p₁.2 (Stmt.interp_preserves_typedStore hcompat hchk.2 hts hq)
 
 /-- **Bridge lemma**: A type-checked program with a well-typed store satisfies intTyped. -/
 theorem Program.typeCheck_intTyped (prog : Program) (h : prog.typeCheck = true)
-    (σ : Store) (hts : TypedStore prog.tyCtx σ) (fuel : Nat) :
-    prog.body.intTyped fuel σ := by
+    (σ : Store) (am : ArrayMem) (hts : TypedStore prog.tyCtx σ) (fuel : Nat) :
+    prog.body.intTyped fuel σ am := by
   simp [Program.typeCheck, Bool.and_eq_true] at h
   obtain ⟨⟨_, _⟩, hchk⟩ := h
-  exact checkStmt_intTyped prog.lookupTy prog.tyCtx σ prog.body fuel
+  exact checkStmt_intTyped prog.lookupTy prog.tyCtx σ am prog.body fuel
     (fun x ty hlook => by
       show (prog.lookupTy x).getD .int = ty
       rw [hlook]; rfl) hchk hts

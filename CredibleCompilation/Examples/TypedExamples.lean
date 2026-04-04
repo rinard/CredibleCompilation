@@ -33,7 +33,7 @@ def prog : Program where
 -- Compile and run
 def tac : Prog := prog.compile
 #eval tac.code.toList
-#eval do let σ ← prog.interp 1000 (inputs := [("n", .int 10)]); return σ "s"
+#eval do let (σ, _) ← prog.interp 1000 (inputs := [("n", .int 10)]); return σ "s"
 
 end TypedSum
 
@@ -53,7 +53,7 @@ def prog : Program where
 
 #eval prog.typeCheck           -- true
 #eval prog.verifyWellTyped     -- true
-#eval do let σ ← prog.interp 1000 (inputs := [("n", .int 5)]); return σ "r"
+#eval do let (σ, _) ← prog.interp 1000 (inputs := [("n", .int 5)]); return σ "r"
 
 end TypedFactorial
 
@@ -77,7 +77,7 @@ def prog : Program where
 
 #eval prog.typeCheck           -- true
 #eval prog.verifyWellTyped     -- true
-#eval do let σ ← prog.interp 1000 (inputs := [("n", .int 10), ("target", .int 7)]); return (σ "found", σ "i")
+#eval do let (σ, _) ← prog.interp 1000 (inputs := [("n", .int 10), ("target", .int 7)]); return (σ "found", σ "i")
 
 end TypedBoolFlag
 

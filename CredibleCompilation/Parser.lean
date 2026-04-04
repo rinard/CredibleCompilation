@@ -30,7 +30,7 @@ inductive Token where
   | num    : Int → Token
   | kw     : String → Token
   | op     : String → Token
-  | lparen | rparen | lbrace | rbrace | comma | semi | colon : Token
+  | lparen | rparen | lbrace | rbrace | lbracket | rbracket | comma | semi | colon : Token
   deriving Repr, DecidableEq
 
 private def keywords : List String :=
@@ -57,6 +57,8 @@ where
       else if c == ')' then go rest (.rparen :: acc)
       else if c == '{' then go rest (.lbrace :: acc)
       else if c == '}' then go rest (.rbrace :: acc)
+      else if c == '[' then go rest (.lbracket :: acc)
+      else if c == ']' then go rest (.rbracket :: acc)
       else if c == ',' then go rest (.comma :: acc)
       else if c == ';' then go rest (.semi :: acc)
       else if c == '+' then go rest (.op "+" :: acc)
@@ -107,6 +109,11 @@ mutual
 partial def parseAtom (toks : List Token) : Except String (SExpr × List Token) :=
   match toks with
   | Token.num n :: rest => .ok (.lit n, rest)
+  | Token.ident x :: Token.lbracket :: rest => do
+    let (idx, rest') ← parseExpr rest
+    match rest' with
+    | Token.rbracket :: rest'' => .ok (.arrRead x idx, rest'')
+    | _ => .error "expected ']' after array index"
   | Token.ident x :: rest => .ok (.var x, rest)
   | Token.lparen :: rest => do
     let (e, rest') ← parseExpr rest
@@ -195,6 +202,13 @@ partial def parseBExprParen (toks : List Token) : Except String (SBool × List T
 partial def parseStmtAtom (toks : List Token) : Except String (Stmt × List Token) :=
   match toks with
   | Token.kw "skip" :: rest => .ok (.skip, rest)
+  | Token.ident x :: Token.lbracket :: rest => do
+    let (idx, rest') ← parseExpr rest
+    match rest' with
+    | Token.rbracket :: Token.op ":=" :: rest'' => do
+      let (val, rest''') ← parseExpr rest''
+      .ok (.arrWrite x idx val, rest''')
+    | _ => .error "expected '] :=' for array write"
   | Token.ident x :: Token.op ":=" :: rest =>
     match rest with
     | Token.kw "true" :: _ | Token.kw "false" :: _ | Token.op "!" :: _ => do

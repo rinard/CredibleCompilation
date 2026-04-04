@@ -1,3 +1,5 @@
+import CredibleCompilation.Core
+
 /-!
 # ARM64 Subset Definitions
 
@@ -61,6 +63,8 @@ structure ArmState where
   pc    : Nat
   /-- Condition flags from the last `cmp`. -/
   flags : Flags
+  /-- Array memory (global, separate from scalar stack). -/
+  arrayMem : ArrayMem := fun _ _ => 0
 
 /-- Update a register. -/
 def ArmState.setReg (s : ArmState) (r : ArmReg) (v : BitVec 64) : ArmState :=
@@ -69,6 +73,10 @@ def ArmState.setReg (s : ArmState) (r : ArmReg) (v : BitVec 64) : ArmState :=
 /-- Update a stack slot. -/
 def ArmState.setStack (s : ArmState) (off : Nat) (v : BitVec 64) : ArmState :=
   { s with stack := fun o => if o == off then v else s.stack o }
+
+/-- Update an array memory slot. -/
+def ArmState.setArrayMem (s : ArmState) (arr : ArrayName) (idx : Nat) (v : BitVec 64) : ArmState :=
+  { s with arrayMem := fun a i => if a == arr && i == idx then v else s.arrayMem a i }
 
 /-- Advance PC by 1. -/
 def ArmState.nextPC (s : ArmState) : ArmState :=
@@ -116,6 +124,10 @@ inductive ArmInstr where
   | orrR     : ArmReg → ArmReg → ArmReg → ArmInstr
   /-- `b label` — unconditional branch. -/
   | b        : Nat → ArmInstr
+  /-- Load from global array: `dst ← arrayMem[arr][idxReg]`. -/
+  | arrLd    : ArmReg → ArrayName → ArmReg → ArmInstr
+  /-- Store to global array: `arrayMem[arr][idxReg] ← valReg`. -/
+  | arrSt    : ArrayName → ArmReg → ArmReg → ArmInstr
   deriving Repr, DecidableEq
 
 /-- An ARM64 program is an array of instructions. -/

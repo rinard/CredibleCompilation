@@ -130,27 +130,29 @@ def SBool.exprFreeVars : SBool → List Var
 
 /-- Integer-safety: all variables used in `SExpr` positions have `.int` values,
     threaded through interpretation just like `Stmt.divSafe`. -/
-def Stmt.intSafe (fuel : Nat) (σ : Store) : Stmt → Prop
+def Stmt.intSafe (fuel : Nat) (σ : Store) (am : ArrayMem) : Stmt → Prop
   | .skip        => True
   | .assign _ e  => ∀ v ∈ e.freeVars, ∃ n, σ v = .int n
   | .bassign _ b => ∀ v ∈ b.exprFreeVars, ∃ n, σ v = .int n
+  | .arrWrite _ idx val => (∀ v ∈ idx.freeVars, ∃ n, σ v = .int n) ∧
+                           (∀ v ∈ val.freeVars, ∃ n, σ v = .int n)
   | .seq s₁ s₂  =>
-    s₁.intSafe fuel σ ∧
-    match s₁.interp fuel σ with
-    | some σ' => s₂.intSafe fuel σ'
+    s₁.intSafe fuel σ am ∧
+    match s₁.interp fuel σ am with
+    | some (σ', am') => s₂.intSafe fuel σ' am'
     | none    => True
   | .ite b s₁ s₂ =>
     (∀ v ∈ b.exprFreeVars, ∃ n, σ v = .int n) ∧
-    (if b.eval σ then s₁.intSafe fuel σ else s₂.intSafe fuel σ)
+    (if b.eval σ am then s₁.intSafe fuel σ am else s₂.intSafe fuel σ am)
   | .loop b body =>
     (∀ v ∈ b.exprFreeVars, ∃ n, σ v = .int n) ∧
     match fuel with
     | 0 => True
     | fuel' + 1 =>
-      if b.eval σ then
-        body.intSafe fuel' σ ∧
-        match body.interp fuel' σ with
-        | some σ' => (Stmt.loop b body).intSafe fuel' σ'
+      if b.eval σ am then
+        body.intSafe fuel' σ am ∧
+        match body.interp fuel' σ am with
+        | some (σ', am') => (Stmt.loop b body).intSafe fuel' σ' am'
         | none    => True
       else True
 
@@ -169,6 +171,10 @@ def refCompileExpr (e : SExpr) (offset nextTmp : Nat) : List TAC × Var × Nat :
     let (codeB, vb, tmp2) := refCompileExpr b (offset + codeA.length) tmp1
     let t := tmpName tmp2
     (codeA ++ codeB ++ [.binop t op va vb], t, tmp2 + 1)
+  | .arrRead arr idx =>
+    let (codeIdx, vIdx, tmp1) := refCompileExpr idx offset nextTmp
+    let t := tmpName tmp1
+    (codeIdx ++ [.arrLoad t arr vIdx], t, tmp1 + 1)
 
 def refCompileBool (b : SBool) (offset nextTmp : Nat) : List TAC × BoolExpr × Nat :=
   match b with
@@ -225,9 +231,17 @@ def refCompileStmt (s : Stmt) (offset nextTmp : Nat) : List TAC × Nat :=
       let (codeA, va, tmp1) := refCompileExpr a offset nextTmp
       let (codeB, vb, tmp2) := refCompileExpr b (offset + codeA.length) tmp1
       (codeA ++ codeB ++ [.binop x op va vb], tmp2)
+    | .arrRead arr idx =>
+      let (codeIdx, vIdx, tmp1) := refCompileExpr idx offset nextTmp
+      let t := tmpName tmp1
+      (codeIdx ++ [.arrLoad t arr vIdx, .copy x t], tmp1 + 1)
   | .bassign x b =>
     let (code, be, tmp') := refCompileBool b offset nextTmp
     (code ++ [.boolop x be], tmp')
+  | .arrWrite arr idx val =>
+    let (codeIdx, vIdx, tmp1) := refCompileExpr idx offset nextTmp
+    let (codeVal, vVal, tmp2) := refCompileExpr val (offset + codeIdx.length) tmp1
+    (codeIdx ++ codeVal ++ [.arrStore arr vIdx vVal], tmp2)
   | .seq s1 s2 =>
     let (code1, tmp1) := refCompileStmt s1 offset nextTmp
     let (code2, tmp2) := refCompileStmt s2 (offset + code1.length) tmp1
@@ -350,16 +364,16 @@ theorem BoolExpr.eval_agree' (cond : BoolExpr) (σ τ : Store)
 -- § 6. Division safety helpers
 -- ============================================================
 
-theorem SExpr.divSafe_bin_safe {op : BinOp} {a b : SExpr} {σ : Store}
-    (h : (SExpr.bin op a b).divSafe σ) : op.safe (a.eval σ) (b.eval σ) := by
+theorem SExpr.divSafe_bin_safe {op : BinOp} {a b : SExpr} {σ : Store} {am : ArrayMem}
+    (h : (SExpr.bin op a b).divSafe σ am) : op.safe (a.eval σ am) (b.eval σ am) := by
   cases op <;> simp_all [SExpr.divSafe, BinOp.safe]
 
-theorem SExpr.divSafe_bin_left {op : BinOp} {a b : SExpr} {σ : Store}
-    (h : (SExpr.bin op a b).divSafe σ) : a.divSafe σ := by
+theorem SExpr.divSafe_bin_left {op : BinOp} {a b : SExpr} {σ : Store} {am : ArrayMem}
+    (h : (SExpr.bin op a b).divSafe σ am) : a.divSafe σ am := by
   cases op <;> simp_all [SExpr.divSafe]
 
-theorem SExpr.divSafe_bin_right {op : BinOp} {a b : SExpr} {σ : Store}
-    (h : (SExpr.bin op a b).divSafe σ) : b.divSafe σ := by
+theorem SExpr.divSafe_bin_right {op : BinOp} {a b : SExpr} {σ : Store} {am : ArrayMem}
+    (h : (SExpr.bin op a b).divSafe σ am) : b.divSafe σ am := by
   cases op <;> simp_all [SExpr.divSafe]
 
 -- ============================================================

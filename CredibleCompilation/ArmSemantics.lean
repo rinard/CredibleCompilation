@@ -109,6 +109,14 @@ inductive ArmStep (prog : ArmProg) : ArmState → ArmState → Prop where
     prog[s.pc]? = some (.b lbl) →
     ArmStep prog s { s with pc := lbl }
 
+  | arrLd (dst : ArmReg) (arr : ArrayName) (idxReg : ArmReg) :
+    prog[s.pc]? = some (.arrLd dst arr idxReg) →
+    ArmStep prog s (s.setReg dst (s.arrayMem arr (s.regs idxReg).toNat) |>.nextPC)
+
+  | arrSt (arr : ArrayName) (idxReg valReg : ArmReg) :
+    prog[s.pc]? = some (.arrSt arr idxReg valReg) →
+    ArmStep prog s (s.setArrayMem arr (s.regs idxReg).toNat (s.regs valReg) |>.nextPC)
+
 /-- Multi-step closure. -/
 inductive ArmSteps (prog : ArmProg) : ArmState → ArmState → Prop where
   | refl : ArmSteps prog s s
@@ -196,8 +204,8 @@ def PcRel (pcMap : Nat → Nat) (tac_pc : Nat) (arm_pc : Nat) : Prop :=
 /-- Full simulation invariant. -/
 def SimRel (vm : VarMap) (pcMap : Nat → Nat) (tac_cfg : Cfg) (arm : ArmState) : Prop :=
   match tac_cfg with
-  | .run pc σ _     => StateRel vm σ arm ∧ PcRel pcMap pc arm.pc
-  | .halt σ _       => StateRel vm σ arm
+  | .run pc σ am    => StateRel vm σ arm ∧ PcRel pcMap pc arm.pc ∧ arm.arrayMem = am
+  | .halt σ am      => StateRel vm σ arm ∧ arm.arrayMem = am
   | .error _ _      => True
   | .typeError _ _  => False
 
@@ -289,8 +297,16 @@ def formalGenInstr (vm : VarMap) (pcMap : Nat → Nat) (instr : TAC)
   | .ifgoto be l =>
     formalGenBoolExpr vm be ++ [.cbnz .x0 (pcMap l)]
   | .halt => [.b haltLabel]
-  | .arrLoad _ _ _ => []   -- TODO: array support in ARM codegen
-  | .arrStore _ _ _ => []  -- TODO: array support in ARM codegen
+  | .arrLoad x arr idx =>
+    match vm.lookup idx, vm.lookup x with
+    | some offIdx, some offX =>
+      [.ldr .x1 offIdx, .arrLd .x0 arr .x1, .str .x0 offX]
+    | _, _ => []
+  | .arrStore arr idx val =>
+    match vm.lookup idx, vm.lookup val with
+    | some offIdx, some offVal =>
+      [.ldr .x1 offIdx, .ldr .x2 offVal, .arrSt arr .x1 .x2]
+    | _, _ => []
 
 -- ============================================================
 -- § 9. CodeAt and helper lemmas
@@ -354,6 +370,29 @@ theorem ArmSteps.one_then {prog : ArmProg} {s s' s'' : ArmState}
 
 @[simp] theorem ArmState.nextPC_flags (s : ArmState) :
     s.nextPC.flags = s.flags := rfl
+
+-- arrayMem preservation
+@[simp] theorem ArmState.setReg_arrayMem (s : ArmState) (r : ArmReg) (v : BitVec 64) :
+    (s.setReg r v).arrayMem = s.arrayMem := rfl
+
+@[simp] theorem ArmState.nextPC_arrayMem (s : ArmState) :
+    s.nextPC.arrayMem = s.arrayMem := rfl
+
+@[simp] theorem ArmState.setStack_arrayMem (s : ArmState) (off : Nat) (v : BitVec 64) :
+    (s.setStack off v).arrayMem = s.arrayMem := rfl
+
+-- setArrayMem preserves stack, regs, pc, flags
+@[simp] theorem ArmState.setArrayMem_stack (s : ArmState) (arr : ArrayName) (idx : Nat) (v : BitVec 64) :
+    (s.setArrayMem arr idx v).stack = s.stack := rfl
+
+@[simp] theorem ArmState.setArrayMem_regs (s : ArmState) (arr : ArrayName) (idx : Nat) (v : BitVec 64) :
+    (s.setArrayMem arr idx v).regs = s.regs := rfl
+
+@[simp] theorem ArmState.setArrayMem_pc (s : ArmState) (arr : ArrayName) (idx : Nat) (v : BitVec 64) :
+    (s.setArrayMem arr idx v).pc = s.pc := rfl
+
+@[simp] theorem ArmState.setArrayMem_flags (s : ArmState) (arr : ArrayName) (idx : Nat) (v : BitVec 64) :
+    (s.setArrayMem arr idx v).flags = s.flags := rfl
 
 -- Register inequality facts for simp
 @[simp] theorem ArmReg.x0_ne_x1 : (ArmReg.x0 == ArmReg.x1) = false := by native_decide

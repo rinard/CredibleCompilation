@@ -139,10 +139,20 @@ private def genInstr (varMap : List (Var × Nat)) (pc : Nat) (instr : TAC) : Lis
     genBoolExpr varMap be ++ (s!"  cbnz w0, .L{l}" :: List.nil)
   | .halt =>
     "  b .Lhalt" :: List.nil
-  | .arrLoad _ _ _ =>
-    "  // TODO: arrLoad" :: List.nil
-  | .arrStore _ _ _ =>
-    "  // TODO: arrStore" :: List.nil
+  | .arrLoad x _arr idx =>
+    match lookupVar varMap idx, lookupVar varMap x with
+    | some offIdx, some offX =>
+      s!"  ldr x1, [sp, #{offIdx}]" ::
+      s!"  arrLd x0, {_arr}, x1" ::
+      s!"  str x0, [sp, #{offX}]" :: List.nil
+    | _, _ => "  // ERROR: arrLoad unknown variable" :: List.nil
+  | .arrStore _arr idx val =>
+    match lookupVar varMap idx, lookupVar varMap val with
+    | some offIdx, some offVal =>
+      s!"  ldr x1, [sp, #{offIdx}]" ::
+      s!"  ldr x2, [sp, #{offVal}]" ::
+      s!"  arrSt {_arr}, x1, x2" :: List.nil
+    | _, _ => "  // ERROR: arrStore unknown variable" :: List.nil
 
 -- ============================================================
 -- § 5. Program codegen
