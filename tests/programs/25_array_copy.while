@@ -1,4 +1,5 @@
 var n : int, i : int, s : int;
+array A[1024], B[1024];
 n := 4;
 A[0] := 11;
 A[1] := 22;

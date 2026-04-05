@@ -299,7 +299,8 @@ private theorem noTmpDecls_not_tmp {decls : List (Var × VarTy)} {v : Var} {ty :
 
 /-- All variables in a well-typed arithmetic expression are declared. -/
 private theorem checkSExpr_declared {lookup : Var → Option VarTy}
-    {e : SExpr} (h : Program.checkSExpr lookup e = true) :
+    {arrayDecls : List (ArrayName × Nat)}
+    {e : SExpr} (h : Program.checkSExpr lookup arrayDecls e = true) :
     ∀ v ∈ e.freeVars, ∃ ty, lookup v = some ty := by
   induction e with
   | lit _ => intro v hv; simp [SExpr.freeVars] at hv
@@ -313,12 +314,13 @@ private theorem checkSExpr_declared {lookup : Var → Option VarTy}
     · exact iha h.1 v ha
     · exact ihb h.2 v hb
   | arrRead _ idx ih =>
-    simp [Program.checkSExpr] at h
-    intro v hv; exact ih h v hv
+    simp [Program.checkSExpr, Bool.and_eq_true] at h
+    intro v hv; exact ih h.2 v hv
 
 /-- All variables in a well-typed boolean expression are declared. -/
 private theorem checkSBool_declared {lookup : Var → Option VarTy}
-    {b : SBool} (h : Program.checkSBool lookup b = true) :
+    {arrayDecls : List (ArrayName × Nat)}
+    {b : SBool} (h : Program.checkSBool lookup arrayDecls b = true) :
     ∀ v ∈ b.freeVars, ∃ ty, lookup v = some ty := by
   induction b with
   | lit _ => intro v hv; simp [SBool.freeVars] at hv
@@ -349,7 +351,8 @@ private theorem checkSBool_declared {lookup : Var → Option VarTy}
 
 /-- All variables in a well-typed statement are declared. -/
 private theorem checkStmt_declared {lookup : Var → Option VarTy}
-    {s : Stmt} (h : Program.checkStmt lookup s = true) :
+    {arrayDecls : List (ArrayName × Nat)}
+    {s : Stmt} (h : Program.checkStmt lookup arrayDecls s = true) :
     ∀ v ∈ s.allVars, ∃ ty, lookup v = some ty := by
   induction s with
   | skip => intro v hv; simp [Stmt.allVars] at hv
@@ -367,10 +370,11 @@ private theorem checkStmt_declared {lookup : Var → Option VarTy}
     · exact checkSBool_declared h.2 v hb
   | arrWrite _ idx val =>
     simp [Program.checkStmt, Bool.and_eq_true] at h
-    intro v hv; simp [Stmt.allVars] at hv
-    rcases hv with hi | hv
-    · exact checkSExpr_declared h.1 v hi
-    · exact checkSExpr_declared h.2 v hv
+    obtain ⟨⟨_, hi⟩, hv⟩ := h
+    intro v hv'; simp [Stmt.allVars] at hv'
+    rcases hv' with hi' | hv'
+    · exact checkSExpr_declared hi v hi'
+    · exact checkSExpr_declared hv v hv'
   | seq s1 s2 ih1 ih2 =>
     simp [Program.checkStmt, Bool.and_eq_true] at h
     intro v hv; simp [Stmt.allVars] at hv
@@ -421,9 +425,9 @@ private theorem lookup_tyCtx {lookup : Var → Option VarTy} {Γ : TyCtx}
     preserves TypedStore. -/
 theorem Stmt.interp_preserves_typedStore
     {s : Stmt} {fuel : Nat} {σ σ' : Store} {am am' : ArrayMem} {Γ : TyCtx}
-    {lookup : Var → Option VarTy}
+    {lookup : Var → Option VarTy} {arrayDecls : List (ArrayName × Nat)}
     (hcompat : ∀ x ty, lookup x = some ty → Γ x = ty)
-    (hchk : Program.checkStmt lookup s = true)
+    (hchk : Program.checkStmt lookup arrayDecls s = true)
     (hts : TypedStore Γ σ)
     (hinterp : s.interp fuel σ am = some (σ', am')) :
     TypedStore Γ σ' := by
@@ -485,9 +489,10 @@ theorem Stmt.interp_preserves_typedStore
 /-- If `checkSExpr lookup e = true` and `TypedStore Γ σ` with compatible lookup/Γ,
     then all vars in `e.freeVars` have int values in `σ`. -/
 private theorem checkSExpr_intVars
-    {lookup : Var → Option VarTy} {Γ : TyCtx} {σ : Store} {e : SExpr}
+    {lookup : Var → Option VarTy} {arrayDecls : List (ArrayName × Nat)}
+    {Γ : TyCtx} {σ : Store} {e : SExpr}
     (hcompat : ∀ x ty, lookup x = some ty → Γ x = ty)
-    (hchk : Program.checkSExpr lookup e = true)
+    (hchk : Program.checkSExpr lookup arrayDecls e = true)
     (hts : TypedStore Γ σ) :
     ∀ v ∈ e.freeVars, ∃ n, σ v = .int n := by
   induction e with
@@ -503,15 +508,16 @@ private theorem checkSExpr_intVars
     · exact iha hchk.1 v ha
     · exact ihb hchk.2 v hb
   | arrRead _ idx ih =>
-    simp [Program.checkSExpr] at hchk
-    intro v hv; exact ih hchk v hv
+    simp [Program.checkSExpr, Bool.and_eq_true] at hchk
+    intro v hv; exact ih hchk.2 v hv
 
 /-- If `checkSBool lookup b = true` and `TypedStore Γ σ` with compatible lookup/Γ,
     then `b.intTyped σ`. -/
 private theorem checkSBool_intTyped
-    {lookup : Var → Option VarTy} {Γ : TyCtx} {σ : Store} {b : SBool}
+    {lookup : Var → Option VarTy} {arrayDecls : List (ArrayName × Nat)}
+    {Γ : TyCtx} {σ : Store} {b : SBool}
     (hcompat : ∀ x ty, lookup x = some ty → Γ x = ty)
-    (hchk : Program.checkSBool lookup b = true)
+    (hchk : Program.checkSBool lookup arrayDecls b = true)
     (hts : TypedStore Γ σ) :
     b.intTyped σ := by
   induction b with
@@ -531,9 +537,10 @@ private theorem checkSBool_intTyped
 /-- If `checkStmt lookup s = true`, `TypedStore Γ σ`, and lookup/Γ are compatible,
     then `s.intTyped fuel σ`. -/
 theorem checkStmt_intTyped
-    (lookup : Var → Option VarTy) (Γ : TyCtx) (σ : Store) (am : ArrayMem) (s : Stmt) (fuel : Nat)
+    (lookup : Var → Option VarTy) (arrayDecls : List (ArrayName × Nat))
+    (Γ : TyCtx) (σ : Store) (am : ArrayMem) (s : Stmt) (fuel : Nat)
     (hcompat : ∀ x ty, lookup x = some ty → Γ x = ty)
-    (hchk : Program.checkStmt lookup s = true)
+    (hchk : Program.checkStmt lookup arrayDecls s = true)
     (hts : TypedStore Γ σ) :
     s.intTyped fuel σ am := by
   induction s generalizing fuel σ am with
@@ -548,8 +555,9 @@ theorem checkStmt_intTyped
     exact checkSBool_intTyped hcompat hchk.2 hts
   | arrWrite _ idx val =>
     simp [Program.checkStmt, Bool.and_eq_true] at hchk
+    obtain ⟨⟨_, hi⟩, hv⟩ := hchk
     simp [Stmt.intTyped]
-    exact ⟨checkSExpr_intVars hcompat hchk.1 hts, checkSExpr_intVars hcompat hchk.2 hts⟩
+    exact ⟨checkSExpr_intVars hcompat hi hts, checkSExpr_intVars hcompat hv hts⟩
   | seq s1 s2 ih1 ih2 =>
     simp [Program.checkStmt, Bool.and_eq_true] at hchk
     simp only [Stmt.intTyped]
@@ -587,7 +595,7 @@ theorem Program.typeCheck_intTyped (prog : Program) (h : prog.typeCheck = true)
     prog.body.intTyped fuel σ am := by
   simp [Program.typeCheck, Bool.and_eq_true] at h
   obtain ⟨⟨_, _⟩, hchk⟩ := h
-  exact checkStmt_intTyped prog.lookupTy prog.tyCtx σ am prog.body fuel
+  exact checkStmt_intTyped prog.lookupTy prog.arrayDecls prog.tyCtx σ am prog.body fuel
     (fun x ty hlook => by
       show (prog.lookupTy x).getD .int = ty
       rw [hlook]; rfl) hchk hts

@@ -310,31 +310,38 @@ private def noDups : List Var → Bool
 def noTmpDecls (decls : List (Var × VarTy)) : Bool :=
   decls.all fun (x, _) => !x.isTmp
 
-/-- Check that all variables in an arithmetic expression are declared as `int`. -/
-def checkSExpr (lookup : Var → Option VarTy) : SExpr → Bool
+/-- Check that an array name is declared. -/
+private def arrayDeclared (arrayDecls : List (ArrayName × Nat)) (arr : ArrayName) : Bool :=
+  arrayDecls.any fun (a, _) => a == arr
+
+/-- Check that all variables in an arithmetic expression are declared as `int`,
+    and all array names are declared. -/
+def checkSExpr (lookup : Var → Option VarTy) (arrayDecls : List (ArrayName × Nat)) : SExpr → Bool
   | .lit _ => true
   | .var x => lookup x == some .int
-  | .bin _ a b => checkSExpr lookup a && checkSExpr lookup b
-  | .arrRead _arr idx => checkSExpr lookup idx
+  | .bin _ a b => checkSExpr lookup arrayDecls a && checkSExpr lookup arrayDecls b
+  | .arrRead arr idx => arrayDeclared arrayDecls arr && checkSExpr lookup arrayDecls idx
 
 /-- Check that a boolean expression uses properly-typed declared variables. -/
-def checkSBool (lookup : Var → Option VarTy) : SBool → Bool
+def checkSBool (lookup : Var → Option VarTy) (arrayDecls : List (ArrayName × Nat)) : SBool → Bool
   | .lit _ => true
   | .bvar x => lookup x == some .bool
-  | .cmp _ a b => checkSExpr lookup a && checkSExpr lookup b
-  | .not e => checkSBool lookup e
-  | .and a b => checkSBool lookup a && checkSBool lookup b
-  | .or a b => checkSBool lookup a && checkSBool lookup b
+  | .cmp _ a b => checkSExpr lookup arrayDecls a && checkSExpr lookup arrayDecls b
+  | .not e => checkSBool lookup arrayDecls e
+  | .and a b => checkSBool lookup arrayDecls a && checkSBool lookup arrayDecls b
+  | .or a b => checkSBool lookup arrayDecls a && checkSBool lookup arrayDecls b
 
 /-- Check that a statement body is well-typed w.r.t. declarations. -/
-def checkStmt (lookup : Var → Option VarTy) : Stmt → Bool
+def checkStmt (lookup : Var → Option VarTy) (arrayDecls : List (ArrayName × Nat)) : Stmt → Bool
   | .skip => true
-  | .assign x e => lookup x == some .int && checkSExpr lookup e
-  | .bassign x b => lookup x == some .bool && checkSBool lookup b
-  | .arrWrite _arr idx val => checkSExpr lookup idx && checkSExpr lookup val
-  | .seq s1 s2 => checkStmt lookup s1 && checkStmt lookup s2
-  | .ite b s1 s2 => checkSBool lookup b && checkStmt lookup s1 && checkStmt lookup s2
-  | .loop b body => checkSBool lookup b && checkStmt lookup body
+  | .assign x e => lookup x == some .int && checkSExpr lookup arrayDecls e
+  | .bassign x b => lookup x == some .bool && checkSBool lookup arrayDecls b
+  | .arrWrite arr idx val =>
+    arrayDeclared arrayDecls arr && checkSExpr lookup arrayDecls idx && checkSExpr lookup arrayDecls val
+  | .seq s1 s2 => checkStmt lookup arrayDecls s1 && checkStmt lookup arrayDecls s2
+  | .ite b s1 s2 =>
+    checkSBool lookup arrayDecls b && checkStmt lookup arrayDecls s1 && checkStmt lookup arrayDecls s2
+  | .loop b body => checkSBool lookup arrayDecls b && checkStmt lookup arrayDecls body
 
 /-- Full static type check: no duplicate declarations, no compiler-reserved
     temporary names in declarations, and the body is well-typed w.r.t.
@@ -342,7 +349,7 @@ def checkStmt (lookup : Var → Option VarTy) : Stmt → Bool
 def typeCheck (prog : Program) : Bool :=
   noDups (prog.decls.map Prod.fst) &&
   noTmpDecls prog.decls &&
-  checkStmt prog.lookupTy prog.body
+  checkStmt prog.lookupTy prog.arrayDecls prog.body
 
 -- ============================================================
 -- § 5b. Compilation
@@ -701,7 +708,7 @@ theorem tyCtx_of_lookup_wt (prog : Program) (x : Var) (ty : VarTy)
 -- compileExpr produces well-typed instructions and the result var has type .int
 theorem compileExpr_wt (prog : Program)
     (hnt : Program.noTmpDecls prog.decls = true)
-    (e : SExpr) (hchk : Program.checkSExpr prog.lookupTy e = true)
+    (e : SExpr) (hchk : Program.checkSExpr prog.lookupTy prog.arrayDecls e = true)
     (offset nextTmp : Nat) :
     AllWTI prog.tyCtx (compileExpr e offset nextTmp).1
     ∧ prog.tyCtx (compileExpr e offset nextTmp).2.1 = .int := by
@@ -729,8 +736,8 @@ theorem compileExpr_wt (prog : Program)
         (allWTI_one (.binop (tyCtx_tmp_wt prog hnt _) ha_ty hb_ty))
     · exact tyCtx_tmp_wt prog hnt _
   | arrRead _arr idx ih =>
-    simp [Program.checkSExpr] at hchk
-    have ⟨hi_wt, hi_ty⟩ := ih hchk offset nextTmp
+    simp [Program.checkSExpr, Bool.and_eq_true] at hchk
+    have ⟨hi_wt, hi_ty⟩ := ih hchk.2 offset nextTmp
     simp only [compileExpr]
     exact ⟨allWTI_append' hi_wt (allWTI_one (.arrLoad (tyCtx_tmp_wt prog hnt _) hi_ty)),
            tyCtx_tmp_wt prog hnt _⟩
@@ -738,7 +745,7 @@ theorem compileExpr_wt (prog : Program)
 -- compileBool produces well-typed instructions and a WellTypedBoolExpr
 theorem compileBool_wt (prog : Program)
     (hnt : Program.noTmpDecls prog.decls = true)
-    (b : SBool) (hchk : Program.checkSBool prog.lookupTy b = true)
+    (b : SBool) (hchk : Program.checkSBool prog.lookupTy prog.arrayDecls b = true)
     (offset nextTmp : Nat) :
     AllWTI prog.tyCtx (compileBool b offset nextTmp).1
     ∧ WellTypedBoolExpr prog.tyCtx (compileBool b offset nextTmp).2.1 := by
@@ -813,7 +820,7 @@ theorem compileBool_wt (prog : Program)
 -- compileStmt produces well-typed instructions
 theorem compileStmt_wt (prog : Program)
     (hnt : Program.noTmpDecls prog.decls = true)
-    (s : Stmt) (hchk : Program.checkStmt prog.lookupTy s = true)
+    (s : Stmt) (hchk : Program.checkStmt prog.lookupTy prog.arrayDecls s = true)
     (offset nextTmp : Nat) :
     AllWTI prog.tyCtx (compileStmt s offset nextTmp).1 := by
   induction s generalizing offset nextTmp with
@@ -842,8 +849,8 @@ theorem compileStmt_wt (prog : Program)
       exact allWTI_append3 ha_wt hb_wt
         (allWTI_one (.binop hxty ha_ty hb_ty))
     | arrRead _arr idx =>
-      simp [Program.checkSExpr] at he
-      have ⟨hi_wt, hi_ty⟩ := compileExpr_wt prog hnt idx he offset nextTmp
+      simp [Program.checkSExpr, Bool.and_eq_true] at he
+      have ⟨hi_wt, hi_ty⟩ := compileExpr_wt prog hnt idx he.2 offset nextTmp
       simp only [compileStmt]
       have htmp_ty := tyCtx_tmp_wt prog hnt (compileExpr idx offset nextTmp).2.2
       exact allWTI_append' hi_wt
@@ -858,7 +865,7 @@ theorem compileStmt_wt (prog : Program)
     exact allWTI_append' hb_wt (allWTI_one (.boolop hxty hb_ty))
   | arrWrite _arr idx val =>
     simp [Program.checkStmt, Bool.and_eq_true] at hchk
-    obtain ⟨hi, hv⟩ := hchk
+    obtain ⟨⟨_, hi⟩, hv⟩ := hchk
     have ⟨hi_wt, hi_ty⟩ := compileExpr_wt prog hnt idx hi offset nextTmp
     have ⟨hv_wt, hv_ty⟩ := compileExpr_wt prog hnt val hv
       (offset + (compileExpr idx offset nextTmp).1.length)

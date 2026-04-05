@@ -1,4 +1,5 @@
 var n : int, i : int, s : int;
+array A[1024];
 n := 5;
 A[0] := 10;
 A[1] := 20;

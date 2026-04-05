@@ -1,4 +1,5 @@
 var i : int, s : int;
+array A[1024];
 i := 0;
 while (i < 10) {
   A[i] := i * i;
