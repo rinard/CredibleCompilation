@@ -505,7 +505,9 @@ theorem execSymbolic_sound (ss : SymStore) (sam : SymArrayMem) (instr : TAC)
       revert hstep; generalize _sbam = am; generalize _sbam' = am'; intro hstep; cases hstep <;> simp_all
     obtain ⟨vv, hvv⟩ : ∃ vv : BitVec 64, σ val = .int vv := by
       revert hstep; generalize _sbam = am; generalize _sbam' = am'; intro hstep; cases hstep <;> simp_all
-    have := step_det _ (Step.arrStore hinstr hv hvv)
+    have hbnd : idxVal.toNat < prog.arraySize arr := by
+      revert hstep; generalize _sbam = am; generalize _sbam' = am'; intro hstep; cases hstep <;> simp_all
+    have := step_det _ (Step.arrStore hinstr hv hvv hbnd)
     have hσ' : σ' = σ := (Cfg.run.inj this).2.1.symm
     rw [hσ']; exact hrepr v
 
@@ -625,7 +627,9 @@ theorem checkInvAtom_sound (inv_pre : EInv) (instr : TAC) (atom : Var × Expr)
           revert hstep; intro hstep; cases hstep <;> simp_all
         obtain ⟨vv, hvv⟩ : ∃ vv : BitVec 64, σ val = .int vv := by
           revert hstep; intro hstep; cases hstep <;> simp_all
-        have := step_det _ (Step.arrStore hinstr hv hvv)
+        have hbnd : idxVal.toNat < prog.arraySize arr := by
+          revert hstep; intro hstep; cases hstep <;> simp_all
+        have := step_det _ (Step.arrStore hinstr hv hvv hbnd)
         have hσ' : σ' = σ := (Cfg.run.inj this).2.1.symm
         rw [hσ']; exact ssGet_nil σ am
       | arrLoad dest arr idx =>
@@ -634,7 +638,9 @@ theorem checkInvAtom_sound (inv_pre : EInv) (instr : TAC) (atom : Var × Expr)
           fun c hc => Step.deterministic hc hstep
         obtain ⟨idxVal, hidx⟩ : ∃ idxVal : BitVec 64, σ idx = .int idxVal := by
           revert hstep; intro hstep; cases hstep <;> simp_all
-        have := step_det _ (Step.arrLoad hinstr hidx)
+        have hbnd : idxVal.toNat < prog.arraySize arr := by
+          revert hstep; intro hstep; cases hstep <;> simp_all
+        have := step_det _ (Step.arrLoad hinstr hidx hbnd)
         have hσ' : σ' = σ[dest ↦ .int (am.read arr idxVal.toNat)] :=
           (Cfg.run.inj this).2.1.symm
         intro v
@@ -1142,8 +1148,12 @@ private theorem execPath_sound_gen (orig : Prog) (ss : SymStore) (sam : SymArray
             obtain ⟨idxVal, hidxVal⟩ : ∃ idxVal : BitVec 64, σ idx = .int idxVal := by
               cases hwti with | arrLoad _ hidx =>
               exact Value.int_of_typeOf_int (by rw [hts idx]; exact hidx)
+            -- TODO: bounds proof should come from the fact that the program
+            -- is executing successfully (not erroring). Need arrayDecls equality
+            -- or a hypothesis that the index is in bounds for orig.
+            have hbnd : idxVal.toNat < orig.arraySize arr := by sorry
             have hs : Step orig (.run pc σ am) (.run (pc + 1) (σ[x ↦ .int (am.read arr idxVal.toNat)]) am) :=
-              Step.arrLoad horig_opt hidxVal
+              Step.arrLoad horig_opt hidxVal hbnd
             -- arrLoad: execSymbolic returns ssSet ss x (samGet sam arr (ssGet ss idx))
             exact ⟨σ[x ↦ .int (am.read arr idxVal.toNat)], am, hs, (fun v => by
               show (ssGet (ssSet ss x (samGet sam arr (ssGet ss idx))) v).eval σ₀ am₀ = _
@@ -1172,8 +1182,11 @@ private theorem execPath_sound_gen (orig : Prog) (ss : SymStore) (sam : SymArray
             obtain ⟨vv, hvv⟩ : ∃ vv : BitVec 64, σ val = .int vv := by
               cases hwti with | arrStore _ hval =>
               exact Value.int_of_typeOf_int (by rw [hts val]; exact hval)
+            -- TODO: bounds proof should come from arrayDecls equality or
+            -- a hypothesis that the index is in bounds for orig.
+            have hbnd : idxVal.toNat < orig.arraySize arr := by sorry
             have hs : Step orig (.run pc σ am) (.run (pc + 1) σ (am.write arr idxVal.toNat vv)) :=
-              Step.arrStore horig_opt hidxVal hvv
+              Step.arrStore horig_opt hidxVal hvv hbnd
             -- arrStore: ss unchanged, σ unchanged. hrepr at am₀ transfers trivially.
             have hexec : (execSymbolic ss sam (.arrStore arr idx val)).1 = ss := rfl
             have hval_eval : (ssGet ss val).eval σ₀ am₀ = .int vv := by
@@ -1732,7 +1745,9 @@ private theorem transRel_sound (dc : ECertificate)
           revert hstep; intro hstep; cases hstep <;> simp_all
         obtain ⟨vv, hvv⟩ : ∃ vv : BitVec 64, σ_t val = .int vv := by
           revert hstep; intro hstep; cases hstep <;> simp_all
-        have := step_det _ (Step.arrStore hinstr hv hvv)
+        have hbnd : idxVal.toNat < dc.trans.arraySize arr := by
+          revert hstep; intro hstep; cases hstep <;> simp_all
+        have := step_det _ (Step.arrStore hinstr hv hvv hbnd)
         have hσ' : σ_t' = σ_t := (Cfg.run.inj this).2.1.symm
         rw [hσ']; exact ssGet_nil σ_t am_t
       | arrLoad dest arr idx =>
@@ -1742,7 +1757,9 @@ private theorem transRel_sound (dc : ECertificate)
           fun c hc => Step.deterministic hc hstep
         obtain ⟨idxVal, hidx⟩ : ∃ idxVal : BitVec 64, σ_t idx = .int idxVal := by
           revert hstep; intro hstep; cases hstep <;> simp_all
-        have := step_det _ (Step.arrLoad hinstr hidx)
+        have hbnd : idxVal.toNat < dc.trans.arraySize arr := by
+          revert hstep; intro hstep; cases hstep <;> simp_all
+        have := step_det _ (Step.arrLoad hinstr hidx hbnd)
         have hσ' : σ_t' = σ_t[dest ↦ .int (am_t.read arr idxVal.toNat)] :=
           (Cfg.run.inj this).2.1.symm
         intro w
@@ -2081,6 +2098,16 @@ theorem checkDivPreservationExec_sound (dc : ECertificate)
         -- Construct Step.error on the original side
         exact ⟨σ_o, am_o, Steps.step (Step.error horig hy' hz' hunsafe) .refl⟩
       | _ => simp at hcheck
+  | arrLoad_boundsError hinstr_arr hidxVal hbnd =>
+    -- TODO: prove via checkBoundsPreservationExec
+    -- Need to show that the original program also has a bounds error
+    -- at the corresponding array instruction. Requires arrayDecls equality.
+    exact ⟨σ_o, am_o, by sorry⟩
+  | arrStore_boundsError hinstr_arr hidxVal hvv hbnd =>
+    -- TODO: prove via checkBoundsPreservationExec
+    -- Need to show that the original program also has a bounds error
+    -- at the corresponding array instruction. Requires arrayDecls equality.
+    exact ⟨σ_o, am_o, by sorry⟩
 
 -- ============================================================
 -- § 9. Main soundness theorem
@@ -2132,24 +2159,26 @@ theorem soundness_bridge
     (dc : ECertificate) (h : checkCertificateExec dc = true)
     (htyctx : dc.orig.tyCtx = dc.trans.tyCtx) :
     PCertificateValid (toPCertificate dc) := by
-  -- checkCertificateExec is: wt_orig && wt_trans && same_obs && c1..c12
-  -- && is left-associative, so decompose from right to left (15 conjuncts, 14 steps)
+  -- checkCertificateExec is: wt_orig && wt_trans && same_obs && c1..c14
+  -- && is left-associative, so decompose from right to left (17 conjuncts, 16 steps)
   unfold checkCertificateExec at h
-  have ⟨ha, h_bounds⟩     := and_true_of_and_eq_true h
-  have ⟨hb, h_div⟩        := and_true_of_and_eq_true ha
-  have ⟨hc, h_nonterm⟩    := and_true_of_and_eq_true hb
-  have ⟨hd, h_haltobs⟩    := and_true_of_and_eq_true hc
-  have ⟨he, h_haltcorr⟩   := and_true_of_and_eq_true hd
-  have ⟨hf, h_trans⟩      := and_true_of_and_eq_true he
-  have ⟨hf2, h_noarr_rels⟩ := and_true_of_and_eq_true hf
-  have ⟨hg, h_noarr_t⟩    := and_true_of_and_eq_true hf2
-  have ⟨hh, h_noarr_o⟩    := and_true_of_and_eq_true hg
-  have ⟨hi, h_invpres⟩    := and_true_of_and_eq_true hh
-  have ⟨hj, h_relstart⟩   := and_true_of_and_eq_true hi
-  have ⟨hk, h_invstart⟩   := and_true_of_and_eq_true hj
-  have ⟨hl, h_startcorr⟩  := and_true_of_and_eq_true hk
-  have ⟨hm, hobs_eq⟩      := and_true_of_and_eq_true hl
-  have ⟨hwt_orig, hwt_trans⟩ := and_true_of_and_eq_true hm
+  have ⟨ha, h_step_bounds⟩ := and_true_of_and_eq_true h
+  have ⟨hb, h_arrsize⟩    := and_true_of_and_eq_true ha
+  have ⟨hc, h_bndpres⟩    := and_true_of_and_eq_true hb
+  have ⟨hd, h_div⟩        := and_true_of_and_eq_true hc
+  have ⟨he, h_nonterm⟩    := and_true_of_and_eq_true hd
+  have ⟨hf, h_haltobs⟩    := and_true_of_and_eq_true he
+  have ⟨hg, h_haltcorr⟩   := and_true_of_and_eq_true hf
+  have ⟨hh, h_trans⟩      := and_true_of_and_eq_true hg
+  have ⟨hh2, h_noarr_rels⟩ := and_true_of_and_eq_true hh
+  have ⟨hi, h_noarr_t⟩    := and_true_of_and_eq_true hh2
+  have ⟨hj, h_noarr_o⟩    := and_true_of_and_eq_true hi
+  have ⟨hk, h_invpres⟩    := and_true_of_and_eq_true hj
+  have ⟨hl, h_relstart⟩   := and_true_of_and_eq_true hk
+  have ⟨hm, h_invstart⟩   := and_true_of_and_eq_true hl
+  have ⟨hn, h_startcorr⟩  := and_true_of_and_eq_true hm
+  have ⟨ho, hobs_eq⟩      := and_true_of_and_eq_true hn
+  have ⟨hwt_orig, hwt_trans⟩ := and_true_of_and_eq_true ho
   -- Derive rel=[] at start from checkRelAtStartExec (h3)
   have hrel0 : (dc.instrCerts.getD 0 default).rel = [] := by
     revert h_relstart; simp only [checkRelAtStartExec]
@@ -2171,7 +2200,7 @@ theorem soundness_bridge
     halt_obs      := checkHaltObservableExec_sound dc h_haltobs
     nonterm       := checkNonterminationExec_sound dc h_nonterm
     error_pres    := checkDivPreservationExec_sound dc h_div
-    step_closed   := checkSuccessorsInBounds_sound dc h_bounds
+    step_closed   := checkSuccessorsInBounds_sound dc h_step_bounds
   }
 
 -- ============================================================

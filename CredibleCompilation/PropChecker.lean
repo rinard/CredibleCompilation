@@ -169,8 +169,14 @@ theorem inv_preserved_steps {inv : PInvariantMap} {p : Prog}
     | goto h => exact ih _ _ _ rfl (hpres _ _ am hinv _ _ am (Step.goto h)) _ _ _ hc'
     | iftrue h hne => exact ih _ _ _ rfl (hpres _ _ am hinv _ _ am (Step.iftrue h hne)) _ _ _ hc'
     | iffall h heq => exact ih _ _ _ rfl (hpres _ _ am hinv _ _ am (Step.iffall h heq)) _ _ _ hc'
-    | arrLoad h hidx => exact ih _ _ _ rfl (hpres _ _ am hinv _ _ am (Step.arrLoad h hidx)) _ _ _ hc'
-    | arrStore h hidx hv => exact ih _ _ _ rfl (hpres _ _ am hinv _ _ _ (Step.arrStore h hidx hv)) _ _ _ hc'
+    | arrLoad h hidx hb => exact ih _ _ _ rfl (hpres _ _ am hinv _ _ am (Step.arrLoad h hidx hb)) _ _ _ hc'
+    | arrStore h hidx hv hb => exact ih _ _ _ rfl (hpres _ _ am hinv _ _ _ (Step.arrStore h hidx hv hb)) _ _ _ hc'
+    | arrLoad_boundsError h _ _ => cases rest with
+      | refl => exact absurd hc' Cfg.noConfusion
+      | step s _ => exact absurd s Step.no_step_from_error
+    | arrStore_boundsError h _ _ _ => cases rest with
+      | refl => exact absurd hc' Cfg.noConfusion
+      | step s _ => exact absurd s Step.no_step_from_error
 
 theorem bound_of_getElem? {a : Array α} {i : Nat} {v : α}
     (h : a[i]? = some v) : i < a.size := by
@@ -206,8 +212,14 @@ theorem type_preservation_steps {Γ : TyCtx} {p : Prog} (hwtp : WellTypedProg Γ
     | goto h => exact ih _ _ _ rfl (type_preservation hwtp hts (bound_of_getElem? h) (Step.goto (am := am) h)) _ _ _ hc'
     | iftrue h hne => exact ih _ _ _ rfl (type_preservation hwtp hts (bound_of_getElem? h) (Step.iftrue (am := am) h hne)) _ _ _ hc'
     | iffall h heq => exact ih _ _ _ rfl (type_preservation hwtp hts (bound_of_getElem? h) (Step.iffall (am := am) h heq)) _ _ _ hc'
-    | arrLoad h hidx => exact ih _ _ _ rfl (type_preservation hwtp hts (bound_of_getElem? h) (Step.arrLoad (am := am) h hidx)) _ _ _ hc'
-    | arrStore h hidx hv => exact ih _ _ _ rfl (type_preservation hwtp hts (bound_of_getElem? h) (Step.arrStore (am := am) h hidx hv)) _ _ _ hc'
+    | arrLoad h hidx hb => exact ih _ _ _ rfl (type_preservation hwtp hts (bound_of_getElem? h) (Step.arrLoad (am := am) h hidx hb)) _ _ _ hc'
+    | arrStore h hidx hv hb => exact ih _ _ _ rfl (type_preservation hwtp hts (bound_of_getElem? h) (Step.arrStore (am := am) h hidx hv hb)) _ _ _ hc'
+    | arrLoad_boundsError h _ _ => cases rest with
+      | refl => exact absurd hc' Cfg.noConfusion
+      | step s _ => exact absurd s Step.no_step_from_error
+    | arrStore_boundsError h _ _ _ => cases rest with
+      | refl => exact absurd hc' Cfg.noConfusion
+      | step s _ => exact absurd s Step.no_step_from_error
 
 theorem step_sim {cert : PCertificate} (hvalid : PCertificateValid cert)
     {pc_t : Label} {σ_t σ_t' : Store} {am_t am_t' : ArrayMem}
@@ -279,12 +291,18 @@ private theorem steps_to_halt_decompose {p : Prog} {pc₀ : Nat} {σ₀ : Store}
     | iffall h heq' =>
       obtain ⟨pc, σ, am, hpre, hhalt, heq⟩ := ih _ _ _ rfl _ _ hc'
       exact ⟨pc, σ, am, Steps.step (Step.iffall (am := am₀) h heq') hpre, hhalt, heq⟩
-    | arrLoad h hidx =>
+    | arrLoad h hidx hb =>
       obtain ⟨pc, σ, am, hpre, hhalt, heq⟩ := ih _ _ _ rfl _ _ hc'
-      exact ⟨pc, σ, am, Steps.step (Step.arrLoad (am := am₀) h hidx) hpre, hhalt, heq⟩
-    | arrStore h hidx hv =>
+      exact ⟨pc, σ, am, Steps.step (Step.arrLoad (am := am₀) h hidx hb) hpre, hhalt, heq⟩
+    | arrStore h hidx hv hb =>
       obtain ⟨pc, σ, am, hpre, hhalt, heq⟩ := ih _ _ _ rfl _ _ hc'
-      exact ⟨pc, σ, am, Steps.step (Step.arrStore (am := am₀) h hidx hv) hpre, hhalt, heq⟩
+      exact ⟨pc, σ, am, Steps.step (Step.arrStore (am := am₀) h hidx hv hb) hpre, hhalt, heq⟩
+    | arrLoad_boundsError h _ _ => cases rest with
+      | refl => exact absurd hc' Cfg.noConfusion
+      | step s _ => exact absurd s Step.no_step_from_error
+    | arrStore_boundsError h _ _ _ => cases rest with
+      | refl => exact absurd hc' Cfg.noConfusion
+      | step s _ => exact absurd s Step.no_step_from_error
 
 -- ============================================================
 -- § StepsN infrastructure
@@ -652,10 +670,16 @@ private theorem steps_run_in_bounds {p : Prog} (hclosed : StepClosedInBounds p)
       exact ih _ _ _ rfl (hclosed.2 _ _ _ _ _ _ hpc (Step.iftrue (am := am) h hne)) _ _ _ hc'
     | iffall h heq =>
       exact ih _ _ _ rfl (hclosed.2 _ _ _ _ _ _ hpc (Step.iffall (am := am) h heq)) _ _ _ hc'
-    | arrLoad h hidx =>
-      exact ih _ _ _ rfl (hclosed.2 _ _ _ _ _ _ hpc (Step.arrLoad (am := am) h hidx)) _ _ _ hc'
-    | arrStore h hidx hv =>
-      exact ih _ _ _ rfl (hclosed.2 _ _ _ _ _ _ hpc (Step.arrStore (am := am) h hidx hv)) _ _ _ hc'
+    | arrLoad h hidx hb =>
+      exact ih _ _ _ rfl (hclosed.2 _ _ _ _ _ _ hpc (Step.arrLoad (am := am) h hidx hb)) _ _ _ hc'
+    | arrStore h hidx hv hb =>
+      exact ih _ _ _ rfl (hclosed.2 _ _ _ _ _ _ hpc (Step.arrStore (am := am) h hidx hv hb)) _ _ _ hc'
+    | arrLoad_boundsError h _ _ => cases rest with
+      | refl => exact absurd hc' Cfg.noConfusion
+      | step s _ => exact absurd s Step.no_step_from_error
+    | arrStore_boundsError h _ _ _ => cases rest with
+      | refl => exact absurd hc' Cfg.noConfusion
+      | step s _ => exact absurd s Step.no_step_from_error
 
 -- ============================================================
 -- § Halt preservation
@@ -746,12 +770,20 @@ private theorem steps_to_error_decompose {p : Prog} {pc₀ : Nat} {σ₀ σ_e : 
     | iffall h heq' =>
       obtain ⟨pc, σ, am, hpre, herr, heq⟩ := ih _ _ _ rfl _ _ hc'
       exact ⟨pc, σ, am, Steps.step (Step.iffall (am := am₀) h heq') hpre, herr, heq⟩
-    | arrLoad h hidx =>
+    | arrLoad h hidx hb =>
       obtain ⟨pc, σ, am, hpre, herr, heq⟩ := ih _ _ _ rfl _ _ hc'
-      exact ⟨pc, σ, am, Steps.step (Step.arrLoad (am := am₀) h hidx) hpre, herr, heq⟩
-    | arrStore h hidx hv =>
+      exact ⟨pc, σ, am, Steps.step (Step.arrLoad (am := am₀) h hidx hb) hpre, herr, heq⟩
+    | arrStore h hidx hv hb =>
       obtain ⟨pc, σ, am, hpre, herr, heq⟩ := ih _ _ _ rfl _ _ hc'
-      exact ⟨pc, σ, am, Steps.step (Step.arrStore (am := am₀) h hidx hv) hpre, herr, heq⟩
+      exact ⟨pc, σ, am, Steps.step (Step.arrStore (am := am₀) h hidx hv hb) hpre, herr, heq⟩
+    | arrLoad_boundsError h hidx hob =>
+      cases rest with
+      | refl => cases hc'; exact ⟨pc₀, σ₀, am₀, Steps.refl, Step.arrLoad_boundsError h hidx hob, rfl⟩
+      | step s _ => exact absurd s Step.no_step_from_error
+    | arrStore_boundsError h hidx hv hob =>
+      cases rest with
+      | refl => cases hc'; exact ⟨pc₀, σ₀, am₀, Steps.refl, Step.arrStore_boundsError h hidx hv hob, rfl⟩
+      | step s _ => exact absurd s Step.no_step_from_error
 
 theorem error_preservation (cert : PCertificate) (hvalid : PCertificateValid cert)
     (σ₀ : Store) (hts₀ : TypedStore cert.tyCtx σ₀) {σ_e : Store} {am₀ am_e : ArrayMem}

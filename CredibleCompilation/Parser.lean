@@ -34,7 +34,7 @@ inductive Token where
   deriving Repr, DecidableEq
 
 private def keywords : List String :=
-  ["var", "int", "bool", "if", "else", "while", "skip", "true", "false"]
+  ["var", "array", "int", "bool", "if", "else", "while", "skip", "true", "false"]
 
 private def spanDigits : List Char → List Char × List Char
   | c :: rest => if c.isDigit then let (d, r) := spanDigits rest; (c :: d, r) else ([], c :: rest)
@@ -155,10 +155,20 @@ partial def parseBAtom (toks : List Token) : Except String (SBool × List Token)
   | Token.kw "true" :: rest => .ok (.cmp .eq (.lit 0) (.lit 0), rest)
   | Token.kw "false" :: rest => .ok (.cmp .ne (.lit 0) (.lit 0), rest)
   | Token.lparen :: rest => do
-    let (b, rest') ← parseBOr rest
-    match rest' with
-    | Token.rparen :: rest'' => .ok (b, rest'')
-    | _ => .error "expected ')' after boolean expression"
+    -- Try as boolean expression first
+    match parseBOr rest with
+    | .ok (b, Token.rparen :: rest'') => .ok (b, rest'')
+    | _ =>
+      -- Fall back: parenthesized int expr, then comparison op
+      let (e1, rest') ← parseExpr (Token.lparen :: rest)
+      match rest' with
+      | Token.op "<" :: rest'' =>  do let (e2, r) ← parseExpr rest''; .ok (.cmp .lt e1 e2, r)
+      | Token.op "<=" :: rest'' => do let (e2, r) ← parseExpr rest''; .ok (.cmp .le e1 e2, r)
+      | Token.op "==" :: rest'' => do let (e2, r) ← parseExpr rest''; .ok (.cmp .eq e1 e2, r)
+      | Token.op "!=" :: rest'' => do let (e2, r) ← parseExpr rest''; .ok (.cmp .ne e1 e2, r)
+      | Token.op ">" :: rest'' =>  do let (e2, r) ← parseExpr rest''; .ok (.cmp .lt e2 e1, r)
+      | Token.op ">=" :: rest'' => do let (e2, r) ← parseExpr rest''; .ok (.cmp .le e2 e1, r)
+      | _ => .error "expected ')' after boolean expression"
   | Token.op "!" :: rest => do
     let (b, rest') ← parseBAtom rest
     .ok (.not b, rest')
@@ -223,6 +233,14 @@ partial def parseStmtAtom (toks : List Token) : Except String (Stmt × List Toke
     | Token.kw "true" :: _ | Token.kw "false" :: _ | Token.op "!" :: _ => do
       let (b, rest') ← parseBOr rest
       .ok (.bassign x b, rest')
+    | Token.lparen :: _ => do
+      -- Ambiguous: could be parenthesized int expr or parenthesized bool expr.
+      -- Try boolean first (it handles both since comparison falls through to expr).
+      match parseBOr rest with
+      | .ok (b, rest') => .ok (.bassign x b, rest')
+      | .error _ => do
+        let (e, rest') ← parseExpr rest
+        .ok (.assign x e, rest')
     | _ => do
       let (e, rest') ← parseExpr rest
       match rest' with
@@ -300,12 +318,44 @@ private partial def parseDecls (toks : List Token) : Except String (List (Var ×
   | tok :: _ => .error s!"expected 'var', got {repr tok}"
   | [] => .error "expected 'var'"
 
+/-- Parse a single array declaration: `name[size]`. -/
+private def parseArrayDecl (toks : List Token)
+    : Except String ((ArrayName × Nat) × List Token) :=
+  match toks with
+  | Token.ident name :: Token.lbracket :: Token.num n :: Token.rbracket :: rest =>
+    if n ≥ 0 then .ok ((name, n.toNat), rest)
+    else .error s!"array size must be non-negative, got {n}"
+  | Token.ident _ :: Token.lbracket :: Token.num _ :: tok :: _ =>
+    .error s!"expected ']' after array size, got {repr tok}"
+  | Token.ident _ :: Token.lbracket :: tok :: _ =>
+    .error s!"expected array size (integer), got {repr tok}"
+  | Token.ident _ :: tok :: _ => .error s!"expected '[' after array name, got {repr tok}"
+  | tok :: _ => .error s!"expected array name, got {repr tok}"
+  | [] => .error "expected array declaration"
+
+private partial def parseArrayDecls' (acc : List (ArrayName × Nat)) (toks : List Token)
+    : Except String (List (ArrayName × Nat) × List Token) :=
+  match toks with
+  | Token.comma :: rest => do let (d, rest') ← parseArrayDecl rest; parseArrayDecls' (acc ++ [d]) rest'
+  | Token.semi :: rest => .ok (acc, rest)
+  | tok :: _ => .error s!"expected ',' or ';' after array declaration, got {repr tok}"
+  | [] => .error "expected ';' after array declarations"
+
+private partial def parseArrayDecls (toks : List Token)
+    : Except String (List (ArrayName × Nat) × List Token) :=
+  match toks with
+  | Token.kw "array" :: rest => do
+    let (d, rest') ← parseArrayDecl rest
+    parseArrayDecls' [d] rest'
+  | _ => .ok ([], toks)  -- array declarations are optional
+
 /-- Parse a string into a `Program`. -/
 def parseProgram (input : String) : Except String Program := do
   let toks ← tokenize input
   let (decls, rest) ← parseDecls toks
-  let (body, rest') ← parseStmt rest
-  if rest'.isEmpty then .ok { decls, body }
+  let (arrayDecls, rest'') ← parseArrayDecls rest
+  let (body, rest') ← parseStmt rest''
+  if rest'.isEmpty then .ok { decls, arrayDecls, body }
   else .error s!"unexpected tokens after program"
 
 -- ============================================================

@@ -77,7 +77,7 @@ def transformProg (prog : Prog) (origMap : Array Nat)
       match prog[pc]? with
       | some instr => transformInstr instr skipArr revMap
       | none => .halt
-    | none => .halt).toArray, tyCtx := prog.tyCtx, observable := prog.observable }
+    | none => .halt).toArray, tyCtx := prog.tyCtx, observable := prog.observable, arrayDecls := prog.arrayDecls }
 
 -- ============================================================
 -- § 5. Orig-path builder

@@ -278,8 +278,9 @@ instance : ToString SBool := ⟨SBool.toString⟩
     All variables used in the body must be declared with their type.
     This enables static type checking that guarantees no type errors at runtime. -/
 structure Program where
-  decls : List (Var × VarTy)
-  body  : Stmt
+  decls      : List (Var × VarTy)
+  arrayDecls : List (ArrayName × Nat) := []
+  body       : Stmt
   deriving Repr
 
 namespace Program
@@ -361,7 +362,8 @@ def compile (prog : Program) : Prog :=
   let (body, _) := compileStmt prog.body inits.length 0
   { code := (inits ++ body ++ [TAC.halt]).toArray
     tyCtx := prog.tyCtx
-    observable := prog.decls.map Prod.fst }
+    observable := prog.decls.map Prod.fst
+    arrayDecls := prog.arrayDecls }
 
 
 -- ============================================================

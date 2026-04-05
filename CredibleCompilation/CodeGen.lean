@@ -118,7 +118,8 @@ private partial def genBoolExpr (varMap : List (Var × Nat)) (be : BoolExpr) : L
 -- § 4. Instruction codegen
 -- ============================================================
 
-private def genInstr (varMap : List (Var × Nat)) (pc : Nat) (instr : TAC) : List String :=
+private def genInstr (varMap : List (Var × Nat)) (arrayDecls : List (ArrayName × Nat))
+    (pc : Nat) (instr : TAC) : List String :=
   (s!".L{pc}:" :: List.nil) ++
   match instr with
   | .const v (.int n) =>
@@ -152,7 +153,10 @@ private def genInstr (varMap : List (Var × Nat)) (pc : Nat) (instr : TAC) : Lis
   | .arrLoad x _arr idx =>
     match lookupVar varMap idx, lookupVar varMap x with
     | some offIdx, some offX =>
+      let arrSize := arraySize arrayDecls _arr
       s!"  ldr x1, [sp, #{offIdx}]" ::            -- index → x1
+      s!"  cmp x1, #{arrSize}" ::                   -- bounds check
+      "  b.hs .Lbounds_err" ::                      -- branch if >= size (unsigned)
       s!"  adrp x8, _arr_{_arr}@PAGE" ::           -- array base (page)
       s!"  add x8, x8, _arr_{_arr}@PAGEOFF" ::     -- array base (offset)
       "  ldr x0, [x8, x1, lsl #3]" ::              -- load arr[idx] (x1*8)
@@ -161,7 +165,10 @@ private def genInstr (varMap : List (Var × Nat)) (pc : Nat) (instr : TAC) : Lis
   | .arrStore _arr idx val =>
     match lookupVar varMap idx, lookupVar varMap val with
     | some offIdx, some offVal =>
+      let arrSize := arraySize arrayDecls _arr
       s!"  ldr x1, [sp, #{offIdx}]" ::             -- index → x1
+      s!"  cmp x1, #{arrSize}" ::                    -- bounds check
+      "  b.hs .Lbounds_err" ::                       -- branch if >= size (unsigned)
       s!"  ldr x2, [sp, #{offVal}]" ::             -- value → x2
       s!"  adrp x8, _arr_{_arr}@PAGE" ::           -- array base (page)
       s!"  add x8, x8, _arr_{_arr}@PAGEOFF" ::     -- array base (offset)
@@ -188,7 +195,9 @@ def generateAsm (p : Prog) : Option String :=
       "",
       "_main:",
       s!"  sub sp, sp, #{frameSize}",
-      s!"  stp x29, x30, [sp, #{frameSize - 16}]",
+      -- stp offset must be in [-512, 504]; use separate str for large frames
+      s!"  str x30, [sp, #{frameSize - 8}]",
+      s!"  str x29, [sp, #{frameSize - 16}]",
       s!"  add x29, sp, #{frameSize - 16}",
       "",
       "  // Initialize all variables to 0",
@@ -196,7 +205,7 @@ def generateAsm (p : Prog) : Option String :=
     ]
     let initVars := vars.map fun v => storeVar varMap v "x0"
     let body := (List.range p.code.size).flatMap fun pc =>
-      genInstr varMap pc (p.code.getD pc .halt)
+      genInstr varMap p.arrayDecls pc (p.code.getD pc .halt)
     -- Print observable variables at halt
     -- ARM64 Darwin variadic convention: args after format go on the stack
     let printCode := p.observable.flatMap fun v =>
@@ -219,7 +228,8 @@ def generateAsm (p : Prog) : Option String :=
       ["",
        "  // Exit with code 0",
        "  mov x0, #0",
-       s!"  ldp x29, x30, [sp, #{frameSize - 16}]",
+       s!"  ldr x29, [sp, #{frameSize - 16}]",
+       s!"  ldr x30, [sp, #{frameSize - 8}]",
        s!"  add sp, sp, #{frameSize}",
        "  ret",
        "",
@@ -230,14 +240,23 @@ def generateAsm (p : Prog) : Option String :=
        "  mov x0, #1",
        "  bl _exit",
        "",
+       ".Lbounds_err:",
+       "  adrp x0, .Lbounds_msg@PAGE",
+       "  add x0, x0, .Lbounds_msg@PAGEOFF",
+       "  bl _printf",
+       "  mov x0, #1",
+       "  bl _exit",
+       "",
        ".section __TEXT,__cstring",
        ".Lfmt:",
        "  .asciz \"%s = %ld\\n\"",
        ".Ldiv_msg:",
-       "  .asciz \"error: division by zero\\n\""] ++
+       "  .asciz \"error: division by zero\\n\"",
+       ".Lbounds_msg:",
+       "  .asciz \"error: array index out of bounds\\n\""] ++
       p.observable.map fun v =>
        s!".Lname_{v}:\n  .asciz \"{v}\""
-    -- Emit .data section for each array (1024 × 8 = 8192 bytes, zero-initialized)
+    -- Emit .data section for each array (size × 8 bytes, zero-initialized)
     let arrays := collectArrays p
     let arrayData := if arrays.isEmpty then [] else
       ["", ".section __DATA,__data"] ++

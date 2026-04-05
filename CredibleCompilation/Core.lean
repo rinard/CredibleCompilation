@@ -163,6 +163,13 @@ theorem read_write_ne_idx (am : ArrayMem) (arr : ArrayName) (idx idx' : Nat)
 
 end ArrayMem
 
+/-- Look up an array's declared size.  Returns 0 for undeclared arrays
+    (meaning all accesses are out-of-bounds). -/
+def arraySize (decls : List (ArrayName × Nat)) (arr : ArrayName) : Nat :=
+  match decls.find? (fun p => p.1 == arr) with
+  | some (_, n) => n
+  | none => 0
+
 -- ============================================================
 -- § 2. Binary operators
 -- ============================================================

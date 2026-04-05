@@ -146,7 +146,7 @@ def transformProg (prog : Prog) (avails : Array (Option AvailSet)) : Prog :=
     | some instr, some (some av) => transformInstr av instr
     | some instr, _              => instr
     | none, _                    => .halt
-  { code := arr.toArray, tyCtx := prog.tyCtx, observable := prog.observable }
+  { code := arr.toArray, tyCtx := prog.tyCtx, observable := prog.observable, arrayDecls := prog.arrayDecls }
 
 -- ============================================================
 -- § 5. Certificate generation

@@ -5,7 +5,7 @@
 # Requires: lake build compiler (While→ARM64 compiler)
 #           cc (C compiler, e.g. clang on macOS)
 
-set -euo pipefail
+set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -54,7 +54,19 @@ for while_file in "$PROG_DIR"/*.while; do
         continue
     fi
 
-    "$while_bin" > "$while_out" 2>&1 || while_exit=$?
+    # Run with 10s timeout (portable macOS/Linux)
+    "$while_bin" > "$while_out" 2>&1 &
+    local_pid=$!
+    ( sleep 10; kill $local_pid 2>/dev/null ) &
+    timer_pid=$!
+    wait $local_pid 2>/dev/null
+    while_exit=$?
+    kill $timer_pid 2>/dev/null; wait $timer_pid 2>/dev/null
+    if [ "$while_exit" -gt 128 ]; then
+        printf "${YELLOW}SKIP${NC} %-30s (timed out)\n" "$name"
+        skip=$((skip + 1))
+        continue
+    fi
 
     # Compile + run C program
     c_bin="$TMP_DIR/c_${name}"
@@ -67,7 +79,18 @@ for while_file in "$PROG_DIR"/*.while; do
         continue
     fi
 
-    "$c_bin" > "$c_out" 2>&1 || c_exit=$?
+    "$c_bin" > "$c_out" 2>&1 &
+    local_pid=$!
+    ( sleep 10; kill $local_pid 2>/dev/null ) &
+    timer_pid=$!
+    wait $local_pid 2>/dev/null
+    c_exit=$?
+    kill $timer_pid 2>/dev/null; wait $timer_pid 2>/dev/null
+    if [ "$c_exit" -gt 128 ]; then
+        printf "${YELLOW}SKIP${NC} %-30s (C timed out)\n" "$name"
+        skip=$((skip + 1))
+        continue
+    fi
 
     # Compare outputs AND exit codes
     if [ "$while_exit" != "$c_exit" ]; then

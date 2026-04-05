@@ -51,6 +51,7 @@ structure Prog where
   code       : Array TAC
   tyCtx      : TyCtx
   observable : List Var
+  arrayDecls : List (ArrayName × Nat) := []
 
 instance : Repr Prog where
   reprPrec p n := reprPrec p.code n
@@ -59,6 +60,10 @@ instance : GetElem Prog Nat TAC (fun p i => i < p.code.size) where
   getElem p i h := p.code[i]
 
 def Prog.size (p : Prog) : Nat := p.code.size
+
+/-- Look up the declared size of an array in this program. -/
+nonrec def Prog.arraySize (p : Prog) (arr : ArrayName) : Nat :=
+  arraySize p.arrayDecls arr
 
 /-- A program has no array instructions. -/
 def NoArrayInstrs (p : Prog) : Prop :=
@@ -106,7 +111,7 @@ theorem Prog.getElem?_eq_some_iff {p : Prog} {i : Nat} {v : TAC} :
 
 /-- Construct a Prog from just an array of instructions (default empty type context and observables). -/
 def Prog.ofCode (code : Array TAC) : Prog :=
-  ⟨code, fun _ => .int, []⟩
+  ⟨code, fun _ => .int, [], []⟩
 
 -- ============================================================
 -- § 4. Machine configurations
@@ -174,12 +179,20 @@ inductive Step (p : Prog) : Cfg → Cfg → Prop where
       Step p (.run pc σ am) (.typeError σ am)
 
   | arrLoad : p[pc]? = some (.arrLoad x arr idx) →
-      σ idx = .int idxVal →
+      σ idx = .int idxVal → idxVal.toNat < p.arraySize arr →
       Step p (.run pc σ am) (.run (pc + 1) (σ[x ↦ .int (am.read arr idxVal.toNat)]) am)
 
   | arrStore : p[pc]? = some (.arrStore arr idx val) →
-      σ idx = .int idxVal → σ val = .int v →
+      σ idx = .int idxVal → σ val = .int v → idxVal.toNat < p.arraySize arr →
       Step p (.run pc σ am) (.run (pc + 1) σ (am.write arr idxVal.toNat v))
+
+  | arrLoad_boundsError : p[pc]? = some (.arrLoad x arr idx) →
+      σ idx = .int idxVal → ¬ (idxVal.toNat < p.arraySize arr) →
+      Step p (.run pc σ am) (.error σ am)
+
+  | arrStore_boundsError : p[pc]? = some (.arrStore arr idx val) →
+      σ idx = .int idxVal → σ val = .int v → ¬ (idxVal.toNat < p.arraySize arr) →
+      Step p (.run pc σ am) (.error σ am)
 
   | arrLoad_typeError : p[pc]? = some (.arrLoad x arr idx) →
       (σ idx).typeOf ≠ .int →
@@ -215,8 +228,8 @@ theorem Step.mem_successors {p : Prog} {pc pc' : Nat} {σ σ' : Store} {am am' :
   | goto h         => exact ⟨_, h, by simp [TAC.successors]⟩
   | iftrue h _     => exact ⟨_, h, by simp [TAC.successors]⟩
   | iffall h _     => exact ⟨_, h, by simp [TAC.successors]⟩
-  | arrLoad h _    => exact ⟨_, h, by simp [TAC.successors]⟩
-  | arrStore h _ _ => exact ⟨_, h, by simp [TAC.successors]⟩
+  | arrLoad h _ _    => exact ⟨_, h, by simp [TAC.successors]⟩
+  | arrStore h _ _ _ => exact ⟨_, h, by simp [TAC.successors]⟩
 
 /-- A step from an in-bounds PC to a run-config stays in-bounds.
     This is the Prop-level condition for totality. -/
@@ -287,7 +300,7 @@ def haltsWithResult (p : Prog) (pc : Nat) (σ σ' : Store) (am am' : ArrayMem) :
 theorem Step.deterministic {p : Prog} {c c₁ c₂ : Cfg}
     (h₁ : p ⊩ c ⟶ c₁) (h₂ : p ⊩ c ⟶ c₂) : c₁ = c₂ := by
   cases h₁ <;> cases h₂ <;> simp_all [Value.int.injEq, Value.typeOf] <;>
-    (first | rfl | contradiction)
+    (first | rfl | contradiction | omega)
 
 /-- A halted configuration admits no further steps. -/
 theorem Step.no_step_from_halt {p : Prog} {σ : Store} {am : ArrayMem} {c : Cfg} :
@@ -356,10 +369,14 @@ theorem Step.store_congr {p : Prog} {pc : Nat} {σ τ : Store} {am : ArrayMem} {
     cases hne with
     | inl hl => left; simp [Value.typeOf] at hl ⊢; rwa [← hagree]
     | inr hr => right; simp [Value.typeOf] at hr ⊢; rwa [← hagree]
-  | arrLoad h hidx =>
-    exact ⟨_, .arrLoad h (by rw [← hagree]; exact hidx)⟩
-  | arrStore h hidx hval =>
-    exact ⟨_, .arrStore h (by rw [← hagree]; exact hidx) (by rw [← hagree]; exact hval)⟩
+  | arrLoad h hidx hb =>
+    exact ⟨_, .arrLoad h (by rw [← hagree]; exact hidx) hb⟩
+  | arrStore h hidx hval hb =>
+    exact ⟨_, .arrStore h (by rw [← hagree]; exact hidx) (by rw [← hagree]; exact hval) hb⟩
+  | arrLoad_boundsError h hidx hb =>
+    exact ⟨_, .arrLoad_boundsError h (by rw [← hagree]; exact hidx) hb⟩
+  | arrStore_boundsError h hidx hval hb =>
+    exact ⟨_, .arrStore_boundsError h (by rw [← hagree]; exact hidx) (by rw [← hagree]; exact hval) hb⟩
   | arrLoad_typeError h hne =>
     exact ⟨_, .arrLoad_typeError h (by simp [Value.typeOf] at hne ⊢; rwa [← hagree])⟩
   | arrStore_typeError h hne =>

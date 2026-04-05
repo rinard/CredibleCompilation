@@ -79,13 +79,17 @@ theorem Step.progress (p : Prog) (pc : Nat) (σ : Store) (am : ArrayMem) (Γ : T
     rw [hp] at hwti; cases hwti with
     | arrLoad _ hidx =>
       obtain ⟨iv, hiv⟩ := Value.int_of_typeOf_int (by rw [hts idx]; exact hidx)
-      exact ⟨_, .arrLoad (hp ▸ hinstr) hiv⟩
+      by_cases hb : iv.toNat < p.arraySize arr
+      · exact ⟨_, .arrLoad (hp ▸ hinstr) hiv hb⟩
+      · exact ⟨_, .arrLoad_boundsError (hp ▸ hinstr) hiv hb⟩
   | .arrStore arr idx val =>
     rw [hp] at hwti; cases hwti with
     | arrStore hidx hval =>
       obtain ⟨iv, hiv⟩ := Value.int_of_typeOf_int (by rw [hts idx]; exact hidx)
       obtain ⟨v, hv⟩ := Value.int_of_typeOf_int (by rw [hts val]; exact hval)
-      exact ⟨_, .arrStore (hp ▸ hinstr) hiv hv⟩
+      by_cases hb : iv.toNat < p.arraySize arr
+      · exact ⟨_, .arrStore (hp ▸ hinstr) hiv hv hb⟩
+      · exact ⟨_, .arrStore_boundsError (hp ▸ hinstr) hiv hv hb⟩
 
 /-- **Type safety (single step)**: a well-typed program with a well-typed store
     never steps to a type-error configuration. -/
@@ -149,14 +153,18 @@ theorem Step.progress_untyped (p : Prog) (pc : Nat) (σ : Store) (am : ArrayMem)
   | .arrLoad x arr idx =>
     by_cases hidx : (σ idx).typeOf = .int
     · obtain ⟨iv, hiv⟩ := Value.int_of_typeOf_int hidx
-      exact ⟨_, .arrLoad (hp ▸ hinstr) hiv⟩
+      by_cases hb : iv.toNat < p.arraySize arr
+      · exact ⟨_, .arrLoad (hp ▸ hinstr) hiv hb⟩
+      · exact ⟨_, .arrLoad_boundsError (hp ▸ hinstr) hiv hb⟩
     · exact ⟨_, .arrLoad_typeError (hp ▸ hinstr) hidx⟩
   | .arrStore arr idx val =>
     by_cases hidx : (σ idx).typeOf = .int
     · by_cases hval : (σ val).typeOf = .int
       · obtain ⟨iv, hiv⟩ := Value.int_of_typeOf_int hidx
         obtain ⟨v, hv⟩ := Value.int_of_typeOf_int hval
-        exact ⟨_, .arrStore (hp ▸ hinstr) hiv hv⟩
+        by_cases hb : iv.toNat < p.arraySize arr
+        · exact ⟨_, .arrStore (hp ▸ hinstr) hiv hv hb⟩
+        · exact ⟨_, .arrStore_boundsError (hp ▸ hinstr) hiv hv hb⟩
       · exact ⟨_, .arrStore_typeError (hp ▸ hinstr) (.inr hval)⟩
     · exact ⟨_, .arrStore_typeError (hp ▸ hinstr) (.inl hidx)⟩
 
@@ -276,12 +284,12 @@ theorem type_preservation {Γ : TyCtx} {p : Prog} {pc pc' : Nat} {σ σ' : Store
   | goto _ => exact hts
   | iftrue _ _ => exact hts
   | iffall _ _ => exact hts
-  | arrLoad h _ =>
+  | arrLoad h _ _ =>
     have := instr_eq_of_lookup hpc h
     rw [this] at hwti
     match hwti with
     | .arrLoad hx _ => exact TypedStore.update_typed hts (by simp [Value.typeOf]; exact hx.symm)
-  | arrStore _ _ _ => exact hts
+  | arrStore _ _ _ _ => exact hts
 
 
 /-- **Type safety (multi-step)**: a well-typed, step-closed program never
@@ -340,14 +348,20 @@ theorem type_safety {p : Prog} {σ₀ σ' : Store} {am₀ am' : ArrayMem} {Γ : 
       exact ih _ _ am rfl hc'
         (hclosed.2 pc _ σ _ am am hpc (Step.iffall (am := am) h heq))
         (type_preservation (am := am) (am' := am) hwtp hts hpc (Step.iffall (am := am) h heq))
-    | arrLoad h hidx =>
+    | arrLoad h hidx hb =>
       exact ih _ _ am rfl hc'
-        (hclosed.2 pc _ σ _ am am hpc (Step.arrLoad (am := am) h hidx))
-        (type_preservation (am := am) (am' := am) hwtp hts hpc (Step.arrLoad (am := am) h hidx))
-    | arrStore h hidx hv =>
+        (hclosed.2 pc _ σ _ am am hpc (Step.arrLoad (am := am) h hidx hb))
+        (type_preservation (am := am) (am' := am) hwtp hts hpc (Step.arrLoad (am := am) h hidx hb))
+    | arrStore h hidx hv hb =>
       exact ih _ _ _ rfl hc'
-        (hclosed.2 pc _ σ _ am _ hpc (Step.arrStore (am := am) h hidx hv))
-        (type_preservation (am := am) hwtp hts hpc (Step.arrStore (am := am) h hidx hv))
+        (hclosed.2 pc _ σ _ am _ hpc (Step.arrStore (am := am) h hidx hv hb))
+        (type_preservation (am := am) hwtp hts hpc (Step.arrStore (am := am) h hidx hv hb))
+    | arrLoad_boundsError _ _ _ => cases rest with
+      | refl => exact Cfg.noConfusion hc'
+      | step s _ => exact Step.no_step_from_error s
+    | arrStore_boundsError _ _ _ _ => cases rest with
+      | refl => exact Cfg.noConfusion hc'
+      | step s _ => exact Step.no_step_from_error s
     | arrLoad_typeError hinstr hne =>
       cases rest with
       | refl => exact Step.no_typeError_of_wellTyped (am := am) (am' := am) hpc hwtp hts

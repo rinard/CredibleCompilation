@@ -584,6 +584,35 @@ def checkDivPreservationExec (cert : ECertificate) : Bool :=
       | _ => false
     | _ => true
 
+/-- **Condition 10 (error preservation for array bounds)**: for every
+    `arrLoad`/`arrStore` in the transformed program, the original at the
+    mapped PC has a matching array instruction on the same array with the
+    same index (via the expression relation).  Combined with equal array
+    sizes, this ensures OOB errors on the transformed side also occur on
+    the original side. -/
+def checkBoundsPreservationExec (cert : ECertificate) : Bool :=
+  (List.range cert.trans.size).all fun pc_t =>
+    match cert.trans[pc_t]? with
+    | some (.arrLoad _ arr idx) =>
+      let ic := cert.instrCerts.getD pc_t default
+      match cert.orig[ic.pc_orig]? with
+      | some (.arrLoad _ arr' idx') =>
+        arr == arr' &&
+        ssGet (buildSubstMap ic.rel) idx == .var idx'
+      | _ => false
+    | some (.arrStore arr idx _) =>
+      let ic := cert.instrCerts.getD pc_t default
+      match cert.orig[ic.pc_orig]? with
+      | some (.arrStore arr' idx' _) =>
+        arr == arr' &&
+        ssGet (buildSubstMap ic.rel) idx == .var idx'
+      | _ => false
+    | _ => true
+
+/-- **Condition 11**: Both programs declare the same array sizes. -/
+def checkArraySizesExec (cert : ECertificate) : Bool :=
+  cert.orig.arrayDecls == cert.trans.arrayDecls
+
 /-- Check that a program contains no array instructions (arrLoad/arrStore). -/
 def checkNoArrayInstrs (p : Prog) : Bool :=
   p.code.all TAC.isScalar
@@ -618,6 +647,8 @@ def checkCertificateExec (cert : ECertificate) : Bool :=
   checkHaltObservableExec cert &&
   checkNonterminationExec cert &&
   checkDivPreservationExec cert &&
+  checkBoundsPreservationExec cert &&
+  checkArraySizesExec cert &&
   checkSuccessorsInBounds cert
 
 /-- Verbose check: returns the result of each individual condition. -/
@@ -636,6 +667,8 @@ def checkCertificateVerboseExec (cert : ECertificate) : List (String × Bool) :=
     ("halt_observable",       checkHaltObservableExec cert),
     ("nontermination",        checkNonterminationExec cert),
     ("div_preservation",      checkDivPreservationExec cert),
+    ("bounds_preservation",   checkBoundsPreservationExec cert),
+    ("array_sizes_equal",     checkArraySizesExec cert),
     ("successors_in_bounds",  checkSuccessorsInBounds cert) ]
 
 /-- Observable output of a configuration with respect to an executable certificate.

@@ -953,15 +953,15 @@ theorem genInstr_correct (prog : ArmProg) (vm : VarMap) (pcMap : Nat → Nat)
     exact ⟨s, .refl, trivial⟩
   | binop_typeError hinstr hne =>
     exact absurd (Step.binop_typeError (am := am) hinstr hne) (Step.no_typeError_of_wellTyped hPC_bound hWT hTS)
-  | arrLoad hinstr hidx =>
+  | arrLoad hinstr hidx hbounds =>
     -- TAC: x := arr[idx]  where σ idx = .int idxVal
     -- ARM: ldr x1 offIdx; arrLd x0 arr x1; str x0 offX
-    rename_i x arr idx idxVal
-    have heq : instr = .arrLoad x arr idx := Option.some.inj (hInstr.symm.trans hinstr)
+    rename_i arrName x idx idxVal
+    have heq : instr = .arrLoad x arrName idx := Option.some.inj (hInstr.symm.trans hinstr)
     obtain ⟨offIdx, hIdx⟩ := hVarMap idx
     obtain ⟨offX, hX⟩ := hVarMap x
-    have hformal : formalGenInstr vm pcMap (.arrLoad x arr idx) haltLabel divLabel =
-        (.ldr .x1 offIdx :: .arrLd .x0 arr .x1 :: .str .x0 offX :: List.nil) := by
+    have hformal : formalGenInstr vm pcMap (.arrLoad x arrName idx) haltLabel divLabel =
+        (.ldr .x1 offIdx :: .arrLd .x0 arrName .x1 :: .str .x0 offX :: List.nil) := by
       show (match vm.lookup idx, vm.lookup x with
         | some offIdx, some offX => _ | _, _ => _) = _
       rw [hIdx, hX]
@@ -971,7 +971,7 @@ theorem genInstr_correct (prog : ArmProg) (vm : VarMap) (pcMap : Nat → Nat)
     rw [← hPcRel] at h0 h1 h2
     have hStackIdx := hStateRel idx offIdx hIdx
     rw [hidx] at hStackIdx; simp [Value.encode] at hStackIdx
-    exact ⟨_, .step (.ldr .x1 offIdx h0) (.step (.arrLd .x0 arr .x1 h1)
+    exact ⟨_, .step (.ldr .x1 offIdx h0) (.step (.arrLd .x0 arrName .x1 h1)
             (.single (.str .x0 offX h2))),
       by intro v off hv
          simp only [ArmState.setStack, ArmState.setReg, ArmState.nextPC,
@@ -989,15 +989,15 @@ theorem genInstr_correct (prog : ArmProg) (vm : VarMap) (pcMap : Nat → Nat)
          show s.pc + 3 = pcMap (pc + 1)
          have := hPcNext _ _ _ rfl; simp at this; rw [this, hPcRel],
       by simp [ArmState.setStack, ArmState.setReg, ArmState.nextPC, hArrayMem]⟩
-  | arrStore hinstr hidx hval =>
+  | arrStore hinstr hidx hval hbounds =>
     -- TAC: arr[idx] := val  where σ idx = .int idxVal, σ val = .int v
     -- ARM: ldr x1 offIdx; ldr x2 offVal; arrSt arr x1 x2
-    rename_i arr idx val idxVal v
-    have heq : instr = .arrStore arr idx val := Option.some.inj (hInstr.symm.trans hinstr)
+    rename_i arrName idx val idxVal v
+    have heq : instr = .arrStore arrName idx val := Option.some.inj (hInstr.symm.trans hinstr)
     obtain ⟨offIdx, hIdx⟩ := hVarMap idx
     obtain ⟨offVal, hVal⟩ := hVarMap val
-    have hformal : formalGenInstr vm pcMap (.arrStore arr idx val) haltLabel divLabel =
-        (.ldr .x1 offIdx :: .ldr .x2 offVal :: .arrSt arr .x1 .x2 :: List.nil) := by
+    have hformal : formalGenInstr vm pcMap (.arrStore arrName idx val) haltLabel divLabel =
+        (.ldr .x1 offIdx :: .ldr .x2 offVal :: .arrSt arrName .x1 .x2 :: List.nil) := by
       show (match vm.lookup idx, vm.lookup val with
         | some offIdx, some offVal => _ | _, _ => _) = _
       rw [hIdx, hVal]
@@ -1010,7 +1010,7 @@ theorem genInstr_correct (prog : ArmProg) (vm : VarMap) (pcMap : Nat → Nat)
     have hStackVal := hStateRel val offVal hVal
     rw [hval] at hStackVal; simp [Value.encode] at hStackVal
     exact ⟨_, .step (.ldr .x1 offIdx h0) (.step (.ldr .x2 offVal h1)
-            (.single (.arrSt arr .x1 .x2 h2))),
+            (.single (.arrSt arrName .x1 .x2 h2))),
       by intro w off hv
          simp only [ArmState.setArrayMem_stack, ArmState.setReg_stack, ArmState.nextPC_stack]
          exact hStateRel w off hv,
@@ -1022,6 +1022,10 @@ theorem genInstr_correct (prog : ArmProg) (vm : VarMap) (pcMap : Nat → Nat)
                     ArmReg.beq_self, ArmReg.x1_ne_x2, ArmReg.x2_ne_x1,
                     ite_true, ite_false, Bool.false_eq_true]
          rw [hStackIdx, hStackVal, hArrayMem]⟩
+  | arrLoad_boundsError hinstr hidx hbounds =>
+    exact ⟨s, .refl, trivial⟩
+  | arrStore_boundsError hinstr hidx hval hbounds =>
+    exact ⟨s, .refl, trivial⟩
   | arrLoad_typeError hinstr hne =>
     exact absurd (Step.arrLoad_typeError (am := am) hinstr hne) (Step.no_typeError_of_wellTyped hPC_bound hWT hTS)
   | arrStore_typeError hinstr hne =>
