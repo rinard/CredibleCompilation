@@ -242,7 +242,7 @@ def SExpr.toString : SExpr → String
   | .lit n => s!"{n}"
   | .var x => x
   | .bin op a b =>
-    let opStr := match op with | .add => "+" | .sub => "-" | .mul => "*" | .div => "/"
+    let opStr := match op with | .add => "+" | .sub => "-" | .mul => "*" | .div => "/" | .mod => "%"
     s!"({a.toString} {opStr} {b.toString})"
   | .arrRead arr idx => s!"{arr}[{idx.toString}]"
 

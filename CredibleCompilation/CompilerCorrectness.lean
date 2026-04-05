@@ -204,6 +204,7 @@ def SExpr.divSafe (σ : Store) (am : ArrayMem) : SExpr → Prop
   | .lit _ => True
   | .var _ => True
   | .bin .div a b => a.divSafe σ am ∧ b.divSafe σ am ∧ b.eval σ am ≠ 0
+  | .bin .mod a b => a.divSafe σ am ∧ b.divSafe σ am ∧ b.eval σ am ≠ 0
   | .bin _ a b => a.divSafe σ am ∧ b.divSafe σ am
   | .arrRead _ idx => idx.divSafe σ am
 

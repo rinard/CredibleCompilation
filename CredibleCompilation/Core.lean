@@ -167,18 +167,20 @@ end ArrayMem
 -- § 2. Binary operators
 -- ============================================================
 
-inductive BinOp | add | sub | mul | div deriving Repr, DecidableEq
+inductive BinOp | add | sub | mul | div | mod deriving Repr, DecidableEq
 
 def BinOp.eval : BinOp → BitVec 64 → BitVec 64 → BitVec 64
   | .add, a, b => a + b
   | .sub, a, b => a - b
   | .mul, a, b => a * b
   | .div, a, b => BitVec.sdiv a b
+  | .mod, a, b => BitVec.srem a b
 
 /-- An operation is safe if it will not cause the program to get stuck.
-    Only `div` can fault — when the divisor is zero. -/
+    Only `div` and `mod` can fault — when the divisor is zero. -/
 def BinOp.safe : BinOp → BitVec 64 → BitVec 64 → Prop
   | .div, _, b => b ≠ 0
+  | .mod, _, b => b ≠ 0
   | _, _, _    => True
 
 instance {op : BinOp} {a b : BitVec 64} : Decidable (op.safe a b) := by

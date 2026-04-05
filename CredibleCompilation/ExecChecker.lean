@@ -438,6 +438,10 @@ def checkBinopSafe (instr : TAC) (ss : SymStore) (inv : EInv) : Bool :=
     match (ssGet ss z).simplify inv with
     | .lit n => n != 0
     | _ => false
+  | .binop _ .mod _ z =>
+    match (ssGet ss z).simplify inv with
+    | .lit n => n != 0
+    | _ => false
   | _ => true
 
 /-- Check that an arrLoad/arrStore instruction's index doesn't alias any existing SAM entry

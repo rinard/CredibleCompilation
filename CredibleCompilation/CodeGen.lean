@@ -48,6 +48,15 @@ private def buildVarMap (vars : List Var) : List (Var × Nat) :=
 private def lookupVar (varMap : List (Var × Nat)) (v : Var) : Option Nat :=
   varMap.find? (fun (x, _) => x == v) |>.map Prod.snd
 
+/-- Collect all distinct array names used in arrLoad/arrStore instructions. -/
+private def collectArrays (p : Prog) : List String :=
+  p.code.foldl (fun acc instr =>
+    match instr with
+    | .arrLoad _ arr _   => if acc.contains arr then acc else acc ++ [arr]
+    | .arrStore arr _ _  => if acc.contains arr then acc else acc ++ [arr]
+    | _                  => acc
+  ) ([] : List String)
+
 -- ============================================================
 -- § 2. Assembly emission helpers
 -- ============================================================
@@ -120,17 +129,18 @@ private def genInstr (varMap : List (Var × Nat)) (pc : Nat) (instr : TAC) : Lis
     (loadVar varMap src "x0") :: (storeVar varMap dst "x0") :: List.nil
   | .binop dst op lv rv =>
     let opInstr := match op with
-      | .add => "  add x0, x1, x2"
-      | .sub => "  sub x0, x1, x2"
-      | .mul => "  mul x0, x1, x2"
-      | .div => "  sdiv x0, x1, x2"
-    if op == .div then
-      (loadVar varMap rv "x2") :: "  cbz x2, .Ldiv_by_zero" ::
-      (loadVar varMap lv "x1") :: (loadVar varMap rv "x2") ::
-      opInstr :: (storeVar varMap dst "x0") :: List.nil
+      | .add => ["  add x0, x1, x2"]
+      | .sub => ["  sub x0, x1, x2"]
+      | .mul => ["  mul x0, x1, x2"]
+      | .div => ["  sdiv x0, x1, x2"]
+      | .mod => ["  sdiv x3, x1, x2", "  msub x0, x3, x2, x1"]  -- x0 = x1 - (x1/x2)*x2
+    if op == .div || op == .mod then
+      [(loadVar varMap rv "x2"), "  cbz x2, .Ldiv_by_zero",
+       (loadVar varMap lv "x1"), (loadVar varMap rv "x2")] ++
+      opInstr ++ [storeVar varMap dst "x0"]
     else
-      (loadVar varMap lv "x1") :: (loadVar varMap rv "x2") ::
-      opInstr :: (storeVar varMap dst "x0") :: List.nil
+      [(loadVar varMap lv "x1"), (loadVar varMap rv "x2")] ++
+      opInstr ++ [storeVar varMap dst "x0"]
   | .boolop dst be =>
     genBoolExpr varMap be ++ ((storeVar varMap dst "x0") :: List.nil)
   | .goto l =>
@@ -142,16 +152,20 @@ private def genInstr (varMap : List (Var × Nat)) (pc : Nat) (instr : TAC) : Lis
   | .arrLoad x _arr idx =>
     match lookupVar varMap idx, lookupVar varMap x with
     | some offIdx, some offX =>
-      s!"  ldr x1, [sp, #{offIdx}]" ::
-      s!"  arrLd x0, {_arr}, x1" ::
+      s!"  ldr x1, [sp, #{offIdx}]" ::            -- index → x1
+      s!"  adrp x8, _arr_{_arr}@PAGE" ::           -- array base (page)
+      s!"  add x8, x8, _arr_{_arr}@PAGEOFF" ::     -- array base (offset)
+      "  ldr x0, [x8, x1, lsl #3]" ::              -- load arr[idx] (x1*8)
       s!"  str x0, [sp, #{offX}]" :: List.nil
     | _, _ => "  // ERROR: arrLoad unknown variable" :: List.nil
   | .arrStore _arr idx val =>
     match lookupVar varMap idx, lookupVar varMap val with
     | some offIdx, some offVal =>
-      s!"  ldr x1, [sp, #{offIdx}]" ::
-      s!"  ldr x2, [sp, #{offVal}]" ::
-      s!"  arrSt {_arr}, x1, x2" :: List.nil
+      s!"  ldr x1, [sp, #{offIdx}]" ::             -- index → x1
+      s!"  ldr x2, [sp, #{offVal}]" ::             -- value → x2
+      s!"  adrp x8, _arr_{_arr}@PAGE" ::           -- array base (page)
+      s!"  add x8, x8, _arr_{_arr}@PAGEOFF" ::     -- array base (offset)
+      "  str x2, [x8, x1, lsl #3]" :: List.nil     -- store arr[idx] = val
     | _, _ => "  // ERROR: arrStore unknown variable" :: List.nil
 
 -- ============================================================
@@ -223,7 +237,16 @@ def generateAsm (p : Prog) : Option String :=
        "  .asciz \"error: division by zero\\n\""] ++
       p.observable.map fun v =>
        s!".Lname_{v}:\n  .asciz \"{v}\""
-    some (emit (header ++ [""] ++ initVars ++ [""] ++ body ++ footer ++ [""]))
+    -- Emit .data section for each array (1024 × 8 = 8192 bytes, zero-initialized)
+    let arrays := collectArrays p
+    let arrayData := if arrays.isEmpty then [] else
+      ["", ".section __DATA,__data"] ++
+      arrays.flatMap fun arr =>
+        [s!".global _arr_{arr}",
+         ".align 3",
+         s!"_arr_{arr}:",
+         "  .space 8192"]
+    some (emit (header ++ [""] ++ initVars ++ [""] ++ body ++ footer ++ arrayData ++ [""]))
 
 -- ============================================================
 -- § 6. End-to-end: parse → compile → codegen
@@ -271,6 +294,16 @@ def assembleAndRun (asm : String) (asmFile binFile : String := "/tmp/tac_out.s")
   var x : int, y : int;
   x := 3;
   y := x + 4
+"
+
+-- Generate assembly for an array program
+#eval! compileToAsm "
+  var i : int, x : int;
+  arr[0] := 42;
+  i := 1;
+  arr[i] := 100;
+  i := 0;
+  x := arr[i]
 "
 
 -- Generate assembly for sum 1..n (n initialized to 0, so sum = 0)

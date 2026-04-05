@@ -64,6 +64,7 @@ where
       else if c == '+' then go rest (.op "+" :: acc)
       else if c == '*' then go rest (.op "*" :: acc)
       else if c == '/' then go rest (.op "/" :: acc)
+      else if c == '%' then go rest (.op "%" :: acc)
       else if c == '-' then go rest (.op "-" :: acc)
       else if c == ':' then
         match rest with
@@ -73,6 +74,10 @@ where
         match rest with
         | '=' :: rest' => go rest' (.op "<=" :: acc)
         | _ => go rest (.op "<" :: acc)
+      else if c == '>' then
+        match rest with
+        | '=' :: rest' => go rest' (.op ">=" :: acc)
+        | _ => go rest (.op ">" :: acc)
       else if c == '=' then
         match rest with
         | '=' :: rest' => go rest' (.op "==" :: acc)
@@ -120,6 +125,7 @@ partial def parseAtom (toks : List Token) : Except String (SExpr × List Token) 
     match rest' with
     | Token.rparen :: rest'' => .ok (e, rest'')
     | _ => .error "expected ')'"
+  | Token.op "-" :: Token.num n :: rest => .ok (.lit (-n), rest)
   | tok :: _ => .error s!"expected expression, got {repr tok}"
   | [] => .error "expected expression, got end of input"
 
@@ -131,6 +137,7 @@ partial def parseTerm' (lhs : SExpr) (toks : List Token) : Except String (SExpr 
   match toks with
   | Token.op "*" :: rest => do let (rhs, rest') ← parseAtom rest; parseTerm' (.bin .mul lhs rhs) rest'
   | Token.op "/" :: rest => do let (rhs, rest') ← parseAtom rest; parseTerm' (.bin .div lhs rhs) rest'
+  | Token.op "%" :: rest => do let (rhs, rest') ← parseAtom rest; parseTerm' (.bin .mod lhs rhs) rest'
   | _ => .ok (lhs, toks)
 
 partial def parseExpr (toks : List Token) : Except String (SExpr × List Token) := do
@@ -162,6 +169,8 @@ partial def parseBAtom (toks : List Token) : Except String (SBool × List Token)
     | Token.op "<=" :: rest' => do let (e2, r) ← parseExpr rest'; .ok (.cmp .le e1 e2, r)
     | Token.op "==" :: rest' => do let (e2, r) ← parseExpr rest'; .ok (.cmp .eq e1 e2, r)
     | Token.op "!=" :: rest' => do let (e2, r) ← parseExpr rest'; .ok (.cmp .ne e1 e2, r)
+    | Token.op ">" :: rest' =>  do let (e2, r) ← parseExpr rest'; .ok (.cmp .lt e2 e1, r)
+    | Token.op ">=" :: rest' => do let (e2, r) ← parseExpr rest'; .ok (.cmp .le e2 e1, r)
     | _ =>
       match e1 with
       | .var x => .ok (.bvar x, rest)
@@ -217,7 +226,8 @@ partial def parseStmtAtom (toks : List Token) : Except String (Stmt × List Toke
     | _ => do
       let (e, rest') ← parseExpr rest
       match rest' with
-      | Token.op "<" :: _ | Token.op "<=" :: _ | Token.op "==" :: _ | Token.op "!=" :: _
+      | Token.op "<" :: _ | Token.op "<=" :: _ | Token.op ">" :: _ | Token.op ">=" :: _
+      | Token.op "==" :: _ | Token.op "!=" :: _
       | Token.op "&&" :: _ | Token.op "||" :: _ => do
         let (b, rest'') ← parseBOr rest
         .ok (.bassign x b, rest'')

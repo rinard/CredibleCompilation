@@ -279,15 +279,16 @@ def formalGenInstr (vm : VarMap) (pcMap : Nat → Nat) (instr : TAC)
     match vm.lookup lv, vm.lookup rv, vm.lookup dst with
     | some offL, some offR, some offD =>
       let opInstr := match op with
-        | .add => ArmInstr.addR .x0 .x1 .x2
-        | .sub => .subR .x0 .x1 .x2
-        | .mul => .mulR .x0 .x1 .x2
-        | .div => .sdivR .x0 .x1 .x2
-      if op == .div then
+        | .add => [ArmInstr.addR .x0 .x1 .x2]
+        | .sub => [.subR .x0 .x1 .x2]
+        | .mul => [.mulR .x0 .x1 .x2]
+        | .div => [.sdivR .x0 .x1 .x2]
+        | .mod => [.sdivR .x0 .x1 .x2, .mulR .x0 .x0 .x2, .subR .x0 .x1 .x0]
+      if op == .div || op == .mod then
         [.ldr .x2 offR, .cbz .x2 divLabel,
-         .ldr .x1 offL, .ldr .x2 offR, opInstr, .str .x0 offD]
+         .ldr .x1 offL, .ldr .x2 offR] ++ opInstr ++ [.str .x0 offD]
       else
-        [.ldr .x1 offL, .ldr .x2 offR, opInstr, .str .x0 offD]
+        [.ldr .x1 offL, .ldr .x2 offR] ++ opInstr ++ [.str .x0 offD]
     | _, _, _ => []
   | .boolop dst be =>
     match vm.lookup dst with
