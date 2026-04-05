@@ -279,7 +279,7 @@ instance : ToString SBool := ⟨SBool.toString⟩
     This enables static type checking that guarantees no type errors at runtime. -/
 structure Program where
   decls      : List (Var × VarTy)
-  arrayDecls : List (ArrayName × Nat) := []
+  arrayDecls : List (ArrayName × Nat × VarTy) := []
   body       : Stmt
   deriving Repr
 
@@ -311,19 +311,19 @@ def noTmpDecls (decls : List (Var × VarTy)) : Bool :=
   decls.all fun (x, _) => !x.isTmp
 
 /-- Check that an array name is declared. -/
-private def arrayDeclared (arrayDecls : List (ArrayName × Nat)) (arr : ArrayName) : Bool :=
-  arrayDecls.any fun (a, _) => a == arr
+private def arrayDeclared (arrayDecls : List (ArrayName × Nat × VarTy)) (arr : ArrayName) : Bool :=
+  arrayDecls.any fun (a, _, _) => a == arr
 
 /-- Check that all variables in an arithmetic expression are declared as `int`,
     and all array names are declared. -/
-def checkSExpr (lookup : Var → Option VarTy) (arrayDecls : List (ArrayName × Nat)) : SExpr → Bool
+def checkSExpr (lookup : Var → Option VarTy) (arrayDecls : List (ArrayName × Nat × VarTy)) : SExpr → Bool
   | .lit _ => true
   | .var x => lookup x == some .int
   | .bin _ a b => checkSExpr lookup arrayDecls a && checkSExpr lookup arrayDecls b
   | .arrRead arr idx => arrayDeclared arrayDecls arr && checkSExpr lookup arrayDecls idx
 
 /-- Check that a boolean expression uses properly-typed declared variables. -/
-def checkSBool (lookup : Var → Option VarTy) (arrayDecls : List (ArrayName × Nat)) : SBool → Bool
+def checkSBool (lookup : Var → Option VarTy) (arrayDecls : List (ArrayName × Nat × VarTy)) : SBool → Bool
   | .lit _ => true
   | .bvar x => lookup x == some .bool
   | .cmp _ a b => checkSExpr lookup arrayDecls a && checkSExpr lookup arrayDecls b
@@ -332,7 +332,7 @@ def checkSBool (lookup : Var → Option VarTy) (arrayDecls : List (ArrayName × 
   | .or a b => checkSBool lookup arrayDecls a && checkSBool lookup arrayDecls b
 
 /-- Check that a statement body is well-typed w.r.t. declarations. -/
-def checkStmt (lookup : Var → Option VarTy) (arrayDecls : List (ArrayName × Nat)) : Stmt → Bool
+def checkStmt (lookup : Var → Option VarTy) (arrayDecls : List (ArrayName × Nat × VarTy)) : Stmt → Bool
   | .skip => true
   | .assign x e => lookup x == some .int && checkSExpr lookup arrayDecls e
   | .bassign x b => lookup x == some .bool && checkSBool lookup arrayDecls b

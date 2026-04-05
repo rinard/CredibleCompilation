@@ -318,13 +318,24 @@ private partial def parseDecls (toks : List Token) : Except String (List (Var ×
   | tok :: _ => .error s!"expected 'var', got {repr tok}"
   | [] => .error "expected 'var'"
 
-/-- Parse a single array declaration: `name[size]`. -/
+/-- Parse a single array declaration: `name[size] : type`. -/
 private def parseArrayDecl (toks : List Token)
-    : Except String ((ArrayName × Nat) × List Token) :=
+    : Except String ((ArrayName × Nat × VarTy) × List Token) :=
   match toks with
-  | Token.ident name :: Token.lbracket :: Token.num n :: Token.rbracket :: rest =>
-    if n ≥ 0 then .ok ((name, n.toNat), rest)
+  | Token.ident name :: Token.lbracket :: Token.num n :: Token.rbracket
+      :: Token.colon :: Token.kw "int" :: rest =>
+    if n ≥ 0 then .ok ((name, n.toNat, .int), rest)
     else .error s!"array size must be non-negative, got {n}"
+  | Token.ident name :: Token.lbracket :: Token.num n :: Token.rbracket
+      :: Token.colon :: Token.kw "bool" :: rest =>
+    if n ≥ 0 then .ok ((name, n.toNat, .bool), rest)
+    else .error s!"array size must be non-negative, got {n}"
+  | Token.ident _ :: Token.lbracket :: Token.num _ :: Token.rbracket
+      :: Token.colon :: tok :: _ =>
+    .error s!"expected 'int' or 'bool' after ':', got {repr tok}"
+  | Token.ident _ :: Token.lbracket :: Token.num _ :: Token.rbracket
+      :: tok :: _ =>
+    .error s!"expected ':' after ']', got {repr tok}"
   | Token.ident _ :: Token.lbracket :: Token.num _ :: tok :: _ =>
     .error s!"expected ']' after array size, got {repr tok}"
   | Token.ident _ :: Token.lbracket :: tok :: _ =>
@@ -333,8 +344,8 @@ private def parseArrayDecl (toks : List Token)
   | tok :: _ => .error s!"expected array name, got {repr tok}"
   | [] => .error "expected array declaration"
 
-private partial def parseArrayDecls' (acc : List (ArrayName × Nat)) (toks : List Token)
-    : Except String (List (ArrayName × Nat) × List Token) :=
+private partial def parseArrayDecls' (acc : List (ArrayName × Nat × VarTy)) (toks : List Token)
+    : Except String (List (ArrayName × Nat × VarTy) × List Token) :=
   match toks with
   | Token.comma :: rest => do let (d, rest') ← parseArrayDecl rest; parseArrayDecls' (acc ++ [d]) rest'
   | Token.semi :: rest => .ok (acc, rest)
@@ -342,7 +353,7 @@ private partial def parseArrayDecls' (acc : List (ArrayName × Nat)) (toks : Lis
   | [] => .error "expected ';' after array declarations"
 
 private partial def parseArrayDecls (toks : List Token)
-    : Except String (List (ArrayName × Nat) × List Token) :=
+    : Except String (List (ArrayName × Nat × VarTy) × List Token) :=
   match toks with
   | Token.kw "array" :: rest => do
     let (d, rest') ← parseArrayDecl rest

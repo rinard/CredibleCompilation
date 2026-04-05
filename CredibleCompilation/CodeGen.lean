@@ -118,7 +118,7 @@ private partial def genBoolExpr (varMap : List (Var × Nat)) (be : BoolExpr) : L
 -- § 4. Instruction codegen
 -- ============================================================
 
-private def genInstr (varMap : List (Var × Nat)) (arrayDecls : List (ArrayName × Nat))
+private def genInstr (varMap : List (Var × Nat)) (arrayDecls : List (ArrayName × Nat × VarTy))
     (pc : Nat) (instr : TAC) : List String :=
   (s!".L{pc}:" :: List.nil) ++
   match instr with

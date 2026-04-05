@@ -51,7 +51,7 @@ structure Prog where
   code       : Array TAC
   tyCtx      : TyCtx
   observable : List Var
-  arrayDecls : List (ArrayName × Nat) := []
+  arrayDecls : List (ArrayName × Nat × VarTy) := []
 
 instance : Repr Prog where
   reprPrec p n := reprPrec p.code n

@@ -299,7 +299,7 @@ private theorem noTmpDecls_not_tmp {decls : List (Var × VarTy)} {v : Var} {ty :
 
 /-- All variables in a well-typed arithmetic expression are declared. -/
 private theorem checkSExpr_declared {lookup : Var → Option VarTy}
-    {arrayDecls : List (ArrayName × Nat)}
+    {arrayDecls : List (ArrayName × Nat × VarTy)}
     {e : SExpr} (h : Program.checkSExpr lookup arrayDecls e = true) :
     ∀ v ∈ e.freeVars, ∃ ty, lookup v = some ty := by
   induction e with
@@ -319,7 +319,7 @@ private theorem checkSExpr_declared {lookup : Var → Option VarTy}
 
 /-- All variables in a well-typed boolean expression are declared. -/
 private theorem checkSBool_declared {lookup : Var → Option VarTy}
-    {arrayDecls : List (ArrayName × Nat)}
+    {arrayDecls : List (ArrayName × Nat × VarTy)}
     {b : SBool} (h : Program.checkSBool lookup arrayDecls b = true) :
     ∀ v ∈ b.freeVars, ∃ ty, lookup v = some ty := by
   induction b with
@@ -351,7 +351,7 @@ private theorem checkSBool_declared {lookup : Var → Option VarTy}
 
 /-- All variables in a well-typed statement are declared. -/
 private theorem checkStmt_declared {lookup : Var → Option VarTy}
-    {arrayDecls : List (ArrayName × Nat)}
+    {arrayDecls : List (ArrayName × Nat × VarTy)}
     {s : Stmt} (h : Program.checkStmt lookup arrayDecls s = true) :
     ∀ v ∈ s.allVars, ∃ ty, lookup v = some ty := by
   induction s with
@@ -425,7 +425,7 @@ private theorem lookup_tyCtx {lookup : Var → Option VarTy} {Γ : TyCtx}
     preserves TypedStore. -/
 theorem Stmt.interp_preserves_typedStore
     {s : Stmt} {fuel : Nat} {σ σ' : Store} {am am' : ArrayMem} {Γ : TyCtx}
-    {lookup : Var → Option VarTy} {arrayDecls : List (ArrayName × Nat)}
+    {lookup : Var → Option VarTy} {arrayDecls : List (ArrayName × Nat × VarTy)}
     (hcompat : ∀ x ty, lookup x = some ty → Γ x = ty)
     (hchk : Program.checkStmt lookup arrayDecls s = true)
     (hts : TypedStore Γ σ)
@@ -489,7 +489,7 @@ theorem Stmt.interp_preserves_typedStore
 /-- If `checkSExpr lookup e = true` and `TypedStore Γ σ` with compatible lookup/Γ,
     then all vars in `e.freeVars` have int values in `σ`. -/
 private theorem checkSExpr_intVars
-    {lookup : Var → Option VarTy} {arrayDecls : List (ArrayName × Nat)}
+    {lookup : Var → Option VarTy} {arrayDecls : List (ArrayName × Nat × VarTy)}
     {Γ : TyCtx} {σ : Store} {e : SExpr}
     (hcompat : ∀ x ty, lookup x = some ty → Γ x = ty)
     (hchk : Program.checkSExpr lookup arrayDecls e = true)
@@ -514,7 +514,7 @@ private theorem checkSExpr_intVars
 /-- If `checkSBool lookup b = true` and `TypedStore Γ σ` with compatible lookup/Γ,
     then `b.intTyped σ`. -/
 private theorem checkSBool_intTyped
-    {lookup : Var → Option VarTy} {arrayDecls : List (ArrayName × Nat)}
+    {lookup : Var → Option VarTy} {arrayDecls : List (ArrayName × Nat × VarTy)}
     {Γ : TyCtx} {σ : Store} {b : SBool}
     (hcompat : ∀ x ty, lookup x = some ty → Γ x = ty)
     (hchk : Program.checkSBool lookup arrayDecls b = true)
@@ -537,7 +537,7 @@ private theorem checkSBool_intTyped
 /-- If `checkStmt lookup s = true`, `TypedStore Γ σ`, and lookup/Γ are compatible,
     then `s.intTyped fuel σ`. -/
 theorem checkStmt_intTyped
-    (lookup : Var → Option VarTy) (arrayDecls : List (ArrayName × Nat))
+    (lookup : Var → Option VarTy) (arrayDecls : List (ArrayName × Nat × VarTy))
     (Γ : TyCtx) (σ : Store) (am : ArrayMem) (s : Stmt) (fuel : Nat)
     (hcompat : ∀ x ty, lookup x = some ty → Γ x = ty)
     (hchk : Program.checkStmt lookup arrayDecls s = true)

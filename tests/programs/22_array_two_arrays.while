@@ -1,5 +1,5 @@
 var i : int, s : int;
-array A[1024], B[1024];
+array A[1024] : int, B[1024] : int;
 A[0] := 1;
 A[1] := 2;
 A[2] := 3;

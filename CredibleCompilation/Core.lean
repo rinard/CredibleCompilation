@@ -165,9 +165,9 @@ end ArrayMem
 
 /-- Look up an array's declared size.  Returns 0 for undeclared arrays
     (meaning all accesses are out-of-bounds). -/
-def arraySize (decls : List (ArrayName × Nat)) (arr : ArrayName) : Nat :=
+def arraySize (decls : List (ArrayName × Nat × VarTy)) (arr : ArrayName) : Nat :=
   match decls.find? (fun p => p.1 == arr) with
-  | some (_, n) => n
+  | some (_, n, _) => n
   | none => 0
 
 -- ============================================================
