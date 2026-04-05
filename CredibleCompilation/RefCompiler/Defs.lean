@@ -340,6 +340,20 @@ theorem FragExec.single_iffalse {p : Prog} {pc : Nat} {σ : Store} {am : ArrayMe
     FragExec p pc σ (pc + 1) σ am am :=
   Steps.single (Step.iffall h hb)
 
+theorem FragExec.single_arrLoad {p : Prog} {pc : Nat} {σ : Store} {am : ArrayMem}
+    {x : Var} {arr : ArrayName} {idx : Var} {idxVal : BitVec 64}
+    (h : p[pc]? = some (.arrLoad x arr idx))
+    (hidx : σ idx = .int idxVal) :
+    FragExec p pc σ (pc + 1) (σ[x ↦ .int (am.read arr idxVal.toNat)]) am am :=
+  Steps.single (Step.arrLoad h hidx)
+
+theorem FragExec.single_arrStore {p : Prog} {pc : Nat} {σ : Store} {am : ArrayMem}
+    {arr : ArrayName} {idx val : Var} {idxVal v : BitVec 64}
+    (h : p[pc]? = some (.arrStore arr idx val))
+    (hidx : σ idx = .int idxVal) (hval : σ val = .int v) :
+    FragExec p pc σ (pc + 1) σ am (am.write arr idxVal.toNat v) :=
+  Steps.single (Step.arrStore h hidx hval)
+
 -- ============================================================
 -- § 5. BoolExpr evaluation congruence (pointwise)
 -- ============================================================
