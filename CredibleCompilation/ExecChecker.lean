@@ -630,10 +630,55 @@ def checkNoArrReadInRels (certs : Array EInstrCert) : Bool :=
       tc.rel.all (fun (e, _) => !e.hasArrRead) &&
       tc.rel_next.all (fun (e, _) => !e.hasArrRead)
 
+/-- All arrLoad/arrStore instructions in a program use element type `.int`. -/
+def AllArrayOpsInt (p : Prog) : Prop :=
+  ∀ i (h : i < p.size), match p[i] with
+    | .arrLoad _ _ _ ty => ty = .int
+    | .arrStore _ _ _ ty => ty = .int
+    | _ => True
+
+/-- Decidable check for `AllArrayOpsInt`. -/
+def checkAllArrayOpsInt (p : Prog) : Bool :=
+  p.code.all fun instr =>
+    match instr with
+    | .arrLoad _ _ _ ty => ty == .int
+    | .arrStore _ _ _ ty => ty == .int
+    | _ => true
+
+theorem checkAllArrayOpsInt_sound (p : Prog) (h : checkAllArrayOpsInt p = true) :
+    AllArrayOpsInt p := by
+  intro i hi
+  have hi' : i < p.code.size := hi
+  simp only [Prog.getElem_eq p i hi']
+  unfold checkAllArrayOpsInt at h
+  rw [Array.all_eq_true] at h
+  have hinstr := h i hi'
+  cases hc : p.code[i] <;> simp_all [beq_iff_eq]
+
+theorem AllArrayOpsInt.arrLoad_int {p : Prog} {pc : Nat} {x : Var} {arr : ArrayName}
+    {idx : Var} {ty : VarTy} (h : AllArrayOpsInt p)
+    (hinstr : p[pc]? = some (.arrLoad x arr idx ty)) :
+    ty = .int := by
+  have hlt : pc < p.size := bound_of_getElem? hinstr
+  have hmatch := h pc hlt
+  have heq := Option.some.inj ((Prog.getElem?_eq_getElem hlt).symm.trans hinstr)
+  simp [heq] at hmatch; exact hmatch
+
+theorem AllArrayOpsInt.arrStore_int {p : Prog} {pc : Nat} {arr : ArrayName}
+    {idx val : Var} {ty : VarTy} (h : AllArrayOpsInt p)
+    (hinstr : p[pc]? = some (.arrStore arr idx val ty)) :
+    ty = .int := by
+  have hlt : pc < p.size := bound_of_getElem? hinstr
+  have hmatch := h pc hlt
+  have heq := Option.some.inj ((Prog.getElem?_eq_getElem hlt).symm.trans hinstr)
+  simp [heq] at hmatch; exact hmatch
+
 /-- Check all certificate conditions. Returns `true` iff the certificate is valid. -/
 def checkCertificateExec (cert : ECertificate) : Bool :=
   checkWellTypedProg cert.orig.tyCtx cert.orig &&
   checkWellTypedProg cert.trans.tyCtx cert.trans &&
+  checkAllArrayOpsInt cert.orig &&
+  checkAllArrayOpsInt cert.trans &&
   (cert.orig.observable == cert.trans.observable) &&
   checkStartCorrespondenceExec cert &&
   checkInvariantsAtStartExec cert &&

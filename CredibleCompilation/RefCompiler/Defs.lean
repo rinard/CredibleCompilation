@@ -130,8 +130,8 @@ def SBool.exprFreeVars : SBool → List Var
   | .barrRead _ idx => idx.freeVars
 
 /-- Integer-safety: all variables used in `SExpr` positions have `.int` values,
-    threaded through interpretation just like `Stmt.divSafe`. -/
-def Stmt.intSafe (fuel : Nat) (σ : Store) (am : ArrayMem) : Stmt → Prop
+    threaded through interpretation just like `Stmt.safe`. -/
+def Stmt.intSafe (fuel : Nat) (σ : Store) (am : ArrayMem) (decls : List (ArrayName × Nat × VarTy)) : Stmt → Prop
   | .skip        => True
   | .assign _ e  => ∀ v ∈ e.freeVars, ∃ n, σ v = .int n
   | .bassign _ b => ∀ v ∈ b.exprFreeVars, ∃ n, σ v = .int n
@@ -140,22 +140,22 @@ def Stmt.intSafe (fuel : Nat) (σ : Store) (am : ArrayMem) : Stmt → Prop
   | .barrWrite _ idx bval => (∀ v ∈ idx.freeVars, ∃ n, σ v = .int n) ∧
                               (∀ v ∈ bval.exprFreeVars, ∃ n, σ v = .int n)
   | .seq s₁ s₂  =>
-    s₁.intSafe fuel σ am ∧
-    match s₁.interp fuel σ am with
-    | some (σ', am') => s₂.intSafe fuel σ' am'
+    s₁.intSafe fuel σ am decls ∧
+    match s₁.interp fuel σ am decls with
+    | some (σ', am') => s₂.intSafe fuel σ' am' decls
     | none    => True
   | .ite b s₁ s₂ =>
     (∀ v ∈ b.exprFreeVars, ∃ n, σ v = .int n) ∧
-    (if b.eval σ am then s₁.intSafe fuel σ am else s₂.intSafe fuel σ am)
+    (if b.eval σ am then s₁.intSafe fuel σ am decls else s₂.intSafe fuel σ am decls)
   | .loop b body =>
     (∀ v ∈ b.exprFreeVars, ∃ n, σ v = .int n) ∧
     match fuel with
     | 0 => True
     | fuel' + 1 =>
       if b.eval σ am then
-        body.intSafe fuel' σ am ∧
-        match body.interp fuel' σ am with
-        | some (σ', am') => (Stmt.loop b body).intSafe fuel' σ' am'
+        body.intSafe fuel' σ am decls ∧
+        match body.interp fuel' σ am decls with
+        | some (σ', am') => (Stmt.loop b body).intSafe fuel' σ' am' decls
         | none    => True
       else True
 
@@ -405,17 +405,20 @@ theorem BoolExpr.eval_agree' (cond : BoolExpr) (σ τ : Store)
 -- § 6. Division safety helpers
 -- ============================================================
 
-theorem SExpr.divSafe_bin_safe {op : BinOp} {a b : SExpr} {σ : Store} {am : ArrayMem}
-    (h : (SExpr.bin op a b).divSafe σ am) : op.safe (a.eval σ am) (b.eval σ am) := by
-  cases op <;> simp_all [SExpr.divSafe, BinOp.safe]
+theorem SExpr.safe_bin_safe {op : BinOp} {a b : SExpr} {σ : Store} {am : ArrayMem}
+    {decls : List (ArrayName × Nat × VarTy)}
+    (h : (SExpr.bin op a b).safe σ am decls) : op.safe (a.eval σ am) (b.eval σ am) := by
+  cases op <;> simp_all [SExpr.safe, BinOp.safe]
 
-theorem SExpr.divSafe_bin_left {op : BinOp} {a b : SExpr} {σ : Store} {am : ArrayMem}
-    (h : (SExpr.bin op a b).divSafe σ am) : a.divSafe σ am := by
-  cases op <;> simp_all [SExpr.divSafe]
+theorem SExpr.safe_bin_left {op : BinOp} {a b : SExpr} {σ : Store} {am : ArrayMem}
+    {decls : List (ArrayName × Nat × VarTy)}
+    (h : (SExpr.bin op a b).safe σ am decls) : a.safe σ am decls := by
+  cases op <;> simp_all [SExpr.safe]
 
-theorem SExpr.divSafe_bin_right {op : BinOp} {a b : SExpr} {σ : Store} {am : ArrayMem}
-    (h : (SExpr.bin op a b).divSafe σ am) : b.divSafe σ am := by
-  cases op <;> simp_all [SExpr.divSafe]
+theorem SExpr.safe_bin_right {op : BinOp} {a b : SExpr} {σ : Store} {am : ArrayMem}
+    {decls : List (ArrayName × Nat × VarTy)}
+    (h : (SExpr.bin op a b).safe σ am decls) : b.safe σ am decls := by
+  cases op <;> simp_all [SExpr.safe]
 
 -- ============================================================
 -- § 7. Store update helpers

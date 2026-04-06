@@ -1,5 +1,6 @@
 import CredibleCompilation.ArmSemantics
 import CredibleCompilation.BvLemmas
+import CredibleCompilation.ExecChecker
 import Std.Tactic.BVDecide
 
 /-!
@@ -506,6 +507,7 @@ theorem genInstr_correct (prog : ArmProg) (vm : VarMap) (pcMap : Nat → Nat)
     (hInjective : VarMapInjective vm)
     (hWT : WellTypedProg p.tyCtx p)
     (hTS : TypedStore p.tyCtx σ)
+    (hAllInt : AllArrayOpsInt p)
     (hPC_bound : pc < p.size)
     (cfg' : Cfg) (hStep : p ⊩ Cfg.run pc σ am ⟶ cfg')
     (hVarMap : ∀ v, ∃ off, vm.lookup v = some off)
@@ -954,9 +956,89 @@ theorem genInstr_correct (prog : ArmProg) (vm : VarMap) (pcMap : Nat → Nat)
   | binop_typeError hinstr hne =>
     exact absurd (Step.binop_typeError (am := am) hinstr hne) (Step.no_typeError_of_wellTyped hPC_bound hWT hTS)
   | arrLoad hinstr hidx hbounds =>
-    exact sorry
+    rename_i arrNm destV idxV _ idxVal
+    have htyint := hAllInt.arrLoad_int hinstr; subst htyint
+    obtain ⟨offIdx, hIdx⟩ := hVarMap idxV
+    obtain ⟨offX, hX⟩ := hVarMap destV
+    have heq : instr = .arrLoad destV arrNm idxV .int := Option.some.inj (hInstr.symm.trans hinstr)
+    have hformal : formalGenInstr vm pcMap (.arrLoad destV arrNm idxV .int) haltLabel divLabel =
+        [.ldr .x1 offIdx, .arrLd .x0 arrNm .x1, .str .x0 offX] := by
+      show (match vm.lookup idxV, vm.lookup destV with
+        | some offIdx, some offX => _ | _, _ => _) = _
+      rw [hIdx, hX]
+    rw [heq, hformal] at hCodeInstr hPcNext
+    have h0 := hCodeInstr.head
+    have h1 := hCodeInstr.tail.head
+    have h2 := hCodeInstr.tail.tail.head
+    rw [← hPcRel] at h0 h1 h2
+    let s1 := s.setReg .x1 (s.stack offIdx) |>.nextPC
+    let s2 := s1.setReg .x0 (s1.arrayMem arrNm (s1.regs .x1).toNat) |>.nextPC
+    let s3 := s2.setStack offX (s2.regs .x0) |>.nextPC
+    refine ⟨s3, .step (.ldr .x1 offIdx h0) (.step (.arrLd .x0 arrNm .x1 h1) (.single (.str .x0 offX h2))),
+      ⟨?_, ?_, ?_⟩⟩
+    · -- StateRel for σ[destV ↦ .int (am.read arrNm idxVal.toNat)]
+      intro w off hv
+      simp only [s3, s2, s1, ArmState.setStack, ArmState.setReg, ArmState.nextPC,
+                  ArmReg.beq_self, ArmReg.x0_ne_x1, ite_true, ite_false, Bool.false_eq_true]
+      by_cases hoff : off = offX
+      · subst hoff; simp
+        have := hInjective w destV off hv hX; subst this
+        rw [Store.update_self]
+        simp [Value.encode, ArrayMem.read]
+        rw [hArrayMem, hStateRel idxV offIdx hIdx, hidx]; simp [Value.encode]
+      · simp [hoff]
+        have hne : w ≠ destV := fun h => hoff (Option.some.inj ((h ▸ hv).symm.trans hX))
+        rw [Store.update_other _ _ _ _ hne]
+        exact hStateRel w off hv
+    · -- PcRel
+      show s.pc + 1 + 1 + 1 = pcMap (pc + 1)
+      have := hPcNext _ _ _ rfl; simp at this
+      rw [this, hPcRel]
+    · -- arrayMem preserved
+      simp [s3, s2, s1, ArmState.setStack, ArmState.setReg, ArmState.nextPC, hArrayMem]
   | arrStore hinstr hidx hval hbounds =>
-    exact sorry
+    rename_i _ arrNm idxV valV idxVal
+    have htyint := hAllInt.arrStore_int hinstr; subst htyint
+    obtain ⟨offIdx, hIdx⟩ := hVarMap idxV
+    obtain ⟨offVal, hVal⟩ := hVarMap valV
+    have heq : instr = .arrStore arrNm idxV valV .int := Option.some.inj (hInstr.symm.trans hinstr)
+    have hformal : formalGenInstr vm pcMap (.arrStore arrNm idxV valV .int) haltLabel divLabel =
+        [.ldr .x1 offIdx, .ldr .x2 offVal, .arrSt arrNm .x1 .x2] := by
+      show (match vm.lookup idxV, vm.lookup valV with
+        | some offIdx, some offVal => _ | _, _ => _) = _
+      rw [hIdx, hVal]
+    rw [heq, hformal] at hCodeInstr hPcNext
+    have h0 := hCodeInstr.head
+    have h1 := hCodeInstr.tail.head
+    have h2 := hCodeInstr.tail.tail.head
+    rw [← hPcRel] at h0 h1 h2
+    let s1 := s.setReg .x1 (s.stack offIdx) |>.nextPC
+    let s2 := s1.setReg .x2 (s1.stack offVal) |>.nextPC
+    let s3 := s2.setArrayMem arrNm (s2.regs .x1).toNat (s2.regs .x2) |>.nextPC
+    refine ⟨s3, .step (.ldr .x1 offIdx h0) (.step (.ldr .x2 offVal h1) (.single (.arrSt arrNm .x1 .x2 h2))),
+      ⟨?_, ?_, ?_⟩⟩
+    · -- StateRel: σ unchanged
+      intro w off hv
+      simp only [s3, s2, s1, ArmState.setArrayMem, ArmState.setReg, ArmState.nextPC,
+                  ArmState.setStack]
+      exact hStateRel w off hv
+    · -- PcRel
+      show s.pc + 1 + 1 + 1 = pcMap (pc + 1)
+      have := hPcNext _ _ _ rfl; simp at this
+      rw [this, hPcRel]
+    · -- arrayMem: need s3.arrayMem = am.write arrNm idxVal.toNat (σ valV).toBits
+      simp only [s3, s2, s1, ArmState.setArrayMem, ArmState.setReg, ArmState.nextPC]
+      funext x i
+      simp only [ArrayMem.write, ArmState.setArrayMem]
+      simp only [ArmReg.beq_self, ite_true, ArmReg.x1_ne_x2, Bool.false_eq_true, ite_false]
+      have hx1eq : (s.stack offIdx) = idxVal := by
+        rw [hStateRel idxV offIdx hIdx, hidx]; simp [Value.encode]
+      have hx2eq : s.stack offVal = (σ valV).toBits := by
+        rw [hStateRel valV offVal hVal]
+        cases hv' : σ valV with
+        | int n => simp [Value.encode, Value.toBits]
+        | bool bb => rw [hv'] at hval; simp [Value.typeOf] at hval
+      rw [hx1eq, hx2eq, hArrayMem]
   | arrLoad_boundsError hinstr hidx hbounds =>
     exact ⟨s, .refl, trivial⟩
   | arrStore_boundsError hinstr hidx hval hbounds =>
@@ -974,6 +1056,7 @@ theorem backward_simulation (p : Prog) (armProg : ArmProg)
     (hInjective : VarMapInjective vm)
     (hVarMap : ∀ v, ∃ off, vm.lookup v = some off)
     (hScratch : ScratchSafe vm)
+    (hAllInt : AllArrayOpsInt p)
     {pc : Nat} {σ : Store} {am : ArrayMem} {cfg' : Cfg} {s : ArmState}
     (hStep : p ⊩ Cfg.run pc σ am ⟶ cfg')
     (hRel : SimRel vm pcMap (.run pc σ am) s)
@@ -987,4 +1070,4 @@ theorem backward_simulation (p : Prog) (armProg : ArmProg)
       pcMap pc' = pcMap pc + (formalGenInstr vm pcMap instr haltLabel divLabel).length) :
     ∃ s', ArmSteps armProg s s' ∧ SimRel vm pcMap cfg' s' := by
   exact genInstr_correct armProg vm pcMap p pc σ am s haltLabel divLabel
-    instr hInstr hRel hScratch hInjective hWT hTS hPC cfg' hStep hVarMap hCode hWrapped hPcNext
+    instr hInstr hRel hScratch hInjective hWT hTS hAllInt hPC cfg' hStep hVarMap hCode hWrapped hPcNext

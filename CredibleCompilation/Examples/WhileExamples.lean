@@ -30,7 +30,7 @@ def tac : Prog := { compile prog with observable := ["s"] }
 
 -- Compile and verify
 #eval tac.code.toList
-#eval do let (σ, _) ← Stmt.interp 1000 (fun v => if v == "n" then .int 10 else .int 0) ArrayMem.init prog; return σ "s"
+#eval do let (σ, _) ← Stmt.interp 1000 (fun v => if v == "n" then .int 10 else .int 0) ArrayMem.init ([] : List (ArrayName × Nat × VarTy)) prog; return σ "s"
 
 -- Optimize with constant propagation, then check
 def cert := ConstPropOpt.optimize tac
@@ -55,7 +55,7 @@ def prog : Stmt :=
 def tac : Prog := { compile prog with observable := ["r"] }
 
 #eval tac.code.toList
-#eval do let (σ, _) ← Stmt.interp 1000 (fun v => if v == "n" then .int 5 else .int 0) ArrayMem.init prog; return σ "r"
+#eval do let (σ, _) ← Stmt.interp 1000 (fun v => if v == "n" then .int 5 else .int 0) ArrayMem.init ([] : List (ArrayName × Nat × VarTy)) prog; return σ "r"
 
 def cert := ConstPropOpt.optimize tac
 #eval checkCertificateExec cert
@@ -78,7 +78,7 @@ def prog : Stmt :=
 def tac : Prog := { compile prog with observable := ["m"] }
 
 #eval tac.code.toList
-#eval do let (σ, _) ← Stmt.interp 100 (fun v => if v == "a" then .int 3 else if v == "b" then .int 7 else .int 0) ArrayMem.init prog; return σ "m"
+#eval do let (σ, _) ← Stmt.interp 100 (fun v => if v == "a" then .int 3 else if v == "b" then .int 7 else .int 0) ArrayMem.init ([] : List (ArrayName × Nat × VarTy)) prog; return σ "m"
 
 def cert := ConstPropOpt.optimize tac
 #eval checkCertificateExec cert
@@ -100,7 +100,7 @@ def prog : Stmt :=
 def tac : Prog := { compile prog with observable := ["y"] }
 
 #eval tac.code.toList
-#eval do let (σ, _) ← Stmt.interp 100 (fun _ => .int 0) ArrayMem.init prog; return σ "y"
+#eval do let (σ, _) ← Stmt.interp 100 (fun _ => .int 0) ArrayMem.init ([] : List (ArrayName × Nat × VarTy)) prog; return σ "y"
 
 -- Constant propagation should fold this aggressively
 def cert := ConstPropOpt.optimize tac
@@ -157,7 +157,7 @@ def prog : Stmt :=
 def tac : Prog := { compile prog with observable := ["s"] }
 
 #eval tac.code.toList
-#eval do let (σ, _) ← Stmt.interp 10000 (fun v => if v == "n" then .int 3 else .int 0) ArrayMem.init prog; return σ "s"
+#eval do let (σ, _) ← Stmt.interp 10000 (fun v => if v == "n" then .int 3 else .int 0) ArrayMem.init ([] : List (ArrayName × Nat × VarTy)) prog; return σ "s"
 
 def cert := ConstPropOpt.optimize tac
 #eval checkCertificateExec cert
@@ -242,7 +242,8 @@ def tac : Prog := { compile prog with observable := ["s"] }
 -- Sum a[0..2] = 10 + 20 + 30 = 60
 #eval do
   let am := ArrayMem.init |>.write "a" 0 10 |>.write "a" 1 20 |>.write "a" 2 30
-  let (σ, _) ← Stmt.interp 1000 (fun v => if v == "n" then .int 3 else .int 0) am prog
+  let decls : List (ArrayName × Nat × VarTy) := [("a", 1024, .int)]
+  let (σ, _) ← Stmt.interp 1000 (fun v => if v == "n" then .int 3 else .int 0) am decls prog
   return σ "s"
 
 def cert := ConstPropOpt.optimize tac
@@ -270,7 +271,8 @@ def tac : Prog := { compile prog with observable := ["i"] }
 
 -- After init: a[0]=0, a[1]=1, a[2]=4
 #eval do
-  let (_, am) ← Stmt.interp 1000 (fun v => if v == "n" then .int 3 else .int 0) ArrayMem.init prog
+  let decls : List (ArrayName × Nat × VarTy) := [("a", 1024, .int)]
+  let (_, am) ← Stmt.interp 1000 (fun v => if v == "n" then .int 3 else .int 0) ArrayMem.init decls prog
   return (am.read "a" 0, am.read "a" 1, am.read "a" 2)
 
 def cert := ConstPropOpt.optimize tac

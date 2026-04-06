@@ -134,7 +134,7 @@ private def run (input : String) (fuel : Nat)
     : Except String (Option (List (String × Value))) := do
   let prog ← parseProgram input
   let σ₀ := inputs.foldl (fun σ (x, n) => Store.update σ x (.int n)) prog.initStore
-  return (prog.body.interp fuel σ₀ ArrayMem.init).map (fun (σ, _) => observe.map (fun v => (v, σ v)))
+  return (prog.body.interp fuel σ₀ ArrayMem.init prog.arrayDecls).map (fun (σ, _) => observe.map (fun v => (v, σ v)))
 
 -- Sum 1..10
 #eval! run "
