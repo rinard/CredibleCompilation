@@ -113,8 +113,8 @@ def execSymbolic (ss : SymStore) (sam : SymArrayMem) (instr : TAC) : SymStore ×
   | .boolop x be    => (ssSet ss x (be.toSymExpr ss), sam)
   | .copy x y       => (ssSet ss x (ssGet ss y), sam)
   | .binop x op y z => (ssSet ss x (.bin op (ssGet ss y) (ssGet ss z)), sam)
-  | .arrLoad x arr idx => (ssSet ss x (samGet sam arr (ssGet ss idx)), sam)
-  | .arrStore arr idx val => (ss, (arr, ssGet ss idx, ssGet ss val) :: sam)
+  | .arrLoad x arr idx _ => (ssSet ss x (samGet sam arr (ssGet ss idx)), sam)
+  | .arrStore arr idx val _ => (ss, (arr, ssGet ss idx, ssGet ss val) :: sam)
   | _               => (ss, sam)
 
 /-- Symbolically execute along a path of labels in the original program.
@@ -136,7 +136,7 @@ def execPath (orig : Prog) (ss : SymStore) (sam : SymArrayMem) (pc : Label) :
 def successors (instr : TAC) (pc : Label) : List Label :=
   match instr with
   | .const _ _ | .copy _ _ | .binop _ _ _ _ | .boolop _ _ => [pc + 1]
-  | .arrLoad _ _ _ | .arrStore _ _ _ => [pc + 1]
+  | .arrLoad _ _ _ _ | .arrStore _ _ _ _ => [pc + 1]
   | .goto l        => [l]
   | .ifgoto _ l    => [l, pc + 1]
   | .halt          => []
@@ -190,8 +190,8 @@ def collectAllVars (p1 p2 : Prog) : List Var :=
     | .copy x y      => [x, y]
     | .binop x _ y z => [x, y, z]
     | .boolop x _    => [x]
-    | .arrLoad x _ idx => [x, idx]
-    | .arrStore _ idx val => [idx, val]
+    | .arrLoad x _ idx _ => [x, idx]
+    | .arrStore _ idx val _ => [idx, val]
     | .ifgoto b _    => b.vars
     | _              => []
   let go (code : Array TAC) := code.toList.foldl (fun acc i => acc ++ extract i) ([] : List Var)
@@ -302,7 +302,7 @@ def buildInstrCerts1to1 (trans : Prog) : Array EInstrCert :=
     match trans[i]? with
     | some .halt => { pc_orig := i, transitions := ([] : List ETransCorr) }
     | some (.const _ _) | some (.copy _ _) | some (.binop _ _ _ _) | some (.boolop _ _)
-    | some (.arrLoad _ _ _) | some (.arrStore _ _ _) =>
+    | some (.arrLoad _ _ _ _) | some (.arrStore _ _ _ _) =>
       { pc_orig := i, transitions := [{ origLabels := [i + 1] }] }
     | some (.goto l) =>
       { pc_orig := i, transitions := [{ origLabels := [l] }] }
@@ -420,7 +420,7 @@ def checkHaltObservableExec (cert : ECertificate) : Bool :=
 def computeNextPC (instr : TAC) (pc : Label) (ss : SymStore) (inv : EInv) : Option Label :=
   match instr with
   | .const _ _ | .copy _ _ | .binop _ _ _ _ | .boolop _ _ => some (pc + 1)
-  | .arrLoad _ _ _ | .arrStore _ _ _ => some (pc + 1)
+  | .arrLoad _ _ _ _ | .arrStore _ _ _ _ => some (pc + 1)
   | .goto l => some l
   | .ifgoto b l =>
     match b.symEval ss inv with
@@ -448,7 +448,7 @@ def checkBinopSafe (instr : TAC) (ss : SymStore) (inv : EInv) : Bool :=
     for the same array.  Uses simplification under the invariant to compare indices. -/
 def checkInstrAliasOk (instr : TAC) (ss : SymStore) (sam : SymArrayMem) (inv : EInv) : Bool :=
   match instr with
-  | .arrLoad _ arr idx | .arrStore arr idx _ =>
+  | .arrLoad _ arr idx _ | .arrStore arr idx _ _ =>
     let idx_sym := ssGet ss idx
     sam.all fun (a, i, _) =>
       !(a == arr) || (i == idx_sym) ||
@@ -593,17 +593,17 @@ def checkDivPreservationExec (cert : ECertificate) : Bool :=
 def checkBoundsPreservationExec (cert : ECertificate) : Bool :=
   (List.range cert.trans.size).all fun pc_t =>
     match cert.trans[pc_t]? with
-    | some (.arrLoad _ arr idx) =>
+    | some (.arrLoad _ arr idx _) =>
       let ic := cert.instrCerts.getD pc_t default
       match cert.orig[ic.pc_orig]? with
-      | some (.arrLoad _ arr' idx') =>
+      | some (.arrLoad _ arr' idx' _) =>
         arr == arr' &&
         ssGet (buildSubstMap ic.rel) idx == .var idx'
       | _ => false
-    | some (.arrStore arr idx _) =>
+    | some (.arrStore arr idx _ _) =>
       let ic := cert.instrCerts.getD pc_t default
       match cert.orig[ic.pc_orig]? with
-      | some (.arrStore arr' idx' _) =>
+      | some (.arrStore arr' idx' _ _) =>
         arr == arr' &&
         ssGet (buildSubstMap ic.rel) idx == .var idx'
       | _ => false

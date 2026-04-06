@@ -31,10 +31,10 @@ private def collectVars (p : Prog) : List Var :=
                           let b := if a.contains y then a else a ++ [y]
                           if b.contains z then b else b ++ [z]
     | .boolop x _      => if acc.contains x then acc else acc ++ [x]
-    | .arrLoad x _ idx => let a := if acc.contains x then acc else acc ++ [x]
-                          if a.contains idx then a else a ++ [idx]
-    | .arrStore _ idx val => let a := if acc.contains idx then acc else acc ++ [idx]
-                             if a.contains val then a else a ++ [val]
+    | .arrLoad x _ idx _ => let a := if acc.contains x then acc else acc ++ [x]
+                            if a.contains idx then a else a ++ [idx]
+    | .arrStore _ idx val _ => let a := if acc.contains idx then acc else acc ++ [idx]
+                               if a.contains val then a else a ++ [val]
     | .goto _          => acc
     | .ifgoto _ _      => acc
     | .halt            => acc
@@ -52,8 +52,8 @@ private def lookupVar (varMap : List (Var × Nat)) (v : Var) : Option Nat :=
 private def collectArrays (p : Prog) : List String :=
   p.code.foldl (fun acc instr =>
     match instr with
-    | .arrLoad _ arr _   => if acc.contains arr then acc else acc ++ [arr]
-    | .arrStore arr _ _  => if acc.contains arr then acc else acc ++ [arr]
+    | .arrLoad _ arr _ _   => if acc.contains arr then acc else acc ++ [arr]
+    | .arrStore arr _ _ _  => if acc.contains arr then acc else acc ++ [arr]
     | _                  => acc
   ) ([] : List String)
 
@@ -150,7 +150,7 @@ private def genInstr (varMap : List (Var × Nat)) (arrayDecls : List (ArrayName 
     genBoolExpr varMap be ++ (s!"  cbnz w0, .L{l}" :: List.nil)
   | .halt =>
     "  b .Lhalt" :: List.nil
-  | .arrLoad x _arr idx =>
+  | .arrLoad x _arr idx _ =>
     match lookupVar varMap idx, lookupVar varMap x with
     | some offIdx, some offX =>
       let arrSize := arraySize arrayDecls _arr
@@ -162,7 +162,7 @@ private def genInstr (varMap : List (Var × Nat)) (arrayDecls : List (ArrayName 
       "  ldr x0, [x8, x1, lsl #3]" ::              -- load arr[idx] (x1*8)
       s!"  str x0, [sp, #{offX}]" :: List.nil
     | _, _ => "  // ERROR: arrLoad unknown variable" :: List.nil
-  | .arrStore _arr idx val =>
+  | .arrStore _arr idx val _ =>
     match lookupVar varMap idx, lookupVar varMap val with
     | some offIdx, some offVal =>
       let arrSize := arraySize arrayDecls _arr

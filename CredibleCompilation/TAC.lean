@@ -37,8 +37,8 @@ inductive TAC where
   | goto     : Label → TAC                       -- goto l
   | ifgoto   : BoolExpr → Label → TAC            -- if cond then goto l
   | halt     : TAC
-  | arrLoad  : Var → ArrayName → Var → TAC       -- x := arr[idx]
-  | arrStore : ArrayName → Var → Var → TAC       -- arr[idx] := val
+  | arrLoad  : Var → ArrayName → Var → VarTy → TAC       -- x := arr[idx] (ty = element type)
+  | arrStore : ArrayName → Var → Var → VarTy → TAC       -- arr[idx] := val (ty = element type)
   deriving Repr, DecidableEq
 
 /-- A scalar instruction is one that does not touch ArrayMem. -/
@@ -64,6 +64,10 @@ def Prog.size (p : Prog) : Nat := p.code.size
 /-- Look up the declared size of an array in this program. -/
 nonrec def Prog.arraySize (p : Prog) (arr : ArrayName) : Nat :=
   arraySize p.arrayDecls arr
+
+/-- Look up the declared element type of an array in this program. -/
+nonrec def Prog.arrayElemTy (p : Prog) (arr : ArrayName) : VarTy :=
+  arrayElemTy p.arrayDecls arr
 
 /-- A program has no array instructions. -/
 def NoArrayInstrs (p : Prog) : Prop :=
@@ -178,28 +182,28 @@ inductive Step (p : Prog) : Cfg → Cfg → Prop where
       (σ y).typeOf ≠ .int ∨ (σ z).typeOf ≠ .int →
       Step p (.run pc σ am) (.typeError σ am)
 
-  | arrLoad : p[pc]? = some (.arrLoad x arr idx) →
+  | arrLoad : p[pc]? = some (.arrLoad x arr idx ty) →
       σ idx = .int idxVal → idxVal.toNat < p.arraySize arr →
-      Step p (.run pc σ am) (.run (pc + 1) (σ[x ↦ .int (am.read arr idxVal.toNat)]) am)
+      Step p (.run pc σ am) (.run (pc + 1) (σ[x ↦ Value.ofBitVec ty (am.read arr idxVal.toNat)]) am)
 
-  | arrStore : p[pc]? = some (.arrStore arr idx val) →
-      σ idx = .int idxVal → σ val = .int v → idxVal.toNat < p.arraySize arr →
-      Step p (.run pc σ am) (.run (pc + 1) σ (am.write arr idxVal.toNat v))
+  | arrStore : p[pc]? = some (.arrStore arr idx val ty) →
+      σ idx = .int idxVal → (σ val).typeOf = ty → idxVal.toNat < p.arraySize arr →
+      Step p (.run pc σ am) (.run (pc + 1) σ (am.write arr idxVal.toNat (σ val).toBits))
 
-  | arrLoad_boundsError : p[pc]? = some (.arrLoad x arr idx) →
+  | arrLoad_boundsError : p[pc]? = some (.arrLoad x arr idx ty) →
       σ idx = .int idxVal → ¬ (idxVal.toNat < p.arraySize arr) →
       Step p (.run pc σ am) (.error σ am)
 
-  | arrStore_boundsError : p[pc]? = some (.arrStore arr idx val) →
-      σ idx = .int idxVal → σ val = .int v → ¬ (idxVal.toNat < p.arraySize arr) →
+  | arrStore_boundsError : p[pc]? = some (.arrStore arr idx val ty) →
+      σ idx = .int idxVal → (σ val).typeOf = ty → ¬ (idxVal.toNat < p.arraySize arr) →
       Step p (.run pc σ am) (.error σ am)
 
-  | arrLoad_typeError : p[pc]? = some (.arrLoad x arr idx) →
+  | arrLoad_typeError : p[pc]? = some (.arrLoad x arr idx ty) →
       (σ idx).typeOf ≠ .int →
       Step p (.run pc σ am) (.typeError σ am)
 
-  | arrStore_typeError : p[pc]? = some (.arrStore arr idx val) →
-      (σ idx).typeOf ≠ .int ∨ (σ val).typeOf ≠ .int →
+  | arrStore_typeError : p[pc]? = some (.arrStore arr idx val ty) →
+      (σ idx).typeOf ≠ .int ∨ (σ val).typeOf ≠ ty →
       Step p (.run pc σ am) (.typeError σ am)
 
 
@@ -210,7 +214,7 @@ notation:50 p " ⊩ " c " ⟶ " c' => Step p c c'
 def TAC.successors (instr : TAC) (pc : Label) : List Label :=
   match instr with
   | .const _ _ | .copy _ _ | .binop _ _ _ _ | .boolop _ _ => [pc + 1]
-  | .arrLoad _ _ _ | .arrStore _ _ _ => [pc + 1]
+  | .arrLoad _ _ _ _ | .arrStore _ _ _ _ => [pc + 1]
   | .goto l        => [l]
   | .ifgoto _ l    => [l, pc + 1]
   | .halt          => []
@@ -371,12 +375,12 @@ theorem Step.store_congr {p : Prog} {pc : Nat} {σ τ : Store} {am : ArrayMem} {
     | inr hr => right; simp [Value.typeOf] at hr ⊢; rwa [← hagree]
   | arrLoad h hidx hb =>
     exact ⟨_, .arrLoad h (by rw [← hagree]; exact hidx) hb⟩
-  | arrStore h hidx hval hb =>
-    exact ⟨_, .arrStore h (by rw [← hagree]; exact hidx) (by rw [← hagree]; exact hval) hb⟩
+  | arrStore h hidx hty hb =>
+    exact ⟨_, .arrStore h (by rw [← hagree]; exact hidx) (by simp [Value.typeOf, ← hagree]; exact hty) hb⟩
   | arrLoad_boundsError h hidx hb =>
     exact ⟨_, .arrLoad_boundsError h (by rw [← hagree]; exact hidx) hb⟩
-  | arrStore_boundsError h hidx hval hb =>
-    exact ⟨_, .arrStore_boundsError h (by rw [← hagree]; exact hidx) (by rw [← hagree]; exact hval) hb⟩
+  | arrStore_boundsError h hidx hty hb =>
+    exact ⟨_, .arrStore_boundsError h (by rw [← hagree]; exact hidx) (by simp [Value.typeOf, ← hagree]; exact hty) hb⟩
   | arrLoad_typeError h hne =>
     exact ⟨_, .arrLoad_typeError h (by simp [Value.typeOf] at hne ⊢; rwa [← hagree])⟩
   | arrStore_typeError h hne =>

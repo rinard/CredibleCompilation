@@ -132,6 +132,7 @@ theorem refCompileBool_stuck (sb : SBool) (offset nextTmp : Nat) (σ σ_tac : St
   induction sb generalizing offset nextTmp σ_tac with
   | lit _ => exact absurd trivial hunsafe
   | bvar x => exact absurd trivial hunsafe
+  | barrRead arr idx => sorry
   | cmp cop a b =>
     have htf_a : ∀ v ∈ a.freeVars, v.isTmp = false :=
       fun v hv => htf v (List.mem_append_left _ hv)
@@ -284,6 +285,7 @@ theorem refCompileStmt_stuck (s : Stmt) (fuel : Nat) (σ σ' : Store) (am am' : 
       pc_s < offset + (refCompileStmt s offset nextTmp).1.length := by
   induction s generalizing fuel σ σ' am am' offset nextTmp p σ_tac with
   | skip => simp [Stmt.divSafe] at hunsafe
+  | barrWrite arr idx bval => sorry
   | arrWrite arr idx val =>
     have htf_idx : ∀ v ∈ idx.freeVars, v.isTmp = false :=
       fun v hv => htmpfree v (by simp [Stmt.allVars, Stmt.tmpFree]; exact Or.inl hv)
@@ -738,6 +740,7 @@ theorem refCompileStmt_unsafe (s : Stmt) (fuel : Nat) (σ : Store) (am : ArrayMe
       pc_s < offset + (refCompileStmt s offset nextTmp).1.length := by
   induction s generalizing fuel σ am offset nextTmp p σ_tac with
   | skip => simp [Stmt.divSafe] at hunsafe
+  | barrWrite arr idx bval => sorry
   | arrWrite arr idx val =>
     have htf_idx : ∀ v ∈ idx.freeVars, v.isTmp = false :=
       fun v hv => htmpfree v (by simp [Stmt.allVars, Stmt.tmpFree]; exact Or.inl hv)

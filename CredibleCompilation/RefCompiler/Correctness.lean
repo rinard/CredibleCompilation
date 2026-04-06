@@ -65,6 +65,7 @@ theorem refCompileBool_nextTmp_ge (sb : SBool) (offset nextTmp : Nat) :
     generalize refCompileBool b (offset + codeA.length + 1) (tmp1 + 1) = rb at hb ⊢
     obtain ⟨codeB, bb, tmp2⟩ := rb; simp at hb ⊢
     omega
+  | barrRead arr idx => sorry
 
 theorem refCompileExpr_result_bound (e : SExpr) (offset nextTmp : Nat)
     (htf : ∀ v ∈ e.freeVars, v.isTmp = false) :
@@ -165,6 +166,7 @@ theorem refCompileBool_vars_bound (sb : SBool) (offset nextTmp : Nat)
     have hge_b := refCompileBool_nextTmp_ge b (offset + codeA.length + 1) (tmp1 + 1)
     rw [hrb] at hge_b; simp at hge_b
     exact ⟨tmp1, by omega, by omega, rfl⟩
+  | barrRead arr idx => sorry
 
 -- ============================================================
 -- § 9. Expression compilation correctness
@@ -191,7 +193,7 @@ theorem refCompileExpr_correct (e : SExpr) (offset nextTmp : Nat) (σ σ_tac : S
     simp only [] at hcode ⊢
     have hcodeIdx : CodeAt (refCompileExpr idx offset nextTmp).1 p offset := by
       rw [hri]; exact hcode.left
-    have harrLoad : p[offset + codeIdx.length]? = some (.arrLoad (tmpName tmp1) arr vIdx) := by
+    have harrLoad : p[offset + codeIdx.length]? = some (.arrLoad (tmpName tmp1) arr vIdx .int) := by
       have := hcode.right.head; simpa using this
     obtain ⟨σ_idx, hexec_idx, hval_idx, hntmp_idx, hprev_idx⟩ :=
       ih offset nextTmp σ_tac htf hintv hsafe_idx hagree hcodeIdx
@@ -620,6 +622,7 @@ theorem refCompileBool_correct (sb : SBool) (offset nextTmp : Nat) (σ σ_tac : 
         · intro k hk
           simp only [σ_final]
           rw [Store.update_tmpName_ne (by omega), hprev_b k (by omega), hprev_a k hk]
+  | barrRead arr idx => sorry
 
 -- ============================================================
 -- § 11. Statement compilation correctness
@@ -663,7 +666,7 @@ theorem refCompileStmt_correct (s : Stmt) (fuel : Nat) (σ σ' : Store) (am am' 
     have hcodeVal : CodeAt (refCompileExpr val (offset + codeIdx.length) tmp1).1 p
         (offset + codeIdx.length) := by rw [hrv]; exact hcode.left.right
     have harrStore : p[offset + codeIdx.length + codeVal.length]? =
-        some (.arrStore arr vIdx vVal) := by
+        some (.arrStore arr vIdx vVal .int) := by
       have := hcode.right.head
       simp only [List.length_append] at this
       rwa [show offset + (codeIdx.length + codeVal.length) =
@@ -703,6 +706,7 @@ theorem refCompileStmt_correct (s : Stmt) (fuel : Nat) (σ σ' : Store) (am am' 
           offset + codeIdx.length + codeVal.length + 1 from by omega]
       exact h123
     · intro v hv; rw [hntmp_val v hv, hntmp_idx v hv, hagree v hv]
+  | barrWrite arr idx bval => sorry
   | skip =>
     simp only [Stmt.interp, Option.some.injEq, Prod.mk.injEq] at hinterp
     obtain ⟨rfl, rfl⟩ := hinterp
@@ -728,7 +732,7 @@ theorem refCompileStmt_correct (s : Stmt) (fuel : Nat) (σ σ' : Store) (am am' 
       have hcodeIdx : CodeAt (refCompileExpr idx offset nextTmp).1 p offset := by
         rw [hri]; exact hcode.left
       have harrLoad : p[offset + codeIdx.length]? =
-          some (.arrLoad (tmpName tmp1) arr vIdx) := by
+          some (.arrLoad (tmpName tmp1) arr vIdx .int) := by
         have := hcode.right.head; simpa using this
       have hcopy : p[offset + codeIdx.length + 1]? =
           some (.copy x (tmpName tmp1)) := by

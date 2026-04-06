@@ -31,6 +31,7 @@ theorem compileBool_eq_refCompileBool (b : SBool) (o t : Nat) :
   | not e ih => simp only [compileBool, refCompileBool, ih]
   | and a b iha ihb => simp only [compileBool, refCompileBool, iha, ihb]
   | or a b iha ihb => simp only [compileBool, refCompileBool, iha, ihb]
+  | barrRead arr idx => simp only [compileBool, refCompileBool, compileExpr_eq_refCompileExpr]
 theorem compileStmt_eq_refCompileStmt (s : Stmt) (o t : Nat) :
     compileStmt s o t = refCompileStmt s o t := by
   induction s generalizing o t with
@@ -43,6 +44,8 @@ theorem compileStmt_eq_refCompileStmt (s : Stmt) (o t : Nat) :
     | arrRead _ _ => simp only [compileStmt, refCompileStmt, compileExpr_eq_refCompileExpr]
   | bassign x b => simp only [compileStmt, refCompileStmt, compileBool_eq_refCompileBool]
   | arrWrite _ _ _ => simp only [compileStmt, refCompileStmt, compileExpr_eq_refCompileExpr]
+  | barrWrite _ _ _ =>
+    simp only [compileStmt, refCompileStmt, compileExpr_eq_refCompileExpr, compileBool_eq_refCompileBool]
   | seq s1 s2 ih1 ih2 => simp only [compileStmt, refCompileStmt, ih1, ih2]
   | ite b s1 s2 ih1 ih2 => simp only [compileStmt, refCompileStmt, compileBool_eq_refCompileBool, ih1, ih2]
   | loop b body ih => simp only [compileStmt, refCompileStmt, compileBool_eq_refCompileBool, ih]

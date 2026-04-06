@@ -32,8 +32,8 @@ inductive WellTypedInstr (Γ : TyCtx) : TAC → Prop where
   | goto   : WellTypedInstr Γ (.goto l)
   | ifgoto : WellTypedBoolExpr Γ b → WellTypedInstr Γ (.ifgoto b l)
   | halt   : WellTypedInstr Γ .halt
-  | arrLoad  : Γ x = .int → Γ idx = .int → WellTypedInstr Γ (.arrLoad x arr idx)
-  | arrStore : Γ idx = .int → Γ val = .int → WellTypedInstr Γ (.arrStore arr idx val)
+  | arrLoad  : Γ x = ty → Γ idx = .int → WellTypedInstr Γ (.arrLoad x arr idx ty)
+  | arrStore : Γ idx = .int → Γ val = ty → WellTypedInstr Γ (.arrStore arr idx val ty)
 
 /-- A program is well-typed if every instruction is well-typed. -/
 def WellTypedProg (Γ : TyCtx) (p : Prog) : Prop :=
@@ -75,21 +75,21 @@ theorem Step.progress (p : Prog) (pc : Nat) (σ : Store) (am : ArrayMem) (Γ : T
     · exact ⟨_, .iftrue (hp ▸ hinstr) hb⟩
     · exact ⟨_, .iffall (hp ▸ hinstr) (Bool.eq_false_iff.mpr hb)⟩
   | .halt          => exact ⟨_, .halt (hp ▸ hinstr)⟩
-  | .arrLoad x arr idx =>
+  | .arrLoad x arr idx ty =>
     rw [hp] at hwti; cases hwti with
     | arrLoad _ hidx =>
       obtain ⟨iv, hiv⟩ := Value.int_of_typeOf_int (by rw [hts idx]; exact hidx)
       by_cases hb : iv.toNat < p.arraySize arr
       · exact ⟨_, .arrLoad (hp ▸ hinstr) hiv hb⟩
       · exact ⟨_, .arrLoad_boundsError (hp ▸ hinstr) hiv hb⟩
-  | .arrStore arr idx val =>
+  | .arrStore arr idx val ty =>
     rw [hp] at hwti; cases hwti with
     | arrStore hidx hval =>
       obtain ⟨iv, hiv⟩ := Value.int_of_typeOf_int (by rw [hts idx]; exact hidx)
-      obtain ⟨v, hv⟩ := Value.int_of_typeOf_int (by rw [hts val]; exact hval)
+      have hty : (σ val).typeOf = ty := by rw [hts val]; exact hval
       by_cases hb : iv.toNat < p.arraySize arr
-      · exact ⟨_, .arrStore (hp ▸ hinstr) hiv hv hb⟩
-      · exact ⟨_, .arrStore_boundsError (hp ▸ hinstr) hiv hv hb⟩
+      · exact ⟨_, .arrStore (hp ▸ hinstr) hiv hty hb⟩
+      · exact ⟨_, .arrStore_boundsError (hp ▸ hinstr) hiv hty hb⟩
 
 /-- **Type safety (single step)**: a well-typed program with a well-typed store
     never steps to a type-error configuration. -/
@@ -150,21 +150,20 @@ theorem Step.progress_untyped (p : Prog) (pc : Nat) (σ : Store) (am : ArrayMem)
     · exact ⟨_, .iftrue (hp ▸ hinstr) hb⟩
     · exact ⟨_, .iffall (hp ▸ hinstr) (Bool.eq_false_iff.mpr hb)⟩
   | .halt          => exact ⟨_, .halt (hp ▸ hinstr)⟩
-  | .arrLoad x arr idx =>
+  | .arrLoad x arr idx ty =>
     by_cases hidx : (σ idx).typeOf = .int
     · obtain ⟨iv, hiv⟩ := Value.int_of_typeOf_int hidx
       by_cases hb : iv.toNat < p.arraySize arr
       · exact ⟨_, .arrLoad (hp ▸ hinstr) hiv hb⟩
       · exact ⟨_, .arrLoad_boundsError (hp ▸ hinstr) hiv hb⟩
     · exact ⟨_, .arrLoad_typeError (hp ▸ hinstr) hidx⟩
-  | .arrStore arr idx val =>
+  | .arrStore arr idx val ty =>
     by_cases hidx : (σ idx).typeOf = .int
-    · by_cases hval : (σ val).typeOf = .int
+    · by_cases hval : (σ val).typeOf = ty
       · obtain ⟨iv, hiv⟩ := Value.int_of_typeOf_int hidx
-        obtain ⟨v, hv⟩ := Value.int_of_typeOf_int hval
         by_cases hb : iv.toNat < p.arraySize arr
-        · exact ⟨_, .arrStore (hp ▸ hinstr) hiv hv hb⟩
-        · exact ⟨_, .arrStore_boundsError (hp ▸ hinstr) hiv hv hb⟩
+        · exact ⟨_, .arrStore (hp ▸ hinstr) hiv hval hb⟩
+        · exact ⟨_, .arrStore_boundsError (hp ▸ hinstr) hiv hval hb⟩
       · exact ⟨_, .arrStore_typeError (hp ▸ hinstr) (.inr hval)⟩
     · exact ⟨_, .arrStore_typeError (hp ▸ hinstr) (.inl hidx)⟩
 
@@ -187,8 +186,8 @@ def checkWellTypedInstr (Γ : TyCtx) : TAC → Bool
   | .goto _        => true
   | .ifgoto b _    => checkWellTypedBoolExpr Γ b
   | .halt          => true
-  | .arrLoad x _ idx  => decide (Γ x = .int) && decide (Γ idx = .int)
-  | .arrStore _ idx val => decide (Γ idx = .int) && decide (Γ val = .int)
+  | .arrLoad x _ idx ty  => decide (Γ x = ty) && decide (Γ idx = .int)
+  | .arrStore _ idx val ty => decide (Γ idx = .int) && decide (Γ val = ty)
 
 theorem checkWellTypedBoolExpr_sound {Γ : TyCtx} {b : BoolExpr}
     (h : checkWellTypedBoolExpr Γ b = true) : WellTypedBoolExpr Γ b := by
@@ -225,10 +224,10 @@ theorem checkWellTypedInstr_sound {Γ : TyCtx} {instr : TAC}
     simp [checkWellTypedInstr] at h
     exact .ifgoto (checkWellTypedBoolExpr_sound h)
   | halt => exact .halt
-  | arrLoad x arr idx =>
+  | arrLoad x arr idx ty =>
     simp [checkWellTypedInstr, Bool.and_eq_true, decide_eq_true_eq] at h
     exact .arrLoad h.1 h.2
-  | arrStore arr idx val =>
+  | arrStore arr idx val ty =>
     simp [checkWellTypedInstr, Bool.and_eq_true, decide_eq_true_eq] at h
     exact .arrStore h.1 h.2
 
@@ -288,7 +287,7 @@ theorem type_preservation {Γ : TyCtx} {p : Prog} {pc pc' : Nat} {σ σ' : Store
     have := instr_eq_of_lookup hpc h
     rw [this] at hwti
     match hwti with
-    | .arrLoad hx _ => exact TypedStore.update_typed hts (by simp [Value.typeOf]; exact hx.symm)
+    | .arrLoad hx _ => exact TypedStore.update_typed hts (by simp [Value.typeOf_ofBitVec]; exact hx.symm)
   | arrStore _ _ _ _ => exact hts
 
 
@@ -352,10 +351,10 @@ theorem type_safety {p : Prog} {σ₀ σ' : Store} {am₀ am' : ArrayMem} {Γ : 
       exact ih _ _ am rfl hc'
         (hclosed.2 pc _ σ _ am am hpc (Step.arrLoad (am := am) h hidx hb))
         (type_preservation (am := am) (am' := am) hwtp hts hpc (Step.arrLoad (am := am) h hidx hb))
-    | arrStore h hidx hv hb =>
+    | arrStore h hidx hty hb =>
       exact ih _ _ _ rfl hc'
-        (hclosed.2 pc _ σ _ am _ hpc (Step.arrStore (am := am) h hidx hv hb))
-        (type_preservation (am := am) hwtp hts hpc (Step.arrStore (am := am) h hidx hv hb))
+        (hclosed.2 pc _ σ _ am _ hpc (Step.arrStore (am := am) h hidx hty hb))
+        (type_preservation (am := am) hwtp hts hpc (Step.arrStore (am := am) h hidx hty hb))
     | arrLoad_boundsError _ _ _ => cases rest with
       | refl => exact Cfg.noConfusion hc'
       | step s _ => exact Step.no_step_from_error s

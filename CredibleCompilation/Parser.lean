@@ -184,6 +184,7 @@ partial def parseBAtom (toks : List Token) : Except String (SBool × List Token)
     | _ =>
       match e1 with
       | .var x => .ok (.bvar x, rest)
+      | .arrRead arr idx => .ok (.barrRead arr idx, rest)
       | _ => .error "expected comparison operator after expression"
 
 partial def parseBNot (toks : List Token) : Except String (SBool × List Token) :=
@@ -224,9 +225,26 @@ partial def parseStmtAtom (toks : List Token) : Except String (Stmt × List Toke
   | Token.ident x :: Token.lbracket :: rest => do
     let (idx, rest') ← parseExpr rest
     match rest' with
-    | Token.rbracket :: Token.op ":=" :: rest'' => do
-      let (val, rest''') ← parseExpr rest''
-      .ok (.arrWrite x idx val, rest''')
+    | Token.rbracket :: Token.op ":=" :: rest'' =>
+      match rest'' with
+      | Token.kw "true" :: _ | Token.kw "false" :: _ | Token.op "!" :: _ => do
+        let (b, rest''') ← parseBOr rest''
+        .ok (.barrWrite x idx b, rest''')
+      | Token.lparen :: _ =>
+        match parseBOr rest'' with
+        | .ok (b, rest''') => .ok (.barrWrite x idx b, rest''')
+        | .error _ => do
+          let (val, rest''') ← parseExpr rest''
+          .ok (.arrWrite x idx val, rest''')
+      | _ => do
+        let (val, rest''') ← parseExpr rest''
+        match rest''' with
+        | Token.op "<" :: _ | Token.op "<=" :: _ | Token.op ">" :: _ | Token.op ">=" :: _
+        | Token.op "==" :: _ | Token.op "!=" :: _
+        | Token.op "&&" :: _ | Token.op "||" :: _ => do
+          let (b, rest4) ← parseBOr rest''
+          .ok (.barrWrite x idx b, rest4)
+        | _ => .ok (.arrWrite x idx val, rest''')
     | _ => .error "expected '] :=' for array write"
   | Token.ident x :: Token.op ":=" :: rest =>
     match rest with

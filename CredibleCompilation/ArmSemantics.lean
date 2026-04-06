@@ -298,12 +298,12 @@ def formalGenInstr (vm : VarMap) (pcMap : Nat → Nat) (instr : TAC)
   | .ifgoto be l =>
     formalGenBoolExpr vm be ++ [.cbnz .x0 (pcMap l)]
   | .halt => [.b haltLabel]
-  | .arrLoad x arr idx =>
+  | .arrLoad x arr idx _ =>
     match vm.lookup idx, vm.lookup x with
     | some offIdx, some offX =>
       [.ldr .x1 offIdx, .arrLd .x0 arr .x1, .str .x0 offX]
     | _, _ => []
-  | .arrStore arr idx val =>
+  | .arrStore arr idx val _ =>
     match vm.lookup idx, vm.lookup val with
     | some offIdx, some offVal =>
       [.ldr .x1 offIdx, .ldr .x2 offVal, .arrSt arr .x1 .x2]

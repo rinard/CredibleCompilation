@@ -64,6 +64,24 @@ theorem bool_of_typeOf_bool {v : Value} (h : v.typeOf = .bool) : ∃ b, v = .boo
 @[simp] theorem typeOf_int (n : BitVec 64) : (Value.int n).typeOf = .int := rfl
 @[simp] theorem typeOf_bool (b : Bool) : (Value.bool b).typeOf = .bool := rfl
 
+/-- Wrap a BitVec 64 as a Value of the given type. -/
+def ofBitVec : VarTy → BitVec 64 → Value
+  | .int,  v => .int v
+  | .bool, v => .bool (v != 0)
+
+/-- Extract the BitVec 64 payload from a Value (booleans become 0 or 1). -/
+def toBits : Value → BitVec 64
+  | .int v  => v
+  | .bool b => if b then 1 else 0
+
+@[simp] theorem ofBitVec_int (v : BitVec 64) : ofBitVec .int v = .int v := rfl
+@[simp] theorem ofBitVec_bool (v : BitVec 64) : ofBitVec .bool v = .bool (v != 0) := rfl
+@[simp] theorem toBits_int (v : BitVec 64) : (Value.int v).toBits = v := rfl
+@[simp] theorem toBits_bool (b : Bool) : (Value.bool b).toBits = if b then 1 else 0 := rfl
+
+@[simp] theorem typeOf_ofBitVec (ty : VarTy) (v : BitVec 64) : (ofBitVec ty v).typeOf = ty := by
+  cases ty <;> simp [ofBitVec, typeOf]
+
 end Value
 
 /-- A store (state) maps every variable to a typed value. -/
@@ -169,6 +187,12 @@ def arraySize (decls : List (ArrayName × Nat × VarTy)) (arr : ArrayName) : Nat
   match decls.find? (fun p => p.1 == arr) with
   | some (_, n, _) => n
   | none => 0
+
+/-- Look up an array's declared element type.  Returns `.int` for undeclared arrays. -/
+def arrayElemTy (decls : List (ArrayName × Nat × VarTy)) (arr : ArrayName) : VarTy :=
+  match decls.find? (fun p => p.1 == arr) with
+  | some (_, _, ty) => ty
+  | none => .int
 
 -- ============================================================
 -- § 2. Binary operators

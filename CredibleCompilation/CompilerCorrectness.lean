@@ -32,12 +32,14 @@ def SBool.freeVars : SBool → List Var
   | .not e => e.freeVars
   | .and a b => a.freeVars ++ b.freeVars
   | .or a b => a.freeVars ++ b.freeVars
+  | .barrRead _ idx => idx.freeVars
 
 def Stmt.allVars : Stmt → List Var
   | .skip => []
   | .assign x e => x :: e.freeVars
   | .bassign x b => x :: b.freeVars
   | .arrWrite _ idx val => idx.freeVars ++ val.freeVars
+  | .barrWrite _ idx bval => idx.freeVars ++ bval.freeVars
   | .seq s₁ s₂ => s₁.allVars ++ s₂.allVars
   | .ite b s₁ s₂ => b.freeVars ++ s₁.allVars ++ s₂.allVars
   | .loop b body => b.freeVars ++ body.allVars
@@ -83,6 +85,7 @@ theorem SBool.eval_agree (sb : SBool) (σ τ : Store) (am : ArrayMem)
     simp only [SBool.eval, SBool.freeVars] at *
     rw [iha (fun v hv => h v (List.mem_append_left _ hv)),
         ihb (fun v hv => h v (List.mem_append_right _ hv))]
+  | barrRead idx ih => sorry
 
 theorem SExpr.eval_tmpAgree (e : SExpr) (σ τ : Store) (am : ArrayMem)
     (hagree : ∀ v, v.isTmp = false → σ v = τ v)
@@ -139,6 +142,7 @@ theorem Stmt.interp_tmpAgree (s : Stmt) (fuel : Nat) (σ τ : Store) (am : Array
     refine ⟨τ, am.write arr (idx.eval τ am).toNat (val.eval τ am), by simp [Stmt.interp], hagree, ?_⟩
     rw [SExpr.eval_tmpAgree idx σ τ am hagree htf_idx,
         SExpr.eval_tmpAgree val σ τ am hagree htf_val]
+  | barrWrite arr idx bval => sorry
   | seq s₁ s₂ ih₁ ih₂ =>
     simp only [Stmt.interp] at h
     cases hq : s₁.interp fuel σ am with
@@ -215,12 +219,14 @@ def SBool.divSafe (σ : Store) (am : ArrayMem) : SBool → Prop
   | .not e => e.divSafe σ am
   | .and a b => a.divSafe σ am ∧ (a.eval σ am = true → b.divSafe σ am)
   | .or a b => a.divSafe σ am ∧ (a.eval σ am = false → b.divSafe σ am)
+  | .barrRead _ idx => idx.divSafe σ am
 
 def Stmt.divSafe (fuel : Nat) (σ : Store) (am : ArrayMem) : Stmt → Prop
   | .skip => True
   | .assign _ e => e.divSafe σ am
   | .bassign _ b => b.divSafe σ am
   | .arrWrite _ idx val => idx.divSafe σ am ∧ val.divSafe σ am
+  | .barrWrite _ idx bval => idx.divSafe σ am ∧ bval.divSafe σ am
   | .seq s₁ s₂ =>
     s₁.divSafe fuel σ am ∧
     match s₁.interp fuel σ am with
@@ -253,6 +259,7 @@ def SBool.intTyped (σ : Store) : SBool → Prop
   | .not e => e.intTyped σ
   | .and a b => a.intTyped σ ∧ b.intTyped σ
   | .or a b => a.intTyped σ ∧ b.intTyped σ
+  | .barrRead _ idx => ∀ v ∈ idx.freeVars, ∃ n, σ v = .int n
 
 /-- All arithmetic-position variables in a statement have int values in σ.
     Mirrors `Stmt.divSafe`: for sequential/branching statements, uses the
@@ -263,6 +270,7 @@ def Stmt.intTyped (fuel : Nat) (σ : Store) (am : ArrayMem) : Stmt → Prop
   | .bassign _ b => b.intTyped σ
   | .arrWrite _ idx val => (∀ v ∈ idx.freeVars, ∃ n, σ v = .int n) ∧
                            (∀ v ∈ val.freeVars, ∃ n, σ v = .int n)
+  | .barrWrite _ idx bval => (∀ v ∈ idx.freeVars, ∃ n, σ v = .int n) ∧ bval.intTyped σ
   | .seq s₁ s₂ =>
     s₁.intTyped fuel σ am ∧
     match s₁.interp fuel σ am with
@@ -348,6 +356,9 @@ private theorem checkSBool_declared {lookup : Var → Option VarTy}
     rcases hv with ha | hb
     · exact iha h.1 v ha
     · exact ihb h.2 v hb
+  | barrRead arr idx =>
+    simp [Program.checkSBool, Bool.and_eq_true] at h
+    intro v hv; simp [SBool.freeVars] at hv; exact checkSExpr_declared h.2 v hv
 
 /-- All variables in a well-typed statement are declared. -/
 private theorem checkStmt_declared {lookup : Var → Option VarTy}
@@ -375,6 +386,13 @@ private theorem checkStmt_declared {lookup : Var → Option VarTy}
     rcases hv' with hi' | hv'
     · exact checkSExpr_declared hi v hi'
     · exact checkSExpr_declared hv v hv'
+  | barrWrite arr idx bval =>
+    simp [Program.checkStmt, Bool.and_eq_true] at h
+    obtain ⟨⟨_, hi⟩, hb⟩ := h
+    intro v hv'; simp [Stmt.allVars] at hv'
+    rcases hv' with hi' | hb'
+    · exact checkSExpr_declared hi v hi'
+    · exact checkSBool_declared hb v hb'
   | seq s1 s2 ih1 ih2 =>
     simp [Program.checkStmt, Bool.and_eq_true] at h
     intro v hv; simp [Stmt.allVars] at hv
@@ -447,6 +465,8 @@ theorem Stmt.interp_preserves_typedStore
     · case isTrue heq => simp [heq, Value.typeOf_bool, hcompat _ .bool hchk.1]
     · case isFalse => exact hts y
   | arrWrite _ _ _ =>
+    simp [Stmt.interp] at hinterp; obtain ⟨rfl, _⟩ := hinterp; exact hts
+  | barrWrite _ _ _ =>
     simp [Stmt.interp] at hinterp; obtain ⟨rfl, _⟩ := hinterp; exact hts
   | seq s1 s2 ih1 ih2 =>
     simp [Program.checkStmt, Bool.and_eq_true] at hchk
@@ -533,6 +553,9 @@ private theorem checkSBool_intTyped
   | or a b iha ihb =>
     simp [Program.checkSBool, Bool.and_eq_true] at hchk
     exact ⟨iha hchk.1, ihb hchk.2⟩
+  | barrRead arr idx =>
+    simp [Program.checkSBool, Bool.and_eq_true] at hchk
+    exact checkSExpr_intVars hcompat hchk.2 hts
 
 /-- If `checkStmt lookup s = true`, `TypedStore Γ σ`, and lookup/Γ are compatible,
     then `s.intTyped fuel σ`. -/
@@ -558,6 +581,11 @@ theorem checkStmt_intTyped
     obtain ⟨⟨_, hi⟩, hv⟩ := hchk
     simp [Stmt.intTyped]
     exact ⟨checkSExpr_intVars hcompat hi hts, checkSExpr_intVars hcompat hv hts⟩
+  | barrWrite _ idx bval =>
+    simp [Program.checkStmt, Bool.and_eq_true] at hchk
+    obtain ⟨⟨_, hi⟩, hb⟩ := hchk
+    simp [Stmt.intTyped]
+    exact ⟨checkSExpr_intVars hcompat hi hts, checkSBool_intTyped hcompat hb hts⟩
   | seq s1 s2 ih1 ih2 =>
     simp [Program.checkStmt, Bool.and_eq_true] at hchk
     simp only [Stmt.intTyped]

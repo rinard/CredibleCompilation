@@ -127,6 +127,7 @@ def SBool.exprFreeVars : SBool → List Var
   | .not e      => e.exprFreeVars
   | .and a b    => a.exprFreeVars ++ b.exprFreeVars
   | .or a b     => a.exprFreeVars ++ b.exprFreeVars
+  | .barrRead _ idx => idx.freeVars
 
 /-- Integer-safety: all variables used in `SExpr` positions have `.int` values,
     threaded through interpretation just like `Stmt.divSafe`. -/
@@ -136,6 +137,8 @@ def Stmt.intSafe (fuel : Nat) (σ : Store) (am : ArrayMem) : Stmt → Prop
   | .bassign _ b => ∀ v ∈ b.exprFreeVars, ∃ n, σ v = .int n
   | .arrWrite _ idx val => (∀ v ∈ idx.freeVars, ∃ n, σ v = .int n) ∧
                            (∀ v ∈ val.freeVars, ∃ n, σ v = .int n)
+  | .barrWrite _ idx bval => (∀ v ∈ idx.freeVars, ∃ n, σ v = .int n) ∧
+                              (∀ v ∈ bval.exprFreeVars, ∃ n, σ v = .int n)
   | .seq s₁ s₂  =>
     s₁.intSafe fuel σ am ∧
     match s₁.interp fuel σ am with
@@ -174,7 +177,7 @@ def refCompileExpr (e : SExpr) (offset nextTmp : Nat) : List TAC × Var × Nat :
   | .arrRead arr idx =>
     let (codeIdx, vIdx, tmp1) := refCompileExpr idx offset nextTmp
     let t := tmpName tmp1
-    (codeIdx ++ [.arrLoad t arr vIdx], t, tmp1 + 1)
+    (codeIdx ++ [.arrLoad t arr vIdx .int], t, tmp1 + 1)
 
 def refCompileBool (b : SBool) (offset nextTmp : Nat) : List TAC × BoolExpr × Nat :=
   match b with
@@ -219,6 +222,10 @@ def refCompileBool (b : SBool) (offset nextTmp : Nat) : List TAC × BoolExpr × 
        TAC.goto endL,
        TAC.const tR (.int 1)]
     (code, .cmpLit .ne tR 0, tmp2)
+  | .barrRead arr idx =>
+    let (codeIdx, vIdx, tmp1) := refCompileExpr idx offset nextTmp
+    let t := tmpName tmp1
+    (codeIdx ++ [.arrLoad t arr vIdx .int], .cmpLit .ne t 0, tmp1 + 1)
 
 def refCompileStmt (s : Stmt) (offset nextTmp : Nat) : List TAC × Nat :=
   match s with
@@ -234,14 +241,27 @@ def refCompileStmt (s : Stmt) (offset nextTmp : Nat) : List TAC × Nat :=
     | .arrRead arr idx =>
       let (codeIdx, vIdx, tmp1) := refCompileExpr idx offset nextTmp
       let t := tmpName tmp1
-      (codeIdx ++ [.arrLoad t arr vIdx, .copy x t], tmp1 + 1)
+      (codeIdx ++ [.arrLoad t arr vIdx .int, .copy x t], tmp1 + 1)
   | .bassign x b =>
     let (code, be, tmp') := refCompileBool b offset nextTmp
     (code ++ [.boolop x be], tmp')
   | .arrWrite arr idx val =>
     let (codeIdx, vIdx, tmp1) := refCompileExpr idx offset nextTmp
     let (codeVal, vVal, tmp2) := refCompileExpr val (offset + codeIdx.length) tmp1
-    (codeIdx ++ codeVal ++ [.arrStore arr vIdx vVal], tmp2)
+    (codeIdx ++ codeVal ++ [.arrStore arr vIdx vVal .int], tmp2)
+  | .barrWrite arr idx bval =>
+    let (codeIdx, vIdx, tmp1) := refCompileExpr idx offset nextTmp
+    let (codeBool, be, tmp2) := refCompileBool bval (offset + codeIdx.length) tmp1
+    let tInt := tmpName tmp2
+    let afterCodeBool := offset + codeIdx.length + codeBool.length
+    let trueL := afterCodeBool + 3
+    let endL := trueL + 1
+    let convCode : List TAC :=
+      [TAC.ifgoto be trueL,
+       TAC.const tInt (.int (0 : BitVec 64)),
+       TAC.goto endL,
+       TAC.const tInt (.int (1 : BitVec 64))]
+    (codeIdx ++ codeBool ++ convCode ++ [.arrStore arr vIdx tInt .int], tmp2 + 1)
   | .seq s1 s2 =>
     let (code1, tmp1) := refCompileStmt s1 offset nextTmp
     let (code2, tmp2) := refCompileStmt s2 (offset + code1.length) tmp1
@@ -342,19 +362,24 @@ theorem FragExec.single_iffalse {p : Prog} {pc : Nat} {σ : Store} {am : ArrayMe
 
 theorem FragExec.single_arrLoad {p : Prog} {pc : Nat} {σ : Store} {am : ArrayMem}
     {x : Var} {arr : ArrayName} {idx : Var} {idxVal : BitVec 64}
-    (h : p[pc]? = some (.arrLoad x arr idx))
+    (h : p[pc]? = some (.arrLoad x arr idx .int))
     (hidx : σ idx = .int idxVal)
     (hbounds : idxVal.toNat < p.arraySize arr) :
-    FragExec p pc σ (pc + 1) (σ[x ↦ .int (am.read arr idxVal.toNat)]) am am :=
-  Steps.single (Step.arrLoad h hidx hbounds)
+    FragExec p pc σ (pc + 1) (σ[x ↦ .int (am.read arr idxVal.toNat)]) am am := by
+  have := Steps.single (Step.arrLoad (am := am) h hidx hbounds)
+  simp [Value.ofBitVec] at this
+  exact this
 
 theorem FragExec.single_arrStore {p : Prog} {pc : Nat} {σ : Store} {am : ArrayMem}
     {arr : ArrayName} {idx val : Var} {idxVal v : BitVec 64}
-    (h : p[pc]? = some (.arrStore arr idx val))
+    (h : p[pc]? = some (.arrStore arr idx val .int))
     (hidx : σ idx = .int idxVal) (hval : σ val = .int v)
     (hbounds : idxVal.toNat < p.arraySize arr) :
-    FragExec p pc σ (pc + 1) σ am (am.write arr idxVal.toNat v) :=
-  Steps.single (Step.arrStore h hidx hval hbounds)
+    FragExec p pc σ (pc + 1) σ am (am.write arr idxVal.toNat v) := by
+  have hty : (σ val).typeOf = .int := by rw [hval]; simp [Value.typeOf]
+  have := Steps.single (Step.arrStore (am := am) h hidx hty hbounds)
+  simp [hval, Value.toBits] at this
+  exact this
 
 -- ============================================================
 -- § 5. BoolExpr evaluation congruence (pointwise)

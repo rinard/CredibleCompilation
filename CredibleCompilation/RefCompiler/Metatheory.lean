@@ -85,9 +85,11 @@ theorem Stmt.interp_fuel_succ (s : Stmt) :
   induction s with
   | skip | assign _ _ | bassign _ _ | arrWrite _ _ _ =>
     intro _ _ _ _ h; simp_all [Stmt.interp]
+  | barrWrite arr idx bval =>
+    intro _ _ _ _ h; simp_all [Stmt.interp]
   | seq s₁ s₂ ih₁ ih₂ =>
     intro fuel σ am r h
-    simp only [Stmt.interp.eq_5] at h ⊢
+    simp only [Stmt.interp.eq_6] at h ⊢
     cases h₁ : s₁.interp fuel σ am with
     | none => simp [h₁] at h
     | some val =>
@@ -97,17 +99,17 @@ theorem Stmt.interp_fuel_succ (s : Stmt) :
       exact ih₂ fuel σ₁ am₁ r h
   | ite b s₁ s₂ ih₁ ih₂ =>
     intro fuel σ am r h
-    simp only [Stmt.interp.eq_6] at h ⊢
+    simp only [Stmt.interp.eq_7] at h ⊢
     split at h
     · rename_i hb; rw [if_pos hb]; exact ih₁ fuel σ am r h
     · rename_i hb; rw [if_neg hb]; exact ih₂ fuel σ am r h
   | loop b body ih_body =>
     intro fuel
     induction fuel with
-    | zero => intro σ am r h; simp [Stmt.interp.eq_7] at h
+    | zero => intro σ am r h; simp [Stmt.interp.eq_8] at h
     | succ fuel' ih_fuel =>
       intro σ am r h
-      rw [Stmt.interp.eq_8] at h; rw [Stmt.interp.eq_8]
+      rw [Stmt.interp.eq_9] at h; rw [Stmt.interp.eq_9]
       by_cases hb : b.eval σ am = true
       · rw [if_pos hb] at h ⊢
         simp only [bind, Option.bind] at h ⊢
@@ -145,9 +147,11 @@ theorem Stmt.divSafe_fuel_succ (s : Stmt) :
   induction s with
   | skip | assign _ _ | bassign _ _ | arrWrite _ _ _ =>
     intro _ _ _ h; simp_all [Stmt.divSafe]
+  | barrWrite arr idx bval =>
+    intro _ _ _ h; simp_all [Stmt.divSafe]
   | seq s₁ s₂ ih₁ ih₂ =>
     intro fuel σ am h
-    rw [Stmt.divSafe.eq_5] at h ⊢
+    rw [Stmt.divSafe.eq_6] at h ⊢
     obtain ⟨hds₁, hds₂⟩ := h
     refine ⟨ih₁ fuel σ am hds₁, ?_⟩
     cases h₁ : s₁.interp fuel σ am with
@@ -158,7 +162,7 @@ theorem Stmt.divSafe_fuel_succ (s : Stmt) :
       rw [h₁'] at hds₂; exact ih₂ fuel σ₁ am₁ hds₂
   | ite b s₁ s₂ ih₁ ih₂ =>
     intro fuel σ am h
-    rw [Stmt.divSafe.eq_6] at h ⊢
+    rw [Stmt.divSafe.eq_7] at h ⊢
     obtain ⟨hb, hbranch⟩ := h
     refine ⟨hb, ?_⟩
     split at hbranch
@@ -167,10 +171,10 @@ theorem Stmt.divSafe_fuel_succ (s : Stmt) :
   | loop b body ih_body =>
     intro fuel
     induction fuel with
-    | zero => intro σ am _; simp [Stmt.divSafe.eq_7]
+    | zero => intro σ am _; simp [Stmt.divSafe.eq_8]
     | succ fuel' ih_fuel =>
       intro σ am h
-      rw [Stmt.divSafe.eq_8] at h ⊢
+      rw [Stmt.divSafe.eq_9] at h ⊢
       obtain ⟨hb, hbranch⟩ := h
       refine ⟨hb, ?_⟩
       by_cases hcond : b.eval σ am = true
@@ -203,9 +207,11 @@ theorem Stmt.intTyped_fuel_succ (s : Stmt) :
   induction s with
   | skip | assign _ _ | bassign _ _ | arrWrite _ _ _ =>
     intro _ _ _ h; simp_all [Stmt.intTyped]
+  | barrWrite arr idx bval =>
+    intro _ _ _ h; simp_all [Stmt.intTyped]
   | seq s₁ s₂ ih₁ ih₂ =>
     intro fuel σ am h
-    rw [Stmt.intTyped.eq_5] at h ⊢
+    rw [Stmt.intTyped.eq_6] at h ⊢
     obtain ⟨hit₁, hit₂⟩ := h
     refine ⟨ih₁ fuel σ am hit₁, ?_⟩
     cases h₁ : s₁.interp fuel σ am with
@@ -216,7 +222,7 @@ theorem Stmt.intTyped_fuel_succ (s : Stmt) :
       rw [h₁'] at hit₂; exact ih₂ fuel σ₁ am₁ hit₂
   | ite b s₁ s₂ ih₁ ih₂ =>
     intro fuel σ am h
-    rw [Stmt.intTyped.eq_6] at h ⊢
+    rw [Stmt.intTyped.eq_7] at h ⊢
     obtain ⟨hb, hbranch⟩ := h
     refine ⟨hb, ?_⟩
     split at hbranch
@@ -225,10 +231,10 @@ theorem Stmt.intTyped_fuel_succ (s : Stmt) :
   | loop b body ih_body =>
     intro fuel
     induction fuel with
-    | zero => intro σ am _; simp [Stmt.intTyped.eq_7]
+    | zero => intro σ am _; simp [Stmt.intTyped.eq_8]
     | succ fuel' ih_fuel =>
       intro σ am h
-      rw [Stmt.intTyped.eq_8] at h ⊢
+      rw [Stmt.intTyped.eq_9] at h ⊢
       obtain ⟨hb, hbranch⟩ := h
       refine ⟨hb, ?_⟩
       by_cases hcond : b.eval σ am = true
@@ -345,6 +351,7 @@ theorem refCompileStmt_diverges (s : Stmt) (σ : Store) (am : ArrayMem)
   | assign _ _ => intro _; exfalso; have := hdiv 0; simp [Stmt.interp] at this
   | bassign _ _ => intro _; exfalso; have := hdiv 0; simp [Stmt.interp] at this
   | arrWrite _ _ _ => intro _; exfalso; have := hdiv 0; simp [Stmt.interp] at this
+  | barrWrite _ _ _ => intro _; exfalso; have := hdiv 0; simp [Stmt.interp] at this
   | seq s₁ s₂ ih₁ ih₂ =>
     intro N
     -- Either s₁ diverges, or s₁ terminates and s₂ diverges
@@ -373,7 +380,7 @@ theorem refCompileStmt_diverges (s : Stmt) (σ : Store) (am : ArrayMem)
       have hdiv₂ : ∀ fuel, s₂.interp fuel σ₁ am₁ = none := by
         intro f
         have hseq := hdiv (max fuel₁ f)
-        simp only [Stmt.interp.eq_5] at hseq
+        simp only [Stmt.interp.eq_6] at hseq
         have hterm := s₁.interp_fuel_mono fuel₁ (max fuel₁ f - fuel₁) σ am ⟨σ₁, am₁⟩ hr₁
         rw [show fuel₁ + (max fuel₁ f - fuel₁) = max fuel₁ f from by omega] at hterm
         simp only [hterm] at hseq
@@ -385,7 +392,7 @@ theorem refCompileStmt_diverges (s : Stmt) (σ : Store) (am : ArrayMem)
       have hds₂ : ∀ f, s₂.divSafe f σ₁ am₁ := by
         intro f
         have hsf := hsafe (max fuel₁ f)
-        simp only [Stmt.divSafe.eq_5] at hsf
+        simp only [Stmt.divSafe.eq_6] at hsf
         have hterm := s₁.interp_fuel_mono fuel₁ (max fuel₁ f - fuel₁) σ am ⟨σ₁, am₁⟩ hr₁
         rw [show fuel₁ + (max fuel₁ f - fuel₁) = max fuel₁ f from by omega] at hterm
         rw [hterm] at hsf
@@ -393,7 +400,7 @@ theorem refCompileStmt_diverges (s : Stmt) (σ : Store) (am : ArrayMem)
       have hintv₂ : ∀ f, s₂.intTyped f σ₁ am₁ := by
         intro f
         have hif := hintv (max fuel₁ f)
-        simp only [Stmt.intTyped.eq_5] at hif
+        simp only [Stmt.intTyped.eq_6] at hif
         have hterm := s₁.interp_fuel_mono fuel₁ (max fuel₁ f - fuel₁) σ am ⟨σ₁, am₁⟩ hr₁
         rw [show fuel₁ + (max fuel₁ f - fuel₁) = max fuel₁ f from by omega] at hterm
         rw [hterm] at hif
