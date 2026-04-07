@@ -609,6 +609,33 @@ def checkBoundsPreservationExec (cert : ECertificate) : Bool :=
       | _ => false
     | _ => true
 
+/-- **Condition 12**: On each orig path, all instructions after the first are scalar,
+    AND if the first orig instruction is an array op, the trans instruction at pc_t must
+    also be an array op (so bounds transfer from the trans step).
+    This ensures array bounds can always be established on the orig path. -/
+def checkOrigPathBoundsOk (cert : ECertificate) : Bool :=
+  (List.range cert.trans.size).all fun pc_t =>
+    match cert.trans[pc_t]? with
+    | some .halt => true
+    | some _ =>
+      match cert.instrCerts[pc_t]? with
+      | some ic =>
+        -- If orig at ic.pc_orig is an array op, trans must also be an array op
+        (match cert.orig[ic.pc_orig]? with
+         | some (.arrLoad ..) | some (.arrStore ..) =>
+           match cert.trans[pc_t]? with
+           | some (.arrLoad ..) | some (.arrStore ..) => true
+           | _ => false
+         | _ => true) &&
+        -- All intermediate orig path labels have scalar instructions
+        ic.transitions.all fun tc =>
+          tc.origLabels.dropLast.all fun l =>
+            match cert.orig[l]? with
+            | some instr => instr.isScalar
+            | none => true
+      | none => false
+    | none => true
+
 /-- **Condition 11**: Both programs declare the same array sizes. -/
 def checkArraySizesExec (cert : ECertificate) : Bool :=
   cert.orig.arrayDecls == cert.trans.arrayDecls
@@ -694,6 +721,7 @@ def checkCertificateExec (cert : ECertificate) : Bool :=
   checkDivPreservationExec cert &&
   checkBoundsPreservationExec cert &&
   checkArraySizesExec cert &&
+  checkOrigPathBoundsOk cert &&
   checkSuccessorsInBounds cert
 
 /-- Verbose check: returns the result of each individual condition. -/
@@ -714,6 +742,7 @@ def checkCertificateVerboseExec (cert : ECertificate) : List (String × Bool) :=
     ("div_preservation",      checkDivPreservationExec cert),
     ("bounds_preservation",   checkBoundsPreservationExec cert),
     ("array_sizes_equal",     checkArraySizesExec cert),
+    ("orig_path_bounds_ok",   checkOrigPathBoundsOk cert),
     ("successors_in_bounds",  checkSuccessorsInBounds cert) ]
 
 /-- Observable output of a configuration with respect to an executable certificate.

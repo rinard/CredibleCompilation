@@ -93,6 +93,7 @@ def checkErrorPreservationProp (cert : PCertificate) : Prop :=
   ∀ (pc_t : Label) (σ_t σ_o : Store) (am_t : ArrayMem) (am_o : ArrayMem),
     pc_t < cert.trans.size → (cert.instrCerts pc_t).storeRel σ_o am_o σ_t am_t →
     cert.inv_trans pc_t σ_t am_t → cert.inv_orig (cert.instrCerts pc_t).pc_orig σ_o am_o →
+    TypedStore cert.tyCtx σ_o →
     (cert.trans ⊩ Cfg.run pc_t σ_t am_t ⟶ Cfg.error σ_t am_t) →
     ∃ σ_o' am_o', cert.orig ⊩ Cfg.run (cert.instrCerts pc_t).pc_orig σ_o am_o ⟶* Cfg.error σ_o' am_o'
 
@@ -790,10 +791,10 @@ theorem error_preservation (cert : PCertificate) (hvalid : PCertificateValid cer
     (hreach : cert.trans ⊩ Cfg.run 0 σ₀ am₀ ⟶* Cfg.error σ_e am_e) :
     ∃ σ_o am_o am_o', cert.orig ⊩ Cfg.run 0 σ₀ am_o ⟶* Cfg.error σ_o am_o' := by
   obtain ⟨pc_t, σ_t, am_t, hrun, herr, rfl⟩ := steps_to_error_decompose hreach
-  obtain ⟨pc_o, σ_o, a1, a2, horig_prefix, hpc_eq, hrel, _, hinv_t, hinv_o, _⟩ := simulation_trace hvalid hts₀ hrun
+  obtain ⟨pc_o, σ_o, a1, a2, horig_prefix, hpc_eq, hrel, _, hinv_t, hinv_o, hts_o⟩ := simulation_trace hvalid hts₀ hrun
   have hpc := steps_run_in_bounds hvalid.step_closed hvalid.step_closed.1 hrun
   rw [← hpc_eq] at horig_prefix
-  obtain ⟨σ_o', am_o', horig_err⟩ := hvalid.error_pres pc_t σ_t σ_o am_t a2 hpc hrel hinv_t (hpc_eq ▸ hinv_o) herr
+  obtain ⟨σ_o', am_o', horig_err⟩ := hvalid.error_pres pc_t σ_t σ_o am_t a2 hpc hrel hinv_t (hpc_eq ▸ hinv_o) hts_o herr
   exact ⟨σ_o', a1, am_o', Steps.trans horig_prefix horig_err⟩
 
 -- ============================================================
