@@ -213,9 +213,9 @@ theorem Stmt.interp_tmpAgree (s : Stmt) (fuel : Nat) (σ τ : Store) (am : Array
       SExpr.eval_tmpAgree val σ τ am hagree htf_val
     simp only [Stmt.interp] at h ⊢
     rw [← hiSafe_idx, ← hiSafe_val, ← heval_idx, ← heval_val]
-    by_cases hc : idx.isSafe σ am decls && val.isSafe σ am decls && decide ((idx.eval σ am).toNat < arraySize decls arr)
+    by_cases hc : idx.isSafe σ am decls && val.isSafe σ am decls && decide ((idx.eval σ am) < arraySizeBv decls arr)
     · simp [hc] at h; obtain ⟨rfl, rfl⟩ := h
-      exact ⟨τ, am.write arr (idx.eval σ am).toNat (val.eval σ am), by simp [hc], hagree, rfl⟩
+      exact ⟨τ, am.write arr (idx.eval σ am) (val.eval σ am), by simp [hc], hagree, rfl⟩
     · simp [hc] at h
   | barrWrite arr idx bval =>
     have htf_idx : ∀ v ∈ idx.freeVars, v.isTmp = false :=
@@ -232,9 +232,9 @@ theorem Stmt.interp_tmpAgree (s : Stmt) (fuel : Nat) (σ τ : Store) (am : Array
       SBool.eval_tmpAgree bval σ τ am hagree htf_bval
     simp only [Stmt.interp] at h ⊢
     rw [← hiSafe_idx, ← hiSafe_bval, ← heval_idx, ← heval_bval]
-    by_cases hc : (idx : SExpr).isSafe σ am decls && bval.isSafe σ am decls && decide ((idx.eval σ am).toNat < arraySize decls arr)
+    by_cases hc : (idx : SExpr).isSafe σ am decls && bval.isSafe σ am decls && decide ((idx.eval σ am) < arraySizeBv decls arr)
     · simp [hc] at h; obtain ⟨rfl, rfl⟩ := h
-      exact ⟨τ, am.write arr (idx.eval σ am).toNat (if bval.eval σ am then 1 else 0),
+      exact ⟨τ, am.write arr (idx.eval σ am) (if bval.eval σ am then 1 else 0),
              by simp [hc], hagree, rfl⟩
     · simp [hc] at h
   | seq s₁ s₂ ih₁ ih₂ =>
@@ -315,7 +315,7 @@ def SExpr.safe (σ : Store) (am : ArrayMem) (decls : List (ArrayName × Nat × V
   | .bin .div a b => a.safe σ am decls ∧ b.safe σ am decls ∧ b.eval σ am ≠ 0
   | .bin .mod a b => a.safe σ am decls ∧ b.safe σ am decls ∧ b.eval σ am ≠ 0
   | .bin _ a b => a.safe σ am decls ∧ b.safe σ am decls
-  | .arrRead arr idx => idx.safe σ am decls ∧ (idx.eval σ am).toNat < arraySize decls arr
+  | .arrRead arr idx => idx.safe σ am decls ∧ (idx.eval σ am) < arraySizeBv decls arr
 
 def SBool.safe (σ : Store) (am : ArrayMem) (decls : List (ArrayName × Nat × VarTy)) : SBool → Prop
   | .lit _ => True
@@ -324,7 +324,7 @@ def SBool.safe (σ : Store) (am : ArrayMem) (decls : List (ArrayName × Nat × V
   | .not e => e.safe σ am decls
   | .and a b => a.safe σ am decls ∧ (a.eval σ am = true → b.safe σ am decls)
   | .or a b => a.safe σ am decls ∧ (a.eval σ am = false → b.safe σ am decls)
-  | .barrRead arr idx => idx.safe σ am decls ∧ (idx.eval σ am).toNat < arraySize decls arr
+  | .barrRead arr idx => idx.safe σ am decls ∧ (idx.eval σ am) < arraySizeBv decls arr
 
 def Stmt.safe (fuel : Nat) (σ : Store) (am : ArrayMem)
     (decls : List (ArrayName × Nat × VarTy)) : Stmt → Prop
@@ -332,9 +332,9 @@ def Stmt.safe (fuel : Nat) (σ : Store) (am : ArrayMem)
   | .assign _ e => e.safe σ am decls
   | .bassign _ b => b.safe σ am decls
   | .arrWrite arr idx val =>
-    idx.safe σ am decls ∧ val.safe σ am decls ∧ (idx.eval σ am).toNat < arraySize decls arr
+    idx.safe σ am decls ∧ val.safe σ am decls ∧ (idx.eval σ am) < arraySizeBv decls arr
   | .barrWrite arr idx bval =>
-    (idx : SExpr).safe σ am decls ∧ bval.safe σ am decls ∧ (idx.eval σ am).toNat < arraySize decls arr
+    (idx : SExpr).safe σ am decls ∧ bval.safe σ am decls ∧ (idx.eval σ am) < arraySizeBv decls arr
   | .seq s₁ s₂ =>
     s₁.safe fuel σ am decls ∧
     match s₁.interp fuel σ am decls with

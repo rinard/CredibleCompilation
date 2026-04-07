@@ -65,6 +65,10 @@ def Prog.size (p : Prog) : Nat := p.code.size
 nonrec def Prog.arraySize (p : Prog) (arr : ArrayName) : Nat :=
   arraySize p.arrayDecls arr
 
+/-- Array size as `BitVec 64` for direct comparison with bitvec indices. -/
+nonrec def Prog.arraySizeBv (p : Prog) (arr : ArrayName) : BitVec 64 :=
+  arraySizeBv p.arrayDecls arr
+
 /-- Look up the declared element type of an array in this program. -/
 nonrec def Prog.arrayElemTy (p : Prog) (arr : ArrayName) : VarTy :=
   arrayElemTy p.arrayDecls arr
@@ -183,19 +187,19 @@ inductive Step (p : Prog) : Cfg → Cfg → Prop where
       Step p (.run pc σ am) (.typeError σ am)
 
   | arrLoad : p[pc]? = some (.arrLoad x arr idx ty) →
-      σ idx = .int idxVal → idxVal.toNat < p.arraySize arr →
-      Step p (.run pc σ am) (.run (pc + 1) (σ[x ↦ Value.ofBitVec ty (am.read arr idxVal.toNat)]) am)
+      σ idx = .int idxVal → idxVal < p.arraySizeBv arr →
+      Step p (.run pc σ am) (.run (pc + 1) (σ[x ↦ Value.ofBitVec ty (am.read arr idxVal)]) am)
 
   | arrStore : p[pc]? = some (.arrStore arr idx val ty) →
-      σ idx = .int idxVal → (σ val).typeOf = ty → idxVal.toNat < p.arraySize arr →
-      Step p (.run pc σ am) (.run (pc + 1) σ (am.write arr idxVal.toNat (σ val).toBits))
+      σ idx = .int idxVal → (σ val).typeOf = ty → idxVal < p.arraySizeBv arr →
+      Step p (.run pc σ am) (.run (pc + 1) σ (am.write arr idxVal (σ val).toBits))
 
   | arrLoad_boundsError : p[pc]? = some (.arrLoad x arr idx ty) →
-      σ idx = .int idxVal → ¬ (idxVal.toNat < p.arraySize arr) →
+      σ idx = .int idxVal → ¬ (idxVal < p.arraySizeBv arr) →
       Step p (.run pc σ am) (.error σ am)
 
   | arrStore_boundsError : p[pc]? = some (.arrStore arr idx val ty) →
-      σ idx = .int idxVal → (σ val).typeOf = ty → ¬ (idxVal.toNat < p.arraySize arr) →
+      σ idx = .int idxVal → (σ val).typeOf = ty → ¬ (idxVal < p.arraySizeBv arr) →
       Step p (.run pc σ am) (.error σ am)
 
   | arrLoad_typeError : p[pc]? = some (.arrLoad x arr idx ty) →
@@ -304,7 +308,7 @@ def haltsWithResult (p : Prog) (pc : Nat) (σ σ' : Store) (am am' : ArrayMem) :
 theorem Step.deterministic {p : Prog} {c c₁ c₂ : Cfg}
     (h₁ : p ⊩ c ⟶ c₁) (h₂ : p ⊩ c ⟶ c₂) : c₁ = c₂ := by
   cases h₁ <;> cases h₂ <;> simp_all [Value.int.injEq, Value.typeOf] <;>
-    (first | rfl | contradiction | omega)
+    (first | rfl | contradiction | omega | bv_omega)
 
 /-- A halted configuration admits no further steps. -/
 theorem Step.no_step_from_halt {p : Prog} {σ : Store} {am : ArrayMem} {c : Cfg} :

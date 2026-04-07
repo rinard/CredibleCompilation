@@ -111,11 +111,11 @@ inductive ArmStep (prog : ArmProg) : ArmState → ArmState → Prop where
 
   | arrLd (dst : ArmReg) (arr : ArrayName) (idxReg : ArmReg) :
     prog[s.pc]? = some (.arrLd dst arr idxReg) →
-    ArmStep prog s (s.setReg dst (s.arrayMem arr (s.regs idxReg).toNat) |>.nextPC)
+    ArmStep prog s (s.setReg dst (s.arrayMem arr (s.regs idxReg)) |>.nextPC)
 
   | arrSt (arr : ArrayName) (idxReg valReg : ArmReg) :
     prog[s.pc]? = some (.arrSt arr idxReg valReg) →
-    ArmStep prog s (s.setArrayMem arr (s.regs idxReg).toNat (s.regs valReg) |>.nextPC)
+    ArmStep prog s (s.setArrayMem arr (s.regs idxReg) (s.regs valReg) |>.nextPC)
 
 /-- Multi-step closure. -/
 inductive ArmSteps (prog : ArmProg) : ArmState → ArmState → Prop where
@@ -383,16 +383,16 @@ theorem ArmSteps.one_then {prog : ArmProg} {s s' s'' : ArmState}
     (s.setStack off v).arrayMem = s.arrayMem := rfl
 
 -- setArrayMem preserves stack, regs, pc, flags
-@[simp] theorem ArmState.setArrayMem_stack (s : ArmState) (arr : ArrayName) (idx : Nat) (v : BitVec 64) :
+@[simp] theorem ArmState.setArrayMem_stack (s : ArmState) (arr : ArrayName) (idx : BitVec 64) (v : BitVec 64) :
     (s.setArrayMem arr idx v).stack = s.stack := rfl
 
-@[simp] theorem ArmState.setArrayMem_regs (s : ArmState) (arr : ArrayName) (idx : Nat) (v : BitVec 64) :
+@[simp] theorem ArmState.setArrayMem_regs (s : ArmState) (arr : ArrayName) (idx : BitVec 64) (v : BitVec 64) :
     (s.setArrayMem arr idx v).regs = s.regs := rfl
 
-@[simp] theorem ArmState.setArrayMem_pc (s : ArmState) (arr : ArrayName) (idx : Nat) (v : BitVec 64) :
+@[simp] theorem ArmState.setArrayMem_pc (s : ArmState) (arr : ArrayName) (idx : BitVec 64) (v : BitVec 64) :
     (s.setArrayMem arr idx v).pc = s.pc := rfl
 
-@[simp] theorem ArmState.setArrayMem_flags (s : ArmState) (arr : ArrayName) (idx : Nat) (v : BitVec 64) :
+@[simp] theorem ArmState.setArrayMem_flags (s : ArmState) (arr : ArrayName) (idx : BitVec 64) (v : BitVec 64) :
     (s.setArrayMem arr idx v).flags = s.flags := rfl
 
 -- Register inequality facts for simp

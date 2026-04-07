@@ -79,7 +79,7 @@ theorem Step.progress (p : Prog) (pc : Nat) (σ : Store) (am : ArrayMem) (Γ : T
     rw [hp] at hwti; cases hwti with
     | arrLoad _ hidx =>
       obtain ⟨iv, hiv⟩ := Value.int_of_typeOf_int (by rw [hts idx]; exact hidx)
-      by_cases hb : iv.toNat < p.arraySize arr
+      by_cases hb : iv < p.arraySizeBv arr
       · exact ⟨_, .arrLoad (hp ▸ hinstr) hiv hb⟩
       · exact ⟨_, .arrLoad_boundsError (hp ▸ hinstr) hiv hb⟩
   | .arrStore arr idx val ty =>
@@ -87,7 +87,7 @@ theorem Step.progress (p : Prog) (pc : Nat) (σ : Store) (am : ArrayMem) (Γ : T
     | arrStore hidx hval =>
       obtain ⟨iv, hiv⟩ := Value.int_of_typeOf_int (by rw [hts idx]; exact hidx)
       have hty : (σ val).typeOf = ty := by rw [hts val]; exact hval
-      by_cases hb : iv.toNat < p.arraySize arr
+      by_cases hb : iv < p.arraySizeBv arr
       · exact ⟨_, .arrStore (hp ▸ hinstr) hiv hty hb⟩
       · exact ⟨_, .arrStore_boundsError (hp ▸ hinstr) hiv hty hb⟩
 
@@ -153,7 +153,7 @@ theorem Step.progress_untyped (p : Prog) (pc : Nat) (σ : Store) (am : ArrayMem)
   | .arrLoad x arr idx ty =>
     by_cases hidx : (σ idx).typeOf = .int
     · obtain ⟨iv, hiv⟩ := Value.int_of_typeOf_int hidx
-      by_cases hb : iv.toNat < p.arraySize arr
+      by_cases hb : iv < p.arraySizeBv arr
       · exact ⟨_, .arrLoad (hp ▸ hinstr) hiv hb⟩
       · exact ⟨_, .arrLoad_boundsError (hp ▸ hinstr) hiv hb⟩
     · exact ⟨_, .arrLoad_typeError (hp ▸ hinstr) hidx⟩
@@ -161,7 +161,7 @@ theorem Step.progress_untyped (p : Prog) (pc : Nat) (σ : Store) (am : ArrayMem)
     by_cases hidx : (σ idx).typeOf = .int
     · by_cases hval : (σ val).typeOf = ty
       · obtain ⟨iv, hiv⟩ := Value.int_of_typeOf_int hidx
-        by_cases hb : iv.toNat < p.arraySize arr
+        by_cases hb : iv < p.arraySizeBv arr
         · exact ⟨_, .arrStore (hp ▸ hinstr) hiv hval hb⟩
         · exact ⟨_, .arrStore_boundsError (hp ▸ hinstr) hiv hval hb⟩
       · exact ⟨_, .arrStore_typeError (hp ▸ hinstr) (.inr hval)⟩

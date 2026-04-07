@@ -216,10 +216,10 @@ theorem refCompileExpr_correct (e : SExpr) (offset nextTmp : Nat) (σ σ_tac : S
     obtain ⟨σ_idx, hexec_idx, hval_idx, hntmp_idx, hprev_idx⟩ :=
       ih offset nextTmp σ_tac htf hintv hsafe_idx hagree hcodeIdx
     rw [hri] at hexec_idx hval_idx; simp at hexec_idx hval_idx
-    have hbounds : (SExpr.eval σ am idx).toNat < p.arraySize arr := by
+    have hbounds : (SExpr.eval σ am idx) < p.arraySizeBv arr := by
       simp only [SExpr.safe] at hsafe; exact hsafe.2
     have hexec_arrLoad := FragExec.single_arrLoad (am := am) harrLoad hval_idx hbounds
-    refine ⟨σ_idx[tmpName tmp1 ↦ .int (am.read arr (idx.eval σ am).toNat)],
+    refine ⟨σ_idx[tmpName tmp1 ↦ .int (am.read arr (idx.eval σ am))],
             ?_, ?_, ?_, ?_⟩
     · have h12 := FragExec.trans' hexec_idx hexec_arrLoad
       simp only [List.length_append, List.length_cons, List.length_nil] at h12 ⊢
@@ -656,10 +656,10 @@ theorem refCompileBool_correct (sb : SBool) (offset nextTmp : Nat) (σ σ_tac : 
     obtain ⟨σ_idx, hexec_idx, hval_idx, hntmp_idx, hprev_idx⟩ :=
       refCompileExpr_correct idx offset nextTmp σ σ_tac am p htf_idx hintv_idx hsafe_idx hagree hcodeIdx
     rw [hri] at hexec_idx hval_idx; simp at hexec_idx hval_idx
-    have hbounds : (SExpr.eval σ am idx).toNat < p.arraySize arr := by
+    have hbounds : (SExpr.eval σ am idx) < p.arraySizeBv arr := by
       simp only [SBool.safe] at hbsafe; exact hbsafe.2
     have hexec_arrLoad := FragExec.single_arrLoad (am := am) harrLoad hval_idx hbounds
-    set σ_load := σ_idx[tmpName tmp1 ↦ .int (am.read arr (idx.eval σ am).toNat)]
+    set σ_load := σ_idx[tmpName tmp1 ↦ .int (am.read arr (idx.eval σ am))]
     have hge := refCompileExpr_nextTmp_ge idx offset nextTmp
     rw [hri] at hge; simp at hge
     refine ⟨σ_load, ?_, ?_, ?_, ?_⟩
@@ -747,7 +747,7 @@ theorem refCompileStmt_correct (s : Stmt) (fuel : Nat) (σ σ' : Store) (am am' 
     have hvidx : σ_val vIdx = .int (idx.eval σ am) := by rw [hvidx_val, hval_idx]
     have hvval : σ_val vVal = .int (val.eval σ am) := hval_val
     -- Execute arrStore
-    have hbounds : (SExpr.eval σ am idx).toNat < p.arraySize arr := by
+    have hbounds : (SExpr.eval σ am idx) < p.arraySizeBv arr := by
       simp only [Stmt.safe] at hsafe; exact hsafe.2.2
     have hexec_store := FragExec.single_arrStore (am := am) harrStore hvidx hvval hbounds
     refine ⟨σ_val, ?_, ?_⟩
@@ -857,7 +857,7 @@ theorem refCompileStmt_correct (s : Stmt) (fuel : Nat) (σ σ' : Store) (am am' 
         rw [Store.update_other _ _ _ _ hne, hvidx]
       have htint_conv : σ_conv (tmpName tmp2) = .int 1 := Store.update_self _ _ _
       -- Execute arrStore
-      have hbounds : (SExpr.eval σ am idx).toNat < p.arraySize arr := by
+      have hbounds : (SExpr.eval σ am idx) < p.arraySizeBv arr := by
         simp only [Stmt.safe] at hsafe; exact hsafe.2.2
       have hexec_store := FragExec.single_arrStore (am := am) harrStore hvidx_conv htint_conv hbounds
       refine ⟨σ_conv, ?_, ?_⟩
@@ -887,7 +887,7 @@ theorem refCompileStmt_correct (s : Stmt) (fuel : Nat) (σ σ' : Store) (am am' 
         rw [Store.update_other _ _ _ _ hne, hvidx]
       have htint_conv : σ_conv (tmpName tmp2) = .int 0 := Store.update_self _ _ _
       -- Execute arrStore
-      have hbounds : (SExpr.eval σ am idx).toNat < p.arraySize arr := by
+      have hbounds : (SExpr.eval σ am idx) < p.arraySizeBv arr := by
         simp only [Stmt.safe] at hsafe; exact hsafe.2.2
       have hexec_store := FragExec.single_arrStore (am := am) harrStore hvidx_conv htint_conv hbounds
       refine ⟨σ_conv, ?_, ?_⟩
@@ -933,18 +933,18 @@ theorem refCompileStmt_correct (s : Stmt) (fuel : Nat) (σ σ' : Store) (am am' 
         refCompileExpr_correct idx offset nextTmp σ σ_tac am p htf_e hintv_e hsafe_idx hagree hcodeIdx
       rw [hri] at hexec_idx hval_idx; simp at hexec_idx hval_idx
       -- Execute arrLoad
-      have hbounds : (SExpr.eval σ am idx).toNat < p.arraySize arr := by
+      have hbounds : (SExpr.eval σ am idx) < p.arraySizeBv arr := by
         simp [SExpr.safe] at hsafe_e; exact hsafe_e.2
       have hexec_arrLoad := FragExec.single_arrLoad (am := am) harrLoad hval_idx hbounds
       -- Execute copy
-      set σ_load := σ_idx[tmpName tmp1 ↦ .int (am.read arr (idx.eval σ am).toNat)]
+      set σ_load := σ_idx[tmpName tmp1 ↦ .int (am.read arr (idx.eval σ am))]
       have hexec_copy := FragExec.single_copy (am := am) hcopy (σ := σ_load)
       refine ⟨σ_load[x ↦ σ_load (tmpName tmp1)], ?_, ?_⟩
       · have h123 := FragExec.trans' (FragExec.trans' hexec_idx hexec_arrLoad) hexec_copy
         simp only [List.length_append, List.length_cons, List.length_nil] at h123 ⊢
         exact h123
       · intro v hv
-        rw [show σ_load (tmpName tmp1) = .int (am.read arr (idx.eval σ am).toNat)
+        rw [show σ_load (tmpName tmp1) = .int (am.read arr (idx.eval σ am))
           from Store.update_self _ _ _]
         simp only [Store.update]
         split

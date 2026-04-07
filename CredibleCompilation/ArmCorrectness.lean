@@ -956,7 +956,7 @@ theorem genInstr_correct (prog : ArmProg) (vm : VarMap) (pcMap : Nat → Nat)
   | binop_typeError hinstr hne =>
     exact absurd (Step.binop_typeError (am := am) hinstr hne) (Step.no_typeError_of_wellTyped hPC_bound hWT hTS)
   | arrLoad hinstr hidx hbounds =>
-    rename_i arrNm destV idxV _ idxVal
+    rename_i idxVal arrNm destV idxV _
     have htyint := hAllInt.arrLoad_int hinstr; subst htyint
     obtain ⟨offIdx, hIdx⟩ := hVarMap idxV
     obtain ⟨offX, hX⟩ := hVarMap destV
@@ -972,11 +972,11 @@ theorem genInstr_correct (prog : ArmProg) (vm : VarMap) (pcMap : Nat → Nat)
     have h2 := hCodeInstr.tail.tail.head
     rw [← hPcRel] at h0 h1 h2
     let s1 := s.setReg .x1 (s.stack offIdx) |>.nextPC
-    let s2 := s1.setReg .x0 (s1.arrayMem arrNm (s1.regs .x1).toNat) |>.nextPC
+    let s2 := s1.setReg .x0 (s1.arrayMem arrNm (s1.regs .x1)) |>.nextPC
     let s3 := s2.setStack offX (s2.regs .x0) |>.nextPC
     refine ⟨s3, .step (.ldr .x1 offIdx h0) (.step (.arrLd .x0 arrNm .x1 h1) (.single (.str .x0 offX h2))),
       ⟨?_, ?_, ?_⟩⟩
-    · -- StateRel for σ[destV ↦ .int (am.read arrNm idxVal.toNat)]
+    · -- StateRel for σ[destV ↦ .int (am.read arrNm idxVal)]
       intro w off hv
       simp only [s3, s2, s1, ArmState.setStack, ArmState.setReg, ArmState.nextPC,
                   ArmReg.beq_self, ArmReg.x0_ne_x1, ite_true, ite_false, Bool.false_eq_true]
@@ -997,7 +997,7 @@ theorem genInstr_correct (prog : ArmProg) (vm : VarMap) (pcMap : Nat → Nat)
     · -- arrayMem preserved
       simp [s3, s2, s1, ArmState.setStack, ArmState.setReg, ArmState.nextPC, hArrayMem]
   | arrStore hinstr hidx hval hbounds =>
-    rename_i _ arrNm idxV valV idxVal
+    rename_i _ idxVal arrNm idxV valV
     have htyint := hAllInt.arrStore_int hinstr; subst htyint
     obtain ⟨offIdx, hIdx⟩ := hVarMap idxV
     obtain ⟨offVal, hVal⟩ := hVarMap valV
@@ -1014,7 +1014,7 @@ theorem genInstr_correct (prog : ArmProg) (vm : VarMap) (pcMap : Nat → Nat)
     rw [← hPcRel] at h0 h1 h2
     let s1 := s.setReg .x1 (s.stack offIdx) |>.nextPC
     let s2 := s1.setReg .x2 (s1.stack offVal) |>.nextPC
-    let s3 := s2.setArrayMem arrNm (s2.regs .x1).toNat (s2.regs .x2) |>.nextPC
+    let s3 := s2.setArrayMem arrNm (s2.regs .x1) (s2.regs .x2) |>.nextPC
     refine ⟨s3, .step (.ldr .x1 offIdx h0) (.step (.ldr .x2 offVal h1) (.single (.arrSt arrNm .x1 .x2 h2))),
       ⟨?_, ?_, ?_⟩⟩
     · -- StateRel: σ unchanged
@@ -1026,7 +1026,7 @@ theorem genInstr_correct (prog : ArmProg) (vm : VarMap) (pcMap : Nat → Nat)
       show s.pc + 1 + 1 + 1 = pcMap (pc + 1)
       have := hPcNext _ _ _ rfl; simp at this
       rw [this, hPcRel]
-    · -- arrayMem: need s3.arrayMem = am.write arrNm idxVal.toNat (σ valV).toBits
+    · -- arrayMem: need s3.arrayMem = am.write arrNm idxVal (σ valV).toBits
       simp only [s3, s2, s1, ArmState.setArrayMem, ArmState.setReg, ArmState.nextPC]
       funext x i
       simp only [ArrayMem.write, ArmState.setArrayMem]

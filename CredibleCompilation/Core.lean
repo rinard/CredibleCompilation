@@ -152,29 +152,30 @@ theorem TypedStore.update_typed {Γ : TyCtx} {σ : Store} {x : Var} {v : Value}
 abbrev ArrayName := String
 
 /-- Array memory: maps array name and index to a 64-bit value.
-    Arrays are global, statically allocated, and separate from the variable store. -/
-def ArrayMem := ArrayName → Nat → BitVec 64
+    Arrays are global, statically allocated, and separate from the variable store.
+    Indices are `BitVec 64` to match register/value semantics directly. -/
+def ArrayMem := ArrayName → BitVec 64 → BitVec 64
 
 namespace ArrayMem
 
 def init : ArrayMem := fun _ _ => 0
 
-def read (am : ArrayMem) (arr : ArrayName) (idx : Nat) : BitVec 64 :=
+def read (am : ArrayMem) (arr : ArrayName) (idx : BitVec 64) : BitVec 64 :=
   am arr idx
 
-def write (am : ArrayMem) (arr : ArrayName) (idx : Nat) (v : BitVec 64) : ArrayMem :=
+def write (am : ArrayMem) (arr : ArrayName) (idx : BitVec 64) (v : BitVec 64) : ArrayMem :=
   fun a i => if a == arr && i == idx then v else am a i
 
-@[simp] theorem read_write_same (am : ArrayMem) (arr : ArrayName) (idx : Nat) (v : BitVec 64) :
+@[simp] theorem read_write_same (am : ArrayMem) (arr : ArrayName) (idx : BitVec 64) (v : BitVec 64) :
     (am.write arr idx v).read arr idx = v := by
   simp [read, write]
 
-theorem read_write_ne_arr (am : ArrayMem) (arr arr' : ArrayName) (idx idx' : Nat)
+theorem read_write_ne_arr (am : ArrayMem) (arr arr' : ArrayName) (idx idx' : BitVec 64)
     (v : BitVec 64) (h : arr' ≠ arr) :
     (am.write arr idx v).read arr' idx' = am.read arr' idx' := by
   simp [read, write, h]
 
-theorem read_write_ne_idx (am : ArrayMem) (arr : ArrayName) (idx idx' : Nat)
+theorem read_write_ne_idx (am : ArrayMem) (arr : ArrayName) (idx idx' : BitVec 64)
     (v : BitVec 64) (h : idx' ≠ idx) :
     (am.write arr idx v).read arr idx' = am.read arr idx' := by
   simp [read, write, h]
@@ -187,6 +188,10 @@ def arraySize (decls : List (ArrayName × Nat × VarTy)) (arr : ArrayName) : Nat
   match decls.find? (fun p => p.1 == arr) with
   | some (_, n, _) => n
   | none => 0
+
+/-- Array size as `BitVec 64`, for direct comparison with bitvec indices. -/
+def arraySizeBv (decls : List (ArrayName × Nat × VarTy)) (arr : ArrayName) : BitVec 64 :=
+  BitVec.ofNat 64 (arraySize decls arr)
 
 /-- Look up an array's declared element type.  Returns `.int` for undeclared arrays. -/
 def arrayElemTy (decls : List (ArrayName × Nat × VarTy)) (arr : ArrayName) : VarTy :=
@@ -248,7 +253,7 @@ inductive Expr where
   | andE    : Expr → Expr → Expr           -- .bool ((a.eval σ).toBool && (b.eval σ).toBool)
   | orE     : Expr → Expr → Expr           -- .bool ((a.eval σ).toBool || (b.eval σ).toBool)
   -- Symbolic array read (for tracking arrLoad results)
-  | arrRead : ArrayName → Expr → Expr      -- .int (am.read arr (idx.eval σ am).toInt.toNat)
+  | arrRead : ArrayName → Expr → Expr      -- .int (am.read arr (idx.eval σ am).toInt)
   deriving Repr, DecidableEq
 
 def Expr.eval (σ : Store) (am : ArrayMem) : Expr → Value
@@ -262,7 +267,7 @@ def Expr.eval (σ : Store) (am : ArrayMem) : Expr → Value
   | .notE e         => .bool (!(e.eval σ am).toBool)
   | .andE a b       => .bool ((a.eval σ am).toBool && (b.eval σ am).toBool)
   | .orE a b        => .bool ((a.eval σ am).toBool || (b.eval σ am).toBool)
-  | .arrRead arr idx => .int (am.read arr (idx.eval σ am).toInt.toNat)
+  | .arrRead arr idx => .int (am.read arr (idx.eval σ am).toInt)
 
 /-- Does an expression contain any `arrRead` sub-expression? -/
 def Expr.hasArrRead : Expr → Bool

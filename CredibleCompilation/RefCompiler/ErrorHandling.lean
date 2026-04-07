@@ -38,7 +38,7 @@ theorem refCompileExpr_stuck (e : SExpr) (offset nextTmp : Nat) (σ σ_tac : Sto
       rw [hri]; exact hcode.left
     by_cases hidx : idx.safe σ am p.arrayDecls
     · -- idx safe, bounds fail
-      have hbounds : ¬ (idx.eval σ am).toNat < arraySize p.arrayDecls arr := by
+      have hbounds : ¬ (idx.eval σ am) < arraySizeBv p.arrayDecls arr := by
         exact fun h => hunsafe ⟨hidx, h⟩
       obtain ⟨σ_idx, hexec_idx, hval_idx, hntmp_idx, _⟩ :=
         refCompileExpr_correct idx offset nextTmp σ σ_tac am p htf hintv hidx hagree hcodeIdx
@@ -155,7 +155,7 @@ theorem refCompileBool_stuck (sb : SBool) (offset nextTmp : Nat) (σ σ_tac : St
       rw [hri]; exact hcode.left
     by_cases hidx : idx.safe σ am p.arrayDecls
     · -- idx safe, bounds fail
-      have hbounds : ¬ (idx.eval σ am).toNat < arraySize p.arrayDecls arr := by
+      have hbounds : ¬ (idx.eval σ am) < arraySizeBv p.arrayDecls arr := by
         exact fun h => hunsafe ⟨hidx, h⟩
       obtain ⟨σ_idx, hexec_idx, hval_idx, hntmp_idx, _⟩ :=
         refCompileExpr_correct idx offset nextTmp σ σ_tac am p htf hintv hidx hagree hcodeIdx
@@ -425,7 +425,7 @@ theorem refCompileStmt_stuck (s : Stmt) (fuel : Nat) (σ σ' : Store) (am am' : 
         rw [hri]; exact hcode.left
       by_cases hidx : idx.safe σ am p.arrayDecls
       · -- idx safe, bounds fail
-        have hbounds : ¬ (idx.eval σ am).toNat < arraySize p.arrayDecls arr := by
+        have hbounds : ¬ (idx.eval σ am) < arraySizeBv p.arrayDecls arr := by
           exact fun h => hunsafe ⟨hidx, h⟩
         obtain ⟨σ_idx, hexec_idx, hval_idx, hntmp_idx, _⟩ :=
           refCompileExpr_correct idx offset nextTmp σ σ_tac am p htf_idx hintv_e hidx hagree hcodeIdx
@@ -868,7 +868,7 @@ theorem refCompileStmt_unsafe (s : Stmt) (fuel : Nat) (σ : Store) (am : ArrayMe
     by_cases hidx : idx.safe σ am p.arrayDecls
     · by_cases hbval : bval.safe σ am p.arrayDecls
       · -- idx safe, bval safe, bounds fail → bounds error on arrStore
-        have hbounds_fail : ¬ (idx.eval σ am).toNat < arraySize p.arrayDecls arr :=
+        have hbounds_fail : ¬ (idx.eval σ am) < arraySizeBv p.arrayDecls arr :=
           fun h => hunsafe ⟨hidx, hbval, h⟩
         -- Execute idx
         obtain ⟨σ_idx, hexec_idx, hval_idx, hntmp_idx, hprev_idx⟩ :=
@@ -922,8 +922,8 @@ theorem refCompileStmt_unsafe (s : Stmt) (fuel : Nat) (σ : Store) (am : ArrayMe
           simp only [List.length_append, List.length_cons, List.length_nil] at h
           rwa [show offset + (codeIdx.length + codeBool.length + 4) =
               offset + codeIdx.length + codeBool.length + 4 from by omega] at h
-        have hbf : ¬ (idx.eval σ am).toNat < p.arraySize arr := by
-          rw [Prog.arraySize]; exact hbounds_fail
+        have hbf : ¬ (idx.eval σ am) < p.arraySizeBv arr := by
+          rw [Prog.arraySizeBv]; exact hbounds_fail
         -- Case split on bool value to execute through convCode
         by_cases hb : bval.eval σ am = true
         · -- true: ifgoto taken → const 1 → arrStore boundsError
@@ -1005,7 +1005,7 @@ theorem refCompileStmt_unsafe (s : Stmt) (fuel : Nat) (σ : Store) (am : ArrayMe
     by_cases hidx : idx.safe σ am p.arrayDecls
     · by_cases hval : val.safe σ am p.arrayDecls
       · -- idx safe, val safe, bounds fail → bounds error on arrStore
-        have hbounds_fail : ¬ (idx.eval σ am).toNat < arraySize p.arrayDecls arr :=
+        have hbounds_fail : ¬ (idx.eval σ am) < arraySizeBv p.arrayDecls arr :=
           fun h => hunsafe ⟨hidx, hval, h⟩
         obtain ⟨σ_idx, hexec_idx, hval_idx, hntmp_idx, hprev_idx⟩ :=
           refCompileExpr_correct idx offset nextTmp σ σ_tac am p htf_idx hintv_idx hidx hagree hcodeIdx
@@ -1027,8 +1027,8 @@ theorem refCompileStmt_unsafe (s : Stmt) (fuel : Nat) (σ : Store) (am : ArrayMe
           simp only [List.length_append] at this
           rwa [show offset + (codeIdx.length + codeVal.length) =
               offset + codeIdx.length + codeVal.length from by omega] at this
-        have hbf : ¬ (idx.eval σ am).toNat < p.arraySize arr := by
-          rw [Prog.arraySize]; exact hbounds_fail
+        have hbf : ¬ (idx.eval σ am) < p.arraySizeBv arr := by
+          rw [Prog.arraySizeBv]; exact hbounds_fail
         have hvval_ty : (σ_val vVal).typeOf = .int := by simp [hval_val, Value.typeOf]
         exact ⟨offset + codeIdx.length + codeVal.length, σ_val, am,
           FragExec.trans' hexec_idx hexec_val,
@@ -1076,8 +1076,8 @@ theorem refCompileStmt_unsafe (s : Stmt) (fuel : Nat) (σ : Store) (am : ArrayMe
         rw [hri] at hexec_idx hval_idx; simp at hexec_idx hval_idx
         have harrLoad : p[offset + codeIdx.length]? = some (.arrLoad (tmpName tmp1) arr vIdx .int) := by
           have := hcode.right.head; simpa using this
-        have hbf : ¬ (idx.eval σ am).toNat < p.arraySize arr := by
-          rw [Prog.arraySize]; omega
+        have hbf : ¬ (idx.eval σ am) < p.arraySizeBv arr := by
+          rw [Prog.arraySizeBv]; exact hbounds_fail
         have hlt : offset + codeIdx.length <
             offset + (codeIdx ++ [TAC.arrLoad (tmpName tmp1) arr vIdx .int, .copy x (tmpName tmp1)]).length := by
           simp [List.length_append]

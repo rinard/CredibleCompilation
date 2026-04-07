@@ -364,8 +364,8 @@ theorem FragExec.single_arrLoad {p : Prog} {pc : Nat} {σ : Store} {am : ArrayMe
     {x : Var} {arr : ArrayName} {idx : Var} {idxVal : BitVec 64}
     (h : p[pc]? = some (.arrLoad x arr idx .int))
     (hidx : σ idx = .int idxVal)
-    (hbounds : idxVal.toNat < p.arraySize arr) :
-    FragExec p pc σ (pc + 1) (σ[x ↦ .int (am.read arr idxVal.toNat)]) am am := by
+    (hbounds : idxVal < p.arraySizeBv arr) :
+    FragExec p pc σ (pc + 1) (σ[x ↦ .int (am.read arr idxVal)]) am am := by
   have := Steps.single (Step.arrLoad (am := am) h hidx hbounds)
   simp [Value.ofBitVec] at this
   exact this
@@ -374,8 +374,8 @@ theorem FragExec.single_arrStore {p : Prog} {pc : Nat} {σ : Store} {am : ArrayM
     {arr : ArrayName} {idx val : Var} {idxVal v : BitVec 64}
     (h : p[pc]? = some (.arrStore arr idx val .int))
     (hidx : σ idx = .int idxVal) (hval : σ val = .int v)
-    (hbounds : idxVal.toNat < p.arraySize arr) :
-    FragExec p pc σ (pc + 1) σ am (am.write arr idxVal.toNat v) := by
+    (hbounds : idxVal < p.arraySizeBv arr) :
+    FragExec p pc σ (pc + 1) σ am (am.write arr idxVal v) := by
   have hty : (σ val).typeOf = .int := by rw [hval]; simp [Value.typeOf]
   have := Steps.single (Step.arrStore (am := am) h hidx hty hbounds)
   simp [hval, Value.toBits] at this

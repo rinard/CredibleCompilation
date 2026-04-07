@@ -70,7 +70,7 @@ def SExpr.eval (σ : Store) (am : ArrayMem) : SExpr → BitVec 64
   | .lit n      => BitVec.ofInt 64 n
   | .var x      => (σ x).toInt
   | .bin op a b => op.eval (a.eval σ am) (b.eval σ am)
-  | .arrRead arr idx => am.read arr (idx.eval σ am).toNat
+  | .arrRead arr idx => am.read arr (idx.eval σ am)
 
 /-- Evaluate a boolean expression. -/
 def SBool.eval (σ : Store) (am : ArrayMem) : SBool → Bool
@@ -80,7 +80,7 @@ def SBool.eval (σ : Store) (am : ArrayMem) : SBool → Bool
   | .not e      => !e.eval σ am
   | .and a b    => a.eval σ am && b.eval σ am
   | .or a b        => a.eval σ am || b.eval σ am
-  | .barrRead arr idx => (am.read arr (idx.eval σ am).toNat) != 0
+  | .barrRead arr idx => (am.read arr (idx.eval σ am)) != 0
 
 /-- Check whether an arithmetic expression is safe to evaluate (no div-by-zero,
     array accesses in bounds). Returns `Bool` for use in `Stmt.interp`. -/
@@ -90,7 +90,7 @@ def SExpr.isSafe (σ : Store) (am : ArrayMem) (decls : List (ArrayName × Nat ×
   | .bin .div a b => a.isSafe σ am decls && b.isSafe σ am decls && decide (b.eval σ am ≠ 0)
   | .bin .mod a b => a.isSafe σ am decls && b.isSafe σ am decls && decide (b.eval σ am ≠ 0)
   | .bin _ a b => a.isSafe σ am decls && b.isSafe σ am decls
-  | .arrRead arr idx => idx.isSafe σ am decls && decide ((idx.eval σ am).toNat < arraySize decls arr)
+  | .arrRead arr idx => idx.isSafe σ am decls && decide ((idx.eval σ am) < arraySizeBv decls arr)
 
 /-- Check whether a boolean expression is safe to evaluate. -/
 def SBool.isSafe (σ : Store) (am : ArrayMem) (decls : List (ArrayName × Nat × VarTy)) : SBool → Bool
@@ -100,7 +100,7 @@ def SBool.isSafe (σ : Store) (am : ArrayMem) (decls : List (ArrayName × Nat ×
   | .not e => e.isSafe σ am decls
   | .and a b => a.isSafe σ am decls && (if a.eval σ am then b.isSafe σ am decls else true)
   | .or a b => a.isSafe σ am decls && (if !(a.eval σ am) then b.isSafe σ am decls else true)
-  | .barrRead arr idx => idx.isSafe σ am decls && decide ((idx.eval σ am).toNat < arraySize decls arr)
+  | .barrRead arr idx => idx.isSafe σ am decls && decide ((idx.eval σ am) < arraySizeBv decls arr)
 
 /-- Interpret a statement directly, with a fuel bound to ensure termination.
     Returns `none` if out of fuel or if a safety check fails (div-by-zero, array out-of-bounds). -/
@@ -113,15 +113,15 @@ def Stmt.interp (fuel : Nat) (σ : Store) (am : ArrayMem)
     if b.isSafe σ am decls then some (σ[x ↦ .bool (b.eval σ am)], am) else none
   | .arrWrite arr idx val =>
     if idx.isSafe σ am decls && val.isSafe σ am decls &&
-       decide ((idx.eval σ am).toNat < arraySize decls arr)
-    then some (σ, am.write arr (idx.eval σ am).toNat (val.eval σ am))
+       decide ((idx.eval σ am) < arraySizeBv decls arr)
+    then some (σ, am.write arr (idx.eval σ am) (val.eval σ am))
     else none
   | .barrWrite arr idx bval =>
     if (idx : SExpr).isSafe σ am decls && bval.isSafe σ am decls &&
-       decide ((idx.eval σ am).toNat < arraySize decls arr)
+       decide ((idx.eval σ am) < arraySizeBv decls arr)
     then let b := bval.eval σ am
          let v : BitVec 64 := if b then 1 else 0
-         some (σ, am.write arr (idx.eval σ am).toNat v)
+         some (σ, am.write arr (idx.eval σ am) v)
     else none
   | .seq s1 s2   => do
     let (σ', am') ← s1.interp fuel σ am decls

@@ -75,7 +75,7 @@ def ArmState.setStack (s : ArmState) (off : Nat) (v : BitVec 64) : ArmState :=
   { s with stack := fun o => if o == off then v else s.stack o }
 
 /-- Update an array memory slot. -/
-def ArmState.setArrayMem (s : ArmState) (arr : ArrayName) (idx : Nat) (v : BitVec 64) : ArmState :=
+def ArmState.setArrayMem (s : ArmState) (arr : ArrayName) (idx : BitVec 64) (v : BitVec 64) : ArmState :=
   { s with arrayMem := fun a i => if a == arr && i == idx then v else s.arrayMem a i }
 
 /-- Advance PC by 1. -/
