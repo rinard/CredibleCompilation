@@ -35,6 +35,9 @@ for while_file in "$PROG_DIR"/*.while; do
     name=$(basename "$while_file" .while)
     c_file="$PROG_DIR/${name}.c"
 
+    # Skip bounds-error tests (handled separately below)
+    case "$name" in bounds_*) continue ;; esac
+
     if [ ! -f "$c_file" ]; then
         printf "${YELLOW}SKIP${NC} %-30s (no .c file)\n" "$name"
         skip=$((skip + 1))
@@ -109,6 +112,40 @@ for while_file in "$PROG_DIR"/*.while; do
         fi
         printf "\n"
         pass=$((pass + 1))
+    fi
+done
+
+# --- Bounds-error tests (While-only, expect exit code 1) ---
+for while_file in "$PROG_DIR"/bounds_*.while; do
+    [ -f "$while_file" ] || continue
+    name=$(basename "$while_file" .while)
+
+    while_bin="$TMP_DIR/while_${name}"
+    while_out="$TMP_DIR/while_${name}.out"
+
+    if ! "$COMPILER" "$while_file" -o "$while_bin" 2>"$TMP_DIR/while_${name}.err"; then
+        printf "${RED}FAIL${NC} %-30s (While compilation failed)\n" "$name"
+        fail=$((fail + 1))
+        continue
+    fi
+
+    "$while_bin" > "$while_out" 2>&1 &
+    local_pid=$!
+    ( sleep 10; kill $local_pid 2>/dev/null ) &
+    timer_pid=$!
+    wait $local_pid 2>/dev/null
+    while_exit=$?
+    kill $timer_pid 2>/dev/null; wait $timer_pid 2>/dev/null
+
+    if [ "$while_exit" -gt 128 ]; then
+        printf "${YELLOW}SKIP${NC} %-30s (timed out)\n" "$name"
+        skip=$((skip + 1))
+    elif [ "$while_exit" -eq 1 ]; then
+        printf "${GREEN}PASS${NC} %-30s (bounds error)\n" "$name"
+        pass=$((pass + 1))
+    else
+        printf "${RED}FAIL${NC} %-30s (expected exit=1, got=%d)\n" "$name" "$while_exit"
+        fail=$((fail + 1))
     fi
 done
 

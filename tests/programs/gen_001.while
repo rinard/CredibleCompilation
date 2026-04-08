@@ -1,5 +1,5 @@
 var v0 : int, v1 : int, v2 : int, v3 : int, v4 : int, v5 : int, b0 : bool, b1 : bool;
-array A[1024] : int, B[1024] : int;
+array A[32] : int, B[32] : int;
 v4 := 2;
 v1 := 42;
 v5 := 10;
@@ -14,4 +14,4 @@ while (v3 < 5) {
   v3 := v3 + 1
 };
 v1 := v4;
-B[((v1 - A[(0 % 32)]) % 32)] := (A[(v3 % 32)] * ((0 - 5) / 10))
+B[(((v3 % 32) + 32) % 32)] := v1

@@ -44,9 +44,19 @@ instance : BEq AvailEntry where
 
 abbrev AvailSet := List AvailEntry
 
-/-- Kill all entries that reference variable `x` as operand or result. -/
+/-- Does the expression reference variable `x`? -/
+def exprRefsVar (e : Expr) (x : Var) : Bool :=
+  match e with
+  | .var v     => v == x
+  | .bin _ a b => exprRefsVar a x || exprRefsVar b x
+  | .lit _     => false
+  | .blit _    => false
+  | _          => false
+
+/-- Kill all entries that reference variable `x` as operand, result,
+    or anywhere in the expanded invariant expression. -/
 def killVar (avail : AvailSet) (x : Var) : AvailSet :=
-  avail.filter fun e => !(e.lhs == x || e.rhs == x || e.result == x)
+  avail.filter fun e => !(e.lhs == x || e.rhs == x || e.result == x || exprRefsVar e.invExpr x)
 
 /-- Find an available computation of `lhs op rhs`. -/
 def findAvail (avail : AvailSet) (op : BinOp) (lhs rhs : Var) : Option AvailEntry :=
@@ -85,6 +95,8 @@ def transfer (avail : AvailSet) (instr : TAC) : AvailSet :=
     else
       let invExpr := Expr.bin op (expandVar avail' y) (expandVar avail' z)
       { op, lhs := y, rhs := z, result := x, invExpr } :: avail'
+  | .boolop x _        => killVar avail x
+  | .arrLoad x _ _ _   => killVar avail x
   | _ => avail
 
 -- ============================================================

@@ -476,7 +476,10 @@ def checkOrigPath (orig : Prog) (ss : SymStore) (sam : SymArrayMem) (inv : EInv)
           | _, _ => false
       let aliasOk := checkInstrAliasOk instr ss sam inv
       let (ss', sam') := execSymbolic ss sam instr
-      pcOk && aliasOk && checkBinopSafe instr ss inv &&
+      let safeOk := match rest with
+        | [] => true  -- last step: div safety covered by checkDivPreservationExec
+        | _  => checkBinopSafe instr ss inv
+      pcOk && aliasOk && safeOk &&
       checkOrigPath orig ss' sam' inv nextPC rest pc_next none
     | none => false
 

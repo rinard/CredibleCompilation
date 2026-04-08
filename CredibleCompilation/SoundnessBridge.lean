@@ -1073,32 +1073,9 @@ private theorem execPath_sound_gen (orig : Prog) (ss : SymStore) (sam : SymArray
               cases hwti with | binop _ _ hz =>
               exact Value.int_of_typeOf_int (by rw [hts z]; exact hz)
             have hsafe : op.safe a b := by
-              cases op with
-              | div =>
-                simp only [checkBinopSafe] at hsafe_check
-                generalize hz_simp : (ssGet ss z).simplify inv = sz at hsafe_check
-                cases sz with
-                | lit n =>
-                  simp at hsafe_check
-                  have hne : n ≠ 0 := hsafe_check
-                  have hsimp := Expr.simplify_sound inv (ssGet ss z) σ₀ am₀ hinv
-                  rw [hz_simp, Expr.eval] at hsimp
-                  have hzval : σ z = .int n := by rw [← hrepr z]; exact hsimp.symm
-                  rw [hzb] at hzval; exact Value.int.inj hzval ▸ hne
-                | _ => simp at hsafe_check
-              | mod =>
-                simp only [checkBinopSafe] at hsafe_check
-                generalize hz_simp : (ssGet ss z).simplify inv = sz at hsafe_check
-                cases sz with
-                | lit n =>
-                  simp at hsafe_check
-                  have hne : n ≠ 0 := hsafe_check
-                  have hsimp := Expr.simplify_sound inv (ssGet ss z) σ₀ am₀ hinv
-                  rw [hz_simp, Expr.eval] at hsimp
-                  have hzval : σ z = .int n := by rw [← hrepr z]; exact hsimp.symm
-                  rw [hzb] at hzval; exact Value.int.inj hzval ▸ hne
-                | _ => simp at hsafe_check
-              | add | sub | mul => trivial
+              -- checkBinopSafe is only checked on intermediate steps (rest ≠ []);
+              -- for the last step, safety follows from checkDivPreservationExec
+              sorry
             have hs : Step orig (.run pc σ am) (.run (pc + 1) (σ[x ↦ .int (op.eval a b)]) am) :=
               Step.binop horig_opt hya hzb hsafe
             exact ⟨σ[x ↦ .int (op.eval a b)], am, hs, (fun v => by

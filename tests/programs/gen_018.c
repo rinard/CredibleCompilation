@@ -5,19 +5,47 @@ int64_t B[32];
 int main() {
     int64_t v0 = 0, v1 = 0, v2 = 0, v3 = 0, v4 = 0, v5 = 0;
     int64_t b0 = 0, b1 = 0;
-    v0 = 7;
-    v3 = 1;
-    v5 = 100;
-    A[0] = 0;
-    A[1] = 3;
-    B[0] = 42;
-    B[1] = 100;
-    B[2] = 100;
-    B[3] = -1;
-    v2 = (int64_t)((uint64_t)B[(-5 % 32)] - (uint64_t)(int64_t)((uint64_t)v0 * (uint64_t)v4));
-    v5 = (int64_t)((uint64_t)(int64_t)((uint64_t)1 - (uint64_t)v2) * (uint64_t)1);
-    b1 = (!((-5 <= v5) ? 1 : 0));
-    A[(v1 % 32)] = (int64_t)((uint64_t)(int64_t)((uint64_t)3 - (uint64_t)v0) - (uint64_t)(int64_t)((uint64_t)100 + (uint64_t)-5));
+    v1 = 3;
+    v2 = 3;
+    v3 = 2;
+    A[0] = 1;
+    A[1] = 5;
+    B[0] = 100;
+    while (v5 < 9) {
+        v2 = (int64_t)((uint64_t)v4 * (uint64_t)2);
+        v5 = v5 + 1;
+    }
+    while (v4 < 3) {
+        if (b1) {
+            if (((v3 <= -1) ? 1 : 0)) {
+                v2 = 42;
+            } else {
+                v2 = v1;
+            }
+        } else {
+            if (((v3 != 5) ? 1 : 0)) {
+                v3 = v4;
+            } else {
+                v1 = 3;
+            }
+        }
+        v4 = v4 + 1;
+    }
+    while (v0 < 8) {
+        while (v5 < 2) {
+            if (((v2 < 1) ? 1 : 0)) {
+                v1 = 5;
+            } else {
+                v3 = v1;
+            }
+            v5 = v5 + 1;
+        }
+        v0 = v0 + 1;
+    }
+    while (v0 < 7) {
+        v4 = v3;
+        v0 = v0 + 1;
+    }
     printf("%s = %ld\n", "v0", v0);
     printf("%s = %ld\n", "v1", v1);
     printf("%s = %ld\n", "v2", v2);

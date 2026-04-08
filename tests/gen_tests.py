@@ -154,6 +154,17 @@ class Loop(Stmt):
 def rand_lit():
     return Lit(random.choice([0, 1, 2, 3, 5, 7, 10, 42, 100, -1, -5]))
 
+def rand_safe_array_idx(depth=0):
+    """Generate an index expression guaranteed to be in [0, ARRAY_SIZE).
+    Uses only non-negative sub-expressions to avoid signed modulo issues."""
+    r = random.random()
+    if r < 0.5:
+        return Lit(random.randint(0, ARRAY_SIZE - 1))
+    else:
+        # Use a variable, but wrap: ((var % SIZE) + SIZE) % SIZE to handle negatives
+        v = Var(random.choice(INT_VARS))
+        return BinOp('%', BinOp('+', BinOp('%', v, Lit(ARRAY_SIZE)), Lit(ARRAY_SIZE)), Lit(ARRAY_SIZE))
+
 def rand_int_expr(depth=0):
     if depth >= MAX_DEPTH:
         return random.choice([rand_lit(), Var(random.choice(INT_VARS))])
@@ -163,9 +174,9 @@ def rand_int_expr(depth=0):
     elif r < 0.5:
         return Var(random.choice(INT_VARS))
     elif r < 0.65:
-        # Array read with bounded index
+        # Array read with safe bounded index
         arr = random.choice(ARRAY_NAMES)
-        idx = BinOp('%', rand_int_expr(depth + 1), Lit(ARRAY_SIZE))
+        idx = rand_safe_array_idx(depth + 1)
         return ArrRead(arr, idx)
     else:
         op = random.choice(['+', '-', '*'])  # avoid div/mod to prevent div-by-zero
@@ -188,7 +199,7 @@ def rand_int_expr_with_div(depth=0):
         return Var(random.choice(INT_VARS))
     elif r < 0.5:
         arr = random.choice(ARRAY_NAMES)
-        idx = BinOp('%', rand_int_expr(depth + 1), Lit(ARRAY_SIZE))
+        idx = rand_safe_array_idx(depth + 1)
         return ArrRead(arr, idx)
     elif r < 0.6:
         op = random.choice(['/', '%'])
@@ -229,7 +240,7 @@ def rand_stmt(depth=0, available_counters=None):
         return BAssign(v, rand_bool_expr(depth + 1))
     elif r < 0.55:
         arr = random.choice(ARRAY_NAMES)
-        idx = BinOp('%', rand_int_expr(depth + 1), Lit(ARRAY_SIZE))
+        idx = rand_safe_array_idx(depth + 1)
         val = rand_int_expr_with_div(depth + 1)
         return ArrWrite(arr, idx, val)
     elif r < 0.75:
@@ -291,6 +302,32 @@ int main() {{
 }}
 """
 
+# --- Bounds-error test generation ---
+
+def rand_oob_index():
+    """Generate an index expression guaranteed to be out of bounds."""
+    return Lit(random.choice([ARRAY_SIZE, ARRAY_SIZE + 1, ARRAY_SIZE * 2, 9999, -1, -5]))
+
+def rand_bounds_error_program():
+    """Generate a program that triggers an array bounds error.
+    Some safe setup, then one out-of-bounds access."""
+    stmts = []
+    # Initialize some vars
+    for v in random.sample(INT_VARS, min(2, NUM_INT_VARS)):
+        stmts.append(Assign(v, Lit(random.randint(0, 10))))
+    # Safe array inits
+    arr = random.choice(ARRAY_NAMES)
+    stmts.append(ArrWrite(arr, Lit(0), rand_lit()))
+    # Out-of-bounds access (read or write)
+    oob_idx = rand_oob_index()
+    if random.random() < 0.5:
+        stmts.append(Assign(INT_VARS[0], ArrRead(arr, oob_idx)))
+    else:
+        stmts.append(ArrWrite(arr, oob_idx, rand_lit()))
+    return Seq(stmts)
+
+NUM_BOUNDS_TESTS = 5
+
 # --- Main ---
 
 def main():
@@ -311,6 +348,14 @@ def main():
             f.write(emit_while(prog))
         with open(os.path.join(prog_dir, f"{name}.c"), "w") as f:
             f.write(emit_c(prog))
+
+    # Generate bounds-error tests (While-only, expected exit code 1)
+    print(f"Generating {NUM_BOUNDS_TESTS} bounds-error tests...")
+    for i in range(NUM_BOUNDS_TESTS):
+        prog = rand_bounds_error_program()
+        name = f"bounds_{i:03d}"
+        with open(os.path.join(prog_dir, f"{name}.while"), "w") as f:
+            f.write(emit_while(prog))
 
     print(f"Wrote {count} pairs to {prog_dir}/gen_*.{{while,c}}")
     print(f"Run: ./tests/run_tests.sh")

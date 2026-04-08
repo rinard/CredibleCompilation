@@ -19,7 +19,7 @@ int main() {
         v3 = v3 + 1;
     }
     v1 = v4;
-    B[((int64_t)((uint64_t)v1 - (uint64_t)A[(0 % 32)]) % 32)] = (int64_t)((uint64_t)A[(v3 % 32)] * (uint64_t)(-5 / 10));
+    B[((int64_t)((uint64_t)(v3 % 32) + (uint64_t)32) % 32)] = v1;
     printf("%s = %ld\n", "v0", v0);
     printf("%s = %ld\n", "v1", v1);
     printf("%s = %ld\n", "v2", v2);

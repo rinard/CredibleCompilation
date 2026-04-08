@@ -76,9 +76,12 @@ def transfer (cm : ConstMap) (instr : TAC) : ConstMap :=
     | none   => cmRemove cm x
   | .binop x op y z =>
     match cmLookup cm y, cmLookup cm z with
-    | some (.int a), some (.int b) => cmSet cm x (.int (op.eval a b))
+    | some (.int a), some (.int b) =>
+      if op.safe a b then cmSet cm x (.int (op.eval a b))
+      else cmRemove cm x
     | _, _           => cmRemove cm x
   | .boolop x _ => cmRemove cm x
+  | .arrLoad x _ _ _ => cmRemove cm x
   | _ => cm
 
 -- ============================================================
@@ -136,7 +139,8 @@ def transformInstr (cm : ConstMap) (instr : TAC) (pc : Nat) : TAC :=
     | none   => instr
   | .binop x op y z =>
     match cmLookup cm y, cmLookup cm z with
-    | some (.int a), some (.int b) => .const x (.int (op.eval a b))
+    | some (.int a), some (.int b) =>
+      if op.safe a b then .const x (.int (op.eval a b)) else instr
     | _, _           => instr
   | .ifgoto b l =>
     match evalBoolConst cm b with

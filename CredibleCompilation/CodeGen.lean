@@ -1,5 +1,11 @@
 import CredibleCompilation.WhileLang
 import CredibleCompilation.Parser
+import CredibleCompilation.ConstPropOpt
+import CredibleCompilation.CSEOpt
+import CredibleCompilation.LICMOpt
+import CredibleCompilation.DCEOpt
+import CredibleCompilation.PeepholeOpt
+import CredibleCompilation.ExecChecker
 
 /-!
 # ARM64 Code Generator for TAC Programs
@@ -271,11 +277,30 @@ def generateAsm (p : Prog) : Option String :=
 -- § 6. End-to-end: parse → compile → codegen
 -- ============================================================
 
-/-- Parse a While program string, compile to TAC, generate ARM64 assembly. -/
+/-- Apply a single optimization pass: run it, check the certificate, return the
+    optimized program. Errors if the certificate check fails. -/
+def applyPass (name : String) (pass : Prog → ECertificate) (p : Prog) : Except String Prog :=
+  let cert := pass p
+  if checkCertificateExec cert then .ok cert.trans
+  else .error s!"optimization certificate check failed for {name}"
+
+/-- Apply each optimization pass in sequence: ConstProp → CSE → LICM → DCE → Peephole.
+    Each pass is checked by the executable certificate checker. -/
+def optimizePipeline (p : Prog) : Except String Prog := do
+  let p ← applyPass "ConstProp" ConstPropOpt.optimize p
+  let p ← applyPass "DCE" DCEOpt.optimize p
+  let p ← applyPass "CSE" CSEOpt.optimize p
+  let p ← applyPass "LICM" LICMOpt.optimize p
+  let p ← applyPass "Peephole" PeepholeOpt.optimize p
+  .ok p
+
+/-- Parse a While program string, compile to TAC, optimize (2 rounds), generate ARM64 assembly. -/
 def compileToAsm (input : String) : Except String String := do
   let prog ← parseProgram input
   let tac := prog.compile
-  match generateAsm tac with
+  let opt ← optimizePipeline tac
+  let opt ← optimizePipeline opt
+  match generateAsm opt with
   | some asm => .ok asm
   | none => .error "program failed type check"
 
