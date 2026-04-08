@@ -972,6 +972,33 @@ private theorem checkInstrAliasOk_arrLoad_noalias
     rw [hs1, hs2]; simp [Value.toInt]
     exact fun h => hlit h
 
+/-- If `checkBinopSafe` passes for a binop instruction, then the operation is safe
+    (denominator non-zero for div/mod). -/
+private theorem checkBinopSafe_sound {x : Var} {op : BinOp} {y z : Var}
+    {ss : SymStore} {inv : EInv} {σ₀ σ : Store} {am₀ : ArrayMem}
+    {a b : BitVec 64}
+    (hcheck : checkBinopSafe (.binop x op y z) ss inv = true)
+    (hrepr : ∀ v, (ssGet ss v).eval σ₀ am₀ = σ v)
+    (hinv : EInv.toProp inv σ₀ am₀)
+    (hzb : σ z = .int b) : op.safe a b := by
+  cases op with
+  | add | sub | mul => exact True.intro
+  | div | mod =>
+    simp only [checkBinopSafe] at hcheck
+    simp only [BinOp.safe]
+    generalize hsim : (ssGet ss z).simplify inv = sz at hcheck
+    cases sz with
+    | lit n =>
+      simp only [bne_iff_ne] at hcheck
+      have heval : (ssGet ss z).eval σ₀ am₀ = .int n := by
+        have := Expr.simplify_sound inv (ssGet ss z) σ₀ am₀ hinv
+        rw [hsim, Expr.eval] at this; exact this.symm
+      have hbn : b = n := by
+        have : σ z = .int n := by rw [← hrepr z]; exact heval
+        rw [hzb] at this; exact Value.int.inj this
+      rw [hbn]; exact hcheck
+    | _ => simp at hcheck
+
 /-- Generalized path execution soundness with arbitrary initial symbolic store.
     The path check includes symbolic branch-direction verification for ifgoto.
     `branchInfo` provides the branch direction for the first step's ifgoto when
@@ -1072,10 +1099,8 @@ private theorem execPath_sound_gen (orig : Prog) (ss : SymStore) (sam : SymArray
             obtain ⟨b, hzb⟩ : ∃ b : BitVec 64, σ z = .int b := by
               cases hwti with | binop _ _ hz =>
               exact Value.int_of_typeOf_int (by rw [hts z]; exact hz)
-            have hsafe : op.safe a b := by
-              -- checkBinopSafe is only checked on intermediate steps (rest ≠ []);
-              -- for the last step, safety follows from checkDivPreservationExec
-              sorry
+            have hsafe : op.safe a b :=
+              checkBinopSafe_sound hsafe_check hrepr hinv hzb
             have hs : Step orig (.run pc σ am) (.run (pc + 1) (σ[x ↦ .int (op.eval a b)]) am) :=
               Step.binop horig_opt hya hzb hsafe
             exact ⟨σ[x ↦ .int (op.eval a b)], am, hs, (fun v => by
