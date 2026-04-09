@@ -3,6 +3,7 @@ import CredibleCompilation.Parser
 import CredibleCompilation.ConstPropOpt
 import CredibleCompilation.CSEOpt
 import CredibleCompilation.LICMOpt
+import CredibleCompilation.DAEOpt
 import CredibleCompilation.DCEOpt
 import CredibleCompilation.PeepholeOpt
 import CredibleCompilation.ExecChecker
@@ -346,25 +347,16 @@ def applyPass (name : String) (pass : Prog → ECertificate) (p : Prog) : Except
 def optimizePipeline (p : Prog) : Except String Prog := do
   let p ← applyPass "ConstProp" ConstPropOpt.optimize p
   let p ← applyPass "DCE" DCEOpt.optimize p
+  let p ← applyPass "DAE" DAEOpt.optimize p
   let p ← applyPass "CSE" CSEOpt.optimize p
   let p ← applyPass "LICM" LICMOpt.optimize p
   let p ← applyPass "Peephole" PeepholeOpt.optimize p
   .ok p
 
-/-- Check if a program contains any float TAC instructions. -/
-private def hasFloatInstrs (p : Prog) : Bool :=
-  p.code.any fun instr =>
-    match instr with
-    | .fbinop _ _ _ _ | .intToFloat _ _ | .floatToInt _ _ => true
-    | .const _ (.float _) => true
-    | _ => false
-
 def compileToAsm (input : String) : Except String String := do
   let prog ← parseProgram input
   let tac := prog.compile
-  -- Skip optimization for programs with float instructions (passes not yet float-aware)
-  let opt ← if hasFloatInstrs tac then .ok tac
-             else do let p ← optimizePipeline tac; optimizePipeline p
+  let opt ← do let p ← optimizePipeline tac; optimizePipeline p
   match generateAsm opt with
   | some asm => .ok asm
   | none => .error "program failed type check"
