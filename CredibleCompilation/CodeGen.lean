@@ -6,6 +6,7 @@ import CredibleCompilation.LICMOpt
 import CredibleCompilation.DAEOpt
 import CredibleCompilation.DCEOpt
 import CredibleCompilation.PeepholeOpt
+import CredibleCompilation.RegAllocOpt
 import CredibleCompilation.ExecChecker
 
 /-!
@@ -98,6 +99,50 @@ private def storeVarFP (varMap : List (Var × Nat)) (v : Var) (freg : String) : 
   | some off => s!"  str {freg}, [sp, #{off}]"
   | none => s!"  // ERROR: unknown variable {v}"
 
+-- ============================================================
+-- § 2a. Register-aware load/store helpers
+-- ============================================================
+
+/-- Detect register allocation by variable name prefix.
+    `__xN` → integer register xN, `__dN` → float register dN. -/
+private def lookupReg (v : Var) : Option String :=
+  if v.startsWith "__x" then some (v.drop 2).toString  -- "__x3" → "x3"
+  else if v.startsWith "__d" then some (v.drop 2).toString  -- "__d5" → "d5"
+  else none
+
+/-- Is this register name a float register (dN)? -/
+private def isFloatReg (reg : String) : Bool := reg.startsWith "d"
+
+/-- Load an integer variable into a scratch register. If the variable is in a
+    register, emit `mov`; otherwise load from stack. -/
+private def smartLoadVar (varMap : List (Var × Nat))
+    (v : Var) (reg : String) : String :=
+  match lookupReg v with
+  | some r => if r == reg then s!"  // {v} already in {reg}" else s!"  mov {reg}, {r}"
+  | none => loadVar varMap v reg
+
+/-- Store a value from a scratch register into an integer variable. If the
+    variable is register-allocated, emit `mov`; otherwise store to stack. -/
+private def smartStoreVar (varMap : List (Var × Nat))
+    (v : Var) (reg : String) : String :=
+  match lookupReg v with
+  | some r => if r == reg then s!"  // {v} already in {reg}" else s!"  mov {r}, {reg}"
+  | none => storeVar varMap v reg
+
+/-- Load a float variable into a scratch FP register. -/
+private def smartLoadVarFP (varMap : List (Var × Nat))
+    (v : Var) (freg : String) : String :=
+  match lookupReg v with
+  | some r => if r == freg then s!"  // {v} already in {freg}" else s!"  fmov {freg}, {r}"
+  | none => loadVarFP varMap v freg
+
+/-- Store a value from a scratch FP register into a float variable. -/
+private def smartStoreVarFP (varMap : List (Var × Nat))
+    (v : Var) (freg : String) : String :=
+  match lookupReg v with
+  | some r => if r == freg then s!"  // {v} already in {freg}" else s!"  fmov {r}, {freg}"
+  | none => storeVarFP varMap v freg
+
 /-- Load an arbitrary 64-bit integer into a register.
     Uses `mov` for small values, `movz`/`movk` sequence for large ones. -/
 private def loadImm64 (reg : String) (n : BitVec 64) : List String :=
@@ -119,62 +164,83 @@ private def loadImm64 (reg : String) (n : BitVec 64) : List String :=
 -- § 3. Boolean expression codegen
 -- ============================================================
 
-/-- Generate code for a BoolExpr, result in w0 (0 or 1). Clobbers x0-x3. -/
-private partial def genBoolExpr (varMap : List (Var × Nat)) (be : BoolExpr) : List String :=
+/-- Generate code for a BoolExpr, result in w0 (0 or 1). Clobbers x0-x2, d1-d2. -/
+private partial def genBoolExpr (varMap : List (Var × Nat))
+    (be : BoolExpr) : List String :=
   match be with
   | .lit b =>
     s!"  mov x0, #{if b then 1 else 0}" :: List.nil
   | .bvar v =>
-    (loadVar varMap v "x0") :: "  and w0, w0, #1" :: List.nil
+    (smartLoadVar varMap v "x0") :: "  and w0, w0, #1" :: List.nil
   | .cmp op lv rv =>
     let cond := match op with | .eq => "eq" | .ne => "ne" | .lt => "lt" | .le => "le"
-    (loadVar varMap lv "x1") :: (loadVar varMap rv "x2") ::
+    (smartLoadVar varMap lv "x1") :: (smartLoadVar varMap rv "x2") ::
     "  cmp x1, x2" :: s!"  cset w0, {cond}" :: List.nil
   | .cmpLit op v n =>
     let cond := match op with | .eq => "eq" | .ne => "ne" | .lt => "lt" | .le => "le"
-    (loadVar varMap v "x1") :: List.nil ++
+    (smartLoadVar varMap v "x1") :: List.nil ++
     loadImm64 "x2" n ++
     ("  cmp x1, x2" :: s!"  cset w0, {cond}" :: List.nil)
   | .not e =>
     genBoolExpr varMap e ++ ("  eor w0, w0, #1" :: List.nil)
   | .fcmp op lv rv =>
     let cond := match op with | .feq => "eq" | .fne => "ne" | .flt => "mi" | .fle => "ls"
-    (loadVarFP varMap lv "d1") :: (loadVarFP varMap rv "d2") ::
+    (smartLoadVarFP varMap lv "d1") :: (smartLoadVarFP varMap rv "d2") ::
     "  fcmp d1, d2" :: s!"  cset w0, {cond}" :: List.nil
 
 -- ============================================================
 -- § 4. Instruction codegen
 -- ============================================================
 
-private def genInstr (varMap : List (Var × Nat)) (arrayDecls : List (ArrayName × Nat × VarTy))
+private def genInstr (varMap : List (Var × Nat))
+    (arrayDecls : List (ArrayName × Nat × VarTy))
     (pc : Nat) (instr : TAC) : List String :=
   (s!".L{pc}:" :: List.nil) ++
   match instr with
   | .const v (.int n) =>
-    loadImm64 "x0" n ++ (storeVar varMap v "x0" :: List.nil)
+    match lookupReg v with
+    | some r => loadImm64 r n
+    | none => loadImm64 "x0" n ++ [storeVar varMap v "x0"]
   | .const v (.bool b) =>
-    s!"  mov x0, #{if b then 1 else 0}" :: storeVar varMap v "x0" :: List.nil
+    match lookupReg v with
+    | some r => [s!"  mov {r}, #{if b then 1 else 0}"]
+    | none => [s!"  mov x0, #{if b then 1 else 0}", storeVar varMap v "x0"]
   | .const v (.float n) =>
-    -- Float stored as raw 64-bit value in stack slot (same layout as int)
-    loadImm64 "x0" n ++ (storeVar varMap v "x0" :: List.nil)
+    match lookupReg v with
+    | some r => loadImm64 "x0" n ++ [s!"  fmov {r}, x0"]
+    | none => loadImm64 "x0" n ++ [storeVar varMap v "x0"]
   | .copy dst src =>
-    (loadVar varMap src "x0") :: (storeVar varMap dst "x0") :: List.nil
+    let srcReg := lookupReg src
+    let dstReg := lookupReg dst
+    let isFloat := srcReg.any isFloatReg || dstReg.any isFloatReg
+    if isFloat then
+      match srcReg, dstReg with
+      | some rs, some rd => if rs == rd then [] else [s!"  fmov {rd}, {rs}"]
+      | some rs, none => [storeVarFP varMap dst rs]
+      | none, some rd => [loadVarFP varMap src rd]
+      | none, none => [loadVarFP varMap src "d0", storeVarFP varMap dst "d0"]
+    else
+      match srcReg, dstReg with
+      | some rs, some rd => if rs == rd then [] else [s!"  mov {rd}, {rs}"]
+      | some rs, none => [storeVar varMap dst rs]
+      | none, some rd => [loadVar varMap src rd]
+      | none, none => [loadVar varMap src "x0", storeVar varMap dst "x0"]
   | .binop dst op lv rv =>
     let opInstr := match op with
       | .add => ["  add x0, x1, x2"]
       | .sub => ["  sub x0, x1, x2"]
       | .mul => ["  mul x0, x1, x2"]
       | .div => ["  sdiv x0, x1, x2"]
-      | .mod => ["  sdiv x3, x1, x2", "  msub x0, x3, x2, x1"]  -- x0 = x1 - (x1/x2)*x2
+      | .mod => ["  sdiv x0, x1, x2", "  msub x0, x0, x2, x1"]
     if op == .div || op == .mod then
-      [(loadVar varMap rv "x2"), "  cbz x2, .Ldiv_by_zero",
-       (loadVar varMap lv "x1"), (loadVar varMap rv "x2")] ++
-      opInstr ++ [storeVar varMap dst "x0"]
+      [smartLoadVar varMap rv "x2", "  cbz x2, .Ldiv_by_zero",
+       smartLoadVar varMap lv "x1", smartLoadVar varMap rv "x2"] ++
+      opInstr ++ [smartStoreVar varMap dst "x0"]
     else
-      [(loadVar varMap lv "x1"), (loadVar varMap rv "x2")] ++
-      opInstr ++ [storeVar varMap dst "x0"]
+      [smartLoadVar varMap lv "x1", smartLoadVar varMap rv "x2"] ++
+      opInstr ++ [smartStoreVar varMap dst "x0"]
   | .boolop dst be =>
-    genBoolExpr varMap be ++ ((storeVar varMap dst "x0") :: List.nil)
+    genBoolExpr varMap be ++ [smartStoreVar varMap dst "x0"]
   | .goto l =>
     s!"  b .L{l}" :: List.nil
   | .ifgoto be l =>
@@ -182,45 +248,48 @@ private def genInstr (varMap : List (Var × Nat)) (arrayDecls : List (ArrayName 
   | .halt =>
     "  b .Lhalt" :: List.nil
   | .arrLoad x _arr idx _ =>
-    match lookupVar varMap idx, lookupVar varMap x with
-    | some offIdx, some offX =>
-      let arrSize := arraySize arrayDecls _arr
-      s!"  ldr x1, [sp, #{offIdx}]" ::            -- index → x1
-      s!"  cmp x1, #{arrSize}" ::                   -- bounds check
-      "  b.hs .Lbounds_err" ::                      -- branch if >= size (unsigned)
-      s!"  adrp x8, _arr_{_arr}@PAGE" ::           -- array base (page)
-      s!"  add x8, x8, _arr_{_arr}@PAGEOFF" ::     -- array base (offset)
-      "  ldr x0, [x8, x1, lsl #3]" ::              -- load arr[idx] (x1*8)
-      s!"  str x0, [sp, #{offX}]" :: List.nil
-    | _, _ => "  // ERROR: arrLoad unknown variable" :: List.nil
+    let arrSize := arraySize arrayDecls _arr
+    let isFloatDest := (lookupReg x).any isFloatReg
+    let storeResult := if isFloatDest then
+        ["  fmov d0, x0", smartStoreVarFP varMap x "d0"]
+      else [smartStoreVar varMap x "x0"]
+    (smartLoadVar varMap idx "x1") ::
+    s!"  cmp x1, #{arrSize}" ::
+    "  b.hs .Lbounds_err" ::
+    s!"  adrp x8, _arr_{_arr}@PAGE" ::
+    s!"  add x8, x8, _arr_{_arr}@PAGEOFF" ::
+    "  ldr x0, [x8, x1, lsl #3]" ::
+    storeResult
   | .arrStore _arr idx val _ =>
-    match lookupVar varMap idx, lookupVar varMap val with
-    | some offIdx, some offVal =>
-      let arrSize := arraySize arrayDecls _arr
-      s!"  ldr x1, [sp, #{offIdx}]" ::             -- index → x1
-      s!"  cmp x1, #{arrSize}" ::                    -- bounds check
-      "  b.hs .Lbounds_err" ::                       -- branch if >= size (unsigned)
-      s!"  ldr x2, [sp, #{offVal}]" ::             -- value → x2
-      s!"  adrp x8, _arr_{_arr}@PAGE" ::           -- array base (page)
-      s!"  add x8, x8, _arr_{_arr}@PAGEOFF" ::     -- array base (offset)
-      "  str x2, [x8, x1, lsl #3]" :: List.nil     -- store arr[idx] = val
-    | _, _ => "  // ERROR: arrStore unknown variable" :: List.nil
+    let arrSize := arraySize arrayDecls _arr
+    let isFloatVal := (lookupReg val).any isFloatReg
+    let loadVal := if isFloatVal then
+        [smartLoadVarFP varMap val "d0", "  fmov x2, d0"]
+      else [smartLoadVar varMap val "x2"]
+    (smartLoadVar varMap idx "x1") ::
+    s!"  cmp x1, #{arrSize}" ::
+    "  b.hs .Lbounds_err" ::
+    loadVal ++
+    s!"  adrp x8, _arr_{_arr}@PAGE" ::
+    s!"  add x8, x8, _arr_{_arr}@PAGEOFF" ::
+    "  str x2, [x8, x1, lsl #3]" :: List.nil
   | .fbinop dst op lv rv =>
     let opInstr := match op with
       | .fadd => "  fadd d0, d1, d2"
       | .fsub => "  fsub d0, d1, d2"
       | .fmul => "  fmul d0, d1, d2"
       | .fdiv => "  fdiv d0, d1, d2"
-    (loadVarFP varMap lv "d1") :: (loadVarFP varMap rv "d2") ::
-    opInstr :: (storeVarFP varMap dst "d0") :: List.nil
+    (smartLoadVarFP varMap lv "d1") ::
+    (smartLoadVarFP varMap rv "d2") ::
+    opInstr :: (smartStoreVarFP varMap dst "d0") :: List.nil
   | .intToFloat dst src =>
-    (loadVar varMap src "x0") ::
+    (smartLoadVar varMap src "x0") ::
     "  scvtf d0, x0" ::
-    (storeVarFP varMap dst "d0") :: List.nil
+    (smartStoreVarFP varMap dst "d0") :: List.nil
   | .floatToInt dst src =>
-    (loadVarFP varMap src "d0") ::
+    (smartLoadVarFP varMap src "d0") ::
     "  fcvtzs x0, d0" ::
-    (storeVar varMap dst "x0") :: List.nil
+    (smartStoreVar varMap dst "x0") :: List.nil
 
 -- ============================================================
 -- § 5. Program codegen
@@ -234,7 +303,7 @@ def generateAsm (p : Prog) : Option String :=
     let varMap := buildVarMap vars
     -- Stack frame: 16-byte aligned
     -- Layout: [scratch 8B] [var1 8B] ... [varN 8B] [padding] [x29 8B] [x30 8B]
-    -- Need (1 + N) * 8 bytes for scratch+vars, plus 16 for saved regs
+    -- All variables get stack slots (needed for halt save of register values)
     let frameSize := ((vars.length + 1) * 8 + 16 + 15) / 16 * 16
     let header := [
       ".global _main",
@@ -242,7 +311,6 @@ def generateAsm (p : Prog) : Option String :=
       "",
       "_main:",
       s!"  sub sp, sp, #{frameSize}",
-      -- stp offset must be in [-512, 504]; use separate str for large frames
       s!"  str x30, [sp, #{frameSize - 8}]",
       s!"  str x29, [sp, #{frameSize - 16}]",
       s!"  add x29, sp, #{frameSize - 16}",
@@ -250,29 +318,42 @@ def generateAsm (p : Prog) : Option String :=
       "  // Initialize all variables to 0",
       "  mov x0, #0"
     ]
-    let initVars := vars.map fun v => storeVar varMap v "x0"
+    -- Initialize: register vars get register zero, stack vars get stack zero
+    let initVars := vars.flatMap fun v =>
+      match lookupReg v with
+      | some r =>
+        if isFloatReg r then [s!"  fmov {r}, xzr"]
+        else [s!"  mov {r}, #0"]
+      | none => [storeVar varMap v "x0"]
     let body := (List.range p.code.size).flatMap fun pc =>
       genInstr varMap p.arrayDecls pc (p.code.getD pc .halt)
-    -- Print observable variables at halt
-    -- ARM64 Darwin variadic convention: args after format go on the stack
+    -- At halt: save register-allocated observable values to stack for printf
+    let saveRegs := p.observable.filterMap fun v =>
+      match lookupReg v with
+      | some r =>
+        match lookupVar varMap v with
+        | some off => some s!"  str {r}, [sp, #{off}]"
+        | none => none
+      | none => none
+    -- Print observable variables at halt (loads from stack, safe after saveRegs)
     let printCode := p.observable.flatMap fun v =>
       let isFloat := p.tyCtx v == .float
       let fmtLabel := if isFloat then s!".Lfmt_float" else ".Lfmt"
       if isFloat then
         s!"  // print {v} (float)" ::
-        (loadVarFP varMap v "d0") ::       -- load float value into d0
+        (loadVarFP varMap v "d0") ::
         "  sub sp, sp, #32" ::
         s!"  adrp x8, .Lname_{v}@PAGE" ::
         s!"  add x8, x8, .Lname_{v}@PAGEOFF" ::
         "  str x8, [sp]" ::
-        "  str d0, [sp, #8]" ::            -- store double on stack for printf
+        "  str d0, [sp, #8]" ::
         s!"  adrp x0, {fmtLabel}@PAGE" ::
         s!"  add x0, x0, {fmtLabel}@PAGEOFF" ::
         "  bl _printf" ::
         "  add sp, sp, #32" :: List.nil
       else
         s!"  // print {v}" ::
-        (loadVar varMap v "x9") ::       -- load value before adjusting sp
+        (loadVar varMap v "x9") ::
         "  sub sp, sp, #16" ::
         s!"  adrp x8, .Lname_{v}@PAGE" ::
         s!"  add x8, x8, .Lname_{v}@PAGEOFF" ::
@@ -285,7 +366,9 @@ def generateAsm (p : Prog) : Option String :=
     let footer := [
       "",
       ".Lhalt:",
-      "  // Print observable variables"] ++
+      "  // Save register values to stack for printf"] ++
+      saveRegs ++
+      ["  // Print observable variables"] ++
       printCode ++
       ["",
        "  // Exit with code 0",
@@ -342,7 +425,8 @@ def applyPass (name : String) (pass : Prog → ECertificate) (p : Prog) : Except
   if checkCertificateExec cert then .ok cert.trans
   else .error s!"optimization certificate check failed for {name}"
 
-/-- Apply each optimization pass in sequence: ConstProp → CSE → LICM → DCE → Peephole.
+/-- Apply each optimization pass in sequence:
+    ConstProp → DCE → DAE → CSE → LICM → RegAlloc → Peephole.
     Each pass is checked by the executable certificate checker. -/
 def optimizePipeline (p : Prog) : Except String Prog := do
   let p ← applyPass "ConstProp" ConstPropOpt.optimize p
@@ -356,7 +440,10 @@ def optimizePipeline (p : Prog) : Except String Prog := do
 def compileToAsm (input : String) : Except String String := do
   let prog ← parseProgram input
   let tac := prog.compile
-  let opt ← do let p ← optimizePipeline tac; optimizePipeline p
+  let opt ← do
+    let p ← optimizePipeline tac
+    let p ← optimizePipeline p
+    applyPass "RegAlloc" RegAllocOpt.optimize p
   match generateAsm opt with
   | some asm => .ok asm
   | none => .error "program failed type check"

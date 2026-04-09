@@ -180,3 +180,30 @@ private def daeFloatProg : Prog :=
   assert! checkCertificateExec cert
   assert! cert.trans.code != cert.orig.code
   true
+
+-- ============================================================
+-- § 9. RegAlloc: register allocation assigns registers
+-- ============================================================
+
+/-- A program with several int variables that should get register assignments.
+    The identity certificate should be valid, and the coloring should assign
+    at least one register. -/
+private def regAllocProg : Prog :=
+  { code := #[TAC.const "a" (.int 3),
+              TAC.const "b" (.int 7),
+              TAC.binop "c" .add "a" "b",
+              TAC.binop "d" .mul "c" "a",
+              TAC.binop "e" .sub "d" "b",
+              TAC.binop "r" .add "e" "c",
+              TAC.halt],
+    tyCtx := fun _ => .int, observable := ["r"] }
+
+#eval!
+  let cert := RegAllocOpt.optimize regAllocProg
+  assert! checkCertificateExec cert
+  -- TAC-level renaming: programs differ (register names in code)
+  assert! cert.trans.code != cert.orig.code
+  -- Coloring assigns registers
+  let coloring := RegAllocOpt.computeColoring regAllocProg
+  assert! !coloring.isEmpty
+  true

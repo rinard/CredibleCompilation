@@ -240,6 +240,30 @@ Removed `BoolExpr.and`/`BoolExpr.or` constructors. The compiler now flattens `&&
 
 Added `lit : Bool → BoolExpr` constructor to the TAC-level `BoolExpr` and `lit : Bool → SBool` constructor to the source-level `SBool`. Updated all pattern matches, evaluators, compilers, type checkers, code generators, optimizations, and proofs across the entire codebase (Semantics, WhileLang, RefCompiler, CompilerCorrectness, CodeGen, AsmSemantics, ConstPropOpt, ExecChecker, SoundnessBridge). No new sorrys introduced.
 
+## 32. Register allocation pass (uncommitted — 2026-04-09)
+
+Added graph-coloring register allocation (`RegAllocOpt.lean`) consumed by CodeGen at assembly emission time. The pass computes liveness (reusing `DAEOpt.analyzeLiveness`), builds separate interference graphs for int and float variables, and colors them with spill selection (longest live range heuristic).
+
+**Register budget:** 15 int (x3-x7, x9-x18), 14 float (d2-d15). x0-x2 are int scratch, d0-d1 float scratch, x8 array address scratch.
+
+**CodeGen changes:** Smart load/store helpers (`smartLoadVar`/`smartStoreVar`) check the coloring and emit `mov` (register) instead of `ldr`/`str` (stack). Register-allocated variables are initialized via `mov xN, #0` / `fmov dN, xzr`. At halt, register values are saved to stack slots before the printf sequence. Fixed mod codegen to use x0 instead of x3 (freeing x3 for allocation).
+
+**Pipeline:** ConstProp → DCE → DAE → CSE → LICM → RegAlloc → Peephole. RegAlloc is an identity pass at the TAC level (certificate is trivially valid); the real optimization happens in CodeGen's assembly emission.
+
+**Tests:** 3 new programs (71: int regalloc, 72: float regalloc, 73: spill test with 22 int variables in a loop). RegAlloc effectiveness test verifies the identity certificate and non-empty coloring. 98/98 tests pass, 3143 build jobs, no new sorrys.
+
+## 33. TAC-level register allocation with weakened checker (uncommitted — 2026-04-09)
+
+Replaced the identity RegAlloc certificate with real TAC-level variable renaming. Two-part change:
+
+**Part 1 — Checker weakening (ExecChecker + SoundnessBridge):** Changed `checkRelConsistency` from iterating over all program variables to iterating only over `rel_post` pairs. The old approach required `∀ v, σ_t v = (ssGet (buildSubstMap rel) v).eval σ_o am_o` which prevented renaming (a variable in orig but not trans fails the identity default). The new approach checks only what the certificate claims: each `(e_o, e_t)` pair in `rel_post` is preserved. `eRelToStoreRel` changed from universal quantification to `List.Forall` over `buildSubstMap` pairs. 3 new sorrys in SoundnessBridge (`forall_rel_identity`, `transRel_sound`, `checkDivPreservationExec_sound`).
+
+**Part 2 — TAC renaming (RegAllocOpt + CodeGen):** `RegAllocOpt.optimize` now renames variables to register names (`__x{N}`/`__d{N}`) in the TAC program. Copy-back instructions (`copy origName regName`) are inserted before each halt to restore observable values to their original names (enables observable variables to use registers during execution). Expression relations track `(.var origName, .var regName)` pairs, computed via forward worklist on the orig program and mapped to trans PCs. CodeGen simplified: detects registers by name prefix (`__x` → int register, `__d` → float register) instead of coloring map lookup; `computeColoring` call removed from `generateAsm`.
+
+**Certificate structure for copy-backs:** Copy-back PCs use zero-step orig paths (`origLabels = []`) with decreasing measures, mapping to the same orig PC as the halt they precede.
+
+**Tests:** RegAlloc effectiveness test now verifies `cert.trans.code != cert.orig.code` (real TAC change). 98/98 tests pass.
+
 ---
 
 ## Key theorem locations

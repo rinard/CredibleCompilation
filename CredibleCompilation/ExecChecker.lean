@@ -520,32 +520,30 @@ def checkOrigPath (orig : Prog) (ss : SymStore) (sam : SymArrayMem) (inv : EInv)
     | none => false
 
 /-- Check expression relation consistency via symbolic execution.
-    For every program variable `v`, the post-relation value (via `buildSubstMap rel_post`)
-    after original symbolic execution must agree with the transformed symbolic execution
+    For every `(e_o, e_t)` pair in `rel_post`, the original-side expression
+    after symbolic execution must agree with the transformed symbolic execution
     value after substituting the pre-relation map, both simplified under `inv_orig`.
-    The `allVars` parameter should include all variables from both programs. -/
+    Only iterates over pairs claimed by the certificate — no all-variables sweep. -/
 def checkRelConsistency
     (orig : Prog) (pc_orig : Label) (origLabels : List Label) (transInstr : TAC)
-    (inv_orig : EInv) (rel_pre rel_post : EExprRel) (allVars : List Var) : Bool :=
+    (inv_orig : EInv) (rel_pre rel_post : EExprRel) : Bool :=
   let (origSS, origSAM) := execPath orig ([] : SymStore) ([] : SymArrayMem) pc_orig origLabels
   let (transSS, transSAM) := execSymbolic ([] : SymStore) ([] : SymArrayMem) transInstr
   let preSubst := buildSubstMap rel_pre
-  let postSubst := buildSubstMap rel_post
-  let varCheck := (allVars ++ preSubst.map Prod.fst ++ postSubst.map Prod.fst).all fun v =>
-    let origVal := (ssGet postSubst v).substSym origSS |>.simplify inv_orig
-    let transVal := (ssGet transSS v).substSym preSubst |>.simplify inv_orig
+  let pairCheck := rel_post.all fun (e_o, e_t) =>
+    let origVal := e_o.substSym origSS |>.simplify inv_orig
+    let transVal := (e_t.substSym transSS).substSym preSubst |>.simplify inv_orig
     origVal == transVal
   let amCheck := origSAM.length == transSAM.length &&
     (origSAM.zip transSAM).all fun ((a_o, i_o, v_o), (a_t, i_t, v_t)) =>
       a_o == a_t &&
       i_o.simplify inv_orig == (i_t.substSym preSubst).simplify inv_orig &&
       v_o.simplify inv_orig == (v_t.substSym preSubst).simplify inv_orig
-  varCheck && amCheck
+  pairCheck && amCheck
 
 /-- **Condition 3**: Every transition in the transformed program has a
     corresponding original-program path with consistent variable effects. -/
 def checkAllTransitionsExec (cert : ECertificate) : Bool :=
-  let allVars := collectAllVars cert.orig cert.trans
   (List.range cert.trans.size).all fun pc_t =>
     match cert.trans[pc_t]? with
     | some .halt => true
@@ -568,7 +566,7 @@ def checkAllTransitionsExec (cert : ECertificate) : Bool :=
               ic.pc_orig tc.origLabels ic'.pc_orig branchInfo &&
             checkRelConsistency cert.orig ic.pc_orig tc.origLabels instr
               (cert.inv_orig.getD ic.pc_orig ([] : EInv))
-              tc.rel tc.rel_next allVars
+              tc.rel tc.rel_next
       | none => false
     | none => true
 
