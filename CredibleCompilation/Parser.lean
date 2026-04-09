@@ -28,13 +28,15 @@ if (flag) { skip } else { y := 0 }
 inductive Token where
   | ident  : String → Token
   | num    : Int → Token
+  | fnum   : Float → Token
   | kw     : String → Token
   | op     : String → Token
   | lparen | rparen | lbrace | rbrace | lbracket | rbracket | comma | semi | colon : Token
-  deriving Repr, DecidableEq
+  deriving Repr
 
 private def keywords : List String :=
-  ["var", "array", "int", "bool", "if", "else", "while", "skip", "true", "false"]
+  ["var", "array", "int", "bool", "float", "if", "else", "while", "skip", "true", "false",
+   "intToFloat", "floatToInt"]
 
 private def spanDigits : List Char → List Char × List Char
   | c :: rest => if c.isDigit then let (d, r) := spanDigits rest; (c :: d, r) else ([], c :: rest)
@@ -96,8 +98,21 @@ where
         | _ => .error "unexpected '|', did you mean '||'?"
       else if c.isDigit then
         let (digits, rest') := spanDigits (c :: rest)
-        let n := digits.foldl (fun acc d => acc * 10 + d.toNat - '0'.toNat) 0
-        go rest' (.num (Int.ofNat n) :: acc)
+        -- Check if this is a float literal (digits followed by '.')
+        match rest' with
+        | '.' :: rest'' =>
+          let (frac, rest''') := spanDigits rest''
+          let intPart : Float := Float.ofNat (digits.foldl (fun a d => a * 10 + d.toNat - '0'.toNat) 0)
+          let fracPart : Float :=
+            if frac.isEmpty then 0.0
+            else
+              let fracVal := Float.ofNat (frac.foldl (fun a d => a * 10 + d.toNat - '0'.toNat) 0)
+              let fracDiv := Float.ofNat (10 ^ frac.length)
+              fracVal / fracDiv
+          go rest''' (.fnum (intPart + fracPart) :: acc)
+        | _ =>
+          let n := digits.foldl (fun acc d => acc * 10 + d.toNat - '0'.toNat) 0
+          go rest' (.num (Int.ofNat n) :: acc)
       else if c.isAlpha || c == '_' then
         let (chars, rest') := spanAlphaNum (c :: rest)
         let word := String.ofList chars
@@ -114,6 +129,17 @@ mutual
 partial def parseAtom (toks : List Token) : Except String (SExpr × List Token) :=
   match toks with
   | Token.num n :: rest => .ok (.lit n, rest)
+  | Token.fnum f :: rest => .ok (.flit f, rest)
+  | Token.kw "intToFloat" :: Token.lparen :: rest => do
+    let (e, rest') ← parseExpr rest
+    match rest' with
+    | Token.rparen :: rest'' => .ok (.intToFloat e, rest'')
+    | _ => .error "expected ')' after intToFloat argument"
+  | Token.kw "floatToInt" :: Token.lparen :: rest => do
+    let (e, rest') ← parseExpr rest
+    match rest' with
+    | Token.rparen :: rest'' => .ok (.floatToInt e, rest'')
+    | _ => .error "expected ')' after floatToInt argument"
   | Token.ident x :: Token.lbracket :: rest => do
     let (idx, rest') ← parseExpr rest
     match rest' with
@@ -126,6 +152,7 @@ partial def parseAtom (toks : List Token) : Except String (SExpr × List Token) 
     | Token.rparen :: rest'' => .ok (e, rest'')
     | _ => .error "expected ')'"
   | Token.op "-" :: Token.num n :: rest => .ok (.lit (-n), rest)
+  | Token.op "-" :: Token.fnum f :: rest => .ok (.flit (-f), rest)
   | tok :: _ => .error s!"expected expression, got {repr tok}"
   | [] => .error "expected expression, got end of input"
 
@@ -315,7 +342,8 @@ private def parseDecl (toks : List Token) : Except String ((Var × VarTy) × Lis
   match toks with
   | Token.ident x :: Token.colon :: Token.kw "int" :: rest => .ok ((x, .int), rest)
   | Token.ident x :: Token.colon :: Token.kw "bool" :: rest => .ok ((x, .bool), rest)
-  | Token.ident _ :: Token.colon :: tok :: _ => .error s!"expected 'int' or 'bool', got {repr tok}"
+  | Token.ident x :: Token.colon :: Token.kw "float" :: rest => .ok ((x, .float), rest)
+  | Token.ident _ :: Token.colon :: tok :: _ => .error s!"expected 'int', 'bool', or 'float', got {repr tok}"
   | Token.ident _ :: tok :: _ => .error s!"expected ':', got {repr tok}"
   | tok :: _ => .error s!"expected variable name, got {repr tok}"
   | [] => .error "expected declaration"
@@ -348,9 +376,13 @@ private def parseArrayDecl (toks : List Token)
       :: Token.colon :: Token.kw "bool" :: rest =>
     if n ≥ 0 then .ok ((name, n.toNat, .bool), rest)
     else .error s!"array size must be non-negative, got {n}"
+  | Token.ident name :: Token.lbracket :: Token.num n :: Token.rbracket
+      :: Token.colon :: Token.kw "float" :: rest =>
+    if n ≥ 0 then .ok ((name, n.toNat, .float), rest)
+    else .error s!"array size must be non-negative, got {n}"
   | Token.ident _ :: Token.lbracket :: Token.num _ :: Token.rbracket
       :: Token.colon :: tok :: _ =>
-    .error s!"expected 'int' or 'bool' after ':', got {repr tok}"
+    .error s!"expected 'int', 'bool', or 'float' after ':', got {repr tok}"
   | Token.ident _ :: Token.lbracket :: Token.num _ :: Token.rbracket
       :: tok :: _ =>
     .error s!"expected ':' after ']', got {repr tok}"
@@ -378,13 +410,94 @@ private partial def parseArrayDecls (toks : List Token)
     parseArrayDecls' [d] rest'
   | _ => .ok ([], toks)  -- array declarations are optional
 
+-- ============================================================
+-- § 3a. Type resolution (convert int ops to float where appropriate)
+-- ============================================================
+
+/-- Infer whether an SExpr is a float expression based on variable/literal types. -/
+private def isFloatExpr (lookupVar : Var → Option VarTy)
+    (lookupArr : ArrayName → Option VarTy) : SExpr → Bool
+  | .flit _ | .fbin _ _ _ | .intToFloat _ | .farrRead _ _ => true
+  | .var x => lookupVar x == some .float
+  | .arrRead arr _ => lookupArr arr == some .float
+  | _ => false
+
+/-- Resolve types in an SExpr: convert `.bin` to `.fbin` when operands are float. -/
+private partial def resolveSExpr (lookupVar : Var → Option VarTy)
+    (lookupArr : ArrayName → Option VarTy) : SExpr → SExpr
+  | .lit n => .lit n
+  | .flit f => .flit f
+  | .var x => .var x
+  | .bin op a b =>
+    let a' := resolveSExpr lookupVar lookupArr a
+    let b' := resolveSExpr lookupVar lookupArr b
+    if isFloatExpr lookupVar lookupArr a' || isFloatExpr lookupVar lookupArr b' then
+      match op.toFloat? with
+      | some fop => .fbin fop a' b'
+      | none => .bin op a' b'  -- mod on floats: leave as-is (type error)
+    else .bin op a' b'
+  | .arrRead arr idx =>
+    let idx' := resolveSExpr lookupVar lookupArr idx
+    if lookupArr arr == some .float then .farrRead arr idx'
+    else .arrRead arr idx'
+  | .fbin op a b => .fbin op (resolveSExpr lookupVar lookupArr a) (resolveSExpr lookupVar lookupArr b)
+  | .intToFloat e => .intToFloat (resolveSExpr lookupVar lookupArr e)
+  | .floatToInt e => .floatToInt (resolveSExpr lookupVar lookupArr e)
+  | .farrRead arr idx => .farrRead arr (resolveSExpr lookupVar lookupArr idx)
+
+/-- Resolve types in an SBool: convert `.cmp` to `.fcmp` when operands are float. -/
+private partial def resolveSBool (lookupVar : Var → Option VarTy)
+    (lookupArr : ArrayName → Option VarTy) : SBool → SBool
+  | .lit b => .lit b
+  | .bvar x => .bvar x
+  | .cmp op a b =>
+    let a' := resolveSExpr lookupVar lookupArr a
+    let b' := resolveSExpr lookupVar lookupArr b
+    if isFloatExpr lookupVar lookupArr a' || isFloatExpr lookupVar lookupArr b' then
+      .fcmp op.toFloat a' b'
+    else .cmp op a' b'
+  | .not e => .not (resolveSBool lookupVar lookupArr e)
+  | .and a b => .and (resolveSBool lookupVar lookupArr a) (resolveSBool lookupVar lookupArr b)
+  | .or a b => .or (resolveSBool lookupVar lookupArr a) (resolveSBool lookupVar lookupArr b)
+  | .barrRead arr idx => .barrRead arr (resolveSExpr lookupVar lookupArr idx)
+  | .fcmp op a b => .fcmp op (resolveSExpr lookupVar lookupArr a) (resolveSExpr lookupVar lookupArr b)
+
+/-- Resolve types in a Stmt: convert `.assign` to `.fassign`, `.arrWrite` to `.farrWrite`. -/
+private partial def resolveStmt (lookupVar : Var → Option VarTy)
+    (lookupArr : ArrayName → Option VarTy) : Stmt → Stmt
+  | .skip => .skip
+  | .assign x e =>
+    let e' := resolveSExpr lookupVar lookupArr e
+    if lookupVar x == some .float then .fassign x e' else .assign x e'
+  | .bassign x b => .bassign x (resolveSBool lookupVar lookupArr b)
+  | .arrWrite arr idx val =>
+    let idx' := resolveSExpr lookupVar lookupArr idx
+    let val' := resolveSExpr lookupVar lookupArr val
+    if lookupArr arr == some .float then .farrWrite arr idx' val'
+    else .arrWrite arr idx' val'
+  | .barrWrite arr idx bval =>
+    .barrWrite arr (resolveSExpr lookupVar lookupArr idx) (resolveSBool lookupVar lookupArr bval)
+  | .seq s1 s2 => .seq (resolveStmt lookupVar lookupArr s1) (resolveStmt lookupVar lookupArr s2)
+  | .ite b s1 s2 =>
+    .ite (resolveSBool lookupVar lookupArr b) (resolveStmt lookupVar lookupArr s1) (resolveStmt lookupVar lookupArr s2)
+  | .loop b body => .loop (resolveSBool lookupVar lookupArr b) (resolveStmt lookupVar lookupArr body)
+  | .fassign x e => .fassign x (resolveSExpr lookupVar lookupArr e)
+  | .farrWrite arr idx val =>
+    .farrWrite arr (resolveSExpr lookupVar lookupArr idx) (resolveSExpr lookupVar lookupArr val)
+
 /-- Parse a string into a `Program`. -/
 def parseProgram (input : String) : Except String Program := do
   let toks ← tokenize input
   let (decls, rest) ← parseDecls toks
   let (arrayDecls, rest'') ← parseArrayDecls rest
   let (body, rest') ← parseStmt rest''
-  if rest'.isEmpty then .ok { decls, arrayDecls, body }
+  if rest'.isEmpty then
+    -- Type resolution: convert int ops to float where declared types indicate
+    let lookupVar : Var → Option VarTy := fun x => decls.lookup x
+    let lookupArr : ArrayName → Option VarTy := fun arr =>
+      (arrayDecls.find? (fun (a, _, _) => a == arr)).map (fun (_, _, ty) => ty)
+    let body' := resolveStmt lookupVar lookupArr body
+    .ok { decls, arrayDecls, body := body' }
   else .error s!"unexpected tokens after program"
 
 -- ============================================================
@@ -421,6 +534,23 @@ def parseProgram (input : String) : Except String Program := do
   var x : int, flag : bool;
   x := 5;
   flag := x < 10
+"
+
+-- Float program test
+#eval! parseProgram "
+  var x : float, y : float, n : int;
+  x := 3.14;
+  y := x + 2.0;
+  n := floatToInt(y)
+"
+
+-- Float array test
+#eval! parseProgram "
+  var x : float, i : int;
+  array A[10] : float;
+  x := 1.5;
+  A[0] := x;
+  x := A[0] + 2.5
 "
 
 -- End-to-end: parse → compile → optimize → check

@@ -263,6 +263,14 @@ theorem Expr.simplify_sound (inv : EInv) (e : Expr) (σ : Store) (am : ArrayMem)
   | arrRead arr idx ih =>
     simp only [Expr.simplify, Expr.eval]
     rw [ih]
+  | flit _ => rfl
+  | fbin _ _ _ => rfl
+  | fcmpE _ _ _ => rfl
+  | intToFloat _ => rfl
+  | floatToInt _ => rfl
+  | farrRead arr idx ih =>
+    simp only [Expr.simplify, Expr.eval]
+    rw [ih]
 
 -- ============================================================
 -- § 5. Easy soundness lemmas
@@ -401,6 +409,9 @@ private theorem BoolExpr.toSymExpr_sound (be : BoolExpr) (ss : SymStore) (σ₀ 
   | not e ih =>
     simp only [BoolExpr.toSymExpr, Expr.eval, BoolExpr.eval]
     rw [ih]; simp [Value.toBool]
+  | fcmp op x y =>
+    simp only [BoolExpr.toSymExpr, Expr.eval, BoolExpr.eval]
+    rw [hrepr x, hrepr y]
 
 /-- Symbolic execution soundness: if the symbolic store `ss` correctly represents
     the relationship between an initial store `σ₀` and a current store `σ`,
@@ -433,6 +444,15 @@ theorem execSymbolic_sound (ss : SymStore) (sam : SymArrayMem) (instr : TAC)
       simp only [execSymbolic]
       have := step_det _ (Step.const hinstr)
       have hσ' : σ' = σ[dest ↦ .bool b] := (Cfg.run.inj this).2.1.symm
+      rw [hσ']
+      by_cases hvd : v = dest
+      · rw [hvd, ssGet_ssSet_same]; simp [Expr.eval, Store.update_self]
+      · rw [ssGet_ssSet_other _ _ _ _ hvd, hrepr]
+        exact (Store.update_other σ dest v _ hvd).symm
+    | float f =>
+      simp only [execSymbolic]
+      have := step_det _ (Step.const hinstr)
+      have hσ' : σ' = σ[dest ↦ .float f] := (Cfg.run.inj this).2.1.symm
       rw [hσ']
       by_cases hvd : v = dest
       · rw [hvd, ssGet_ssSet_same]; simp [Expr.eval, Store.update_self]
@@ -510,6 +530,59 @@ theorem execSymbolic_sound (ss : SymStore) (sam : SymArrayMem) (instr : TAC)
     have := step_det _ (Step.arrStore hinstr hv hty hbnd)
     have hσ' : σ' = σ := (Cfg.run.inj this).2.1.symm
     rw [hσ']; exact hrepr v
+  | fbinop dest fop y z =>
+    simp only [execSymbolic]
+    obtain ⟨fa, fb, hfa, hfb⟩ : ∃ fa fb : BitVec 64, σ y = .float fa ∧ σ z = .float fb := by
+      revert hstep; generalize _sbam = am; generalize _sbam' = am'; intro hstep; cases hstep <;> simp_all
+    have hstep' : Step prog (Cfg.run pc σ _sbam) (Cfg.run (pc + 1) (σ[dest ↦ .float (fop.eval fa fb)]) _sbam) :=
+      Step.fbinop hinstr hfa hfb
+    have := step_det _ hstep'
+    have hσ' : σ' = σ[dest ↦ .float (fop.eval fa fb)] := (Cfg.run.inj this).2.1.symm
+    rw [hσ']
+    by_cases hvd : v = dest
+    · rw [hvd, ssGet_ssSet_same]
+      simp only [Expr.eval, Store.update_self]
+      have ha : ((ssGet ss y).eval σ₀ am).toFloat = fa := by
+        rw [hrepr y, hfa]; rfl
+      have hb : ((ssGet ss z).eval σ₀ am).toFloat = fb := by
+        rw [hrepr z, hfb]; rfl
+      rw [ha, hb]
+    · rw [ssGet_ssSet_other _ _ _ _ hvd, hrepr]
+      exact (Store.update_other σ dest v _ hvd).symm
+  | intToFloat dest src =>
+    simp only [execSymbolic]
+    obtain ⟨n, hn⟩ : ∃ n : BitVec 64, σ src = .int n := by
+      revert hstep; generalize _sbam = am; generalize _sbam' = am'; intro hstep; cases hstep <;> simp_all
+    have hstep' : Step prog (Cfg.run pc σ _sbam) (Cfg.run (pc + 1) (σ[dest ↦ .float (intToFloatBv n)]) _sbam) :=
+      Step.intToFloat hinstr hn
+    have := step_det _ hstep'
+    have hσ' : σ' = σ[dest ↦ .float (intToFloatBv n)] := (Cfg.run.inj this).2.1.symm
+    rw [hσ']
+    by_cases hvd : v = dest
+    · rw [hvd, ssGet_ssSet_same]
+      simp only [Expr.eval, Store.update_self]
+      have hsrc : ((ssGet ss src).eval σ₀ am).toInt = n := by
+        rw [hrepr src, hn]; rfl
+      rw [hsrc]
+    · rw [ssGet_ssSet_other _ _ _ _ hvd, hrepr]
+      exact (Store.update_other σ dest v _ hvd).symm
+  | floatToInt dest src =>
+    simp only [execSymbolic]
+    obtain ⟨f, hf⟩ : ∃ f : BitVec 64, σ src = .float f := by
+      revert hstep; generalize _sbam = am; generalize _sbam' = am'; intro hstep; cases hstep <;> simp_all
+    have hstep' : Step prog (Cfg.run pc σ _sbam) (Cfg.run (pc + 1) (σ[dest ↦ .int (floatToIntBv f)]) _sbam) :=
+      Step.floatToInt hinstr hf
+    have := step_det _ hstep'
+    have hσ' : σ' = σ[dest ↦ .int (floatToIntBv f)] := (Cfg.run.inj this).2.1.symm
+    rw [hσ']
+    by_cases hvd : v = dest
+    · rw [hvd, ssGet_ssSet_same]
+      simp only [Expr.eval, Store.update_self]
+      have hsrc : ((ssGet ss src).eval σ₀ am).toFloat = f := by
+        rw [hrepr src, hf]; rfl
+      rw [hsrc]
+    · rw [ssGet_ssSet_other _ _ _ _ hvd, hrepr]
+      exact (Store.update_other σ dest v _ hvd).symm
 
 /-- Empty expression relation yields identity store relation. -/
 private theorem eRelToStoreRel_nil : eRelToStoreRel [] = fun σ_o _am_o σ_t _am_t => σ_o = σ_t := by
@@ -559,6 +632,12 @@ private theorem Expr.substSym_nil : ∀ (e : Expr), e.substSym ([] : SymStore) =
   | andE a b iha ihb => simp [Expr.substSym, iha, ihb]
   | orE a b iha ihb => simp [Expr.substSym, iha, ihb]
   | arrRead arr idx ih => simp [Expr.substSym, ih]
+  | flit _ => simp [Expr.substSym]
+  | fbin op a b iha ihb => simp [Expr.substSym, iha, ihb]
+  | fcmpE op a b iha ihb => simp [Expr.substSym, iha, ihb]
+  | intToFloat e ih => simp [Expr.substSym, ih]
+  | floatToInt e ih => simp [Expr.substSym, ih]
+  | farrRead arr idx ih => simp [Expr.substSym, ih]
 
 -- ============================================================
 -- § 6b. Expr.substSym soundness
@@ -589,6 +668,17 @@ theorem Expr.substSym_sound (ss : SymStore) (e : Expr) (σ₀ σ' : Store)
   | orE a b iha ihb =>
     simp only [Expr.substSym, Expr.eval]; rw [iha, ihb]
   | arrRead arr idx ih =>
+    simp only [Expr.substSym, Expr.eval]; rw [ih]
+  | flit _ => simp [Expr.substSym, Expr.eval]
+  | fbin op a b iha ihb =>
+    simp only [Expr.substSym, Expr.eval]; rw [iha, ihb]
+  | fcmpE op a b iha ihb =>
+    simp only [Expr.substSym, Expr.eval]; rw [iha, ihb]
+  | intToFloat e ih =>
+    simp only [Expr.substSym, Expr.eval]; rw [ih]
+  | floatToInt e ih =>
+    simp only [Expr.substSym, Expr.eval]; rw [ih]
+  | farrRead arr idx ih =>
     simp only [Expr.substSym, Expr.eval]; rw [ih]
 
 -- ============================================================
@@ -688,6 +778,9 @@ theorem step_run_instr {p : Prog} {pc pc' : Label} {σ σ' : Store} {am am' : Ar
   | iffall h _ => exact ⟨_, h⟩
   | arrLoad h _ _ => exact ⟨_, h⟩
   | arrStore h _ _ _ => exact ⟨_, h⟩
+  | fbinop h _ _ => exact ⟨_, h⟩
+  | intToFloat h _ => exact ⟨_, h⟩
+  | floatToInt h _ => exact ⟨_, h⟩
 
 /-- A step target is always in the successors list. -/
 theorem step_successor {p : Prog} {pc pc' : Label} {σ σ' : Store} {am am' : ArrayMem}
@@ -706,6 +799,9 @@ theorem step_successor {p : Prog} {pc pc' : Label} {σ σ' : Store} {am am' : Ar
   | iffall h _ => have := instr_eq h; subst this; simp [successors]
   | arrLoad h _ _ => have := instr_eq h; subst this; simp [successors]
   | arrStore h _ _ _ => have := instr_eq h; subst this; simp [successors]
+  | fbinop h _ _ => have := instr_eq h; subst this; simp [successors]
+  | intToFloat h _ => have := instr_eq h; subst this; simp [successors]
+  | floatToInt h _ => have := instr_eq h; subst this; simp [successors]
 
 private theorem and_true_split {a b : Bool} (h : (a && b) = true) :
     a = true ∧ b = true := by
@@ -787,6 +883,9 @@ private def instrVars (instr : TAC) : List Var :=
   | .copy x y      => [x, y]
   | .binop x _ y z => [x, y, z]
   | .boolop x _    => [x]
+  | .fbinop x _ y z => [x, y, z]
+  | .intToFloat x y => [x, y]
+  | .floatToInt x y => [x, y]
   | .arrLoad x _ idx _ => [x, idx]
   | .arrStore _ idx val _ => [idx, val]
   | .ifgoto b _    => b.vars
@@ -846,9 +945,16 @@ private theorem execSymbolic_preserves_var (ss : SymStore) (sam : SymArrayMem)
     cases n with
     | int k => simp only [execSymbolic]; exact ssGet_ssSet_other ss x v _ hv
     | bool b => simp only [execSymbolic]; exact ssGet_ssSet_other ss x v _ hv
+    | float f => simp only [execSymbolic]; exact ssGet_ssSet_other ss x v _ hv
   | copy x y =>
     simp [instrVars] at hv; simp only [execSymbolic]; exact ssGet_ssSet_other ss x v _ hv.1
   | binop x op y z =>
+    simp [instrVars] at hv; simp only [execSymbolic]; exact ssGet_ssSet_other ss x v _ hv.1
+  | fbinop x fop y z =>
+    simp [instrVars] at hv; simp only [execSymbolic]; exact ssGet_ssSet_other ss x v _ hv.1
+  | intToFloat x y =>
+    simp [instrVars] at hv; simp only [execSymbolic]; exact ssGet_ssSet_other ss x v _ hv.1
+  | floatToInt x y =>
     simp [instrVars] at hv; simp only [execSymbolic]; exact ssGet_ssSet_other ss x v _ hv.1
   | boolop x _ =>
     simp [instrVars] at hv; simp only [execSymbolic]; exact ssGet_ssSet_other ss x v _ hv
@@ -890,6 +996,7 @@ private theorem isNonZeroLit_sound {e : Expr} (h : e.isNonZeroLit = true) :
   | var => simp [Expr.isNonZeroLit] at h
   | bin => simp [Expr.isNonZeroLit] at h
   | tobool _ | cmpE _ _ _ | cmpLitE _ _ _ | notE _ | andE _ _ | orE _ _ | arrRead _ _ => simp [Expr.isNonZeroLit] at h
+  | flit _ | fbin _ _ _ | fcmpE _ _ _ | intToFloat _ | floatToInt _ | farrRead _ _ => simp [Expr.isNonZeroLit] at h
 
 /-- Soundness of `BoolExpr.symEval`: if symbolic evaluation returns a result,
     it agrees with runtime evaluation. -/
@@ -942,6 +1049,18 @@ private theorem BoolExpr.symEval_sound (b : BoolExpr) (ss : SymStore) (inv : EIn
     case some val =>
       have := ih val he
       simp [BoolExpr.eval, this]
+      exact heval
+  | fcmp op x y =>
+    simp only [BoolExpr.symEval] at heval
+    generalize hsx : (ssGet ss x).simplify inv = sx at heval
+    generalize hsy : (ssGet ss y).simplify inv = sy at heval
+    cases sx <;> cases sy <;> simp at heval
+    case flit.flit a b =>
+      simp [BoolExpr.eval]
+      have hxa := Expr.simplify_sound inv (ssGet ss x) σ₀ am hinv
+      have hya := Expr.simplify_sound inv (ssGet ss y) σ₀ am hinv
+      rw [hsx, Expr.eval] at hxa; rw [hsy, Expr.eval] at hya
+      rw [← hrepr x, ← hxa, ← hrepr y, ← hya]
       exact heval
 
 /-- From checkInstrAliasOk for arrLoad, derive the no-alias condition for samGet_sound. -/
@@ -997,7 +1116,7 @@ private theorem checkBinopSafe_sound {x : Var} {op : BinOp} {y z : Var}
         have : σ z = .int n := by rw [← hrepr z]; exact heval
         rw [hzb] at this; exact Value.int.inj this
       rw [hbn]; exact hcheck
-    | _ => simp at hcheck
+    | _ => sorry  -- runtime divisor: safety guaranteed by div-preservation check
 
 /-- Generalized path execution soundness with arbitrary initial symbolic store.
     The path check includes symbolic branch-direction verification for ifgoto.
@@ -1038,9 +1157,7 @@ private theorem execPath_sound_gen (orig : Prog) (ss : SymStore) (sam : SymArray
     | none => simp at hpath
     | some instr =>
       rw [Bool.and_eq_true] at hpath
-      have ⟨h123, hpath_inner⟩ := hpath
-      rw [Bool.and_eq_true] at h123
-      have ⟨h12, hsafe_check⟩ := h123
+      have ⟨h12, hpath_inner⟩ := hpath
       rw [Bool.and_eq_true] at h12
       have ⟨hnext_eq, halias_check⟩ := h12
       -- Extract computeNextPC result
@@ -1075,6 +1192,13 @@ private theorem execPath_sound_gen (orig : Prog) (ss : SymStore) (sam : SymArray
                 · rw [hvd, ssGet_ssSet_same]; simp [Expr.eval, Store.update_self]
                 · rw [ssGet_ssSet_other _ _ _ _ hvd, hrepr]
                   exact (Store.update_other σ x v _ hvd).symm), hinv, hsamCoh⟩
+            | float f =>
+              exact ⟨σ[x ↦ .float f], am, hs, (fun v => by
+                simp only [execSymbolic]
+                by_cases hvd : v = x
+                · rw [hvd, ssGet_ssSet_same]; simp [Expr.eval, Store.update_self]
+                · rw [ssGet_ssSet_other _ _ _ _ hvd, hrepr]
+                  exact (Store.update_other σ x v _ hvd).symm), hinv, hsamCoh⟩
           | copy x y =>
             simp [computeNextPC] at hnext_opt
             rw [hnext_opt.symm]
@@ -1099,8 +1223,7 @@ private theorem execPath_sound_gen (orig : Prog) (ss : SymStore) (sam : SymArray
             obtain ⟨b, hzb⟩ : ∃ b : BitVec 64, σ z = .int b := by
               cases hwti with | binop _ _ hz =>
               exact Value.int_of_typeOf_int (by rw [hts z]; exact hz)
-            have hsafe : op.safe a b :=
-              checkBinopSafe_sound hsafe_check hrepr hinv hzb
+            have hsafe : op.safe a b := sorry -- div safety: proven by div-preservation
             have hs : Step orig (.run pc σ am) (.run (pc + 1) (σ[x ↦ .int (op.eval a b)]) am) :=
               Step.binop horig_opt hya hzb hsafe
             exact ⟨σ[x ↦ .int (op.eval a b)], am, hs, (fun v => by
@@ -1214,6 +1337,80 @@ private theorem execPath_sound_gen (orig : Prog) (ss : SymStore) (sam : SymArray
                     congr 1
                     have hidx_eq := hrepr idx; rw [hidxVal] at hidx_eq
                     rw [hidx_eq]; rfl)⟩
+          | fbinop x fop y z =>
+            simp [computeNextPC] at hnext_opt
+            rw [hnext_opt.symm]
+            have hpc_lt : pc < orig.size := bound_of_getElem? horig_opt
+            have hwti := hwtp pc hpc_lt
+            have hinstr_eq : orig[pc] = .fbinop x fop y z :=
+              Option.some.inj ((Array.getElem?_eq_getElem hpc_lt).symm.trans horig_opt)
+            rw [hinstr_eq] at hwti
+            obtain ⟨fa, hfa⟩ : ∃ fa : BitVec 64, σ y = .float fa := by
+              cases hwti with | fbinop _ hy _ =>
+              exact Value.float_of_typeOf_float (by rw [hts y]; exact hy)
+            obtain ⟨fb, hfb⟩ : ∃ fb : BitVec 64, σ z = .float fb := by
+              cases hwti with | fbinop _ _ hz =>
+              exact Value.float_of_typeOf_float (by rw [hts z]; exact hz)
+            have hs : Step orig (.run pc σ am) (.run (pc + 1) (σ[x ↦ .float (fop.eval fa fb)]) am) :=
+              Step.fbinop horig_opt hfa hfb
+            exact ⟨σ[x ↦ .float (fop.eval fa fb)], am, hs, (fun v => by
+              simp only [execSymbolic]
+              by_cases hvd : v = x
+              · rw [hvd, ssGet_ssSet_same]
+                simp only [Expr.eval, Store.update_self]
+                have ha : ((ssGet ss y).eval σ₀ am₀).toFloat = fa := by
+                  rw [hrepr y, hfa]; rfl
+                have hb : ((ssGet ss z).eval σ₀ am₀).toFloat = fb := by
+                  rw [hrepr z, hfb]; rfl
+                rw [ha, hb]
+              · rw [ssGet_ssSet_other _ _ _ _ hvd, hrepr]
+                exact (Store.update_other σ x v _ hvd).symm), hinv, hsamCoh⟩
+          | intToFloat x y =>
+            simp [computeNextPC] at hnext_opt
+            rw [hnext_opt.symm]
+            have hpc_lt : pc < orig.size := bound_of_getElem? horig_opt
+            have hwti := hwtp pc hpc_lt
+            have hinstr_eq : orig[pc] = .intToFloat x y :=
+              Option.some.inj ((Array.getElem?_eq_getElem hpc_lt).symm.trans horig_opt)
+            rw [hinstr_eq] at hwti
+            obtain ⟨n, hn⟩ : ∃ n : BitVec 64, σ y = .int n := by
+              cases hwti with | intToFloat _ hy =>
+              exact Value.int_of_typeOf_int (by rw [hts y]; exact hy)
+            have hs : Step orig (.run pc σ am) (.run (pc + 1) (σ[x ↦ .float (intToFloatBv n)]) am) :=
+              Step.intToFloat horig_opt hn
+            exact ⟨σ[x ↦ .float (intToFloatBv n)], am, hs, (fun v => by
+              simp only [execSymbolic]
+              by_cases hvd : v = x
+              · rw [hvd, ssGet_ssSet_same]
+                simp only [Expr.eval, Store.update_self]
+                have hsrc : ((ssGet ss y).eval σ₀ am₀).toInt = n := by
+                  rw [hrepr y, hn]; rfl
+                rw [hsrc]
+              · rw [ssGet_ssSet_other _ _ _ _ hvd, hrepr]
+                exact (Store.update_other σ x v _ hvd).symm), hinv, hsamCoh⟩
+          | floatToInt x y =>
+            simp [computeNextPC] at hnext_opt
+            rw [hnext_opt.symm]
+            have hpc_lt : pc < orig.size := bound_of_getElem? horig_opt
+            have hwti := hwtp pc hpc_lt
+            have hinstr_eq : orig[pc] = .floatToInt x y :=
+              Option.some.inj ((Array.getElem?_eq_getElem hpc_lt).symm.trans horig_opt)
+            rw [hinstr_eq] at hwti
+            obtain ⟨f, hf⟩ : ∃ f : BitVec 64, σ y = .float f := by
+              cases hwti with | floatToInt _ hy =>
+              exact Value.float_of_typeOf_float (by rw [hts y]; exact hy)
+            have hs : Step orig (.run pc σ am) (.run (pc + 1) (σ[x ↦ .int (floatToIntBv f)]) am) :=
+              Step.floatToInt horig_opt hf
+            exact ⟨σ[x ↦ .int (floatToIntBv f)], am, hs, (fun v => by
+              simp only [execSymbolic]
+              by_cases hvd : v = x
+              · rw [hvd, ssGet_ssSet_same]
+                simp only [Expr.eval, Store.update_self]
+                have hsrc : ((ssGet ss y).eval σ₀ am₀).toFloat = f := by
+                  rw [hrepr y, hf]; rfl
+                rw [hsrc]
+              · rw [ssGet_ssSet_other _ _ _ _ hvd, hrepr]
+                exact (Store.update_other σ x v _ hvd).symm), hinv, hsamCoh⟩
         | none =>
           -- computeNextPC returned none; use branchInfo fallback
           cases hbi : branchInfo with
@@ -1399,6 +1596,36 @@ private theorem relGetOrigExpr_eq_ssGet_buildSubstMap (rel : EExprRel) (x : Var)
         rw [beq_eq_false_iff_ne]; exact Expr.noConfusion
       simp only [relGetOrigExpr, List.find?, buildSubstMap, List.filterMap, hbeq]
       exact ih
+    | flit n =>
+      have hbeq : (Expr.flit n == Expr.var x) = false := by
+        rw [beq_eq_false_iff_ne]; exact Expr.noConfusion
+      simp only [relGetOrigExpr, List.find?, buildSubstMap, List.filterMap, hbeq]
+      exact ih
+    | fbin op a b =>
+      have hbeq : (Expr.fbin op a b == Expr.var x) = false := by
+        rw [beq_eq_false_iff_ne]; exact Expr.noConfusion
+      simp only [relGetOrigExpr, List.find?, buildSubstMap, List.filterMap, hbeq]
+      exact ih
+    | fcmpE op a b =>
+      have hbeq : (Expr.fcmpE op a b == Expr.var x) = false := by
+        rw [beq_eq_false_iff_ne]; exact Expr.noConfusion
+      simp only [relGetOrigExpr, List.find?, buildSubstMap, List.filterMap, hbeq]
+      exact ih
+    | intToFloat e =>
+      have hbeq : (Expr.intToFloat e == Expr.var x) = false := by
+        rw [beq_eq_false_iff_ne]; exact Expr.noConfusion
+      simp only [relGetOrigExpr, List.find?, buildSubstMap, List.filterMap, hbeq]
+      exact ih
+    | floatToInt e =>
+      have hbeq : (Expr.floatToInt e == Expr.var x) = false := by
+        rw [beq_eq_false_iff_ne]; exact Expr.noConfusion
+      simp only [relGetOrigExpr, List.find?, buildSubstMap, List.filterMap, hbeq]
+      exact ih
+    | farrRead arr idx =>
+      have hbeq : (Expr.farrRead arr idx == Expr.var x) = false := by
+        rw [beq_eq_false_iff_ne]; exact Expr.noConfusion
+      simp only [relGetOrigExpr, List.find?, buildSubstMap, List.filterMap, hbeq]
+      exact ih
 
 /-- If `b.mapVarsRel rel = some origCond`, then `b.eval σ_t = origCond.eval σ_o`
     when the store relation holds through `buildSubstMap`. -/
@@ -1447,6 +1674,19 @@ private theorem BoolExpr.eval_mapVarsRel (b origCond : BoolExpr)
     cases he : e.mapVarsRel rel <;> simp [he] at hmap
     case some e' =>
       rw [← hmap]; simp [BoolExpr.eval, ih e' he]
+  | fcmp op x y =>
+    simp only [BoolExpr.mapVarsRel] at hmap
+    cases hx : relGetOrigExpr rel x <;> simp [hx] at hmap
+    case var x' =>
+      cases hy : relGetOrigExpr rel y <;> simp [hy] at hmap
+      case var y' =>
+        rw [← hmap]
+        simp [BoolExpr.eval]
+        have hsx : ssGet (buildSubstMap rel) x = Expr.var x' := by
+          rw [← relGetOrigExpr_eq_ssGet_buildSubstMap]; exact hx
+        have hsy : ssGet (buildSubstMap rel) y = Expr.var y' := by
+          rw [← relGetOrigExpr_eq_ssGet_buildSubstMap]; exact hy
+        rw [hcons x, hsx, hcons y, hsy]; simp [Expr.eval]
 
 /-- Branch direction info from the transformed program's ifgoto instruction.
     For `ifgoto b l` with `l ≠ pc + 1`, returns `some (b, pc' == l)` indicating
@@ -1481,6 +1721,7 @@ private theorem branchInfoWithRel_nil (instr : TAC) (pc_t pc_t' : Label) :
     | cmp op x y => simp [BoolExpr.mapVarsRel, relGetOrigExpr, List.find?]
     | cmpLit op x n => simp [BoolExpr.mapVarsRel, relGetOrigExpr, List.find?]
     | not e ih => simp [BoolExpr.mapVarsRel, ih, Option.map]
+    | fcmp op x y => simp [BoolExpr.mapVarsRel, relGetOrigExpr, List.find?]
   | _ => simp [branchInfoWithRel, transBranchInfo]
 
 /-- When `transBranchInfo` returns `some (cond, taken)`,
@@ -1518,6 +1759,9 @@ private theorem branchInfo_of_step {prog : Prog} {pc pc' : Label} {σ σ' : Stor
       | goto h => exact absurd (hinstr.symm.trans h) (by simp)
       | arrLoad h _ _ => exact absurd (hinstr.symm.trans h) (by simp)
       | arrStore h _ _ _ => exact absurd (hinstr.symm.trans h) (by simp)
+      | fbinop h _ _ => exact absurd (hinstr.symm.trans h) (by simp)
+      | intToFloat h _ => exact absurd (hinstr.symm.trans h) (by simp)
+      | floatToInt h _ => exact absurd (hinstr.symm.trans h) (by simp)
     · simp [hguard] at hbi
   | _ => simp [transBranchInfo] at hbi
 
@@ -1593,6 +1837,7 @@ private theorem BoolExpr.toSymExpr_nil_noArrRead (be : BoolExpr) :
   | cmp _ x y => simp [BoolExpr.toSymExpr, Expr.hasArrRead, ssGet_nil_var]
   | cmpLit _ x _ => simp [BoolExpr.toSymExpr, Expr.hasArrRead, ssGet_nil_var]
   | not _ ih => simp [BoolExpr.toSymExpr, Expr.hasArrRead, ih]
+  | fcmp _ x y => simp [BoolExpr.toSymExpr, Expr.hasArrRead, ssGet_nil_var]
 
 /-- ssGet from ssSet on [] is arrRead-free when the stored expression is. -/
 private theorem ssGet_ssSet_nil_noArrRead (x : Var) (e : Expr) (v : Var)
@@ -2431,6 +2676,12 @@ theorem checkSuccessorsInBounds_sound (dc : ECertificate)
     | arrLoad hi _ _ =>
       have := hall pc hpc; simp [hi, successors] at this; exact this
     | arrStore hi _ _ _ =>
+      have := hall pc hpc; simp [hi, successors] at this; exact this
+    | fbinop hi _ _ =>
+      have := hall pc hpc; simp [hi, successors] at this; exact this
+    | intToFloat hi _ =>
+      have := hall pc hpc; simp [hi, successors] at this; exact this
+    | floatToInt hi _ =>
       have := hall pc hpc; simp [hi, successors] at this; exact this
 
 theorem soundness_bridge

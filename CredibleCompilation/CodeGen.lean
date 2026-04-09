@@ -41,6 +41,13 @@ private def collectVars (p : Prog) : List Var :=
                             if a.contains idx then a else a ++ [idx]
     | .arrStore _ idx val _ => let a := if acc.contains idx then acc else acc ++ [idx]
                                if a.contains val then a else a ++ [val]
+    | .fbinop x _ y z  => let a := if acc.contains x then acc else acc ++ [x]
+                          let b := if a.contains y then a else a ++ [y]
+                          if b.contains z then b else b ++ [z]
+    | .intToFloat x y  => let a := if acc.contains x then acc else acc ++ [x]
+                          if a.contains y then a else a ++ [y]
+    | .floatToInt x y  => let a := if acc.contains x then acc else acc ++ [x]
+                          if a.contains y then a else a ++ [y]
     | .goto _          => acc
     | .ifgoto _ _      => acc
     | .halt            => acc
@@ -78,6 +85,16 @@ private def loadVar (varMap : List (Var × Nat)) (v : Var) (reg : String) : Stri
 private def storeVar (varMap : List (Var × Nat)) (v : Var) (reg : String) : String :=
   match lookupVar varMap v with
   | some off => s!"  str {reg}, [sp, #{off}]"
+  | none => s!"  // ERROR: unknown variable {v}"
+
+private def loadVarFP (varMap : List (Var × Nat)) (v : Var) (freg : String) : String :=
+  match lookupVar varMap v with
+  | some off => s!"  ldr {freg}, [sp, #{off}]"
+  | none => s!"  // ERROR: unknown variable {v}"
+
+private def storeVarFP (varMap : List (Var × Nat)) (v : Var) (freg : String) : String :=
+  match lookupVar varMap v with
+  | some off => s!"  str {freg}, [sp, #{off}]"
   | none => s!"  // ERROR: unknown variable {v}"
 
 /-- Load an arbitrary 64-bit integer into a register.
@@ -119,6 +136,10 @@ private partial def genBoolExpr (varMap : List (Var × Nat)) (be : BoolExpr) : L
     ("  cmp x1, x2" :: s!"  cset w0, {cond}" :: List.nil)
   | .not e =>
     genBoolExpr varMap e ++ ("  eor w0, w0, #1" :: List.nil)
+  | .fcmp op lv rv =>
+    let cond := match op with | .feq => "eq" | .fne => "ne" | .flt => "mi" | .fle => "ls"
+    (loadVarFP varMap lv "d1") :: (loadVarFP varMap rv "d2") ::
+    "  fcmp d1, d2" :: s!"  cset w0, {cond}" :: List.nil
 
 -- ============================================================
 -- § 4. Instruction codegen
@@ -132,6 +153,9 @@ private def genInstr (varMap : List (Var × Nat)) (arrayDecls : List (ArrayName 
     loadImm64 "x0" n ++ (storeVar varMap v "x0" :: List.nil)
   | .const v (.bool b) =>
     s!"  mov x0, #{if b then 1 else 0}" :: storeVar varMap v "x0" :: List.nil
+  | .const v (.float n) =>
+    -- Float stored as raw 64-bit value in stack slot (same layout as int)
+    loadImm64 "x0" n ++ (storeVar varMap v "x0" :: List.nil)
   | .copy dst src =>
     (loadVar varMap src "x0") :: (storeVar varMap dst "x0") :: List.nil
   | .binop dst op lv rv =>
@@ -180,6 +204,22 @@ private def genInstr (varMap : List (Var × Nat)) (arrayDecls : List (ArrayName 
       s!"  add x8, x8, _arr_{_arr}@PAGEOFF" ::     -- array base (offset)
       "  str x2, [x8, x1, lsl #3]" :: List.nil     -- store arr[idx] = val
     | _, _ => "  // ERROR: arrStore unknown variable" :: List.nil
+  | .fbinop dst op lv rv =>
+    let opInstr := match op with
+      | .fadd => "  fadd d0, d1, d2"
+      | .fsub => "  fsub d0, d1, d2"
+      | .fmul => "  fmul d0, d1, d2"
+      | .fdiv => "  fdiv d0, d1, d2"
+    (loadVarFP varMap lv "d1") :: (loadVarFP varMap rv "d2") ::
+    opInstr :: (storeVarFP varMap dst "d0") :: List.nil
+  | .intToFloat dst src =>
+    (loadVar varMap src "x0") ::
+    "  scvtf d0, x0" ::
+    (storeVarFP varMap dst "d0") :: List.nil
+  | .floatToInt dst src =>
+    (loadVarFP varMap src "d0") ::
+    "  fcvtzs x0, d0" ::
+    (storeVar varMap dst "x0") :: List.nil
 
 -- ============================================================
 -- § 5. Program codegen
@@ -215,17 +255,32 @@ def generateAsm (p : Prog) : Option String :=
     -- Print observable variables at halt
     -- ARM64 Darwin variadic convention: args after format go on the stack
     let printCode := p.observable.flatMap fun v =>
-      s!"  // print {v}" ::
-      (loadVar varMap v "x9") ::       -- load value before adjusting sp
-      "  sub sp, sp, #16" ::
-      s!"  adrp x8, .Lname_{v}@PAGE" ::
-      s!"  add x8, x8, .Lname_{v}@PAGEOFF" ::
-      "  str x8, [sp]" ::
-      "  str x9, [sp, #8]" ::
-      "  adrp x0, .Lfmt@PAGE" ::
-      "  add x0, x0, .Lfmt@PAGEOFF" ::
-      "  bl _printf" ::
-      "  add sp, sp, #16" :: List.nil
+      let isFloat := p.tyCtx v == .float
+      let fmtLabel := if isFloat then s!".Lfmt_float" else ".Lfmt"
+      if isFloat then
+        s!"  // print {v} (float)" ::
+        (loadVarFP varMap v "d0") ::       -- load float value into d0
+        "  sub sp, sp, #32" ::
+        s!"  adrp x8, .Lname_{v}@PAGE" ::
+        s!"  add x8, x8, .Lname_{v}@PAGEOFF" ::
+        "  str x8, [sp]" ::
+        "  str d0, [sp, #8]" ::            -- store double on stack for printf
+        s!"  adrp x0, {fmtLabel}@PAGE" ::
+        s!"  add x0, x0, {fmtLabel}@PAGEOFF" ::
+        "  bl _printf" ::
+        "  add sp, sp, #32" :: List.nil
+      else
+        s!"  // print {v}" ::
+        (loadVar varMap v "x9") ::       -- load value before adjusting sp
+        "  sub sp, sp, #16" ::
+        s!"  adrp x8, .Lname_{v}@PAGE" ::
+        s!"  add x8, x8, .Lname_{v}@PAGEOFF" ::
+        "  str x8, [sp]" ::
+        "  str x9, [sp, #8]" ::
+        s!"  adrp x0, {fmtLabel}@PAGE" ::
+        s!"  add x0, x0, {fmtLabel}@PAGEOFF" ::
+        "  bl _printf" ::
+        "  add sp, sp, #16" :: List.nil
     let footer := [
       "",
       ".Lhalt:",
@@ -256,6 +311,8 @@ def generateAsm (p : Prog) : Option String :=
        ".section __TEXT,__cstring",
        ".Lfmt:",
        "  .asciz \"%s = %ld\\n\"",
+       ".Lfmt_float:",
+       "  .asciz \"%s = %f\\n\"",
        ".Ldiv_msg:",
        "  .asciz \"error: division by zero\\n\"",
        ".Lbounds_msg:",
@@ -294,12 +351,20 @@ def optimizePipeline (p : Prog) : Except String Prog := do
   let p ← applyPass "Peephole" PeepholeOpt.optimize p
   .ok p
 
-/-- Parse a While program string, compile to TAC, optimize (2 rounds), generate ARM64 assembly. -/
+/-- Check if a program contains any float TAC instructions. -/
+private def hasFloatInstrs (p : Prog) : Bool :=
+  p.code.any fun instr =>
+    match instr with
+    | .fbinop _ _ _ _ | .intToFloat _ _ | .floatToInt _ _ => true
+    | .const _ (.float _) => true
+    | _ => false
+
 def compileToAsm (input : String) : Except String String := do
   let prog ← parseProgram input
   let tac := prog.compile
-  let opt ← optimizePipeline tac
-  let opt ← optimizePipeline opt
+  -- Skip optimization for programs with float instructions (passes not yet float-aware)
+  let opt ← if hasFloatInstrs tac then .ok tac
+             else do let p ← optimizePipeline tac; optimizePipeline p
   match generateAsm opt with
   | some asm => .ok asm
   | none => .error "program failed type check"

@@ -393,6 +393,9 @@ theorem genBoolExpr_correct (prog : ArmProg) (vm : VarMap)
       ⟨nL, hnL⟩ ⟨nR, hnR⟩ hWrapped hCode hPC
     simp only [BoolExpr.eval, formalGenBoolExpr, hL, hR] at this ⊢
     exact this
+  | fcmp htyL htyR =>
+    -- Float comparison not yet supported in ARM backend
+    sorry
   | cmpLit hty hnn hlt =>
     -- be = .cmpLit op v n
     -- formalGenBoolExpr = [ldr x1 off] ++ formalLoadImm64 x2 n ++ [cmp x1 x2, cset x0 cond]
@@ -618,6 +621,9 @@ theorem genInstr_correct (prog : ArmProg) (vm : VarMap) (pcMap : Nat → Nat)
         rw [this, hPcRel]
       · -- arrayMem preserved
         simp [ArmState.setStack, ArmState.setReg, ArmState.nextPC, hArrayMem]
+    | float f =>
+      -- Float constants not yet supported in ARM backend
+      sorry
   | copy hinstr =>
     -- TAC: copy x y → ARM: ldr x0 offS; str x0 offD
     rename_i x y
@@ -1038,6 +1044,7 @@ theorem genInstr_correct (prog : ArmProg) (vm : VarMap) (pcMap : Nat → Nat)
         cases hv' : σ valV with
         | int n => simp [Value.encode, Value.toBits]
         | bool bb => rw [hv'] at hval; simp [Value.typeOf] at hval
+        | float f => simp [Value.encode, Value.toBits]
       rw [hx1eq, hx2eq, hArrayMem]
   | arrLoad_boundsError hinstr hidx hbounds =>
     exact ⟨s, .refl, trivial⟩
@@ -1047,6 +1054,21 @@ theorem genInstr_correct (prog : ArmProg) (vm : VarMap) (pcMap : Nat → Nat)
     exact absurd (Step.arrLoad_typeError (am := am) hinstr hne) (Step.no_typeError_of_wellTyped hPC_bound hWT hTS)
   | arrStore_typeError hinstr hne =>
     exact absurd (Step.arrStore_typeError (am := am) hinstr hne) (Step.no_typeError_of_wellTyped hPC_bound hWT hTS)
+  | fbinop hinstr hy hz =>
+    -- Float binary ops not yet supported in ARM backend
+    sorry
+  | fbinop_typeError hinstr hne =>
+    exact absurd (Step.fbinop_typeError (am := am) hinstr hne) (Step.no_typeError_of_wellTyped hPC_bound hWT hTS)
+  | intToFloat hinstr hy =>
+    -- intToFloat not yet supported in ARM backend
+    sorry
+  | intToFloat_typeError hinstr hne =>
+    exact absurd (Step.intToFloat_typeError (am := am) hinstr hne) (Step.no_typeError_of_wellTyped hPC_bound hWT hTS)
+  | floatToInt hinstr hy =>
+    -- floatToInt not yet supported in ARM backend
+    sorry
+  | floatToInt_typeError hinstr hne =>
+    exact absurd (Step.floatToInt_typeError (am := am) hinstr hne) (Step.no_typeError_of_wellTyped hPC_bound hWT hTS)
 
 /-- Main backward simulation: every TAC step is matched by ARM64 steps.
     Directly delegates to `genInstr_correct`. -/

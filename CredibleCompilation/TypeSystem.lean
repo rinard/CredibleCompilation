@@ -20,6 +20,7 @@ inductive WellTypedBoolExpr (Γ : TyCtx) : BoolExpr → Prop where
   | cmp    : Γ x = .int → Γ y = .int → WellTypedBoolExpr Γ (.cmp op x y)
   | cmpLit : Γ x = .int → 0 ≤ n.toInt → n.toInt < 2 ^ 63 → WellTypedBoolExpr Γ (.cmpLit op x n)
   | not    : WellTypedBoolExpr Γ b → WellTypedBoolExpr Γ (.not b)
+  | fcmp   : Γ x = .float → Γ y = .float → WellTypedBoolExpr Γ (.fcmp op x y)
 
 /-- Well-typedness for a single TAC instruction. -/
 inductive WellTypedInstr (Γ : TyCtx) : TAC → Prop where
@@ -34,6 +35,10 @@ inductive WellTypedInstr (Γ : TyCtx) : TAC → Prop where
   | halt   : WellTypedInstr Γ .halt
   | arrLoad  : Γ x = ty → Γ idx = .int → WellTypedInstr Γ (.arrLoad x arr idx ty)
   | arrStore : Γ idx = .int → Γ val = ty → WellTypedInstr Γ (.arrStore arr idx val ty)
+  | fbinop : Γ x = .float → Γ y = .float → Γ z = .float →
+      WellTypedInstr Γ (.fbinop x fop y z)
+  | intToFloat : Γ x = .float → Γ y = .int → WellTypedInstr Γ (.intToFloat x y)
+  | floatToInt : Γ x = .int → Γ y = .float → WellTypedInstr Γ (.floatToInt x y)
 
 /-- A program is well-typed if every instruction is well-typed. -/
 def WellTypedProg (Γ : TyCtx) (p : Prog) : Prop :=
@@ -90,6 +95,22 @@ theorem Step.progress (p : Prog) (pc : Nat) (σ : Store) (am : ArrayMem) (Γ : T
       by_cases hb : iv < p.arraySizeBv arr
       · exact ⟨_, .arrStore (hp ▸ hinstr) hiv hty hb⟩
       · exact ⟨_, .arrStore_boundsError (hp ▸ hinstr) hiv hty hb⟩
+  | .fbinop x fop y z =>
+    rw [hp] at hwti; cases hwti with
+    | fbinop _ hy hz =>
+      obtain ⟨a, ha⟩ := Value.float_of_typeOf_float (by rw [hts y]; exact hy)
+      obtain ⟨b, hb⟩ := Value.float_of_typeOf_float (by rw [hts z]; exact hz)
+      exact ⟨_, .fbinop (hp ▸ hinstr) ha hb⟩
+  | .intToFloat x y =>
+    rw [hp] at hwti; cases hwti with
+    | intToFloat _ hy =>
+      obtain ⟨n, hn⟩ := Value.int_of_typeOf_int (by rw [hts y]; exact hy)
+      exact ⟨_, .intToFloat (hp ▸ hinstr) hn⟩
+  | .floatToInt x y =>
+    rw [hp] at hwti; cases hwti with
+    | floatToInt _ hy =>
+      obtain ⟨f, hf⟩ := Value.float_of_typeOf_float (by rw [hts y]; exact hy)
+      exact ⟨_, .floatToInt (hp ▸ hinstr) hf⟩
 
 /-- **Type safety (single step)**: a well-typed program with a well-typed store
     never steps to a type-error configuration. -/
@@ -122,6 +143,27 @@ theorem Step.no_typeError_of_wellTyped {p : Prog} {pc : Nat} {σ τ : Store} {am
       cases hne with
       | inl hl => exact hl (by rw [hts]; exact hidx)
       | inr hr => exact hr (by rw [hts]; exact hval)
+  | fbinop_typeError hinstr hne =>
+    have hwti := hwtp pc hpc
+    have := instr_eq_of_lookup hpc hinstr
+    rw [this] at hwti
+    cases hwti with
+    | fbinop _ hy hz =>
+      cases hne with
+      | inl hl => exact hl (by rw [hts]; exact hy)
+      | inr hr => exact hr (by rw [hts]; exact hz)
+  | intToFloat_typeError hinstr hne =>
+    have hwti := hwtp pc hpc
+    have := instr_eq_of_lookup hpc hinstr
+    rw [this] at hwti
+    cases hwti with
+    | intToFloat _ hy => exact hne (by rw [hts]; exact hy)
+  | floatToInt_typeError hinstr hne =>
+    have hwti := hwtp pc hpc
+    have := instr_eq_of_lookup hpc hinstr
+    rw [this] at hwti
+    cases hwti with
+    | floatToInt _ hy => exact hne (by rw [hts]; exact hy)
 
 /-- **Progress (untyped)**: an in-bounds PC always admits a step,
     regardless of type safety. For ill-typed binop operands, the step
@@ -166,6 +208,24 @@ theorem Step.progress_untyped (p : Prog) (pc : Nat) (σ : Store) (am : ArrayMem)
         · exact ⟨_, .arrStore_boundsError (hp ▸ hinstr) hiv hval hb⟩
       · exact ⟨_, .arrStore_typeError (hp ▸ hinstr) (.inr hval)⟩
     · exact ⟨_, .arrStore_typeError (hp ▸ hinstr) (.inl hidx)⟩
+  | .fbinop x fop y z =>
+    by_cases hy : (σ y).typeOf = .float
+    · by_cases hz : (σ z).typeOf = .float
+      · obtain ⟨a, ha⟩ := Value.float_of_typeOf_float hy
+        obtain ⟨b, hb⟩ := Value.float_of_typeOf_float hz
+        exact ⟨_, .fbinop (hp ▸ hinstr) ha hb⟩
+      · exact ⟨_, .fbinop_typeError (hp ▸ hinstr) (.inr hz)⟩
+    · exact ⟨_, .fbinop_typeError (hp ▸ hinstr) (.inl hy)⟩
+  | .intToFloat x y =>
+    by_cases hy : (σ y).typeOf = .int
+    · obtain ⟨n, hn⟩ := Value.int_of_typeOf_int hy
+      exact ⟨_, .intToFloat (hp ▸ hinstr) hn⟩
+    · exact ⟨_, .intToFloat_typeError (hp ▸ hinstr) hy⟩
+  | .floatToInt x y =>
+    by_cases hy : (σ y).typeOf = .float
+    · obtain ⟨f, hf⟩ := Value.float_of_typeOf_float hy
+      exact ⟨_, .floatToInt (hp ▸ hinstr) hf⟩
+    · exact ⟨_, .floatToInt_typeError (hp ▸ hinstr) hy⟩
 
 -- ============================================================
 -- § 11. Decidable type checking
@@ -177,6 +237,7 @@ def checkWellTypedBoolExpr (Γ : TyCtx) : BoolExpr → Bool
   | .cmp _ x y    => decide (Γ x = .int) && decide (Γ y = .int)
   | .cmpLit _ x n => decide (Γ x = .int) && decide (0 ≤ n.toInt) && decide (n.toInt < 2 ^ 63)
   | .not e        => checkWellTypedBoolExpr Γ e
+  | .fcmp _ x y   => decide (Γ x = .float) && decide (Γ y = .float)
 
 def checkWellTypedInstr (Γ : TyCtx) : TAC → Bool
   | .const x v     => decide (v.typeOf = Γ x)
@@ -188,6 +249,9 @@ def checkWellTypedInstr (Γ : TyCtx) : TAC → Bool
   | .halt          => true
   | .arrLoad x _ idx ty  => decide (Γ x = ty) && decide (Γ idx = .int)
   | .arrStore _ idx val ty => decide (Γ idx = .int) && decide (Γ val = ty)
+  | .fbinop x _ y z => decide (Γ x = .float) && decide (Γ y = .float) && decide (Γ z = .float)
+  | .intToFloat x y => decide (Γ x = .float) && decide (Γ y = .int)
+  | .floatToInt x y => decide (Γ x = .int) && decide (Γ y = .float)
 
 theorem checkWellTypedBoolExpr_sound {Γ : TyCtx} {b : BoolExpr}
     (h : checkWellTypedBoolExpr Γ b = true) : WellTypedBoolExpr Γ b := by
@@ -204,6 +268,9 @@ theorem checkWellTypedBoolExpr_sound {Γ : TyCtx} {b : BoolExpr}
     exact .cmpLit h.1.1 h.1.2 h.2
   | not e ih =>
     simp [checkWellTypedBoolExpr] at h; exact .not (ih h)
+  | fcmp op x y =>
+    simp [checkWellTypedBoolExpr, Bool.and_eq_true, decide_eq_true_eq] at h
+    exact .fcmp h.1 h.2
 
 theorem checkWellTypedInstr_sound {Γ : TyCtx} {instr : TAC}
     (h : checkWellTypedInstr Γ instr = true) : WellTypedInstr Γ instr := by
@@ -230,6 +297,15 @@ theorem checkWellTypedInstr_sound {Γ : TyCtx} {instr : TAC}
   | arrStore arr idx val ty =>
     simp [checkWellTypedInstr, Bool.and_eq_true, decide_eq_true_eq] at h
     exact .arrStore h.1 h.2
+  | fbinop x fop y z =>
+    simp [checkWellTypedInstr, Bool.and_eq_true, decide_eq_true_eq] at h
+    exact .fbinop h.1.1 h.1.2 h.2
+  | intToFloat x y =>
+    simp [checkWellTypedInstr, Bool.and_eq_true, decide_eq_true_eq] at h
+    exact .intToFloat h.1 h.2
+  | floatToInt x y =>
+    simp [checkWellTypedInstr, Bool.and_eq_true, decide_eq_true_eq] at h
+    exact .floatToInt h.1 h.2
 
 /-- Check that every instruction in a program is well-typed. -/
 def checkWellTypedProg (Γ : TyCtx) (p : Prog) : Bool :=
@@ -289,6 +365,21 @@ theorem type_preservation {Γ : TyCtx} {p : Prog} {pc pc' : Nat} {σ σ' : Store
     match hwti with
     | .arrLoad hx _ => exact TypedStore.update_typed hts (by simp [Value.typeOf_ofBitVec]; exact hx.symm)
   | arrStore _ _ _ _ => exact hts
+  | fbinop h _ _ =>
+    have := instr_eq_of_lookup hpc h
+    rw [this] at hwti
+    match hwti with
+    | .fbinop hx _ _ => exact TypedStore.update_typed hts (by simp [Value.typeOf]; exact hx.symm)
+  | intToFloat h _ =>
+    have := instr_eq_of_lookup hpc h
+    rw [this] at hwti
+    match hwti with
+    | .intToFloat hx _ => exact TypedStore.update_typed hts (by simp [Value.typeOf]; exact hx.symm)
+  | floatToInt h _ =>
+    have := instr_eq_of_lookup hpc h
+    rw [this] at hwti
+    match hwti with
+    | .floatToInt hx _ => exact TypedStore.update_typed hts (by simp [Value.typeOf]; exact hx.symm)
 
 
 /-- **Type safety (multi-step)**: a well-typed, step-closed program never
@@ -370,4 +461,31 @@ theorem type_safety {p : Prog} {σ₀ σ' : Store} {am₀ am' : ArrayMem} {Γ : 
       cases rest with
       | refl => exact Step.no_typeError_of_wellTyped (am := am) (am' := am) hpc hwtp hts
                   (.arrStore_typeError (am := am) hinstr hne)
+      | step s _ => exact Step.no_step_from_typeError s
+    | fbinop h hy hz =>
+      exact ih _ _ am rfl hc'
+        (hclosed.2 pc _ σ _ am am hpc (Step.fbinop (am := am) h hy hz))
+        (type_preservation (am := am) (am' := am) hwtp hts hpc (Step.fbinop (am := am) h hy hz))
+    | fbinop_typeError hinstr hne =>
+      cases rest with
+      | refl => exact Step.no_typeError_of_wellTyped (am := am) (am' := am) hpc hwtp hts
+                  (.fbinop_typeError (am := am) hinstr hne)
+      | step s _ => exact Step.no_step_from_typeError s
+    | intToFloat h hy =>
+      exact ih _ _ am rfl hc'
+        (hclosed.2 pc _ σ _ am am hpc (Step.intToFloat (am := am) h hy))
+        (type_preservation (am := am) (am' := am) hwtp hts hpc (Step.intToFloat (am := am) h hy))
+    | intToFloat_typeError hinstr hne =>
+      cases rest with
+      | refl => exact Step.no_typeError_of_wellTyped (am := am) (am' := am) hpc hwtp hts
+                  (.intToFloat_typeError (am := am) hinstr hne)
+      | step s _ => exact Step.no_step_from_typeError s
+    | floatToInt h hy =>
+      exact ih _ _ am rfl hc'
+        (hclosed.2 pc _ σ _ am am hpc (Step.floatToInt (am := am) h hy))
+        (type_preservation (am := am) (am' := am) hwtp hts hpc (Step.floatToInt (am := am) h hy))
+    | floatToInt_typeError hinstr hne =>
+      cases rest with
+      | refl => exact Step.no_typeError_of_wellTyped (am := am) (am' := am) hpc hwtp hts
+                  (.floatToInt_typeError (am := am) hinstr hne)
       | step s _ => exact Step.no_step_from_typeError s

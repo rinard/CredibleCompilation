@@ -60,6 +60,7 @@ def evalBoolConst (cm : ConstMap) : BoolExpr → Option Bool
     match cmLookup cm x with
     | some (.int a) => some (op.eval a n)
     | _ => none
+  | .fcmp _op _x _y => none
   | .not e => evalBoolConst cm e |>.map (!·)
 
 -- ============================================================
@@ -82,6 +83,9 @@ def transfer (cm : ConstMap) (instr : TAC) : ConstMap :=
     | _, _           => cmRemove cm x
   | .boolop x _ => cmRemove cm x
   | .arrLoad x _ _ _ => cmRemove cm x
+  | .fbinop x _ _ _ => cmRemove cm x
+  | .intToFloat x _ => cmRemove cm x
+  | .floatToInt x _ => cmRemove cm x
   | _ => cm
 
 -- ============================================================
@@ -164,7 +168,7 @@ def transformProg (prog : Prog) (consts : Array (Option ConstMap)) : Prog :=
 
 /-- Convert a ConstMap to an EInv (invariant). -/
 def constMapToInv (cm : ConstMap) : EInv :=
-  cm.map fun (v, val) => (v, match val with | .int n => .lit n | .bool b => .blit b)
+  cm.map fun (v, val) => (v, match val with | .int n => .lit n | .bool b => .blit b | .float f => .flit f)
 
 /-- Build the invariant arrays. Both programs share the same invariants
     since the transformation preserves all variable values. -/

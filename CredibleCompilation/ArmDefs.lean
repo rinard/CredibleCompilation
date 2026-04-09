@@ -22,6 +22,11 @@ inductive ArmReg where
 -- sp is implicit (stack is addressed by offset)
 -- x29/x30 are only used in prologue/epilogue (not modeled)
 
+/-- ARM64 floating-point registers used by the code generator. -/
+inductive ArmFReg where
+  | d0 | d1 | d2
+  deriving Repr, DecidableEq
+
 -- ============================================================
 -- § 2. Condition codes and flags
 -- ============================================================
@@ -57,6 +62,8 @@ def Flags.condHolds (f : Flags) : Cond → Bool
 structure ArmState where
   /-- Register file. -/
   regs  : ArmReg → BitVec 64
+  /-- Floating-point register file. -/
+  fregs : ArmFReg → BitVec 64 := fun _ => 0
   /-- Stack memory: maps byte offset from sp to 64-bit value. -/
   stack : Nat → BitVec 64
   /-- Program counter (index into instruction array). -/
@@ -77,6 +84,10 @@ def ArmState.setStack (s : ArmState) (off : Nat) (v : BitVec 64) : ArmState :=
 /-- Update an array memory slot. -/
 def ArmState.setArrayMem (s : ArmState) (arr : ArrayName) (idx : BitVec 64) (v : BitVec 64) : ArmState :=
   { s with arrayMem := fun a i => if a == arr && i == idx then v else s.arrayMem a i }
+
+/-- Update a floating-point register. -/
+def ArmState.setFReg (s : ArmState) (r : ArmFReg) (v : BitVec 64) : ArmState :=
+  { s with fregs := fun r' => if r' == r then v else s.fregs r' }
 
 /-- Advance PC by 1. -/
 def ArmState.nextPC (s : ArmState) : ArmState :=
@@ -128,6 +139,31 @@ inductive ArmInstr where
   | arrLd    : ArmReg → ArrayName → ArmReg → ArmInstr
   /-- Store to global array: `arrayMem[arr][idxReg] ← valReg`. -/
   | arrSt    : ArrayName → ArmReg → ArmReg → ArmInstr
+  -- Floating-point instructions
+  /-- `fmov Dd, Xn` — move integer register to FP register. -/
+  | fmovToFP : ArmFReg → ArmReg → ArmInstr
+  /-- `ldr Dd, [sp, #off]` — load FP from stack. -/
+  | fldr     : ArmFReg → Nat → ArmInstr
+  /-- `str Dd, [sp, #off]` — store FP to stack. -/
+  | fstr     : ArmFReg → Nat → ArmInstr
+  /-- `fadd Dd, Dn, Dm` — FP addition. -/
+  | faddR    : ArmFReg → ArmFReg → ArmFReg → ArmInstr
+  /-- `fsub Dd, Dn, Dm` — FP subtraction. -/
+  | fsubR    : ArmFReg → ArmFReg → ArmFReg → ArmInstr
+  /-- `fmul Dd, Dn, Dm` — FP multiplication. -/
+  | fmulR    : ArmFReg → ArmFReg → ArmFReg → ArmInstr
+  /-- `fdiv Dd, Dn, Dm` — FP division. -/
+  | fdivR    : ArmFReg → ArmFReg → ArmFReg → ArmInstr
+  /-- `fcmp Dn, Dm` — FP compare (sets flags). -/
+  | fcmpR    : ArmFReg → ArmFReg → ArmInstr
+  /-- `scvtf Dd, Xn` — signed int → FP conversion. -/
+  | scvtf    : ArmFReg → ArmReg → ArmInstr
+  /-- `fcvtzs Xd, Dn` — FP → signed int conversion. -/
+  | fcvtzs   : ArmReg → ArmFReg → ArmInstr
+  /-- Load from FP array: `dst ← arrayMem[arr][idxReg]`. -/
+  | farrLd   : ArmFReg → ArrayName → ArmReg → ArmInstr
+  /-- Store to FP array: `arrayMem[arr][idxReg] ← valFReg`. -/
+  | farrSt   : ArrayName → ArmReg → ArmFReg → ArmInstr
   deriving Repr, DecidableEq
 
 /-- An ARM64 program is an array of instructions. -/

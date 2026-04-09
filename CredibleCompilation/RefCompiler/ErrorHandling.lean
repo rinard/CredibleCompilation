@@ -130,6 +130,7 @@ theorem refCompileExpr_stuck (e : SExpr) (offset nextTmp : Nat) (σ σ_tac : Sto
         iha offset nextTmp σ_tac htf_a hintv_a ha hagree hcodeA
       rw [hra] at hlt; simp at hlt
       exact ⟨pc_s, σ_s, hfrag, hstuck, by simp [List.length_append]; omega⟩
+  | flit _ | fbin _ _ _ _ _ | intToFloat _ _ | floatToInt _ _ | farrRead _ _ _ => sorry
 
 /-- Boolean expression stuck theorem: if `¬ sb.safe σ am p.arrayDecls`, the compiled boolean code
     reaches a stuck configuration. -/
@@ -303,6 +304,7 @@ theorem refCompileBool_stuck (sb : SBool) (offset nextTmp : Nat) (σ σ_tac : St
       rw [hra] at hlt; simp at hlt
       exact ⟨pc_s, σ_s, hfrag, hstuck,
         by simp [List.length_append, List.length_cons, List.length_nil]; omega⟩
+  | fcmp _ _ _ => sorry
 
 -- ============================================================
 -- § 15. Statement stuck theorem
@@ -506,6 +508,7 @@ theorem refCompileStmt_stuck (s : Stmt) (fuel : Nat) (σ σ' : Store) (am am' : 
           refCompileExpr_stuck a offset nextTmp σ σ_tac am p htf_a hintv_a ha hagree hcodeA
         rw [hra] at hlt; simp at hlt
         exact ⟨pc_s, σ_s, am, hfrag, hstuck, by simp [List.length_append]; omega⟩
+    | flit _ | fbin _ _ _ | intToFloat _ | floatToInt _ | farrRead _ _ => sorry
   | bassign x b =>
     simp only [Stmt.safe] at hunsafe
     have hintv_b : b.intTyped σ := by simp only [Stmt.intTyped] at hintv; exact hintv
@@ -802,6 +805,8 @@ theorem refCompileStmt_stuck (s : Stmt) (fuel : Nat) (σ σ' : Store) (am am' : 
             rw [hrcb] at hlt; simp at hlt
             exact ⟨pc_s, σ_s, am, hfrag, hstuck,
               by simp [List.length_append, List.length_cons, List.length_nil]; omega⟩
+  | fassign _ _ => sorry
+  | farrWrite _ _ _ => sorry
 
 #check @refCompileStmt_stuck  -- sanity: theorem registered
 
@@ -1155,6 +1160,7 @@ theorem refCompileStmt_unsafe (s : Stmt) (fuel : Nat) (σ : Store) (am : ArrayMe
           refCompileExpr_stuck a offset nextTmp σ σ_tac am p htf_a hintv_a ha hagree hcodeA
         rw [hra] at hlt; simp at hlt
         exact ⟨pc_s, σ_s, am, hfrag, hstuck, by simp [List.length_append]; omega⟩
+    | flit _ | fbin _ _ _ | intToFloat _ | floatToInt _ | farrRead _ _ => sorry
   | bassign x b =>
     simp only [Stmt.safe] at hunsafe
     have hintv_b : b.intTyped σ := by simp only [Stmt.intTyped] at hintv; exact hintv
@@ -1421,6 +1427,8 @@ theorem refCompileStmt_unsafe (s : Stmt) (fuel : Nat) (σ : Store) (am : ArrayMe
           rw [hrcb] at hlt; simp at hlt
           exact ⟨pc_s, σ_s, am, hfrag, hstuck,
             by simp [List.length_append, List.length_cons, List.length_nil]; omega⟩
+  | fassign _ _ => sorry
+  | farrWrite _ _ _ => sorry
 
 /-- If `¬ s.safe fuel σ am decls` holds for some fuel, the compiled program
     does **not** halt — it reaches a division-by-zero error. -/

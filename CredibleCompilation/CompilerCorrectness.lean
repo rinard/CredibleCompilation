@@ -24,6 +24,11 @@ def SExpr.freeVars : SExpr → List Var
   | .var x => [x]
   | .bin _ a b => a.freeVars ++ b.freeVars
   | .arrRead _ idx => idx.freeVars
+  | .flit _ => []
+  | .fbin _ a b => a.freeVars ++ b.freeVars
+  | .intToFloat e => e.freeVars
+  | .floatToInt e => e.freeVars
+  | .farrRead _ idx => idx.freeVars
 
 def SBool.freeVars : SBool → List Var
   | .lit _ => []
@@ -33,6 +38,7 @@ def SBool.freeVars : SBool → List Var
   | .and a b => a.freeVars ++ b.freeVars
   | .or a b => a.freeVars ++ b.freeVars
   | .barrRead _ idx => idx.freeVars
+  | .fcmp _ a b => a.freeVars ++ b.freeVars
 
 def Stmt.allVars : Stmt → List Var
   | .skip => []
@@ -43,6 +49,8 @@ def Stmt.allVars : Stmt → List Var
   | .seq s₁ s₂ => s₁.allVars ++ s₂.allVars
   | .ite b s₁ s₂ => b.freeVars ++ s₁.allVars ++ s₂.allVars
   | .loop b body => b.freeVars ++ body.allVars
+  | .fassign x e => x :: e.freeVars
+  | .farrWrite _ idx val => idx.freeVars ++ val.freeVars
 
 def Stmt.tmpFree (s : Stmt) : Prop := ∀ v ∈ s.allVars, v.isTmp = false
 
@@ -64,6 +72,14 @@ theorem SExpr.eval_agree (e : SExpr) (σ τ : Store) (am : ArrayMem)
   | arrRead _ idx ih =>
     simp only [SExpr.eval]
     rw [ih h]
+  | flit _ => rfl
+  | fbin _ a b iha ihb =>
+    simp only [SExpr.eval]
+    rw [iha (fun v hv => h v (List.mem_append_left _ hv)),
+        ihb (fun v hv => h v (List.mem_append_right _ hv))]
+  | intToFloat e ih => simp only [SExpr.eval]; rw [ih h]
+  | floatToInt e ih => simp only [SExpr.eval]; rw [ih h]
+  | farrRead _ idx ih => simp only [SExpr.eval]; rw [ih h]
 
 theorem SBool.eval_agree (sb : SBool) (σ τ : Store) (am : ArrayMem)
     (h : ∀ v ∈ sb.freeVars, σ v = τ v) : sb.eval σ am = sb.eval τ am := by
@@ -88,6 +104,10 @@ theorem SBool.eval_agree (sb : SBool) (σ τ : Store) (am : ArrayMem)
   | barrRead arr idx =>
     simp only [SBool.eval]
     rw [SExpr.eval_agree idx σ τ am h]
+  | fcmp _ a b =>
+    simp only [SBool.eval]
+    rw [SExpr.eval_agree a σ τ am (fun v hv => h v (List.mem_append_left _ hv)),
+        SExpr.eval_agree b σ τ am (fun v hv => h v (List.mem_append_right _ hv))]
 
 theorem SExpr.eval_tmpAgree (e : SExpr) (σ τ : Store) (am : ArrayMem)
     (hagree : ∀ v, v.isTmp = false → σ v = τ v)
@@ -118,6 +138,16 @@ theorem SExpr.isSafe_agree (e : SExpr) (σ τ : Store) (am : ArrayMem) (decls)
   | arrRead arr idx ih =>
     simp only [SExpr.isSafe]
     rw [ih h, SExpr.eval_agree idx σ τ am h]
+  | flit _ => rfl
+  | fbin _ a b iha ihb =>
+    simp only [SExpr.isSafe]
+    rw [iha (fun v hv => h v (List.mem_append_left _ hv)),
+        ihb (fun v hv => h v (List.mem_append_right _ hv))]
+  | intToFloat e ih => simp only [SExpr.isSafe]; rw [ih h]
+  | floatToInt e ih => simp only [SExpr.isSafe]; rw [ih h]
+  | farrRead arr idx ih =>
+    simp only [SExpr.isSafe]
+    rw [ih h, SExpr.eval_agree idx σ τ am h]
 
 theorem SBool.isSafe_agree (sb : SBool) (σ τ : Store) (am : ArrayMem) (decls)
     (h : ∀ v ∈ sb.freeVars, σ v = τ v) :
@@ -143,6 +173,10 @@ theorem SBool.isSafe_agree (sb : SBool) (σ τ : Store) (am : ArrayMem) (decls)
     simp only [SBool.isSafe]
     rw [SExpr.isSafe_agree idx σ τ am decls h,
         SExpr.eval_agree idx σ τ am h]
+  | fcmp _ a b =>
+    simp only [SBool.isSafe]
+    rw [SExpr.isSafe_agree a σ τ am decls (fun v hv => h v (List.mem_append_left _ hv)),
+        SExpr.isSafe_agree b σ τ am decls (fun v hv => h v (List.mem_append_right _ hv))]
 
 theorem SExpr.isSafe_tmpAgree (e : SExpr) (σ τ : Store) (am : ArrayMem) (decls)
     (hagree : ∀ v, v.isTmp = false → σ v = τ v)
@@ -304,6 +338,8 @@ theorem Stmt.interp_tmpAgree (s : Stmt) (fuel : Nat) (σ τ : Store) (am : Array
           refine ⟨τ, am, ?_, hagree, rfl⟩
           simp [Stmt.interp, ← hiSafe_b, hbs, ← hbool, hb]
       · simp [hbs] at h
+  | fassign _ _ => sorry
+  | farrWrite _ _ _ => sorry
 
 -- ============================================================
 -- § 4. Safety (division + bounds)
@@ -316,6 +352,11 @@ def SExpr.safe (σ : Store) (am : ArrayMem) (decls : List (ArrayName × Nat × V
   | .bin .mod a b => a.safe σ am decls ∧ b.safe σ am decls ∧ b.eval σ am ≠ 0
   | .bin _ a b => a.safe σ am decls ∧ b.safe σ am decls
   | .arrRead arr idx => idx.safe σ am decls ∧ (idx.eval σ am) < arraySizeBv decls arr
+  | .flit _ => True
+  | .fbin _ a b => a.safe σ am decls ∧ b.safe σ am decls
+  | .intToFloat e => e.safe σ am decls
+  | .floatToInt e => e.safe σ am decls
+  | .farrRead arr idx => idx.safe σ am decls ∧ (idx.eval σ am) < arraySizeBv decls arr
 
 def SBool.safe (σ : Store) (am : ArrayMem) (decls : List (ArrayName × Nat × VarTy)) : SBool → Prop
   | .lit _ => True
@@ -325,6 +366,7 @@ def SBool.safe (σ : Store) (am : ArrayMem) (decls : List (ArrayName × Nat × V
   | .and a b => a.safe σ am decls ∧ (a.eval σ am = true → b.safe σ am decls)
   | .or a b => a.safe σ am decls ∧ (a.eval σ am = false → b.safe σ am decls)
   | .barrRead arr idx => idx.safe σ am decls ∧ (idx.eval σ am) < arraySizeBv decls arr
+  | .fcmp _ a b => a.safe σ am decls ∧ b.safe σ am decls
 
 def Stmt.safe (fuel : Nat) (σ : Store) (am : ArrayMem)
     (decls : List (ArrayName × Nat × VarTy)) : Stmt → Prop
@@ -353,6 +395,9 @@ def Stmt.safe (fuel : Nat) (σ : Store) (am : ArrayMem)
         | some (σ', am') => (Stmt.loop b body).safe fuel' σ' am' decls
         | none => True
       else True
+  | .fassign _ e => e.safe σ am decls
+  | .farrWrite arr idx val =>
+    idx.safe σ am decls ∧ val.safe σ am decls ∧ (idx.eval σ am) < arraySizeBv decls arr
 
 -- ============================================================
 -- § 4a. isSafe → safe bridge
@@ -371,6 +416,15 @@ theorem SExpr.isSafe_implies_safe (e : SExpr) (σ : Store) (am : ArrayMem) (decl
       | exact ⟨iha h.1, ihb h.2⟩
       | exact ⟨iha h.1.1, ihb h.1.2, h.2⟩
   | arrRead arr idx ih =>
+    simp only [SExpr.isSafe, SExpr.safe, Bool.and_eq_true, decide_eq_true_eq]
+    intro ⟨hs, hb⟩; exact ⟨ih hs, hb⟩
+  | flit _ => intro; trivial
+  | fbin _ a b iha ihb =>
+    simp only [SExpr.isSafe, SExpr.safe, Bool.and_eq_true]
+    intro ⟨ha, hb⟩; exact ⟨iha ha, ihb hb⟩
+  | intToFloat e ih => simp only [SExpr.isSafe, SExpr.safe]; exact ih
+  | floatToInt e ih => simp only [SExpr.isSafe, SExpr.safe]; exact ih
+  | farrRead arr idx ih =>
     simp only [SExpr.isSafe, SExpr.safe, Bool.and_eq_true, decide_eq_true_eq]
     intro ⟨hs, hb⟩; exact ⟨ih hs, hb⟩
 
@@ -398,6 +452,10 @@ theorem SBool.isSafe_implies_safe (sb : SBool) (σ : Store) (am : ArrayMem) (dec
   | barrRead arr idx =>
     simp only [SBool.isSafe, SBool.safe, Bool.and_eq_true, decide_eq_true_eq]
     intro ⟨hs, hb⟩; exact ⟨SExpr.isSafe_implies_safe idx σ am decls hs, hb⟩
+  | fcmp _ a b =>
+    simp only [SBool.isSafe, SBool.safe, Bool.and_eq_true]
+    intro ⟨ha, hb⟩; exact ⟨SExpr.isSafe_implies_safe a σ am decls ha,
+                           SExpr.isSafe_implies_safe b σ am decls hb⟩
 
 theorem Stmt.interp_some_implies_safe (s : Stmt) (fuel : Nat)
     (σ σ' : Store) (am am' : ArrayMem) (decls) :
@@ -469,6 +527,8 @@ theorem Stmt.interp_some_implies_safe (s : Stmt) (fuel : Nat)
             refine ⟨hbs_safe, ?_⟩; simp [hb]; refine ⟨ih fuel' σ p₁.1 am p₁.2 hq, ?_⟩
             exact ihf p₁.1 σ' p₁.2 am' h
       · simp at h
+  | fassign _ _ => sorry
+  | farrWrite _ _ _ => sorry
 
 -- ============================================================
 -- § 4b. Integer typing (all arithmetic-position variables have int values)
@@ -484,6 +544,8 @@ def SBool.intTyped (σ : Store) : SBool → Prop
   | .and a b => a.intTyped σ ∧ b.intTyped σ
   | .or a b => a.intTyped σ ∧ b.intTyped σ
   | .barrRead _ idx => ∀ v ∈ idx.freeVars, ∃ n, σ v = .int n
+  | .fcmp _ a b => (∀ v ∈ a.freeVars, ∃ n, σ v = .int n) ∧
+                   (∀ v ∈ b.freeVars, ∃ n, σ v = .int n)
 
 /-- All arithmetic-position variables in a statement have int values in σ.
     Mirrors `Stmt.divSafe`: for sequential/branching statements, uses the
@@ -514,6 +576,9 @@ def Stmt.intTyped (fuel : Nat) (σ : Store) (am : ArrayMem)
         | some (σ', am') => (Stmt.loop b body).intTyped fuel' σ' am' decls
         | none => True
       else True
+  | .fassign _ e => ∀ v ∈ e.freeVars, ∃ n, σ v = .int n
+  | .farrWrite _ idx val => (∀ v ∈ idx.freeVars, ∃ n, σ v = .int n) ∧
+                            (∀ v ∈ val.freeVars, ∃ n, σ v = .int n)
 
 -- ============================================================
 -- § 4c. Bridge: typeCheck → tmpFree
@@ -547,6 +612,22 @@ private theorem checkSExpr_declared {lookup : Var → Option VarTy}
     · exact iha h.1 v ha
     · exact ihb h.2 v hb
   | arrRead _ idx ih =>
+    simp [Program.checkSExpr, Bool.and_eq_true] at h
+    intro v hv; exact ih h.2 v hv
+  | flit _ => intro v hv; simp [SExpr.freeVars] at hv
+  | fbin _ a b iha ihb =>
+    simp [Program.checkSExpr, Bool.and_eq_true] at h
+    intro v hv; simp [SExpr.freeVars] at hv
+    rcases hv with ha | hb
+    · exact iha h.1 v ha
+    · exact ihb h.2 v hb
+  | intToFloat e ih =>
+    simp [Program.checkSExpr] at h
+    intro v hv; exact ih h v hv
+  | floatToInt e ih =>
+    simp [Program.checkSExpr] at h
+    intro v hv; exact ih h v hv
+  | farrRead _ idx ih =>
     simp [Program.checkSExpr, Bool.and_eq_true] at h
     intro v hv; exact ih h.2 v hv
 
@@ -584,6 +665,7 @@ private theorem checkSBool_declared {lookup : Var → Option VarTy}
   | barrRead arr idx =>
     simp [Program.checkSBool, Bool.and_eq_true] at h
     intro v hv; simp [SBool.freeVars] at hv; exact checkSExpr_declared h.2 v hv
+  | fcmp _ a b => sorry
 
 /-- All variables in a well-typed statement are declared. -/
 private theorem checkStmt_declared {lookup : Var → Option VarTy}
@@ -638,6 +720,8 @@ private theorem checkStmt_declared {lookup : Var → Option VarTy}
     rcases hv with hfb | hbv
     · exact checkSBool_declared h.1 v hfb
     · exact ih h.2 v hbv
+  | fassign _ _ => sorry
+  | farrWrite _ _ _ => sorry
 
 /-- **Bridge lemma**: A type-checked program's body is tmp-free — no variable
     in the source program uses the compiler-reserved `__t` prefix. -/
@@ -739,6 +823,8 @@ theorem Stmt.interp_preserves_typedStore
             simp [hq] at hinterp
             exact ihf (ih hchk.2 hts hq) hinterp
       · simp at hinterp
+  | fassign _ _ => sorry
+  | farrWrite _ _ _ => sorry
 
 -- ============================================================
 -- § 4e. Bridge: typeCheck + TypedStore → intTyped
@@ -768,6 +854,7 @@ private theorem checkSExpr_intVars
   | arrRead _ idx ih =>
     simp [Program.checkSExpr, Bool.and_eq_true] at hchk
     intro v hv; exact ih hchk.2 v hv
+  | flit _ | fbin _ _ _ _ _ | intToFloat _ _ | floatToInt _ _ | farrRead _ _ _ => sorry
 
 /-- If `checkSBool lookup b = true` and `TypedStore Γ σ` with compatible lookup/Γ,
     then `b.intTyped σ`. -/
@@ -794,6 +881,7 @@ private theorem checkSBool_intTyped
   | barrRead arr idx =>
     simp [Program.checkSBool, Bool.and_eq_true] at hchk
     exact checkSExpr_intVars hcompat hchk.2 hts
+  | fcmp _ _ _ => sorry
 
 /-- If `checkStmt lookup s = true`, `TypedStore Γ σ`, and lookup/Γ are compatible,
     then `s.intTyped fuel σ`. -/
@@ -854,6 +942,8 @@ theorem checkStmt_intTyped
       | some p₁ =>
         simp [hq]
         exact ihf p₁.1 p₁.2 (Stmt.interp_preserves_typedStore hcompat hchk.2 hts hq)
+  | fassign _ _ => sorry
+  | farrWrite _ _ _ => sorry
 
 /-- **Bridge lemma**: A type-checked program with a well-typed store satisfies intTyped. -/
 theorem Program.typeCheck_intTyped (prog : Program) (h : prog.typeCheck = true)

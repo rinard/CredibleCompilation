@@ -39,11 +39,15 @@ inductive TAC where
   | halt     : TAC
   | arrLoad  : Var → ArrayName → Var → VarTy → TAC       -- x := arr[idx] (ty = element type)
   | arrStore : ArrayName → Var → Var → VarTy → TAC       -- arr[idx] := val (ty = element type)
+  | fbinop   : Var → FloatBinOp → Var → Var → TAC       -- x := y fop z (float binary op)
+  | intToFloat : Var → Var → TAC                          -- x := intToFloat(y)
+  | floatToInt : Var → Var → TAC                          -- x := floatToInt(y)
   deriving Repr, DecidableEq
 
 /-- A scalar instruction is one that does not touch ArrayMem. -/
 def TAC.isScalar : TAC → Bool
   | .const .. | .copy .. | .binop .. | .boolop .. | .goto .. | .ifgoto .. | .halt => true
+  | .fbinop .. | .intToFloat .. | .floatToInt .. => true
   | .arrLoad .. | .arrStore .. => false
 
 /-- A program: TAC code together with its type context and observable variables. -/
@@ -210,6 +214,30 @@ inductive Step (p : Prog) : Cfg → Cfg → Prop where
       (σ idx).typeOf ≠ .int ∨ (σ val).typeOf ≠ ty →
       Step p (.run pc σ am) (.typeError σ am)
 
+  | fbinop {a b : BitVec 64} : p[pc]? = some (.fbinop x fop y z) →
+      σ y = .float a → σ z = .float b →
+      Step p (.run pc σ am) (.run (pc + 1) (σ[x ↦ .float (fop.eval a b)]) am)
+
+  | fbinop_typeError : p[pc]? = some (.fbinop x fop y z) →
+      (σ y).typeOf ≠ .float ∨ (σ z).typeOf ≠ .float →
+      Step p (.run pc σ am) (.typeError σ am)
+
+  | intToFloat {n : BitVec 64} : p[pc]? = some (.intToFloat x y) →
+      σ y = .int n →
+      Step p (.run pc σ am) (.run (pc + 1) (σ[x ↦ .float (intToFloatBv n)]) am)
+
+  | intToFloat_typeError : p[pc]? = some (.intToFloat x y) →
+      (σ y).typeOf ≠ .int →
+      Step p (.run pc σ am) (.typeError σ am)
+
+  | floatToInt {f : BitVec 64} : p[pc]? = some (.floatToInt x y) →
+      σ y = .float f →
+      Step p (.run pc σ am) (.run (pc + 1) (σ[x ↦ .int (floatToIntBv f)]) am)
+
+  | floatToInt_typeError : p[pc]? = some (.floatToInt x y) →
+      (σ y).typeOf ≠ .float →
+      Step p (.run pc σ am) (.typeError σ am)
+
 
 -- p ⊩ c ⟶ c'   (⊩ avoids conflict with Lean's reserved ⊢)
 notation:50 p " ⊩ " c " ⟶ " c' => Step p c c'
@@ -218,6 +246,7 @@ notation:50 p " ⊩ " c " ⟶ " c' => Step p c c'
 def TAC.successors (instr : TAC) (pc : Label) : List Label :=
   match instr with
   | .const _ _ | .copy _ _ | .binop _ _ _ _ | .boolop _ _ => [pc + 1]
+  | .fbinop _ _ _ _ | .intToFloat _ _ | .floatToInt _ _ => [pc + 1]
   | .arrLoad _ _ _ _ | .arrStore _ _ _ _ => [pc + 1]
   | .goto l        => [l]
   | .ifgoto _ l    => [l, pc + 1]
@@ -238,6 +267,9 @@ theorem Step.mem_successors {p : Prog} {pc pc' : Nat} {σ σ' : Store} {am am' :
   | iffall h _     => exact ⟨_, h, by simp [TAC.successors]⟩
   | arrLoad h _ _    => exact ⟨_, h, by simp [TAC.successors]⟩
   | arrStore h _ _ _ => exact ⟨_, h, by simp [TAC.successors]⟩
+  | fbinop h _ _       => exact ⟨_, h, by simp [TAC.successors]⟩
+  | intToFloat h _     => exact ⟨_, h, by simp [TAC.successors]⟩
+  | floatToInt h _     => exact ⟨_, h, by simp [TAC.successors]⟩
 
 /-- A step from an in-bounds PC to a run-config stays in-bounds.
     This is the Prop-level condition for totality. -/
@@ -392,6 +424,21 @@ theorem Step.store_congr {p : Prog} {pc : Nat} {σ τ : Store} {am : ArrayMem} {
     cases hne with
     | inl hl => left; simp [Value.typeOf] at hl ⊢; rwa [← hagree]
     | inr hr => right; simp [Value.typeOf] at hr ⊢; rwa [← hagree]
+  | fbinop h hy hz =>
+    exact ⟨_, .fbinop h (by rw [← hagree]; exact hy) (by rw [← hagree]; exact hz)⟩
+  | fbinop_typeError h hne =>
+    refine ⟨_, .fbinop_typeError h ?_⟩
+    cases hne with
+    | inl hl => left; simp [Value.typeOf] at hl ⊢; rwa [← hagree]
+    | inr hr => right; simp [Value.typeOf] at hr ⊢; rwa [← hagree]
+  | intToFloat h hy =>
+    exact ⟨_, .intToFloat h (by rw [← hagree]; exact hy)⟩
+  | intToFloat_typeError h hne =>
+    exact ⟨_, .intToFloat_typeError h (by simp [Value.typeOf] at hne ⊢; rwa [← hagree])⟩
+  | floatToInt h hy =>
+    exact ⟨_, .floatToInt h (by rw [← hagree]; exact hy)⟩
+  | floatToInt_typeError h hne =>
+    exact ⟨_, .floatToInt_typeError h (by simp [Value.typeOf] at hne ⊢; rwa [← hagree])⟩
 
 -- ============================================================
 -- § 10. Observable output at a configuration

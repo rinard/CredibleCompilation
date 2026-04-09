@@ -39,6 +39,7 @@ theorem refCompileExpr_nextTmp_ge (e : SExpr) (offset nextTmp : Nat) :
     generalize refCompileExpr b (offset + codeA.length) tmp1 = rb at hb ⊢
     obtain ⟨codeB, vb, tmp2⟩ := rb; simp at hb ⊢
     omega
+  | flit _ | fbin _ _ _ _ _ | intToFloat _ _ | floatToInt _ _ | farrRead _ _ _ => sorry
 
 theorem refCompileBool_nextTmp_ge (sb : SBool) (offset nextTmp : Nat) :
     nextTmp ≤ (refCompileBool sb offset nextTmp).2.2 := by
@@ -76,6 +77,7 @@ theorem refCompileBool_nextTmp_ge (sb : SBool) (offset nextTmp : Nat) :
     generalize refCompileExpr idx offset nextTmp = ri at hi ⊢
     obtain ⟨codeIdx, vIdx, tmp1⟩ := ri; simp at hi ⊢
     omega
+  | fcmp _ _ _ => sorry
 
 theorem refCompileExpr_result_bound (e : SExpr) (offset nextTmp : Nat)
     (htf : ∀ v ∈ e.freeVars, v.isTmp = false) :
@@ -101,6 +103,7 @@ theorem refCompileExpr_result_bound (e : SExpr) (offset nextTmp : Nat)
     generalize refCompileExpr b (offset + codeA.length) tmp1 = rb at hge_b ⊢
     obtain ⟨codeB, vb, tmp2⟩ := rb; simp at hge_b ⊢
     exact ⟨tmp2, Nat.le_trans hge_a hge_b, by omega, rfl⟩
+  | flit _ | fbin _ _ _ _ _ | intToFloat _ _ | floatToInt _ _ | farrRead _ _ _ => sorry
 
 theorem refCompileBool_vars_bound (sb : SBool) (offset nextTmp : Nat)
     (htf : ∀ v ∈ sb.freeVars, v.isTmp = false) :
@@ -185,6 +188,7 @@ theorem refCompileBool_vars_bound (sb : SBool) (offset nextTmp : Nat)
     intro v hv; subst hv
     right
     exact ⟨tmp1, hge, by omega, rfl⟩
+  | fcmp _ _ _ => sorry
 
 -- ============================================================
 -- § 9. Expression compilation correctness
@@ -309,6 +313,7 @@ theorem refCompileExpr_correct (e : SExpr) (offset nextTmp : Nat) (σ σ_tac : S
         have := refCompileExpr_nextTmp_ge b (offset + codeA.length) tmp1; rw [hrb] at this; simpa using this
       rw [Store.update_tmpName_ne (by omega)]
       rw [hprev_b k (by omega), hprev_a k hk]
+  | flit _ | fbin _ _ _ _ _ | intToFloat _ _ | floatToInt _ _ | farrRead _ _ _ => sorry
 
 -- ============================================================
 -- § 10. Boolean expression compilation correctness
@@ -673,6 +678,7 @@ theorem refCompileBool_correct (sb : SBool) (offset nextTmp : Nat) (σ σ_tac : 
     · intro k hk
       simp only [σ_load]
       rw [Store.update_tmpName_ne (by omega), hprev_idx k hk]
+  | fcmp _ _ _ => sorry
 
 -- ============================================================
 -- § 11. Statement compilation correctness
@@ -1032,6 +1038,7 @@ theorem refCompileStmt_correct (s : Stmt) (fuel : Nat) (σ σ' : Store) (am am' 
         split
         · rfl
         · rw [hntmp_b v hv, hntmp_a v hv, hagree v hv]
+    | flit _ | fbin _ _ _ | intToFloat _ | floatToInt _ | farrRead _ _ => sorry
   | bassign x b =>
     simp only [Stmt.interp] at hinterp
     obtain ⟨_, rfl, rfl⟩ := ite_some_eq_some_pair hinterp
@@ -1294,6 +1301,8 @@ theorem refCompileStmt_correct (s : Stmt) (fuel : Nat) (σ σ' : Store) (am am' 
           dsimp only [refCompileStmt] at hexec_loop; rw [hrcb, hrcbody] at hexec_loop
           simp only [] at hexec_loop
           exact ⟨σ_final, FragExec.trans' hexec_iter hexec_loop, hagree_final⟩
+  | fassign _ _ => sorry
+  | farrWrite _ _ _ => sorry
 
 -- ============================================================
 -- § 12. Top-level correctness theorem

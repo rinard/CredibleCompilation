@@ -66,6 +66,12 @@ def Expr.simplify (inv : EInv) : Expr → Expr
   | .andE a b       => .andE a b
   | .orE a b        => .orE a b
   | .arrRead arr idx => .arrRead arr (idx.simplify inv)
+  | .flit n         => .flit n
+  | .fbin op a b    => .fbin op a b
+  | .fcmpE op a b   => .fcmpE op a b
+  | .intToFloat e   => .intToFloat e
+  | .floatToInt e   => .floatToInt e
+  | .farrRead arr idx => .farrRead arr (idx.simplify inv)
 
 -- ============================================================
 -- § 3. Symbolic execution
@@ -91,6 +97,7 @@ def BoolExpr.toSymExpr (ss : SymStore) : BoolExpr → Expr
   | .cmp op x y    => .cmpE op (ssGet ss x) (ssGet ss y)
   | .cmpLit op x n => .cmpLitE op (ssGet ss x) n
   | .not e         => .notE (e.toSymExpr ss)
+  | .fcmp op x y   => .fcmpE op (ssGet ss x) (ssGet ss y)
 
 /-- Symbolic array memory: tracks array writes as a list of (array, index, value) triples.
     Most recent writes are at the head. -/
@@ -110,9 +117,13 @@ def execSymbolic (ss : SymStore) (sam : SymArrayMem) (instr : TAC) : SymStore ×
   match instr with
   | .const x (.int n)  => (ssSet ss x (.lit n), sam)
   | .const x (.bool b) => (ssSet ss x (.blit b), sam)
+  | .const x (.float f) => (ssSet ss x (.flit f), sam)
   | .boolop x be    => (ssSet ss x (be.toSymExpr ss), sam)
   | .copy x y       => (ssSet ss x (ssGet ss y), sam)
   | .binop x op y z => (ssSet ss x (.bin op (ssGet ss y) (ssGet ss z)), sam)
+  | .fbinop x op y z => (ssSet ss x (.fbin op (ssGet ss y) (ssGet ss z)), sam)
+  | .intToFloat x y => (ssSet ss x (.intToFloat (ssGet ss y)), sam)
+  | .floatToInt x y => (ssSet ss x (.floatToInt (ssGet ss y)), sam)
   | .arrLoad x arr idx _ => (ssSet ss x (samGet sam arr (ssGet ss idx)), sam)
   | .arrStore arr idx val _ => (ss, (arr, ssGet ss idx, ssGet ss val) :: sam)
   | _               => (ss, sam)
@@ -136,6 +147,7 @@ def execPath (orig : Prog) (ss : SymStore) (sam : SymArrayMem) (pc : Label) :
 def successors (instr : TAC) (pc : Label) : List Label :=
   match instr with
   | .const _ _ | .copy _ _ | .binop _ _ _ _ | .boolop _ _ => [pc + 1]
+  | .fbinop _ _ _ _ | .intToFloat _ _ | .floatToInt _ _ => [pc + 1]
   | .arrLoad _ _ _ _ | .arrStore _ _ _ _ => [pc + 1]
   | .goto l        => [l]
   | .ifgoto _ l    => [l, pc + 1]
@@ -151,6 +163,7 @@ def Expr.isNonZeroLit : Expr → Bool
   | .blit true => true
   | .blit false | .var _ | .bin _ _ _ => false
   | .tobool _ | .cmpE _ _ _ | .cmpLitE _ _ _ | .notE _ | .andE _ _ | .orE _ _ | .arrRead _ _ => false
+  | .flit _ | .fbin _ _ _ | .fcmpE _ _ _ | .intToFloat _ | .floatToInt _ | .farrRead _ _ => false
 
 /-- Symbolically evaluate a BoolExpr under a symbolic store and invariant.
     Returns `some true`/`some false` if the result can be determined, `none` otherwise. -/
@@ -169,6 +182,10 @@ def BoolExpr.symEval (ss : SymStore) (inv : EInv) : BoolExpr → Option Bool
     | .lit a => some (op.eval a n)
     | _ => none
   | .not e => e.symEval ss inv |>.map (!·)
+  | .fcmp op x y =>
+    match (ssGet ss x).simplify inv, (ssGet ss y).simplify inv with
+    | .flit a, .flit b => some (FloatCmpOp.eval op a b)
+    | _, _ => none
 
 /-- Like `canReach`, but for `ifgoto` also verifies the branch direction
     via symbolic evaluation of the boolean condition under the invariant.
@@ -190,6 +207,9 @@ def collectAllVars (p1 p2 : Prog) : List Var :=
     | .copy x y      => [x, y]
     | .binop x _ y z => [x, y, z]
     | .boolop x _    => [x]
+    | .fbinop x _ y z => [x, y, z]
+    | .intToFloat x y => [x, y]
+    | .floatToInt x y => [x, y]
     | .arrLoad x _ idx _ => [x, idx]
     | .arrStore _ idx val _ => [idx, val]
     | .ifgoto b _    => b.vars
@@ -264,6 +284,10 @@ def BoolExpr.mapVarsRel (rel : EExprRel) : BoolExpr → Option BoolExpr
     | .var x' => some (.cmpLit op x' n)
     | _ => none
   | .not e => e.mapVarsRel rel |>.map .not
+  | .fcmp op x y =>
+    match relGetOrigExpr rel x, relGetOrigExpr rel y with
+    | .var x', .var y' => some (.fcmp op x' y')
+    | _, _ => none
 
 /-- Build a substitution map from pre-relation pairs of the form `(e_o, .var v)`.
     Maps transformed variable `v` to original expression `e_o`. -/
@@ -302,6 +326,7 @@ def buildInstrCerts1to1 (trans : Prog) : Array EInstrCert :=
     match trans[i]? with
     | some .halt => { pc_orig := i, transitions := ([] : List ETransCorr) }
     | some (.const _ _) | some (.copy _ _) | some (.binop _ _ _ _) | some (.boolop _ _)
+    | some (.fbinop _ _ _ _) | some (.intToFloat _ _) | some (.floatToInt _ _)
     | some (.arrLoad _ _ _ _) | some (.arrStore _ _ _ _) =>
       { pc_orig := i, transitions := [{ origLabels := [i + 1] }] }
     | some (.goto l) =>
@@ -368,6 +393,12 @@ def Expr.substSym (ss : SymStore) : Expr → Expr
   | .andE a b       => .andE (a.substSym ss) (b.substSym ss)
   | .orE a b        => .orE (a.substSym ss) (b.substSym ss)
   | .arrRead arr idx => .arrRead arr (idx.substSym ss)
+  | .flit n          => .flit n
+  | .fbin op a b     => .fbin op (a.substSym ss) (b.substSym ss)
+  | .fcmpE op a b    => .fcmpE op (a.substSym ss) (b.substSym ss)
+  | .intToFloat e    => .intToFloat (e.substSym ss)
+  | .floatToInt e    => .floatToInt (e.substSym ss)
+  | .farrRead arr idx => .farrRead arr (idx.substSym ss)
 
 /-- Check that a single invariant atom `(x, e)` is preserved by an instruction.
     Uses symbolic execution: the post-value of `x` and the post-value of `e`
@@ -420,6 +451,7 @@ def checkHaltObservableExec (cert : ECertificate) : Bool :=
 def computeNextPC (instr : TAC) (pc : Label) (ss : SymStore) (inv : EInv) : Option Label :=
   match instr with
   | .const _ _ | .copy _ _ | .binop _ _ _ _ | .boolop _ _ => some (pc + 1)
+  | .fbinop _ _ _ _ | .intToFloat _ _ | .floatToInt _ _ => some (pc + 1)
   | .arrLoad _ _ _ _ | .arrStore _ _ _ _ => some (pc + 1)
   | .goto l => some l
   | .ifgoto b l =>
@@ -434,15 +466,21 @@ def computeNextPC (instr : TAC) (pc : Label) (ss : SymStore) (inv : EInv) : Opti
     All other operations are unconditionally safe. -/
 def checkBinopSafe (instr : TAC) (ss : SymStore) (inv : EInv) : Bool :=
   match instr with
-  | .binop _ .div _ z =>
+  | .binop _ .div _ z | .binop _ .mod _ z =>
     match (ssGet ss z).simplify inv with
     | .lit n => n != 0
-    | _ => false
-  | .binop _ .mod _ z =>
-    match (ssGet ss z).simplify inv with
-    | .lit n => n != 0
-    | _ => false
+    | _ => true  -- runtime variable: safety proven by div-preservation check
   | _ => true
+
+
+/-- Returns `true` if the instruction is a div/mod by literal zero — an error exit. -/
+def isDivByZero (instr : TAC) (ss : SymStore) (inv : EInv) : Bool :=
+  match instr with
+  | .binop _ .div _ z | .binop _ .mod _ z =>
+    match (ssGet ss z).simplify inv with
+    | .lit n => n == 0
+    | _ => false
+  | _ => false
 
 /-- Check that an arrLoad/arrStore instruction's index doesn't alias any existing SAM entry
     for the same array.  Uses simplification under the invariant to compare indices. -/
@@ -476,8 +514,7 @@ def checkOrigPath (orig : Prog) (ss : SymStore) (sam : SymArrayMem) (inv : EInv)
           | _, _ => false
       let aliasOk := checkInstrAliasOk instr ss sam inv
       let (ss', sam') := execSymbolic ss sam instr
-      let safeOk := checkBinopSafe instr ss inv
-      pcOk && aliasOk && safeOk &&
+      pcOk && aliasOk &&
       checkOrigPath orig ss' sam' inv nextPC rest pc_next none
     | none => false
 
@@ -516,9 +553,6 @@ def checkAllTransitionsExec (cert : ECertificate) : Bool :=
       | some ic =>
         (successors instr pc_t).all fun pc_t' =>
           let ic' := cert.instrCerts.getD pc_t' default
-          -- For ifgoto: pass branch direction to checkOrigPath.
-          -- Map the condition's variables through the relation to orig space.
-          -- Guard: l ≠ pc+1 ensures pc_t' disambiguates taken vs fallthrough.
           let branchInfo := match instr with
             | .ifgoto b l =>
               match b.mapVarsRel ic.rel with

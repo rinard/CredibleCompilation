@@ -128,6 +128,7 @@ def SBool.exprFreeVars : SBool → List Var
   | .and a b    => a.exprFreeVars ++ b.exprFreeVars
   | .or a b     => a.exprFreeVars ++ b.exprFreeVars
   | .barrRead _ idx => idx.freeVars
+  | .fcmp _ a b => a.freeVars ++ b.freeVars
 
 /-- Integer-safety: all variables used in `SExpr` positions have `.int` values,
     threaded through interpretation just like `Stmt.safe`. -/
@@ -158,6 +159,9 @@ def Stmt.intSafe (fuel : Nat) (σ : Store) (am : ArrayMem) (decls : List (ArrayN
         | some (σ', am') => (Stmt.loop b body).intSafe fuel' σ' am' decls
         | none    => True
       else True
+  | .fassign _ e => ∀ v ∈ e.freeVars, ∃ n, σ v = .int n
+  | .farrWrite _ idx val => (∀ v ∈ idx.freeVars, ∃ n, σ v = .int n) ∧
+                            (∀ v ∈ val.freeVars, ∃ n, σ v = .int n)
 
 -- ============================================================
 -- § 2. Reference compiler definitions
@@ -178,6 +182,26 @@ def refCompileExpr (e : SExpr) (offset nextTmp : Nat) : List TAC × Var × Nat :
     let (codeIdx, vIdx, tmp1) := refCompileExpr idx offset nextTmp
     let t := tmpName tmp1
     (codeIdx ++ [.arrLoad t arr vIdx .int], t, tmp1 + 1)
+  | .flit f =>
+    let t := tmpName nextTmp
+    ([.const t (.float (floatToBits f))], t, nextTmp + 1)
+  | .fbin op a b =>
+    let (codeA, va, tmp1) := refCompileExpr a offset nextTmp
+    let (codeB, vb, tmp2) := refCompileExpr b (offset + codeA.length) tmp1
+    let t := tmpName tmp2
+    (codeA ++ codeB ++ [.fbinop t op va vb], t, tmp2 + 1)
+  | .intToFloat e =>
+    let (codeE, ve, tmp1) := refCompileExpr e offset nextTmp
+    let t := tmpName tmp1
+    (codeE ++ [.intToFloat t ve], t, tmp1 + 1)
+  | .floatToInt e =>
+    let (codeE, ve, tmp1) := refCompileExpr e offset nextTmp
+    let t := tmpName tmp1
+    (codeE ++ [.floatToInt t ve], t, tmp1 + 1)
+  | .farrRead arr idx =>
+    let (codeIdx, vIdx, tmp1) := refCompileExpr idx offset nextTmp
+    let t := tmpName tmp1
+    (codeIdx ++ [.arrLoad t arr vIdx .float], t, tmp1 + 1)
 
 def refCompileBool (b : SBool) (offset nextTmp : Nat) : List TAC × BoolExpr × Nat :=
   match b with
@@ -226,6 +250,10 @@ def refCompileBool (b : SBool) (offset nextTmp : Nat) : List TAC × BoolExpr × 
     let (codeIdx, vIdx, tmp1) := refCompileExpr idx offset nextTmp
     let t := tmpName tmp1
     (codeIdx ++ [.arrLoad t arr vIdx .int], .cmpLit .ne t 0, tmp1 + 1)
+  | .fcmp op a b =>
+    let (codeA, va, tmp1) := refCompileExpr a offset nextTmp
+    let (codeB, vb, tmp2) := refCompileExpr b (offset + codeA.length) tmp1
+    (codeA ++ codeB, .fcmp op va vb, tmp2)
 
 def refCompileStmt (s : Stmt) (offset nextTmp : Nat) : List TAC × Nat :=
   match s with
@@ -242,6 +270,9 @@ def refCompileStmt (s : Stmt) (offset nextTmp : Nat) : List TAC × Nat :=
       let (codeIdx, vIdx, tmp1) := refCompileExpr idx offset nextTmp
       let t := tmpName tmp1
       (codeIdx ++ [.arrLoad t arr vIdx .int, .copy x t], tmp1 + 1)
+    | _ =>
+      let (codeE, ve, tmp1) := refCompileExpr e offset nextTmp
+      (codeE ++ [.copy x ve], tmp1)
   | .bassign x b =>
     let (code, be, tmp') := refCompileBool b offset nextTmp
     (code ++ [.boolop x be], tmp')
@@ -281,6 +312,28 @@ def refCompileStmt (s : Stmt) (offset nextTmp : Nat) : List TAC × Nat :=
     let (codeBody, tmpBody) := refCompileStmt body bodyStart tmpB
     let exitLabel := bodyStart + codeBody.length + 1
     (codeBool ++ [.ifgoto (.not be) exitLabel] ++ codeBody ++ [.goto condLabel], tmpBody)
+  | .fassign x e =>
+    match e with
+    | .flit f => ([.const x (.float (floatToBits f))], nextTmp)
+    | .var y => ([.copy x y], nextTmp)
+    | .fbin op a b =>
+      let (codeA, va, tmp1) := refCompileExpr a offset nextTmp
+      let (codeB, vb, tmp2) := refCompileExpr b (offset + codeA.length) tmp1
+      (codeA ++ codeB ++ [.fbinop x op va vb], tmp2)
+    | .intToFloat e =>
+      let (codeE, ve, tmp1) := refCompileExpr e offset nextTmp
+      (codeE ++ [.intToFloat x ve], tmp1)
+    | .farrRead arr idx =>
+      let (codeIdx, vIdx, tmp1) := refCompileExpr idx offset nextTmp
+      let t := tmpName tmp1
+      (codeIdx ++ [.arrLoad t arr vIdx .float, .copy x t], tmp1 + 1)
+    | _ =>
+      let (codeE, ve, tmp1) := refCompileExpr e offset nextTmp
+      (codeE ++ [.copy x ve], tmp1)
+  | .farrWrite arr idx val =>
+    let (codeIdx, vIdx, tmp1) := refCompileExpr idx offset nextTmp
+    let (codeVal, vVal, tmp2) := refCompileExpr val (offset + codeIdx.length) tmp1
+    (codeIdx ++ codeVal ++ [.arrStore arr vIdx vVal .float], tmp2)
 
 def refCompile (s : Stmt) : Prog :=
   let (code, _) := refCompileStmt s 0 0
@@ -400,6 +453,9 @@ theorem BoolExpr.eval_agree' (cond : BoolExpr) (σ τ : Store)
     rw [h x (by simp [BoolExpr.vars])]
   | not e ih =>
     simp only [BoolExpr.eval]; rw [ih (fun v hv => h v hv)]
+  | fcmp op x y =>
+    simp only [BoolExpr.eval]
+    rw [h x (by simp [BoolExpr.vars]), h y (by simp [BoolExpr.vars])]
 
 -- ============================================================
 -- § 6. Division safety helpers

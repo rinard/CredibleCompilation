@@ -117,6 +117,56 @@ inductive ArmStep (prog : ArmProg) : ArmState → ArmState → Prop where
     prog[s.pc]? = some (.arrSt arr idxReg valReg) →
     ArmStep prog s (s.setArrayMem arr (s.regs idxReg) (s.regs valReg) |>.nextPC)
 
+  -- Floating-point instructions
+
+  | fmovToFP (fd : ArmFReg) (rn : ArmReg) :
+    prog[s.pc]? = some (.fmovToFP fd rn) →
+    ArmStep prog s (s.setFReg fd (s.regs rn) |>.nextPC)
+
+  | fldr (fd : ArmFReg) (off : Nat) :
+    prog[s.pc]? = some (.fldr fd off) →
+    ArmStep prog s (s.setFReg fd (s.stack off) |>.nextPC)
+
+  | fstr (fs : ArmFReg) (off : Nat) :
+    prog[s.pc]? = some (.fstr fs off) →
+    ArmStep prog s (s.setStack off (s.fregs fs) |>.nextPC)
+
+  | faddR (fd fn fm : ArmFReg) :
+    prog[s.pc]? = some (.faddR fd fn fm) →
+    ArmStep prog s (s.setFReg fd (FloatBinOp.eval .fadd (s.fregs fn) (s.fregs fm)) |>.nextPC)
+
+  | fsubR (fd fn fm : ArmFReg) :
+    prog[s.pc]? = some (.fsubR fd fn fm) →
+    ArmStep prog s (s.setFReg fd (FloatBinOp.eval .fsub (s.fregs fn) (s.fregs fm)) |>.nextPC)
+
+  | fmulR (fd fn fm : ArmFReg) :
+    prog[s.pc]? = some (.fmulR fd fn fm) →
+    ArmStep prog s (s.setFReg fd (FloatBinOp.eval .fmul (s.fregs fn) (s.fregs fm)) |>.nextPC)
+
+  | fdivR (fd fn fm : ArmFReg) :
+    prog[s.pc]? = some (.fdivR fd fn fm) →
+    ArmStep prog s (s.setFReg fd (FloatBinOp.eval .fdiv (s.fregs fn) (s.fregs fm)) |>.nextPC)
+
+  | fcmpRR (fn fm : ArmFReg) :
+    prog[s.pc]? = some (.fcmpR fn fm) →
+    ArmStep prog s ({ s with flags := ⟨s.fregs fn - s.fregs fm⟩, pc := s.pc + 1 })
+
+  | scvtf (fd : ArmFReg) (rn : ArmReg) :
+    prog[s.pc]? = some (.scvtf fd rn) →
+    ArmStep prog s (s.setFReg fd (intToFloatBv (s.regs rn)) |>.nextPC)
+
+  | fcvtzs (rd : ArmReg) (fn : ArmFReg) :
+    prog[s.pc]? = some (.fcvtzs rd fn) →
+    ArmStep prog s (s.setReg rd (floatToIntBv (s.fregs fn)) |>.nextPC)
+
+  | farrLd (fd : ArmFReg) (arr : ArrayName) (idxReg : ArmReg) :
+    prog[s.pc]? = some (.farrLd fd arr idxReg) →
+    ArmStep prog s (s.setFReg fd (s.arrayMem arr (s.regs idxReg)) |>.nextPC)
+
+  | farrSt (arr : ArrayName) (idxReg : ArmReg) (valFReg : ArmFReg) :
+    prog[s.pc]? = some (.farrSt arr idxReg valFReg) →
+    ArmStep prog s (s.setArrayMem arr (s.regs idxReg) (s.fregs valFReg) |>.nextPC)
+
 /-- Multi-step closure. -/
 inductive ArmSteps (prog : ArmProg) : ArmState → ArmState → Prop where
   | refl : ArmSteps prog s s
@@ -142,12 +192,14 @@ theorem ArmSteps.trans {prog : ArmProg} {s s' s'' : ArmState}
 def Value.encode : Value → BitVec 64
   | .int n  => n
   | .bool b => if b then 1 else 0
+  | .float f => f
 
 /-- Decode a 64-bit bitvector back to a `Value` given its type. -/
 def Value.decode (ty : VarTy) (bv : BitVec 64) : Value :=
   match ty with
   | .int  => .int bv
   | .bool => .bool (bv != 0)
+  | .float => .float bv
 
 /-- For integer values, encode produces toInt. -/
 theorem Value.encode_eq_toInt_of_int {v : Value} (h : ∃ n, v = .int n) :
@@ -256,6 +308,9 @@ def formalGenBoolExpr (vm : VarMap) (be : BoolExpr) : List ArmInstr :=
     | none => []
   | .not e =>
     formalGenBoolExpr vm e ++ [.eorImm .x0 .x0 (1 : BitVec 64)]
+  | .fcmp _fop _lv _rv =>
+    -- Float comparison not yet supported in ARM backend
+    sorry
 
 /-- Generate formal ARM64 instructions for a TAC instruction.
     Mirrors `genInstr` in CodeGen.lean (without the label string).
@@ -270,6 +325,10 @@ def formalGenInstr (vm : VarMap) (pcMap : Nat → Nat) (instr : TAC)
   | .const v (.bool b) =>
     match vm.lookup v with
     | some off => [.mov .x0 (if b then (1 : BitVec 64) else 0), .str .x0 off]
+    | none => []
+  | .const v (.float f) =>
+    match vm.lookup v with
+    | some off => formalLoadImm64 .x0 f ++ [.str .x0 off]
     | none => []
   | .copy dst src =>
     match vm.lookup src, vm.lookup dst with
@@ -308,6 +367,15 @@ def formalGenInstr (vm : VarMap) (pcMap : Nat → Nat) (instr : TAC)
     | some offIdx, some offVal =>
       [.ldr .x1 offIdx, .ldr .x2 offVal, .arrSt arr .x1 .x2]
     | _, _ => []
+  | .fbinop _dst _fop _lv _rv =>
+    -- Float binary ops not yet supported in ARM backend
+    sorry
+  | .intToFloat _dst _src =>
+    -- intToFloat not yet supported in ARM backend
+    sorry
+  | .floatToInt _dst _src =>
+    -- floatToInt not yet supported in ARM backend
+    sorry
 
 -- ============================================================
 -- § 9. CodeAt and helper lemmas

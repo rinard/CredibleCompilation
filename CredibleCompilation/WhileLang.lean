@@ -32,6 +32,11 @@ inductive SExpr where
   | var     : Var → SExpr
   | bin     : BinOp → SExpr → SExpr → SExpr
   | arrRead : ArrayName → SExpr → SExpr          -- arr[idx]
+  | flit       : Float → SExpr                      -- float literal
+  | fbin       : FloatBinOp → SExpr → SExpr → SExpr -- float binary op
+  | intToFloat : SExpr → SExpr                      -- int→float cast
+  | floatToInt : SExpr → SExpr                      -- float→int cast
+  | farrRead   : ArrayName → SExpr → SExpr          -- float arr[idx]
   deriving Repr
 
 /-- Boolean expressions over arithmetic sub-expressions. -/
@@ -43,6 +48,7 @@ inductive SBool where
   | and      : SBool → SBool → SBool
   | or       : SBool → SBool → SBool
   | barrRead : ArrayName → SExpr → SBool        -- arr[idx] (boolean array read)
+  | fcmp : FloatCmpOp → SExpr → SExpr → SBool   -- float comparison
   deriving Repr
 
 /-- Statements. -/
@@ -55,6 +61,8 @@ inductive Stmt where
   | seq      : Stmt → Stmt → Stmt
   | ite      : SBool → Stmt → Stmt → Stmt       -- if-then-else
   | loop     : SBool → Stmt → Stmt
+  | fassign   : Var → SExpr → Stmt               -- float assignment
+  | farrWrite : ArrayName → SExpr → SExpr → Stmt  -- float arr[idx] := val
   deriving Repr
 
 -- Syntactic sugar
@@ -71,6 +79,11 @@ def SExpr.eval (σ : Store) (am : ArrayMem) : SExpr → BitVec 64
   | .var x      => (σ x).toInt
   | .bin op a b => op.eval (a.eval σ am) (b.eval σ am)
   | .arrRead arr idx => am.read arr (idx.eval σ am)
+  | .flit f        => floatToBits f
+  | .fbin op a b   => op.eval (a.eval σ am) (b.eval σ am)
+  | .intToFloat e  => intToFloatBv (e.eval σ am)
+  | .floatToInt e  => floatToIntBv (e.eval σ am)
+  | .farrRead arr idx => am.read arr (idx.eval σ am)
 
 /-- Evaluate a boolean expression. -/
 def SBool.eval (σ : Store) (am : ArrayMem) : SBool → Bool
@@ -81,6 +94,7 @@ def SBool.eval (σ : Store) (am : ArrayMem) : SBool → Bool
   | .and a b    => a.eval σ am && b.eval σ am
   | .or a b        => a.eval σ am || b.eval σ am
   | .barrRead arr idx => (am.read arr (idx.eval σ am)) != 0
+  | .fcmp op a b => FloatCmpOp.eval op (a.eval σ am) (b.eval σ am)
 
 /-- Check whether an arithmetic expression is safe to evaluate (no div-by-zero,
     array accesses in bounds). Returns `Bool` for use in `Stmt.interp`. -/
@@ -91,6 +105,11 @@ def SExpr.isSafe (σ : Store) (am : ArrayMem) (decls : List (ArrayName × Nat ×
   | .bin .mod a b => a.isSafe σ am decls && b.isSafe σ am decls && decide (b.eval σ am ≠ 0)
   | .bin _ a b => a.isSafe σ am decls && b.isSafe σ am decls
   | .arrRead arr idx => idx.isSafe σ am decls && decide ((idx.eval σ am) < arraySizeBv decls arr)
+  | .flit _ => true
+  | .fbin _ a b => a.isSafe σ am decls && b.isSafe σ am decls
+  | .intToFloat e => e.isSafe σ am decls
+  | .floatToInt e => e.isSafe σ am decls
+  | .farrRead arr idx => idx.isSafe σ am decls && decide ((idx.eval σ am) < arraySizeBv decls arr)
 
 /-- Check whether a boolean expression is safe to evaluate. -/
 def SBool.isSafe (σ : Store) (am : ArrayMem) (decls : List (ArrayName × Nat × VarTy)) : SBool → Bool
@@ -101,6 +120,7 @@ def SBool.isSafe (σ : Store) (am : ArrayMem) (decls : List (ArrayName × Nat ×
   | .and a b => a.isSafe σ am decls && (if a.eval σ am then b.isSafe σ am decls else true)
   | .or a b => a.isSafe σ am decls && (if !(a.eval σ am) then b.isSafe σ am decls else true)
   | .barrRead arr idx => idx.isSafe σ am decls && decide ((idx.eval σ am) < arraySizeBv decls arr)
+  | .fcmp _ a b => a.isSafe σ am decls && b.isSafe σ am decls
 
 /-- Interpret a statement directly, with a fuel bound to ensure termination.
     Returns `none` if out of fuel or if a safety check fails (div-by-zero, array out-of-bounds). -/
@@ -140,6 +160,13 @@ def Stmt.interp (fuel : Nat) (σ : Store) (am : ArrayMem)
           (Stmt.loop b body).interp fuel' σ' am' decls
         else some (σ, am)
       else none
+  | .fassign x e =>
+    if e.isSafe σ am decls then some (σ[x ↦ .float (e.eval σ am)], am) else none
+  | .farrWrite arr idx val =>
+    if idx.isSafe σ am decls && val.isSafe σ am decls &&
+       decide ((idx.eval σ am) < arraySizeBv decls arr)
+    then some (σ, am.write arr (idx.eval σ am) (val.eval σ am))
+    else none
 
 -- ============================================================
 -- § 3. Compiler: While language → TAC (pure functional)
@@ -172,6 +199,26 @@ def compileExpr (e : SExpr) (offset nextTmp : Nat) : List TAC × Var × Nat :=
     let (codeIdx, vIdx, tmp1) := compileExpr idx offset nextTmp
     let t := tmpName tmp1
     (codeIdx ++ [.arrLoad t arr vIdx .int], t, tmp1 + 1)
+  | .flit f =>
+    let t := tmpName nextTmp
+    ([.const t (.float (floatToBits f))], t, nextTmp + 1)
+  | .fbin op a b =>
+    let (codeA, va, tmp1) := compileExpr a offset nextTmp
+    let (codeB, vb, tmp2) := compileExpr b (offset + codeA.length) tmp1
+    let t := tmpName tmp2
+    (codeA ++ codeB ++ [.fbinop t op va vb], t, tmp2 + 1)
+  | .intToFloat e =>
+    let (codeE, ve, tmp1) := compileExpr e offset nextTmp
+    let t := tmpName tmp1
+    (codeE ++ [.intToFloat t ve], t, tmp1 + 1)
+  | .floatToInt e =>
+    let (codeE, ve, tmp1) := compileExpr e offset nextTmp
+    let t := tmpName tmp1
+    (codeE ++ [.floatToInt t ve], t, tmp1 + 1)
+  | .farrRead arr idx =>
+    let (codeIdx, vIdx, tmp1) := compileExpr idx offset nextTmp
+    let t := tmpName tmp1
+    (codeIdx ++ [.arrLoad t arr vIdx .float], t, tmp1 + 1)
 
 /-- Compile a boolean expression. Returns (code, BoolExpr, next temp index). -/
 def compileBool (b : SBool) (offset nextTmp : Nat) : List TAC × BoolExpr × Nat :=
@@ -230,6 +277,10 @@ def compileBool (b : SBool) (offset nextTmp : Nat) : List TAC × BoolExpr × Nat
     let (codeIdx, vIdx, tmp1) := compileExpr idx offset nextTmp
     let t := tmpName tmp1
     (codeIdx ++ [.arrLoad t arr vIdx .int], .cmpLit .ne t 0, tmp1 + 1)
+  | .fcmp op a b =>
+    let (codeA, va, tmp1) := compileExpr a offset nextTmp
+    let (codeB, vb, tmp2) := compileExpr b (offset + codeA.length) tmp1
+    (codeA ++ codeB, .fcmp op va vb, tmp2)
 
 /-- Compile a statement. Returns (code, next temp index).
     Jump targets are pre-computed from code lengths. -/
@@ -248,6 +299,10 @@ def compileStmt (s : Stmt) (offset nextTmp : Nat) : List TAC × Nat :=
       let (codeIdx, vIdx, tmp1) := compileExpr idx offset nextTmp
       let t := tmpName tmp1
       (codeIdx ++ [.arrLoad t arr vIdx .int, .copy x t], tmp1 + 1)
+    | _ =>
+      -- Float expressions in int assignment (type error, but handle gracefully)
+      let (codeE, ve, tmp1) := compileExpr e offset nextTmp
+      (codeE ++ [.copy x ve], tmp1)
   | .bassign x b =>
     let (code, be, tmp') := compileBool b offset nextTmp
     (code ++ [.boolop x be], tmp')
@@ -289,6 +344,29 @@ def compileStmt (s : Stmt) (offset nextTmp : Nat) : List TAC × Nat :=
     let (codeBody, tmpBody) := compileStmt body bodyStart tmpB
     let exitLabel := bodyStart + codeBody.length + 1
     (codeB ++ [.ifgoto (.not be) exitLabel] ++ codeBody ++ [.goto condLabel], tmpBody)
+  | .fassign x e =>
+    match e with
+    | .flit f => ([.const x (.float (floatToBits f))], nextTmp)
+    | .var y => ([.copy x y], nextTmp)
+    | .fbin op a b =>
+      let (codeA, va, tmp1) := compileExpr a offset nextTmp
+      let (codeB, vb, tmp2) := compileExpr b (offset + codeA.length) tmp1
+      (codeA ++ codeB ++ [.fbinop x op va vb], tmp2)
+    | .intToFloat e =>
+      let (codeE, ve, tmp1) := compileExpr e offset nextTmp
+      (codeE ++ [.intToFloat x ve], tmp1)
+    | .farrRead arr idx =>
+      let (codeIdx, vIdx, tmp1) := compileExpr idx offset nextTmp
+      let t := tmpName tmp1
+      (codeIdx ++ [.arrLoad t arr vIdx .float, .copy x t], tmp1 + 1)
+    | _ =>
+      -- Fallback: compile expression generically
+      let (codeE, ve, tmp1) := compileExpr e offset nextTmp
+      (codeE ++ [.copy x ve], tmp1)
+  | .farrWrite arr idx val =>
+    let (codeIdx, vIdx, tmp1) := compileExpr idx offset nextTmp
+    let (codeVal, vVal, tmp2) := compileExpr val (offset + codeIdx.length) tmp1
+    (codeIdx ++ codeVal ++ [.arrStore arr vIdx vVal .float], tmp2)
 
 /-- Compile a while-language program to a TAC program.
     Appends `halt` at the end. -/
@@ -307,6 +385,13 @@ def SExpr.toString : SExpr → String
     let opStr := match op with | .add => "+" | .sub => "-" | .mul => "*" | .div => "/" | .mod => "%"
     s!"({a.toString} {opStr} {b.toString})"
   | .arrRead arr idx => s!"{arr}[{idx.toString}]"
+  | .flit f => s!"{f}"
+  | .fbin op a b =>
+    let opStr := match op with | .fadd => "+" | .fsub => "-" | .fmul => "*" | .fdiv => "/"
+    s!"({a.toString} {opStr} {b.toString})"
+  | .intToFloat e => s!"intToFloat({e.toString})"
+  | .floatToInt e => s!"floatToInt({e.toString})"
+  | .farrRead arr idx => s!"{arr}[{idx.toString}]"
 
 def SBool.toString : SBool → String
   | .lit true => "true"
@@ -319,6 +404,9 @@ def SBool.toString : SBool → String
   | .and a b => s!"({a.toString} && {b.toString})"
   | .or a b => s!"({a.toString} || {b.toString})"
   | .barrRead arr idx => s!"{arr}[{idx.toString}]"
+  | .fcmp op a b =>
+    let opStr := match op with | .feq => "==" | .fne => "!=" | .flt => "<" | .fle => "<="
+    s!"({a.toString} {opStr} {b.toString})"
 
 def Stmt.toString : Stmt → String
   | .skip => "skip"
@@ -329,6 +417,8 @@ def Stmt.toString : Stmt → String
   | .seq s1 s2 => s!"{s1.toString};\n{s2.toString}"
   | .ite b s1 s2 => s!"if {b.toString} then\n  {s1.toString}\nelse\n  {s2.toString}"
   | .loop b body => s!"while {b.toString} do\n  {body.toString}"
+  | .fassign x e => s!"{x} := {e.toString}"
+  | .farrWrite arr idx val => s!"{arr}[{idx.toString}] := {val.toString}"
 
 instance : ToString Stmt := ⟨Stmt.toString⟩
 instance : ToString SExpr := ⟨SExpr.toString⟩
@@ -385,6 +475,21 @@ def checkSExpr (lookup : Var → Option VarTy) (arrayDecls : List (ArrayName × 
   | .var x => lookup x == some .int
   | .bin _ a b => checkSExpr lookup arrayDecls a && checkSExpr lookup arrayDecls b
   | .arrRead arr idx => arrayDeclared arrayDecls arr && checkSExpr lookup arrayDecls idx
+  | .flit _ => true
+  | .fbin _ a b => checkSExpr lookup arrayDecls a && checkSExpr lookup arrayDecls b
+  | .intToFloat e => checkSExpr lookup arrayDecls e
+  | .floatToInt e => checkSExpr lookup arrayDecls e
+  | .farrRead arr idx => arrayDeclared arrayDecls arr && checkSExpr lookup arrayDecls idx
+
+/-- Check that all variables in a float expression are declared as `float`. -/
+def checkFExpr (lookup : Var → Option VarTy) (arrayDecls : List (ArrayName × Nat × VarTy)) : SExpr → Bool
+  | .flit _ => true
+  | .var x => lookup x == some .float
+  | .fbin _ a b => checkFExpr lookup arrayDecls a && checkFExpr lookup arrayDecls b
+  | .intToFloat e => checkSExpr lookup arrayDecls e
+  | .floatToInt e => checkFExpr lookup arrayDecls e
+  | .farrRead arr idx => arrayDeclared arrayDecls arr && checkSExpr lookup arrayDecls idx
+  | _ => false  -- int expressions in float context
 
 /-- Check that a boolean expression uses properly-typed declared variables. -/
 def checkSBool (lookup : Var → Option VarTy) (arrayDecls : List (ArrayName × Nat × VarTy)) : SBool → Bool
@@ -395,6 +500,7 @@ def checkSBool (lookup : Var → Option VarTy) (arrayDecls : List (ArrayName × 
   | .and a b => checkSBool lookup arrayDecls a && checkSBool lookup arrayDecls b
   | .or a b => checkSBool lookup arrayDecls a && checkSBool lookup arrayDecls b
   | .barrRead arr idx => arrayDeclared arrayDecls arr && checkSExpr lookup arrayDecls idx
+  | .fcmp _ a b => checkFExpr lookup arrayDecls a && checkFExpr lookup arrayDecls b
 
 /-- Check that a statement body is well-typed w.r.t. declarations. -/
 def checkStmt (lookup : Var → Option VarTy) (arrayDecls : List (ArrayName × Nat × VarTy)) : Stmt → Bool
@@ -409,6 +515,9 @@ def checkStmt (lookup : Var → Option VarTy) (arrayDecls : List (ArrayName × N
   | .ite b s1 s2 =>
     checkSBool lookup arrayDecls b && checkStmt lookup arrayDecls s1 && checkStmt lookup arrayDecls s2
   | .loop b body => checkSBool lookup arrayDecls b && checkStmt lookup arrayDecls body
+  | .fassign x e => lookup x == some .float && checkFExpr lookup arrayDecls e
+  | .farrWrite arr idx val =>
+    arrayDeclared arrayDecls arr && checkSExpr lookup arrayDecls idx && checkFExpr lookup arrayDecls val
 
 /-- Full static type check: no duplicate declarations, no compiler-reserved
     temporary names in declarations, and the body is well-typed w.r.t.
@@ -426,16 +535,39 @@ def typeCheck (prog : Program) : Bool :=
 private def initCode (decls : List (Var × VarTy)) : List TAC :=
   decls.map fun (x, ty) =>
     match ty with
-    | .int  => .const x (.int (0 : BitVec 64))
-    | .bool => .const x (.bool false)
+    | .int   => .const x (.int (0 : BitVec 64))
+    | .bool  => .const x (.bool false)
+    | .float => .const x (.float (0 : BitVec 64))
+
+/-- Infer the type a TAC instruction assigns to its destination variable. -/
+private def instrDefType : TAC → Option (Var × VarTy)
+  | .const x v        => some (x, v.typeOf)
+  | .copy x _         => none  -- inherits type from source, handled by declared vars
+  | .binop x _ _ _    => some (x, .int)
+  | .boolop x _       => some (x, .bool)
+  | .arrLoad x _ _ ty => some (x, ty)
+  | .fbinop x _ _ _   => some (x, .float)
+  | .intToFloat x _   => some (x, .float)
+  | .floatToInt x _   => some (x, .int)
+  | _                  => none
+
+/-- Build a type context from declarations augmented with types inferred from
+    compiled instructions. Ensures temporaries get correct types. -/
+private def buildTyCtx (base : TyCtx) (code : Array TAC) : TyCtx :=
+  code.foldl (fun ctx instr =>
+    match instrDefType instr with
+    | some (x, ty) => fun v => if v == x then ty else ctx v
+    | none => ctx
+  ) base
 
 /-- Compile a typed program: initialize declared variables, then compile body.
     Appends `halt` at the end. -/
 def compile (prog : Program) : Prog :=
   let inits := initCode prog.decls
   let (body, _) := compileStmt prog.body inits.length 0
-  { code := (inits ++ body ++ [TAC.halt]).toArray
-    tyCtx := prog.tyCtx
+  let code := (inits ++ body ++ [TAC.halt]).toArray
+  { code := code
+    tyCtx := buildTyCtx prog.tyCtx code
     observable := prog.decls.map Prod.fst
     arrayDecls := prog.arrayDecls }
 
@@ -444,13 +576,17 @@ def compile (prog : Program) : Prog :=
 -- § 5c. Interpretation
 -- ============================================================
 
+-- The fold step for initStore (defined before initStore so it can be reused)
+private def initFold (σ : Store) (p : Var × VarTy) : Store :=
+  match p.2 with
+  | .int   => σ[p.1 ↦ .int (0 : BitVec 64)]
+  | .bool  => σ[p.1 ↦ .bool false]
+  | .float => σ[p.1 ↦ .float (0 : BitVec 64)]
+
 /-- Build an initial store from declarations with type-appropriate defaults.
-    Int variables get 0, bool variables get false. -/
+    Int variables get 0, bool variables get false, float variables get 0. -/
 def initStore (prog : Program) : Store :=
-  prog.decls.foldl (fun σ (x, ty) =>
-    match ty with
-    | .int  => σ[x ↦ .int (0 : BitVec 64)]
-    | .bool => σ[x ↦ .bool false]) Store.init
+  prog.decls.foldl initFold Store.init
 
 /-- Interpret a typed program. Starts from the declaration-initialized store,
     with optional input overrides. -/
@@ -462,12 +598,6 @@ def interp (prog : Program) (fuel : Nat)
 -- ============================================================
 -- § 5d. initStore is well-typed
 -- ============================================================
-
--- The fold step for initStore
-private def initFold (σ : Store) (p : Var × VarTy) : Store :=
-  match p.2 with
-  | .int  => σ[p.1 ↦ .int (0 : BitVec 64)]
-  | .bool => σ[p.1 ↦ .bool false]
 
 -- `contains` false implies not a member (for Var = String with LawfulBEq)
 private theorem notMem_of_contains_false {x : Var} {xs : List Var}
@@ -616,6 +746,17 @@ theorem compile_initExec (prog : Program)
         simp only [hty, VarTy.defaultVal] at hval
         have hinst : prog.compile[k]? =
             some (.const (prog.decls[k]).1 (.bool false)) := by
+          simp only [Prog.getElem?_code, Program.compile, List.getElem?_toArray]
+          rw [List.getElem?_append_left (by rw [List.length_append, initCode_length]; omega)]
+          rw [List.getElem?_append_left (by rw [initCode_length]; omega)]
+          simp only [initCode, List.getElem?_map, List.getElem?_eq_getElem hk_lt,
+            Option.map_some, hty]
+        have := Step.const hinst (σ := prog.initStore) (am := ArrayMem.init)
+        rwa [Store.update_of_eq _ _ _ hval] at this
+      | float =>
+        simp only [hty, VarTy.defaultVal] at hval
+        have hinst : prog.compile[k]? =
+            some (.const (prog.decls[k]).1 (.float 0)) := by
           simp only [Prog.getElem?_code, Program.compile, List.getElem?_toArray]
           rw [List.getElem?_append_left (by rw [List.length_append, initCode_length]; omega)]
           rw [List.getElem?_append_left (by rw [initCode_length]; omega)]
@@ -808,6 +949,11 @@ theorem compileExpr_wt (prog : Program)
     simp only [compileExpr]
     exact ⟨allWTI_append' hi_wt (allWTI_one (.arrLoad (tyCtx_tmp_wt prog hnt _) hi_ty)),
            tyCtx_tmp_wt prog hnt _⟩
+  | flit _ => sorry
+  | fbin _ _ _ _ _ => sorry
+  | intToFloat _ _ => sorry
+  | floatToInt _ _ => sorry
+  | farrRead _ _ _ => sorry
 
 -- compileBool produces well-typed instructions and a WellTypedBoolExpr
 theorem compileBool_wt (prog : Program)
@@ -889,6 +1035,7 @@ theorem compileBool_wt (prog : Program)
     simp only [compileBool]
     exact ⟨allWTI_append' hi_wt (allWTI_one (.arrLoad (tyCtx_tmp_wt prog hnt _) hi_ty)),
            .cmpLit (tyCtx_tmp_wt prog hnt _) (by native_decide) (by native_decide)⟩
+  | fcmp _ _ _ => sorry
 
 -- compileStmt produces well-typed instructions
 theorem compileStmt_wt (prog : Program)
@@ -929,6 +1076,7 @@ theorem compileStmt_wt (prog : Program)
       exact allWTI_append' hi_wt
         (allWTI_cons' (.arrLoad htmp_ty hi_ty)
           (allWTI_one (.copy (by rw [hxty, htmp_ty]))))
+    | flit _ | fbin _ _ _ | intToFloat _ | floatToInt _ | farrRead _ _ => sorry
   | bassign x b =>
     simp [Program.checkStmt, Bool.and_eq_true] at hchk
     obtain ⟨hx, hb⟩ := hchk
@@ -1008,6 +1156,8 @@ theorem compileStmt_wt (prog : Program)
         (allWTI_append' hb_wt (allWTI_one (.ifgoto (.not hb_ty))))
         h_body)
       (allWTI_one .goto)
+  | fassign _ _ => sorry
+  | farrWrite _ _ _ => sorry
 
 -- initCode produces well-typed instructions
 theorem initCode_wt (prog : Program)
@@ -1024,6 +1174,9 @@ theorem initCode_wt (prog : Program)
     simp at hgen; subst hgen
     exact .const (by simp [Value.typeOf]; exact hty.symm)
   | bool =>
+    simp at hgen; subst hgen
+    exact .const (by simp [Value.typeOf]; exact hty.symm)
+  | float =>
     simp at hgen; subst hgen
     exact .const (by simp [Value.typeOf]; exact hty.symm)
 
@@ -1099,7 +1252,8 @@ theorem AllJumpsLe_single_ifgoto {be : BoolExpr} (hle : l ≤ bound) :
 def IsSeqInstr (instr : TAC) : Prop :=
   match instr with
   | .const _ _ | .copy _ _ | .binop _ _ _ _ | .boolop _ _
-  | .arrLoad _ _ _ _ | .arrStore _ _ _ _ => True
+  | .arrLoad _ _ _ _ | .arrStore _ _ _ _
+  | .fbinop _ _ _ _ | .intToFloat _ _ | .floatToInt _ _ => True
   | _ => False
 
 theorem AllJumpsLe_of_allSeq {code : List TAC}
@@ -1118,6 +1272,28 @@ theorem compileExpr_allSeq (e : SExpr) (offset nextTmp : Nat) :
     · exact ihb _ _ instr hb
     · trivial
   | arrRead _ idx ih =>
+    intro instr hmem; simp [compileExpr, List.mem_append] at hmem
+    rcases hmem with hi | rfl
+    · exact ih _ _ instr hi
+    · trivial
+  | flit _ => intro instr hmem; simp [compileExpr] at hmem; subst hmem; trivial
+  | fbin _ a b iha ihb =>
+    intro instr hmem; simp [compileExpr, List.mem_append] at hmem
+    rcases hmem with ha | hb | rfl
+    · exact iha _ _ instr ha
+    · exact ihb _ _ instr hb
+    · trivial
+  | intToFloat e ih =>
+    intro instr hmem; simp [compileExpr, List.mem_append] at hmem
+    rcases hmem with he | rfl
+    · exact ih _ _ instr he
+    · trivial
+  | floatToInt e ih =>
+    intro instr hmem; simp [compileExpr, List.mem_append] at hmem
+    rcases hmem with he | rfl
+    · exact ih _ _ instr he
+    · trivial
+  | farrRead _ idx ih =>
     intro instr hmem; simp [compileExpr, List.mem_append] at hmem
     rcases hmem with hi | rfl
     · exact ih _ _ instr hi
@@ -1175,6 +1351,12 @@ theorem compileBool_allJumpsLe (b : SBool) (offset nextTmp bound : Nat)
       rcases hmem with hi | rfl
       · exact compileExpr_allSeq idx _ _ instr hi
       · trivial)
+  | fcmp _ a b =>
+    exact AllJumpsLe_of_allSeq (fun instr hmem => by
+      simp [compileBool, List.mem_append] at hmem
+      rcases hmem with ha | hb
+      · exact compileExpr_allSeq a _ _ instr ha
+      · exact compileExpr_allSeq b _ _ instr hb)
 
 theorem initCode_allSeq (decls : List (Var × VarTy)) :
     ∀ instr, instr ∈ initCode decls → IsSeqInstr instr := by
@@ -1205,6 +1387,7 @@ theorem compileStmt_allJumpsLe (s : Stmt) (offset nextTmp : Nat) :
         · exact compileExpr_allSeq idx _ _ instr hi
         · trivial
         · trivial)
+    | flit _ | fbin _ _ _ | intToFloat _ | floatToInt _ | farrRead _ _ => sorry
   | bassign _ b =>
     simp only [compileStmt, List.length_append, List.length_singleton]
     exact AllJumpsLe_append
@@ -1292,6 +1475,8 @@ theorem compileStmt_allJumpsLe (s : Stmt) (offset nextTmp : Nat) :
           (AllJumpsLe_single_ifgoto (by omega)))
         (AllJumpsLe_mono hih (by omega)))
       (AllJumpsLe_single_goto (by omega))
+  | fassign _ _ => sorry
+  | farrWrite _ _ _ => sorry
 
 /-- Bridge: if all jump targets in `code` are ≤ `code.length`, then
     `(code ++ [halt]).toArray` is step-closed in bounds. -/
@@ -1316,6 +1501,8 @@ private theorem stepClosed_of_allJumpsLe {code : List TAC} {p : Prog}
       | const _ _ | copy _ _ | binop _ _ _ _ | boolop _ _ =>
         simp [TAC.successors] at hmem; omega
       | arrLoad _ _ _ _ | arrStore _ _ _ _ =>
+        simp [TAC.successors] at hmem; omega
+      | fbinop _ _ _ _ | intToFloat _ _ | floatToInt _ _ =>
         simp [TAC.successors] at hmem; omega
       | goto l => simp [TAC.successors] at hmem; subst hmem; exact Nat.lt_of_le_of_lt hj (by omega)
       | ifgoto _ l =>
@@ -1356,8 +1543,9 @@ theorem compile_has_behavior (prog : Program) (htc : prog.typeCheck = true)
 -- ============================================================
 
 private def tyToString : VarTy → String
-  | .int  => "int"
-  | .bool => "bool"
+  | .int   => "int"
+  | .bool  => "bool"
+  | .float => "float"
 
 def toString (prog : Program) : String :=
   let declStrs := prog.decls.map fun (x, ty) => s!"var {x} : {tyToString ty}"

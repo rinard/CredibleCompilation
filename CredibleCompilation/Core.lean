@@ -14,70 +14,95 @@ Split from `Semantics.lean`.
 abbrev Var   := String
 abbrev Label := Nat        -- program counter / jump target
 
-/-- Runtime values: either a 64-bit integer or a boolean.
-    Integers use `BitVec 64` to match ARM64 register semantics. -/
+/-- Runtime values: a 64-bit integer, a boolean, or a 64-bit float.
+    Integers and floats both use `BitVec 64` to match ARM64 register semantics.
+    Float operations are opaque/uninterpreted in proofs. -/
 inductive Value where
-  | int  : BitVec 64 → Value
-  | bool : Bool → Value
+  | int   : BitVec 64 → Value
+  | bool  : Bool → Value
+  | float : BitVec 64 → Value
   deriving Repr, DecidableEq, Inhabited
 
 /-- Variable types. -/
 inductive VarTy where
-  | int | bool
+  | int | bool | float
   deriving Repr, DecidableEq
 
 namespace VarTy
 
 /-- The default `Value` for a variable type: `0` for int, `false` for bool. -/
 def defaultVal : VarTy → Value
-  | .int  => .int (0 : BitVec 64)
-  | .bool => .bool false
+  | .int   => .int (0 : BitVec 64)
+  | .bool  => .bool false
+  | .float => .float (0 : BitVec 64)
 
 end VarTy
 
 namespace Value
 
 def toInt : Value → BitVec 64
-  | .int n  => n
-  | .bool _ => 0
+  | .int n   => n
+  | .bool _  => 0
+  | .float _ => 0
 
 def toBool : Value → Bool
-  | .bool b => b
-  | .int _  => false
+  | .bool b  => b
+  | .int _   => false
+  | .float _ => false
+
+def toFloat : Value → BitVec 64
+  | .float f => f
+  | .int _   => 0
+  | .bool _  => 0
 
 def typeOf : Value → VarTy
-  | .int _  => .int
-  | .bool _ => .bool
+  | .int _   => .int
+  | .bool _  => .bool
+  | .float _ => .float
 
 theorem int_of_typeOf_int {v : Value} (h : v.typeOf = .int) : ∃ n, v = .int n := by
   cases v with
   | int n => exact ⟨n, rfl⟩
   | bool _ => simp [typeOf] at h
+  | float _ => simp [typeOf] at h
 
 theorem bool_of_typeOf_bool {v : Value} (h : v.typeOf = .bool) : ∃ b, v = .bool b := by
   cases v with
   | int _ => simp [typeOf] at h
   | bool b => exact ⟨b, rfl⟩
+  | float _ => simp [typeOf] at h
+
+theorem float_of_typeOf_float {v : Value} (h : v.typeOf = .float) : ∃ f, v = .float f := by
+  cases v with
+  | int _ => simp [typeOf] at h
+  | bool _ => simp [typeOf] at h
+  | float f => exact ⟨f, rfl⟩
 
 @[simp] theorem toInt_int (n : BitVec 64) : (Value.int n).toInt = n := rfl
 @[simp] theorem toBool_bool (b : Bool) : (Value.bool b).toBool = b := rfl
+@[simp] theorem toFloat_float (f : BitVec 64) : (Value.float f).toFloat = f := rfl
 @[simp] theorem typeOf_int (n : BitVec 64) : (Value.int n).typeOf = .int := rfl
 @[simp] theorem typeOf_bool (b : Bool) : (Value.bool b).typeOf = .bool := rfl
+@[simp] theorem typeOf_float (f : BitVec 64) : (Value.float f).typeOf = .float := rfl
 
 /-- Wrap a BitVec 64 as a Value of the given type. -/
 def ofBitVec : VarTy → BitVec 64 → Value
-  | .int,  v => .int v
-  | .bool, v => .bool (v != 0)
+  | .int,   v => .int v
+  | .bool,  v => .bool (v != 0)
+  | .float, v => .float v
 
 /-- Extract the BitVec 64 payload from a Value (booleans become 0 or 1). -/
 def toBits : Value → BitVec 64
-  | .int v  => v
-  | .bool b => if b then 1 else 0
+  | .int v   => v
+  | .bool b  => if b then 1 else 0
+  | .float v => v
 
 @[simp] theorem ofBitVec_int (v : BitVec 64) : ofBitVec .int v = .int v := rfl
 @[simp] theorem ofBitVec_bool (v : BitVec 64) : ofBitVec .bool v = .bool (v != 0) := rfl
+@[simp] theorem ofBitVec_float (v : BitVec 64) : ofBitVec .float v = .float v := rfl
 @[simp] theorem toBits_int (v : BitVec 64) : (Value.int v).toBits = v := rfl
 @[simp] theorem toBits_bool (b : Bool) : (Value.bool b).toBits = if b then 1 else 0 := rfl
+@[simp] theorem toBits_float (v : BitVec 64) : (Value.float v).toBits = v := rfl
 
 @[simp] theorem typeOf_ofBitVec (ty : VarTy) (v : BitVec 64) : (ofBitVec ty v).typeOf = ty := by
   cases ty <;> simp [ofBitVec, typeOf]
@@ -235,6 +260,54 @@ def CmpOp.eval : CmpOp → BitVec 64 → BitVec 64 → Bool
   | .le, a, b => BitVec.sle a b
 
 -- ============================================================
+-- § 2a'. Float binary operators
+-- ============================================================
+
+inductive FloatBinOp | fadd | fsub | fmul | fdiv deriving Repr, DecidableEq
+
+/-- Evaluate a float binary operation. Opaque in proofs — FP operations
+    are uninterpreted functions over BitVec 64. -/
+opaque FloatBinOp.eval : FloatBinOp → BitVec 64 → BitVec 64 → BitVec 64
+
+-- ============================================================
+-- § 2a''. Float comparison operators
+-- ============================================================
+
+inductive FloatCmpOp | feq | fne | flt | fle deriving Repr, DecidableEq
+
+/-- Evaluate a float comparison. Opaque in proofs — FP comparisons
+    are uninterpreted predicates over BitVec 64. -/
+opaque FloatCmpOp.eval : FloatCmpOp → BitVec 64 → BitVec 64 → Bool
+
+/-- Convert a signed integer (BitVec 64) to float (BitVec 64).
+    Opaque — corresponds to ARM64 `scvtf`. -/
+opaque intToFloatBv : BitVec 64 → BitVec 64
+
+/-- Convert a float (BitVec 64) to signed integer (BitVec 64).
+    Opaque — corresponds to ARM64 `fcvtzs`. -/
+opaque floatToIntBv : BitVec 64 → BitVec 64
+
+/-- Convert a Lean Float to its IEEE 754 bit representation as BitVec 64.
+    Uses `Float.toBits` for proper bit reinterpretation (not truncation). -/
+def floatToBits (f : Float) : BitVec 64 :=
+  BitVec.ofNat 64 f.toBits.toNat
+
+/-- Convert a BinOp to the corresponding FloatBinOp (mod has no float equivalent). -/
+def BinOp.toFloat? : BinOp → Option FloatBinOp
+  | .add => some .fadd
+  | .sub => some .fsub
+  | .mul => some .fmul
+  | .div => some .fdiv
+  | .mod => none
+
+/-- Convert a CmpOp to the corresponding FloatCmpOp. -/
+def CmpOp.toFloat : CmpOp → FloatCmpOp
+  | .eq => .feq
+  | .ne => .fne
+  | .lt => .flt
+  | .le => .fle
+
+-- ============================================================
 -- § 2b. Expressions over stores
 -- ============================================================
 
@@ -254,6 +327,13 @@ inductive Expr where
   | orE     : Expr → Expr → Expr           -- .bool ((a.eval σ).toBool || (b.eval σ).toBool)
   -- Symbolic array read (for tracking arrLoad results)
   | arrRead : ArrayName → Expr → Expr      -- .int (am.read arr (idx.eval σ am).toInt)
+  -- Float expression constructors
+  | flit     : BitVec 64 → Expr                       -- float literal
+  | fbin     : FloatBinOp → Expr → Expr → Expr        -- float binary op
+  | fcmpE    : FloatCmpOp → Expr → Expr → Expr        -- .bool (fop.eval a b)
+  | intToFloat : Expr → Expr                           -- .float (intToFloat (e.toInt))
+  | floatToInt : Expr → Expr                           -- .int (floatToInt (e.toFloat))
+  | farrRead : ArrayName → Expr → Expr                -- .float (am.read arr idx)
   deriving Repr, DecidableEq
 
 def Expr.eval (σ : Store) (am : ArrayMem) : Expr → Value
@@ -268,10 +348,16 @@ def Expr.eval (σ : Store) (am : ArrayMem) : Expr → Value
   | .andE a b       => .bool ((a.eval σ am).toBool && (b.eval σ am).toBool)
   | .orE a b        => .bool ((a.eval σ am).toBool || (b.eval σ am).toBool)
   | .arrRead arr idx => .int (am.read arr (idx.eval σ am).toInt)
+  | .flit f            => .float f
+  | .fbin op a b       => .float (op.eval (a.eval σ am).toFloat (b.eval σ am).toFloat)
+  | .fcmpE op a b      => .bool (FloatCmpOp.eval op (a.eval σ am).toFloat (b.eval σ am).toFloat)
+  | .intToFloat e      => .float (intToFloatBv (e.eval σ am).toInt)
+  | .floatToInt e      => .int (floatToIntBv (e.eval σ am).toFloat)
+  | .farrRead arr idx  => .float (am.read arr (idx.eval σ am).toInt)
 
-/-- Does an expression contain any `arrRead` sub-expression? -/
+/-- Does an expression contain any `arrRead` or `farrRead` sub-expression? -/
 def Expr.hasArrRead : Expr → Bool
-  | .lit _ | .blit _ | .var _ => false
+  | .lit _ | .blit _ | .var _ | .flit _ => false
   | .bin _ a b     => a.hasArrRead || b.hasArrRead
   | .tobool e      => e.hasArrRead
   | .cmpE _ a b    => a.hasArrRead || b.hasArrRead
@@ -280,6 +366,11 @@ def Expr.hasArrRead : Expr → Bool
   | .andE a b      => a.hasArrRead || b.hasArrRead
   | .orE a b       => a.hasArrRead || b.hasArrRead
   | .arrRead _ _   => true
+  | .fbin _ a b    => a.hasArrRead || b.hasArrRead
+  | .fcmpE _ a b   => a.hasArrRead || b.hasArrRead
+  | .intToFloat e  => e.hasArrRead
+  | .floatToInt e  => e.hasArrRead
+  | .farrRead _ _  => true
 
 /-- For arrRead-free expressions, evaluation is independent of the array memory. -/
 theorem Expr.eval_noArrRead (e : Expr) (σ : Store) (am₁ am₂ : ArrayMem)
@@ -305,6 +396,18 @@ theorem Expr.eval_noArrRead (e : Expr) (σ : Store) (am₁ am₂ : ArrayMem)
     simp only [hasArrRead, Bool.or_eq_false_iff] at h
     simp only [Expr.eval]; rw [iha h.1, ihb h.2]
   | arrRead _ _ => simp [hasArrRead] at h
+  | flit _ => rfl
+  | fbin _ a b iha ihb =>
+    simp only [hasArrRead, Bool.or_eq_false_iff] at h
+    simp only [Expr.eval]; rw [iha h.1, ihb h.2]
+  | fcmpE _ a b iha ihb =>
+    simp only [hasArrRead, Bool.or_eq_false_iff] at h
+    simp only [Expr.eval]; rw [iha h.1, ihb h.2]
+  | intToFloat e ih =>
+    simp only [hasArrRead] at h; simp only [Expr.eval]; rw [ih h]
+  | floatToInt e ih =>
+    simp only [hasArrRead] at h; simp only [Expr.eval]; rw [ih h]
+  | farrRead _ _ => simp [hasArrRead] at h
 
 -- ============================================================
 -- § 2c. Boolean expressions
@@ -317,6 +420,7 @@ inductive BoolExpr where
   | cmp    : CmpOp → Var → Var → BoolExpr     -- x op y (integer comparison)
   | cmpLit : CmpOp → Var → BitVec 64 → BoolExpr     -- x op n (variable vs literal)
   | not    : BoolExpr → BoolExpr
+  | fcmp   : FloatCmpOp → Var → Var → BoolExpr      -- float comparison
   deriving Repr, DecidableEq
 
 /-- Evaluate a boolean expression. Uses `.toInt`/`.toBool` extractors;
@@ -327,6 +431,7 @@ def BoolExpr.eval (σ : Store) : BoolExpr → Bool
   | .cmp op x y    => op.eval (σ x).toInt (σ y).toInt
   | .cmpLit op x n => op.eval (σ x).toInt n
   | .not e         => !e.eval σ
+  | .fcmp op x y   => FloatCmpOp.eval op (σ x).toFloat (σ y).toFloat
 
 theorem BoolExpr.eval_congr (cond : BoolExpr) (σ τ : Store)
     (hagree : ∀ y, σ y = τ y) : cond.eval σ = cond.eval τ := by
@@ -336,6 +441,7 @@ theorem BoolExpr.eval_congr (cond : BoolExpr) (σ τ : Store)
   | cmp op x y => simp [BoolExpr.eval, hagree]
   | cmpLit op x n => simp [BoolExpr.eval, hagree]
   | not e ih => simp [BoolExpr.eval, ih]
+  | fcmp op x y => simp [BoolExpr.eval, hagree]
 
 /-- Collect all variable names from a boolean expression. -/
 def BoolExpr.vars : BoolExpr → List Var
@@ -344,3 +450,4 @@ def BoolExpr.vars : BoolExpr → List Var
   | .cmp _ x y    => [x, y]
   | .cmpLit _ x _ => [x]
   | .not e        => e.vars
+  | .fcmp _ x y   => [x, y]

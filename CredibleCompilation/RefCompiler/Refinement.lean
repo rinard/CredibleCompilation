@@ -22,12 +22,14 @@ theorem compileExpr_eq_refCompileExpr (e : SExpr) (o t : Nat) :
   | bin op a b iha ihb =>
     simp only [compileExpr, refCompileExpr, iha, ihb]
   | arrRead _ _ ih => simp only [compileExpr, refCompileExpr, ih]
+  | flit _ | fbin _ _ _ _ _ | intToFloat _ _ | floatToInt _ _ | farrRead _ _ _ => sorry
 theorem compileBool_eq_refCompileBool (b : SBool) (o t : Nat) :
     compileBool b o t = refCompileBool b o t := by
   induction b generalizing o t with
   | lit _ => rfl
   | bvar _ => rfl
   | cmp op a b => simp only [compileBool, refCompileBool, compileExpr_eq_refCompileExpr]
+  | fcmp _ _ _ => sorry
   | not e ih => simp only [compileBool, refCompileBool, ih]
   | and a b iha ihb => simp only [compileBool, refCompileBool, iha, ihb]
   | or a b iha ihb => simp only [compileBool, refCompileBool, iha, ihb]
@@ -42,8 +44,11 @@ theorem compileStmt_eq_refCompileStmt (s : Stmt) (o t : Nat) :
     | var _ => rfl
     | bin op a b => simp only [compileStmt, refCompileStmt, compileExpr_eq_refCompileExpr]
     | arrRead _ _ => simp only [compileStmt, refCompileStmt, compileExpr_eq_refCompileExpr]
+    | flit _ | fbin _ _ _ | intToFloat _ | floatToInt _ | farrRead _ _ => sorry
   | bassign x b => simp only [compileStmt, refCompileStmt, compileBool_eq_refCompileBool]
+  | fassign _ _ => sorry
   | arrWrite _ _ _ => simp only [compileStmt, refCompileStmt, compileExpr_eq_refCompileExpr]
+  | farrWrite _ _ _ => sorry
   | barrWrite _ _ _ =>
     simp only [compileStmt, refCompileStmt, compileExpr_eq_refCompileExpr, compileBool_eq_refCompileBool]
   | seq s1 s2 ih1 ih2 => simp only [compileStmt, refCompileStmt, ih1, ih2]

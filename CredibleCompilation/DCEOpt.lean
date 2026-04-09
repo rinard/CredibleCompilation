@@ -48,6 +48,9 @@ def transformInstr (prog : Prog) (revMap : Array Nat) (origPC : Nat) : TAC :=
   | some (.boolop x b)     => .boolop x b
   | some (.arrLoad x arr idx ty)   => .arrLoad x arr idx ty
   | some (.arrStore arr idx val ty) => .arrStore arr idx val ty
+  | some (.fbinop x op y z) => .fbinop x op y z
+  | some (.intToFloat x y) => .intToFloat x y
+  | some (.floatToInt x y) => .floatToInt x y
   | some .halt             => .halt
   | some (.goto l)         => .goto (revMap.getD l 0)
   | some (.ifgoto b l)     => .ifgoto b (revMap.getD l 0)
@@ -75,7 +78,8 @@ def buildInstrCerts (origMap : Array Nat) (trans : Prog) : Array EInstrCert :=
     | some .halt =>
       { pc_orig := origPC, transitions := ([] : List ETransCorr) }
     | some (.const _ _) | some (.copy _ _) | some (.binop _ _ _ _) | some (.boolop _ _)
-    | some (.arrLoad _ _ _ _) | some (.arrStore _ _ _ _) =>
+    | some (.arrLoad _ _ _ _) | some (.arrStore _ _ _ _)
+    | some (.fbinop _ _ _ _) | some (.intToFloat _ _) | some (.floatToInt _ _) =>
       let nextOrigPC := origMap.getD (i + 1) 0
       { pc_orig := origPC, transitions := [{ origLabels := (nextOrigPC :: []) }] }
     | some (.goto l) =>
