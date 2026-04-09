@@ -117,15 +117,16 @@ theorem progCompile_halt (prog : Program) (fuel : Nat) (σ' : Store) (am' : Arra
     (hinterp : prog.body.interp fuel prog.initStore ArrayMem.init prog.arrayDecls = some (σ', am'))
     (hsafe : prog.body.safe fuel prog.initStore ArrayMem.init prog.arrayDecls) :
     ∃ σ_tac am_h, haltsWithResult prog.compile 0 prog.initStore σ_tac ArrayMem.init am_h ∧
-      (∀ v, v.isTmp = false → σ_tac v = σ' v) := by
+      (∀ v, v.isTmp = false → v.isFTmp = false → σ_tac v = σ' v) := by
   have htmpfree := Program.typeCheck_tmpFree prog htc
+  have hftmpfree : prog.body.ftmpFree := Program.typeCheck_ftmpFree prog htc
   have hts := Program.typeCheck_initStore_typedStore prog htc
-  have hintv := Program.typeCheck_intTyped prog htc prog.initStore ArrayMem.init hts fuel
+  have htypedv := Program.typeCheck_typedVars prog htc prog.initStore ArrayMem.init hts fuel
   have hcode := progCompile_body_codeAt prog
   have hinit := Program.compile_initExec prog (Program.typeCheck_noDups prog htc)
   obtain ⟨σ_tac, hexec, hagree⟩ :=
     refCompileStmt_correct prog.body fuel prog.initStore σ' ArrayMem.init am' prog.decls.length 0
-      prog.compile prog.initStore hinterp htmpfree hsafe hintv (fun _ _ => rfl) hcode
+      prog.compile prog.initStore hinterp htmpfree hftmpfree hsafe htypedv (fun _ _ _ => rfl) hcode
   have hhalt_instr : prog.compile[prog.decls.length +
       (refCompileStmt prog.body prog.decls.length 0).1.length]? = some .halt := by
     rw [← compileStmt_eq_refCompileStmt]; exact Program.compile_halt_getElem prog
@@ -142,13 +143,14 @@ theorem progCompile_no_halt_unsafe (prog : Program) (fuel : Nat)
     ¬ ∃ σ_tac am_h, haltsWithResult prog.compile 0 prog.initStore σ_tac ArrayMem.init am_h := by
   intro ⟨σ_tac, am_h, hhalt⟩
   have htmpfree := Program.typeCheck_tmpFree prog htc
+  have hftmpfree : prog.body.ftmpFree := Program.typeCheck_ftmpFree prog htc
   have hts := Program.typeCheck_initStore_typedStore prog htc
-  have hintv := Program.typeCheck_intTyped prog htc prog.initStore ArrayMem.init hts fuel
+  have htypedv := Program.typeCheck_typedVars prog htc prog.initStore ArrayMem.init hts fuel
   have hcode := progCompile_body_codeAt prog
   have hinit := Program.compile_initExec prog (Program.typeCheck_noDups prog htc)
   obtain ⟨pc_s, σ_s, am_s, hfrag, herror, _⟩ :=
     refCompileStmt_unsafe prog.body fuel prog.initStore ArrayMem.init prog.decls.length 0
-      prog.compile prog.initStore htmpfree hunsafe hintv (fun _ _ => rfl) hcode
+      prog.compile prog.initStore htmpfree hftmpfree hunsafe htypedv (fun _ _ _ => rfl) hcode
   exact error_run_no_halt (FragExec.trans' hinit hfrag) herror hhalt
 /-- **Forward error reachability** for `prog.compile`: if `¬safe`, the
     compiled program reaches an error state. -/
@@ -157,13 +159,14 @@ theorem progCompile_reaches_error (prog : Program) (fuel : Nat)
     (hunsafe : ¬ prog.body.safe fuel prog.initStore ArrayMem.init prog.arrayDecls) :
     ∃ σ_e am_e, prog.compile ⊩ Cfg.run 0 prog.initStore ArrayMem.init ⟶* Cfg.error σ_e am_e := by
   have htmpfree := Program.typeCheck_tmpFree prog htc
+  have hftmpfree : prog.body.ftmpFree := Program.typeCheck_ftmpFree prog htc
   have hts := Program.typeCheck_initStore_typedStore prog htc
-  have hintv := Program.typeCheck_intTyped prog htc prog.initStore ArrayMem.init hts fuel
+  have htypedv := Program.typeCheck_typedVars prog htc prog.initStore ArrayMem.init hts fuel
   have hcode := progCompile_body_codeAt prog
   have hinit := Program.compile_initExec prog (Program.typeCheck_noDups prog htc)
   obtain ⟨pc_s, σ_s, am_s, hfrag, herror, _⟩ :=
     refCompileStmt_unsafe prog.body fuel prog.initStore ArrayMem.init prog.decls.length 0
-      prog.compile prog.initStore htmpfree hunsafe hintv (fun _ _ => rfl) hcode
+      prog.compile prog.initStore htmpfree hftmpfree hunsafe htypedv (fun _ _ _ => rfl) hcode
   exact ⟨σ_s, am_s, Steps.trans (FragExec.trans' hinit hfrag)
     (Steps.step herror Steps.refl)⟩
 /-- **Forward no-halt for safe divergence** in `prog.compile`: if the source
@@ -175,14 +178,15 @@ theorem progCompile_no_halt_diverge (prog : Program)
     ¬ ∃ σ_tac am_h, haltsWithResult prog.compile 0 prog.initStore σ_tac ArrayMem.init am_h := by
   intro ⟨σ_tac, am_h, hhalt⟩
   have htmpfree := Program.typeCheck_tmpFree prog htc
+  have hftmpfree : prog.body.ftmpFree := Program.typeCheck_ftmpFree prog htc
   have hts := Program.typeCheck_initStore_typedStore prog htc
-  have hintv : ∀ fuel, prog.body.intTyped fuel prog.initStore ArrayMem.init prog.arrayDecls :=
-    fun fuel => Program.typeCheck_intTyped prog htc prog.initStore ArrayMem.init hts fuel
+  have htypedv : ∀ fuel, prog.body.typedVars fuel prog.initStore ArrayMem.init prog.arrayDecls :=
+    fun fuel => Program.typeCheck_typedVars prog htc prog.initStore ArrayMem.init hts fuel
   have hcode := progCompile_body_codeAt prog
   have hinit := Program.compile_initExec prog (Program.typeCheck_noDups prog htc)
   have hunbounded := refCompileStmt_diverges prog.body prog.initStore ArrayMem.init
     prog.decls.length 0 prog.compile prog.initStore
-    htmpfree hdiv hsafe hintv (fun _ _ => rfl) hcode
+    htmpfree hftmpfree hdiv hsafe htypedv (fun _ _ _ => rfl) hcode
   have hunbounded' : ∀ N, ∃ n, n ≥ N ∧ ∃ pc' σ' am',
       RefStepsN prog.compile n (Cfg.run 0 prog.initStore ArrayMem.init)
         (Cfg.run pc' σ' am') := by
@@ -246,7 +250,7 @@ theorem program_refinement (prog : Program) (htc : prog.typeCheck = true) (b : B
     (hbeh : program_behavior_init prog.compile prog.initStore b) :
     match b with
     | .halts σ_tac => ∃ fuel σ' am', prog.interp fuel = some (σ', am') ∧
-        ∀ v, v.isTmp = false → σ_tac v = σ' v
+        ∀ v, v.isTmp = false → v.isFTmp = false → σ_tac v = σ' v
     | .errors _ => ∃ fuel, ¬ prog.body.safe fuel prog.initStore ArrayMem.init prog.arrayDecls
     | .typeErrors _ => False
     | .diverges => ∀ fuel, prog.interp fuel = none := by
@@ -281,14 +285,15 @@ theorem program_refinement (prog : Program) (htc : prog.typeCheck = true) (b : B
     by_cases hdiv : ∀ fuel, prog.body.interp fuel prog.initStore ArrayMem.init prog.arrayDecls = none
     · -- Source diverges safely → unbounded execution → error contradicts unbounded
       have htmpfree := Program.typeCheck_tmpFree prog htc
+      have hftmpfree : prog.body.ftmpFree := Program.typeCheck_ftmpFree prog htc
       have hts := Program.typeCheck_initStore_typedStore prog htc
-      have hintv : ∀ fuel, prog.body.intTyped fuel prog.initStore ArrayMem.init prog.arrayDecls :=
-        fun fuel => Program.typeCheck_intTyped prog htc prog.initStore ArrayMem.init hts fuel
+      have htypedv : ∀ fuel, prog.body.typedVars fuel prog.initStore ArrayMem.init prog.arrayDecls :=
+        fun fuel => Program.typeCheck_typedVars prog htc prog.initStore ArrayMem.init hts fuel
       have hcode := progCompile_body_codeAt prog
       have hinit := Program.compile_initExec prog (Program.typeCheck_noDups prog htc)
       have hunbounded := refCompileStmt_diverges prog.body prog.initStore ArrayMem.init
         prog.decls.length 0 prog.compile prog.initStore
-        htmpfree hdiv hall hintv (fun _ _ => rfl) hcode
+        htmpfree hftmpfree hdiv hall htypedv (fun _ _ _ => rfl) hcode
       have hunbounded' : ∀ N, ∃ n, n ≥ N ∧ ∃ pc' σ' am',
           RefStepsN prog.compile n (Cfg.run 0 prog.initStore ArrayMem.init)
             (Cfg.run pc' σ' am') := by
@@ -320,14 +325,15 @@ theorem program_refinement (prog : Program) (htc : prog.typeCheck = true) (b : B
     · by_cases hsafe_all : ∀ fuel, prog.body.safe fuel prog.initStore ArrayMem.init prog.arrayDecls
       · -- Source diverges safely → unbounded → typeError contradicts unbounded
         have htmpfree := Program.typeCheck_tmpFree prog htc
+        have hftmpfree : prog.body.ftmpFree := Program.typeCheck_ftmpFree prog htc
         have hts := Program.typeCheck_initStore_typedStore prog htc
-        have hintv : ∀ fuel, prog.body.intTyped fuel prog.initStore ArrayMem.init prog.arrayDecls :=
-          fun fuel => Program.typeCheck_intTyped prog htc prog.initStore ArrayMem.init hts fuel
+        have htypedv : ∀ fuel, prog.body.typedVars fuel prog.initStore ArrayMem.init prog.arrayDecls :=
+          fun fuel => Program.typeCheck_typedVars prog htc prog.initStore ArrayMem.init hts fuel
         have hcode := progCompile_body_codeAt prog
         have hinit := Program.compile_initExec prog (Program.typeCheck_noDups prog htc)
         have hunbounded := refCompileStmt_diverges prog.body prog.initStore ArrayMem.init
           prog.decls.length 0 prog.compile prog.initStore
-          htmpfree hdiv hsafe_all hintv (fun _ _ => rfl) hcode
+          htmpfree hftmpfree hdiv hsafe_all htypedv (fun _ _ _ => rfl) hcode
         have hunbounded' : ∀ N, ∃ n, n ≥ N ∧ ∃ pc' σ' am',
             RefStepsN prog.compile n (Cfg.run 0 prog.initStore ArrayMem.init)
               (Cfg.run pc' σ' am') := by

@@ -115,6 +115,31 @@ theorem tmpName_isTmp (k : Nat) : (tmpName k).isTmp = true :=
 theorem isTmp_false_ne_tmpName {v : Var} {k : Nat} (h : v.isTmp = false) : v ≠ tmpName k := by
   intro heq; have := tmpName_isTmp k; rw [← heq] at this; simp [h] at this
 
+private theorem ftmpName_injective : Function.Injective ftmpName := by
+  intro k j h
+  have h2 := String.ext_iff.mp h
+  simp only [ftmpName, String.toList_append] at h2
+  have h3 := List.append_cancel_left h2
+  exact Nat_toString_injective (String.ext_iff.mpr h3)
+
+theorem ftmpName_ne {k j : Nat} (h : k ≠ j) : ftmpName k ≠ ftmpName j :=
+  fun heq => h (ftmpName_injective heq)
+
+theorem ftmpName_isFTmp (k : Nat) : (ftmpName k).isFTmp = true :=
+  ftmpName_isFTmp_wt k
+
+-- ftmpName_not_isTmp and tmpName_not_isFTmp are imported from WhileLang
+
+theorem isFTmp_false_ne_ftmpName {v : Var} {k : Nat} (h : v.isFTmp = false) : v ≠ ftmpName k := by
+  intro heq; have := ftmpName_isFTmp k; rw [← heq] at this; simp [h] at this
+
+/-- tmpName and ftmpName never collide (different prefixes). -/
+theorem tmpName_ne_ftmpName {k j : Nat} : tmpName k ≠ ftmpName j := by
+  intro h
+  have : (tmpName k).isTmp = true := tmpName_isTmp k
+  have : (ftmpName j).isTmp = false := ftmpName_not_isTmp j
+  rw [h] at *; simp_all
+
 -- ============================================================
 -- § 1b. Integer free-variable helpers
 -- ============================================================
@@ -183,16 +208,16 @@ def refCompileExpr (e : SExpr) (offset nextTmp : Nat) : List TAC × Var × Nat :
     let t := tmpName tmp1
     (codeIdx ++ [.arrLoad t arr vIdx .int], t, tmp1 + 1)
   | .flit f =>
-    let t := tmpName nextTmp
+    let t := ftmpName nextTmp
     ([.const t (.float (floatToBits f))], t, nextTmp + 1)
   | .fbin op a b =>
     let (codeA, va, tmp1) := refCompileExpr a offset nextTmp
     let (codeB, vb, tmp2) := refCompileExpr b (offset + codeA.length) tmp1
-    let t := tmpName tmp2
+    let t := ftmpName tmp2
     (codeA ++ codeB ++ [.fbinop t op va vb], t, tmp2 + 1)
   | .intToFloat e =>
     let (codeE, ve, tmp1) := refCompileExpr e offset nextTmp
-    let t := tmpName tmp1
+    let t := ftmpName tmp1
     (codeE ++ [.intToFloat t ve], t, tmp1 + 1)
   | .floatToInt e =>
     let (codeE, ve, tmp1) := refCompileExpr e offset nextTmp
@@ -200,7 +225,7 @@ def refCompileExpr (e : SExpr) (offset nextTmp : Nat) : List TAC × Var × Nat :
     (codeE ++ [.floatToInt t ve], t, tmp1 + 1)
   | .farrRead arr idx =>
     let (codeIdx, vIdx, tmp1) := refCompileExpr idx offset nextTmp
-    let t := tmpName tmp1
+    let t := ftmpName tmp1
     (codeIdx ++ [.arrLoad t arr vIdx .float], t, tmp1 + 1)
 
 def refCompileBool (b : SBool) (offset nextTmp : Nat) : List TAC × BoolExpr × Nat :=
@@ -325,7 +350,7 @@ def refCompileStmt (s : Stmt) (offset nextTmp : Nat) : List TAC × Nat :=
       (codeE ++ [.intToFloat x ve], tmp1)
     | .farrRead arr idx =>
       let (codeIdx, vIdx, tmp1) := refCompileExpr idx offset nextTmp
-      let t := tmpName tmp1
+      let t := ftmpName tmp1
       (codeIdx ++ [.arrLoad t arr vIdx .float, .copy x t], tmp1 + 1)
     | _ =>
       let (codeE, ve, tmp1) := refCompileExpr e offset nextTmp
@@ -434,6 +459,48 @@ theorem FragExec.single_arrStore {p : Prog} {pc : Nat} {σ : Store} {am : ArrayM
   simp [hval, Value.toBits] at this
   exact this
 
+theorem FragExec.single_fbinop {p : Prog} {pc : Nat} {σ : Store} {am : ArrayMem}
+    {x : Var} {fop : FloatBinOp} {y z : Var} {a b : BitVec 64}
+    (h : p[pc]? = some (.fbinop x fop y z))
+    (hy : σ y = .float a) (hz : σ z = .float b) :
+    FragExec p pc σ (pc + 1) (σ[x ↦ .float (fop.eval a b)]) am am :=
+  Steps.single (Step.fbinop h hy hz)
+
+theorem FragExec.single_intToFloat {p : Prog} {pc : Nat} {σ : Store} {am : ArrayMem}
+    {x y : Var} {n : BitVec 64}
+    (h : p[pc]? = some (.intToFloat x y))
+    (hy : σ y = .int n) :
+    FragExec p pc σ (pc + 1) (σ[x ↦ .float (intToFloatBv n)]) am am :=
+  Steps.single (Step.intToFloat h hy)
+
+theorem FragExec.single_floatToInt {p : Prog} {pc : Nat} {σ : Store} {am : ArrayMem}
+    {x y : Var} {f : BitVec 64}
+    (h : p[pc]? = some (.floatToInt x y))
+    (hy : σ y = .float f) :
+    FragExec p pc σ (pc + 1) (σ[x ↦ .int (floatToIntBv f)]) am am :=
+  Steps.single (Step.floatToInt h hy)
+
+theorem FragExec.single_arrStore_float {p : Prog} {pc : Nat} {σ : Store} {am : ArrayMem}
+    {arr : ArrayName} {idx val : Var} {idxVal v : BitVec 64}
+    (h : p[pc]? = some (.arrStore arr idx val .float))
+    (hidx : σ idx = .int idxVal) (hval : σ val = .float v)
+    (hbounds : idxVal < p.arraySizeBv arr) :
+    FragExec p pc σ (pc + 1) σ am (am.write arr idxVal v) := by
+  have hty : (σ val).typeOf = .float := by rw [hval]; simp [Value.typeOf]
+  have := Steps.single (Step.arrStore (am := am) h hidx hty hbounds)
+  simp [hval, Value.toBits] at this
+  exact this
+
+theorem FragExec.single_arrLoad_float {p : Prog} {pc : Nat} {σ : Store} {am : ArrayMem}
+    {x : Var} {arr : ArrayName} {idx : Var} {idxVal : BitVec 64}
+    (h : p[pc]? = some (.arrLoad x arr idx .float))
+    (hidx : σ idx = .int idxVal)
+    (hbounds : idxVal < p.arraySizeBv arr) :
+    FragExec p pc σ (pc + 1) (σ[x ↦ .float (am.read arr idxVal)]) am am := by
+  have := Steps.single (Step.arrLoad (am := am) h hidx hbounds)
+  simp [Value.ofBitVec] at this
+  exact this
+
 -- ============================================================
 -- § 5. BoolExpr evaluation congruence (pointwise)
 -- ============================================================
@@ -476,6 +543,16 @@ theorem SExpr.safe_bin_right {op : BinOp} {a b : SExpr} {σ : Store} {am : Array
     (h : (SExpr.bin op a b).safe σ am decls) : b.safe σ am decls := by
   cases op <;> simp_all [SExpr.safe]
 
+theorem SExpr.safe_fbin_left {fop : FloatBinOp} {a b : SExpr} {σ : Store} {am : ArrayMem}
+    {decls : List (ArrayName × Nat × VarTy)}
+    (h : (SExpr.fbin fop a b).safe σ am decls) : a.safe σ am decls := by
+  simp [SExpr.safe] at h; exact h.1
+
+theorem SExpr.safe_fbin_right {fop : FloatBinOp} {a b : SExpr} {σ : Store} {am : ArrayMem}
+    {decls : List (ArrayName × Nat × VarTy)}
+    (h : (SExpr.fbin fop a b).safe σ am decls) : b.safe σ am decls := by
+  simp [SExpr.safe] at h; exact h.2
+
 -- ============================================================
 -- § 7. Store update helpers
 -- ============================================================
@@ -488,3 +565,12 @@ theorem Store.update_isTmp_ne {σ : Store} {t : Var} {v : Value}
     {w : Var} (ht : t.isTmp = true) (hw : w.isTmp = false) :
     (σ[t ↦ v]) w = σ w :=
   Store.update_other σ t w v (fun heq => by rw [heq] at hw; simp [hw] at ht)
+
+theorem Store.update_isFTmp_ne {σ : Store} {t : Var} {v : Value}
+    {w : Var} (ht : t.isFTmp = true) (hw : w.isFTmp = false) :
+    (σ[t ↦ v]) w = σ w :=
+  Store.update_other σ t w v (fun heq => by rw [heq] at hw; simp [hw] at ht)
+
+theorem Store.update_ftmpName_ne {σ : Store} {k j : Nat} {v : Value}
+    (hne : j ≠ k) : (σ[ftmpName k ↦ v]) (ftmpName j) = σ (ftmpName j) :=
+  Store.update_other σ (ftmpName k) (ftmpName j) v (ftmpName_ne hne)
