@@ -412,42 +412,37 @@ def checkInvAtom (inv_pre : EInv) (instr : TAC) (atom : Var × Expr) : Bool :=
   lhs == rhs
 
 /-- Compute reachable PCs from PC 0 via successor edges. -/
-private partial def reachLoop (prog : Prog)
-    (visited : Array Bool) (worklist : List Nat) : Array Bool :=
-  match worklist with
-  | [] => visited
-  | pc :: rest =>
-    if pc < prog.size && !(visited.getD pc false) then
-      let visited' := visited.set! pc true
-      let succs := match prog[pc]? with
-        | some instr => successors instr pc
-        | none => []
-      reachLoop prog visited' (succs ++ rest)
-    else reachLoop prog visited rest
+partial def reachable (prog : Prog) : Array Bool :=
+  let rec go (visited : Array Bool) (worklist : List Nat) : Array Bool :=
+    match worklist with
+    | [] => visited
+    | pc :: rest =>
+      if pc < prog.size && !(visited.getD pc false) then
+        let visited' := visited.set! pc true
+        let succs := match prog[pc]? with
+          | some instr => successors instr pc
+          | none => []
+        go visited' (succs ++ rest)
+      else go visited rest
+  go (Array.replicate prog.size false) (0 :: [])
 
-/-- Compute which PCs are reachable from PC 0. -/
-def reachable (prog : Prog) : Array Bool :=
-  reachLoop prog (Array.replicate prog.size false) (0 :: [])
-
-/-- Replace unreachable instructions with `halt`.  Halts have no successors,
-    so invariant and transition checks are vacuously satisfied. -/
-def removeUnreachable (prog : Prog) : Prog :=
-  let reached := reachable prog
-  let arr := (List.range prog.size).map fun pc =>
-    if reached.getD pc false then
-      match prog[pc]? with | some i => i | none => .halt
-    else .halt
-  { code := arr.toArray, tyCtx := prog.tyCtx,
-    observable := prog.observable, arrayDecls := prog.arrayDecls }
-
-/-- Replace instructions at specific PCs with `halt`, using a precomputed mask. -/
-def removeByMask (prog : Prog) (reached : Array Bool) : Prog :=
-  let arr := (List.range prog.size).map fun pc =>
-    if reached.getD pc false then
-      match prog[pc]? with | some i => i | none => .halt
-    else .halt
-  { code := arr.toArray, tyCtx := prog.tyCtx,
-    observable := prog.observable, arrayDecls := prog.arrayDecls }
+/-- Compact a program: remove unreachable PCs and remap labels.
+    Returns `(compacted, origMap, revMap)`. -/
+def compactProg (prog : Prog) (reached : Array Bool) : Prog × Array Nat × Array Nat :=
+  let origMap := buildOrigMap reached
+  let revMap := buildRevMap origMap prog.size
+  let arr := (List.range origMap.size).map fun i =>
+    match origMap[i]? with
+    | some pc =>
+      match prog[pc]? with
+      | some (.goto l)    => .goto (revMap.getD l 0)
+      | some (.ifgoto b l) => .ifgoto b (revMap.getD l 0)
+      | some instr        => instr
+      | none              => .halt
+    | none => .halt
+  ({ code := arr.toArray, tyCtx := prog.tyCtx,
+     observable := prog.observable, arrayDecls := prog.arrayDecls },
+   origMap, revMap)
 
 /-- **Condition 2b**: Invariants are preserved by both programs. -/
 def checkInvariantsPreservedExec (cert : ECertificate) : Bool :=

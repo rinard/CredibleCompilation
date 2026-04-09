@@ -188,10 +188,12 @@ def optimize (prog : Prog) : ECertificate :=
   let consts := analyze prog
   let trans := transformProg prog consts
   let inv := buildInvariants consts
-  -- Remove unreachable PCs using trans reachability (trans has simplified gotos)
+  -- Compact: remove unreachable PCs using trans reachability
   let reached := _root_.reachable trans
-  let orig := _root_.removeByMask prog reached
-  let trans := _root_.removeByMask trans reached
+  let (orig, origMap, _) := _root_.compactProg prog reached
+  let (trans, _, _) := _root_.compactProg trans reached
+  -- Remap invariants to compacted PCs
+  let inv := origMap.map fun pc => inv.getD pc ([] : EInv)
   let instrCerts := _root_.buildInstrCerts1to1 trans
   let haltCerts := _root_.buildHaltCerts instrCerts trans
   { orig := orig

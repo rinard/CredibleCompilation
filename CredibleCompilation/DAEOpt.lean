@@ -333,7 +333,7 @@ def optimize (prog : Prog) : ECertificate :=
   let instrCerts := buildInstrCerts trans rels
   let haltCerts := (List.range trans.size).map fun i =>
     { pc_orig := i, rel := rels.getD i ([] : EExprRel) : EHaltCert }
-  { orig := prog
+  { orig := prog  -- no compaction needed: inv_trans computed on trans0 covers unreachable PCs
     trans := trans
     inv_orig := inv_orig
     inv_trans := inv_trans
