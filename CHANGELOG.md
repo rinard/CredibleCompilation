@@ -52,7 +52,9 @@ Chronological record of what was built and why, to reconstruct the sequence of d
 - Exercises: indirect array indexing, flattened 2-D arrays, nested loops (3-deep for matmul), float reductions, conditional updates, loop-carried dependencies
 
 **benchmarks/livermore/ (new):**
-- 8 WhileLang source programs (.w) and 8 equivalent C programs (.c)
+- 18 WhileLang source programs (.w) and 18 equivalent C programs (.c)
+- Kernels: K1 hydro, K2 ICCG, K3 dot product, K4 banded linear, K5 tri-diagonal, K6 general recurrence, K7 EOS, K8 ADI/stencil, K9 integrate predictors, K10 difference predictors, K11 prefix sum, K12 first difference, K14 1-D PIC, K17 implicit conditional, K18 2-D explicit hydro, K20 discrete ordinates, K21 matrix multiply, K24 find minimum
+- Skipped: K13 (2-D PIC, too complex), K15/K16 (need RNG), K19 (variant of K6), K22 (needs exp()), K23 (variant of K18)
 - `run.sh` benchmark runner: compiles both, measures wall-clock time, prints comparison table
 - C programs include internal `clock_gettime` timing (kernel-only, excludes init)
 
@@ -61,16 +63,26 @@ Chronological record of what was built and why, to reconstruct the sequence of d
 
 ### Benchmark results (Apple M-series, 1024-element arrays, 10K reps)
 
-| Kernel         | C -O2 (s) | WhileLang (s) | Ratio |
-|----------------|-----------|--------------|-------|
-| K1 hydro       | 0.27      | 0.28         | 1.1x  |
-| K3 dot product | 0.26      | 0.31         | 1.2x  |
-| K5 tri-diag    | 0.28      | 0.36         | 1.3x  |
-| K7 EOS         | 0.27      | 0.32         | 1.2x  |
-| K11 prefix sum | 0.27      | 0.27         | 1.0x  |
-| K12 first diff | 0.25      | 0.28         | 1.1x  |
-| K21 matmul     | 0.27      | 0.29         | 1.1x  |
-| K24 find min   | 0.27      | 0.26         | 1.0x  |
+| Kernel            | C -O2 (s) | WhileLang (s) | Ratio |
+|-------------------|-----------|--------------|-------|
+| K1 hydro          | 0.33      | 0.28         | 0.9x  |
+| K2 ICCG           | 0.28      | 0.36         | 1.3x  |
+| K3 dot product    | 0.26      | 0.28         | 1.1x  |
+| K4 banded linear  | 0.26      | 0.29         | 1.1x  |
+| K5 tri-diag       | 0.31      | 0.35         | 1.1x  |
+| K6 recurrence     | 0.26      | 0.25         | 1.0x  |
+| K7 EOS            | 0.26      | 0.30         | 1.1x  |
+| K8 ADI stencil    | 0.26      | 0.30         | 1.1x  |
+| K9 integrate      | 0.26      | 0.29         | 1.1x  |
+| K10 diff predict  | 0.28      | 0.29         | 1.0x  |
+| K11 prefix sum    | 0.26      | 0.36         | 1.4x  |
+| K12 first diff    | 0.26      | 0.28         | 1.1x  |
+| K14 1-D PIC       | 0.26      | 0.26         | 1.0x  |
+| K17 implicit cond | 0.27      | 0.28         | 1.1x  |
+| K18 2-D hydro     | 0.26      | 0.69         | 2.6x  |
+| K20 discrete ord  | 0.67      | 0.34         | 0.5x  |
+| K21 matmul        | 0.28      | 0.32         | 1.2x  |
+| K24 find min      | 0.29      | 0.27         | 0.9x  |
 
 ---
 
