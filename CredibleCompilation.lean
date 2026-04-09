@@ -1,6 +1,5 @@
 import CredibleCompilation.Semantics
 import CredibleCompilation.PropChecker
-import CredibleCompilation.Examples.PropExamples
 import CredibleCompilation.ExecChecker
 import CredibleCompilation.Examples.ExecExamples
 import CredibleCompilation.SoundnessBridge
@@ -18,3 +17,4 @@ import CredibleCompilation.WhileLang
 import CredibleCompilation.Examples.WhileExamples
 import CredibleCompilation.CompilerCorrectness
 import CredibleCompilation.RefCompiler
+import CredibleCompilation.Tests.LivermoreLoops

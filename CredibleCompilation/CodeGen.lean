@@ -411,7 +411,7 @@ def generateAsm (p : Prog) : Option String :=
         [s!".global _arr_{arr}",
          ".align 3",
          s!"_arr_{arr}:",
-         "  .space 8192"]
+         s!"  .space {(if p.arraySize arr == 0 then 1024 else p.arraySize arr) * 8}"]
     some (emit (header ++ [""] ++ initVars ++ [""] ++ body ++ footer ++ arrayData ++ [""]))
 
 -- ============================================================

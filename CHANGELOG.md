@@ -4,6 +4,138 @@ Chronological record of what was built and why, to reconstruct the sequence of d
 
 ---
 
+## Prove fassign/farrWrite cases, float ErrorHandling, delete intTyped (2026-04-10)
+
+**Goal:** Prove remaining float-related sorry cases in Correctness.lean and ErrorHandling.lean, delete deprecated `intTyped` infrastructure. 29→25 sorrys (−4 net, but also fixed a pre-existing sorry in ErrorHandling barrWrite).
+
+### Changes
+
+**RefCompiler/Defs.lean:**
+- Added `FragExec.single_arrStore_float` lemma for float array stores
+
+**RefCompiler/Correctness.lean:**
+- Proved `fassign` case in `refCompileStmt_correct` — 6 sub-cases matching specialized compilation: `flit` (const), `var` (copy), `fbin` (fbinop), `intToFloat`, `farrRead` (arrLoad float + copy), and wildcard fallback (4 expression forms)
+- Proved `farrWrite` case — mirrors `arrWrite` but with float val type and `single_arrStore_float`
+
+**RefCompiler/ErrorHandling.lean:**
+- Proved `refCompileExpr_stuck` float cases: `flit` (impossible), `fbin` (mirrors bin), `intToFloat`/`floatToInt` (delegate to sub-expr), `farrRead` (mirrors arrRead with .float)
+- Proved `refCompileBool_stuck` fcmp case (mirrors cmp)
+- Proved `refCompileStmt_stuck` and `refCompileStmt_unsafe` fassign cases — specialized sub-cases for fbin/intToFloat/farrRead, wildcard delegation for remaining forms
+- Proved `refCompileStmt_stuck` and `refCompileStmt_unsafe` farrWrite cases — mirrors arrWrite with float val
+- Proved assign float sub-cases in both `_stuck` and `_unsafe` (flit impossible, rest delegate to `refCompileExpr_stuck`)
+- Fixed pre-existing sorry in barrWrite `hvidx_bool` (was discarding `hfprev_bool`)
+
+**CompilerCorrectness.lean:**
+- Deleted deprecated `SBool.intTyped`, `Stmt.intTyped` definitions
+- Deleted `checkSExpr_intVars`, `checkSBool_intTyped`, `checkStmt_intTyped`, `Program.typeCheck_intTyped` (3 sorry-using declarations removed)
+
+**RefCompiler/Metatheory.lean:**
+- Deleted `Stmt.intTyped_fuel_succ` and `Stmt.intTyped_of_le` (2 sorry-using declarations removed)
+
+### Sorry count: 25 (was 29)
+- Metatheory: 5 (pre-existing)
+- Refinement: 3 (pre-existing)
+- ArmCorrectness: 7, ArmSemantics: 4, SoundnessBridge: 5, ExecChecker: 1
+
+---
+
+## Livermore Loops benchmark suite (2026-04-10)
+
+**Goal:** Add realistic numerical-kernel tests from the Lawrence Livermore National Laboratory loop benchmark (McMahon, 1986) to stress-test all optimization passes on array-heavy, float-heavy, multi-loop programs, and measure compiled-code performance vs clang.
+
+### Changes
+
+**Tests/LivermoreLoops.lean (new):**
+- 8 kernels translated to TAC: K1 (hydro fragment), K3 (dot product), K5 (tri-diagonal elimination), K7 (equation of state), K11 (prefix sum), K12 (first difference), K21 (matrix multiply), K24 (find minimum)
+- Each kernel tested individually through selected optimization passes (ConstProp, CSE, LICM, DAE, Peephole, RegAlloc) with certificate verification
+- Full `optimizePipeline` regression test runs all 8 kernels end-to-end
+- Exercises: indirect array indexing, flattened 2-D arrays, nested loops (3-deep for matmul), float reductions, conditional updates, loop-carried dependencies
+
+**benchmarks/livermore/ (new):**
+- 8 WhileLang source programs (.w) and 8 equivalent C programs (.c)
+- `run.sh` benchmark runner: compiles both, measures wall-clock time, prints comparison table
+- C programs include internal `clock_gettime` timing (kernel-only, excludes init)
+
+**CodeGen.lean:**
+- Fixed `.space` directive to use actual declared array size instead of hardcoded 8192 bytes
+
+### Benchmark results (Apple M-series, 1024-element arrays, 10K reps)
+
+| Kernel         | C -O2 (s) | WhileLang (s) | Ratio |
+|----------------|-----------|--------------|-------|
+| K1 hydro       | 0.27      | 0.28         | 1.1x  |
+| K3 dot product | 0.26      | 0.31         | 1.2x  |
+| K5 tri-diag    | 0.28      | 0.36         | 1.3x  |
+| K7 EOS         | 0.27      | 0.32         | 1.2x  |
+| K11 prefix sum | 0.27      | 0.27         | 1.0x  |
+| K12 first diff | 0.25      | 0.28         | 1.1x  |
+| K21 matmul     | 0.27      | 0.29         | 1.1x  |
+| K24 find min   | 0.27      | 0.26         | 1.0x  |
+
+---
+
+## Unified checkExpr type-checker and sorry elimination (2026-04-09)
+
+**Goal:** Fix `checkSExpr`/`checkFExpr` bug (accepted float forms in int context), write correct `checkExpr_typedVars` bridge, eliminate sorrys. 34→26 sorrys (−8 net).
+
+### Changes
+
+**WhileLang.lean:**
+- Replaced `checkSExpr`/`checkFExpr` with unified `checkExpr (ty : VarTy) : SExpr → Bool` + `abbrev` wrappers
+- Unified `compileExpr_wt`/`compileExpr_float_wt` into `compileExpr_typed_wt` with ty parameter (eliminates 6 sorrys for float cases + floatToInt)
+- Fixed `compileStmt_wt` — `assign (floatToInt e)` now proven, all float-in-int-context cases closed by contradiction
+
+**CompilerCorrectness.lean:**
+- Generalized `checkSExpr_declared` → `checkExpr_declared` (works with any `ty`)
+- **New: `checkExpr_typedVars`** — single induction gives `e.typedVars σ am` + `wrapEval` correctness from `checkExpr ty e + TypedStore`. This is the correct replacement for the 4 bridge sorrys.
+- Proved `checkSBool_declared` for `fcmp` case (was sorry)
+- Proved `checkStmt_declared` for `fassign`/`farrWrite` (2 sorrys → 0)
+- Proved `Stmt.interp_preserves_typedStore` for `fassign`/`farrWrite` (2 sorrys → 0)
+- Proved `Stmt.interp_some_implies_safe` for `fassign`/`farrWrite` (2 sorrys → 0)
+- Proved `Stmt.interp_tmpAgree` for `fassign`/`farrWrite` (2 sorrys → 0)
+- Closed `checkSExpr_intVars` float contradiction cases (4/5 done, `floatToInt` still sorry — predicate is wrong)
+
+### Remaining blockers
+- 4 bridge sorrys (`typedVars_of_intVars` etc.) are **fundamentally unprovable** as stated — they assume uniform value types but `floatToInt`/`intToFloat` have mixed types. Callers should migrate to `checkExpr_typedVars`.
+- `intTyped`/`intVars` predicate is wrong for float statements — needs replacement with `typedVars`-based predicate. Blocks `checkStmt_intTyped` for `fassign`/`farrWrite`/`fcmp`.
+- `refCompileExpr_correct_int` wrapper sorrys blocked by above.
+
+---
+
+## Generalize refCompileExpr_correct for float expressions (2026-04-09)
+
+**Goal:** Eliminate the 5 sorrys in `refCompileExpr_correct` for float expression cases (flit, fbin, intToFloat, floatToInt, farrRead). These were blocked because the theorem conclusion hard-coded `.int` wrapping but float TAC stores `.float`.
+
+### Changes
+
+**WhileLang.lean:**
+- Fixed `SExpr.eval` `.var` case: `.toInt` → `.toBits` (transparent for int vars via `toBits_int` simp lemma, correct for float vars)
+- Added `SExpr.wrapEval`: type-aware evaluation returning `Value` (`.int` for int-producing, `.float` for float-producing, `σ x` for `.var`)
+- Added `SExpr.typedVars`: context-sensitive typing predicate with embedded `wrapEval` bridge for sub-expressions
+
+**RefCompiler/Defs.lean:**
+- Added `FragExec.single_fbinop`, `single_intToFloat`, `single_floatToInt`, `single_arrLoad_float`
+- Added `SExpr.safe_fbin_left`, `safe_fbin_right`
+
+**RefCompiler/Correctness.lean:**
+- **Generalized `refCompileExpr_correct`** — all 9 expression cases now fully proven (0 sorry):
+  - New signature: `hftf` (isFTmp), `htypedv` (typedVars), 2-arg `hagree`, `wrapEval` conclusion, ftmpName preservation
+  - New cases: flit, fbin, intToFloat, floatToInt, farrRead — each proved using new FragExec helpers
+- Added `refCompileExpr_result_ftmp_bound` (mirrors `result_bound` for `isFTmp`/`ftmpName`)
+- Added `refCompileExpr_correct_int` backward-compatible wrapper (old signature, uses bridge lemmas)
+- Updated `refCompileBool_correct` signature to accept `hftf`
+
+**CompilerCorrectness.lean:**
+- Added `noTmpDecls_not_ftmp`, `Stmt.ftmpFree`, `Program.typeCheck_ftmpFree`
+- Added bridge lemmas (temporary sorry): `typedVars_of_intVars`, `typedVars_of_floatVars`, `wrapEval_eq_int`, `wrapEval_eq_float`
+
+### Sorry status
+- **Eliminated:** 5 sorrys in `refCompileExpr_correct` (the main target)
+- **Added (temporary):** 6 sorrys in bridge lemmas and backward-compat wrapper
+- **Next:** Fix `checkSExpr`/`checkFExpr` mutual recursion to properly reject float-producing forms in int context, enabling clean bridge proofs. Then update `Stmt.intTyped` to use `typedVars`.
+
+---
+
 ## 1. Initial semantics (`320b98f` — 2026-03-23)
 
 Created `Semantics.lean`: a small imperative language in three-address code (TAC) form with scalar integer variables. Small-step structural operational semantics (Winskel-style). Includes `Store`, `BinOp` (add/sub/mul), `TAC` instructions (const/copy/binop/goto/ifgoto/halt), `Step` relation, `Steps` (reflexive-transitive closure), determinism, and basic metatheory.
@@ -294,3 +426,45 @@ Replaced the identity RegAlloc certificate with real TAC-level variable renaming
 - `credible_compilation_total` (line 737)
 - `simulation_trace` (line 763)
 - `has_behavior` (line 670)
+
+## 25. Float temporary infrastructure and WhileLang float proofs (2026-04-09)
+
+**Phase 0 — Float temporary infrastructure:**
+- Added `ftmpName (k : Nat) : Var := s!"__ft{k}"` and `String.isFTmp` predicate
+- Updated `compileExpr`/`compileStmt` to use `ftmpName` for float-producing expressions (`flit`, `fbin`, `intToFloat`, `farrRead`)
+- Extended `tyCtx` to map `__ft`-prefixed vars to `.float` (others still default to `.int`)
+- Extended `noTmpDecls` to also check `!x.isFTmp`
+- Added `initStoreBase` (float temps default to float zero) for correct TypedStore
+- Proved `tyCtx_ftmp_wt`, `ftmpName_isFTmp_wt`, `tmpName_not_isFTmp`, `lookup_none_of_isFTmp_wt`
+- Mirrored all changes in RefCompiler/Defs.lean with `ftmpName_injective`, `ftmpName_ne`, collision lemmas
+
+**Phase 1 — WhileLang.lean float proofs (65 sorrys remain, down from ~71):**
+- Added `compileExpr_float_wt`: parallel to `compileExpr_wt` but uses `checkFExpr` and proves result type `.float`
+- Filled `compileBool_wt .fcmp` using `compileExpr_float_wt`
+- Filled `compileStmt_wt .fassign` (all sub-cases except degenerate `floatToInt`) and `.farrWrite`
+- Filled `compileStmt_allJumpsLe` for `.fassign`, `.farrWrite`, and `.assign` float fallback cases
+- Remaining WhileLang sorrys: 5 dead (superseded by `compileExpr_float_wt`), 3 degenerate (type checker permits `floatToInt` in float context / float exprs in int context)
+
+## 26. Sorry elimination — Phases 2, 5, 6 (2026-04-09)
+
+Eliminated 19 sorrys across three RefCompiler files. Down from ~65 to ~35 sorrys.
+
+**Phase 6 — RefCompiler/Refinement.lean (5 sorrys → 0):**
+- `compileExpr_eq_refCompileExpr` float cases: `rfl` for `flit`, `simp` with IHs for `fbin`/`intToFloat`/`floatToInt`/`farrRead`
+- `compileBool_eq_refCompileBool` `fcmp`: `simp` with `compileExpr_eq_refCompileExpr`
+- `compileStmt_eq_refCompileStmt` `fassign`: case-split on expr, `rfl`/`simp` for each sub-case
+- `compileStmt_eq_refCompileStmt` `farrWrite`: `simp` with `compileExpr_eq_refCompileExpr`
+
+**Phase 5 — RefCompiler/Metatheory.lean (10 sorrys → 0):**
+- `SExpr.isSafe_of_safe` float cases: mirrors int pattern (`simp [SExpr.safe/isSafe]` + IHs)
+- `SBool.isSafe_of_safe` `fcmp`: `simp` with `SExpr.isSafe_of_safe`
+- Added `interp_ne_none_of_safe_fassign` and `interp_ne_none_of_safe_farrWrite` helper lemmas
+- `Stmt.interp_fuel_succ`, `safe_fuel_succ`, `intTyped_fuel_succ` for `fassign`/`farrWrite`: `simp_all [Stmt.interp/safe/intTyped]` (no fuel dependence)
+- `refCompileStmt_diverges` for `fassign`/`farrWrite`: `exfalso` via new helper lemmas (leaf stmts can't diverge)
+
+**Phase 2 — RefCompiler/Correctness.lean (9 sorrys → 5):**
+- `refCompileExpr_nextTmp_ge` float cases: mirror int pattern with `omega`
+- `refCompileBool_nextTmp_ge` `fcmp`: mirror `cmp` pattern
+- `refCompileExpr_result_bound` float cases: `ftmpName` results use `left` + `ftmpName_not_isTmp`; `floatToInt` uses `right` (produces `tmpName`)
+- `refCompileBool_vars_bound` `fcmp`: mirrors `cmp` exactly
+- **5 remaining**: `refCompileExpr_correct`, `refCompileBool_correct`, `refCompileStmt_correct` float cases require generalizing theorem from `.int` to `.float` result wrapping — blocked on `refCompileExpr_float_correct` infrastructure
