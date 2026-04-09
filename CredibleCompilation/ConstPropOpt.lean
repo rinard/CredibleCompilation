@@ -188,9 +188,13 @@ def optimize (prog : Prog) : ECertificate :=
   let consts := analyze prog
   let trans := transformProg prog consts
   let inv := buildInvariants consts
+  -- Remove unreachable PCs using trans reachability (trans has simplified gotos)
+  let reached := _root_.reachable trans
+  let orig := _root_.removeByMask prog reached
+  let trans := _root_.removeByMask trans reached
   let instrCerts := _root_.buildInstrCerts1to1 trans
   let haltCerts := _root_.buildHaltCerts instrCerts trans
-  { orig := prog
+  { orig := orig
     trans := trans
     inv_orig := inv
     inv_trans := inv

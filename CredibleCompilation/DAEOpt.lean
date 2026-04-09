@@ -195,6 +195,24 @@ def transformProg (prog : Prog) (deadPCs : Array Bool) : Prog :=
   { code := arr.toArray, tyCtx := prog.tyCtx, observable := prog.observable,
     arrayDecls := prog.arrayDecls }
 
+/-- Simplify ifgotos whose condition is determined by ConstProp analysis. -/
+def simplifyKnownBranches (prog : Prog)
+    (consts : Array (Option ConstPropOpt.ConstMap)) : Prog :=
+  let arr := (List.range prog.size).map fun pc =>
+    match prog[pc]? with
+    | some (.ifgoto b l) =>
+      match consts[pc]? with
+      | some (some cm) =>
+        match ConstPropOpt.evalBoolConst cm b with
+        | some true  => .goto l
+        | some false => .goto (pc + 1)
+        | none       => .ifgoto b l
+      | _ => .ifgoto b l
+    | some instr => instr
+    | none => .halt
+  { code := arr.toArray, tyCtx := prog.tyCtx, observable := prog.observable,
+    arrayDecls := prog.arrayDecls }
+
 -- ============================================================
 -- § 5. Expression relation computation
 -- ============================================================
@@ -305,11 +323,13 @@ def optimize (prog : Prog) : ECertificate :=
   let liveOut := analyzeLiveness prog
   let consts := ConstPropOpt.analyze prog
   let deadPCs := findDeadPCs prog liveOut consts
-  let trans := transformProg prog deadPCs
-  let rels := computeRels prog deadPCs consts
+  let trans0 := transformProg prog deadPCs
+  let constsT := ConstPropOpt.analyze trans0
+  let rels := computeRels prog deadPCs constsT
   let inv_orig := ConstPropOpt.buildInvariants consts
-  let constsT := ConstPropOpt.analyze trans
   let inv_trans := ConstPropOpt.buildInvariants constsT
+  -- Simplify ifgotos with known conditions
+  let trans := simplifyKnownBranches trans0 consts
   let instrCerts := buildInstrCerts trans rels
   let haltCerts := (List.range trans.size).map fun i =>
     { pc_orig := i, rel := rels.getD i ([] : EExprRel) : EHaltCert }

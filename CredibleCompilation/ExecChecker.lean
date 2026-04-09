@@ -411,6 +411,44 @@ def checkInvAtom (inv_pre : EInv) (instr : TAC) (atom : Var × Expr) : Bool :=
   let rhs := (atom.2.substSym ss).simplify inv_pre
   lhs == rhs
 
+/-- Compute reachable PCs from PC 0 via successor edges. -/
+private partial def reachLoop (prog : Prog)
+    (visited : Array Bool) (worklist : List Nat) : Array Bool :=
+  match worklist with
+  | [] => visited
+  | pc :: rest =>
+    if pc < prog.size && !(visited.getD pc false) then
+      let visited' := visited.set! pc true
+      let succs := match prog[pc]? with
+        | some instr => successors instr pc
+        | none => []
+      reachLoop prog visited' (succs ++ rest)
+    else reachLoop prog visited rest
+
+/-- Compute which PCs are reachable from PC 0. -/
+def reachable (prog : Prog) : Array Bool :=
+  reachLoop prog (Array.replicate prog.size false) (0 :: [])
+
+/-- Replace unreachable instructions with `halt`.  Halts have no successors,
+    so invariant and transition checks are vacuously satisfied. -/
+def removeUnreachable (prog : Prog) : Prog :=
+  let reached := reachable prog
+  let arr := (List.range prog.size).map fun pc =>
+    if reached.getD pc false then
+      match prog[pc]? with | some i => i | none => .halt
+    else .halt
+  { code := arr.toArray, tyCtx := prog.tyCtx,
+    observable := prog.observable, arrayDecls := prog.arrayDecls }
+
+/-- Replace instructions at specific PCs with `halt`, using a precomputed mask. -/
+def removeByMask (prog : Prog) (reached : Array Bool) : Prog :=
+  let arr := (List.range prog.size).map fun pc =>
+    if reached.getD pc false then
+      match prog[pc]? with | some i => i | none => .halt
+    else .halt
+  { code := arr.toArray, tyCtx := prog.tyCtx,
+    observable := prog.observable, arrayDecls := prog.arrayDecls }
+
 /-- **Condition 2b**: Invariants are preserved by both programs. -/
 def checkInvariantsPreservedExec (cert : ECertificate) : Bool :=
   let checkProg (prog : Prog) (inv : Array EInv) : Bool :=
