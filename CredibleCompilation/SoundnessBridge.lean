@@ -264,10 +264,18 @@ theorem Expr.simplify_sound (inv : EInv) (e : Expr) (σ : Store) (am : ArrayMem)
     simp only [Expr.simplify, Expr.eval]
     rw [ih]
   | flit _ => rfl
-  | fbin _ _ _ => rfl
-  | fcmpE _ _ _ => rfl
-  | intToFloat _ => rfl
-  | floatToInt _ => rfl
+  | fbin _ _ _ iha ihb =>
+    simp only [Expr.simplify, Expr.eval]
+    rw [iha, ihb]
+  | fcmpE _ _ _ iha ihb =>
+    simp only [Expr.simplify, Expr.eval]
+    rw [iha, ihb]
+  | intToFloat _ ih =>
+    simp only [Expr.simplify, Expr.eval]
+    rw [ih]
+  | floatToInt _ ih =>
+    simp only [Expr.simplify, Expr.eval]
+    rw [ih]
   | farrRead arr idx ih =>
     simp only [Expr.simplify, Expr.eval]
     rw [ih]
@@ -1052,16 +1060,7 @@ private theorem BoolExpr.symEval_sound (b : BoolExpr) (ss : SymStore) (inv : EIn
       exact heval
   | fcmp op x y =>
     simp only [BoolExpr.symEval] at heval
-    generalize hsx : (ssGet ss x).simplify inv = sx at heval
-    generalize hsy : (ssGet ss y).simplify inv = sy at heval
-    cases sx <;> cases sy <;> simp at heval
-    case flit.flit a b =>
-      simp [BoolExpr.eval]
-      have hxa := Expr.simplify_sound inv (ssGet ss x) σ₀ am hinv
-      have hya := Expr.simplify_sound inv (ssGet ss y) σ₀ am hinv
-      rw [hsx, Expr.eval] at hxa; rw [hsy, Expr.eval] at hya
-      rw [← hrepr x, ← hxa, ← hrepr y, ← hya]
-      exact heval
+    exact absurd heval (by simp)
 
 /-- From checkInstrAliasOk for arrLoad, derive the no-alias condition for samGet_sound. -/
 private theorem checkInstrAliasOk_arrLoad_noalias

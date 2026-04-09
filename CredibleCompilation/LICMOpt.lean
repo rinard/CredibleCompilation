@@ -40,7 +40,14 @@ namespace LICMOpt
 def isRedundant (avail : CSEOpt.AvailSet) (instr : TAC) : Bool :=
   match instr with
   | .binop x op y z =>
-    match CSEOpt.findAvail avail op y z with
+    match CSEOpt.findAvail avail (.int op) y z with
+    | some e =>
+      e.result == x &&
+      avail.all fun e' =>
+        e'.result == x || (!(e'.lhs == x) && !(e'.rhs == x))
+    | none => false
+  | .fbinop x fop y z =>
+    match CSEOpt.findAvail avail (.float fop) y z with
     | some e =>
       e.result == x &&
       avail.all fun e' =>

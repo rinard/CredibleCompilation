@@ -28,10 +28,16 @@ namespace CSEOpt
 -- § 1. Available expressions
 -- ============================================================
 
+/-- Tag distinguishing integer vs float binary operations for CSE. -/
+inductive AvailOp where
+  | int   : BinOp → AvailOp
+  | float : FloatBinOp → AvailOp
+  deriving Repr, BEq
+
 /-- An available expression entry: `result := lhs op rhs`.
     `invExpr` is the fully-expanded form for the certificate invariant. -/
 structure AvailEntry where
-  op      : BinOp
+  op      : AvailOp
   lhs     : Var
   rhs     : Var
   result  : Var
@@ -49,8 +55,12 @@ def exprRefsVar (e : Expr) (x : Var) : Bool :=
   match e with
   | .var v     => v == x
   | .bin _ a b => exprRefsVar a x || exprRefsVar b x
+  | .fbin _ a b => exprRefsVar a x || exprRefsVar b x
+  | .intToFloat a => exprRefsVar a x
+  | .floatToInt a => exprRefsVar a x
   | .lit _     => false
   | .blit _    => false
+  | .flit _    => false
   | _          => false
 
 /-- Kill all entries that reference variable `x` as operand, result,
@@ -59,7 +69,7 @@ def killVar (avail : AvailSet) (x : Var) : AvailSet :=
   avail.filter fun e => !(e.lhs == x || e.rhs == x || e.result == x || exprRefsVar e.invExpr x)
 
 /-- Find an available computation of `lhs op rhs`. -/
-def findAvail (avail : AvailSet) (op : BinOp) (lhs rhs : Var) : Option AvailEntry :=
+def findAvail (avail : AvailSet) (op : AvailOp) (lhs rhs : Var) : Option AvailEntry :=
   avail.find? fun e => e.op == op && e.lhs == lhs && e.rhs == rhs
 
 /-- Expand a variable through the available set: if `v` is the result of
@@ -94,9 +104,17 @@ def transfer (avail : AvailSet) (instr : TAC) : AvailSet :=
     if x == y || x == z then avail'
     else
       let invExpr := Expr.bin op (expandVar avail' y) (expandVar avail' z)
-      { op, lhs := y, rhs := z, result := x, invExpr } :: avail'
+      { op := .int op, lhs := y, rhs := z, result := x, invExpr } :: avail'
+  | .fbinop x fop y z =>
+    let avail' := killVar avail x
+    if x == y || x == z then avail'
+    else
+      let invExpr := Expr.fbin fop (expandVar avail' y) (expandVar avail' z)
+      { op := .float fop, lhs := y, rhs := z, result := x, invExpr } :: avail'
   | .boolop x _        => killVar avail x
   | .arrLoad x _ _ _   => killVar avail x
+  | .intToFloat x _    => killVar avail x
+  | .floatToInt x _    => killVar avail x
   | _ => avail
 
 -- ============================================================
@@ -146,7 +164,11 @@ def analyze (prog : Prog) : Array (Option AvailSet) :=
 def transformInstr (avail : AvailSet) (instr : TAC) : TAC :=
   match instr with
   | .binop x op y z =>
-    match findAvail avail op y z with
+    match findAvail avail (.int op) y z with
+    | some e => if x == e.result then instr else .copy x e.result
+    | none   => instr
+  | .fbinop x fop y z =>
+    match findAvail avail (.float fop) y z with
     | some e => if x == e.result then instr else .copy x e.result
     | none   => instr
   | other => other
