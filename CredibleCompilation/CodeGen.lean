@@ -3,6 +3,7 @@ import CredibleCompilation.Parser
 import CredibleCompilation.ConstPropOpt
 import CredibleCompilation.CSEOpt
 import CredibleCompilation.LICMOpt
+import CredibleCompilation.ConstHoistOpt
 import CredibleCompilation.DAEOpt
 import CredibleCompilation.DCEOpt
 import CredibleCompilation.PeepholeOpt
@@ -470,7 +471,7 @@ def applyPass (name : String) (pass : Prog → ECertificate) (p : Prog) : Except
   else .error s!"optimization certificate check failed for {name}"
 
 /-- Apply each optimization pass in sequence:
-    ConstProp → DCE → DAE → CSE → LICM → RegAlloc → Peephole.
+    ConstProp → DCE → DAE → CSE → LICM → ConstHoist → Peephole.
     Each pass is checked by the executable certificate checker. -/
 def optimizePipeline (p : Prog) : Except String Prog := do
   let p ← applyPass "ConstProp" ConstPropOpt.optimize p
@@ -478,6 +479,7 @@ def optimizePipeline (p : Prog) : Except String Prog := do
   let p ← applyPass "DAE" DAEOpt.optimize p
   let p ← applyPass "CSE" CSEOpt.optimize p
   let p ← applyPass "LICM" LICMOpt.optimize p
+  let p ← applyPass "ConstHoist" ConstHoistOpt.optimize p
   let p ← applyPass "Peephole" PeepholeOpt.optimize p
   .ok p
 
