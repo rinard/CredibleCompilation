@@ -187,6 +187,9 @@ def Stmt.intSafe (fuel : Nat) (σ : Store) (am : ArrayMem) (decls : List (ArrayN
   | .fassign _ e => ∀ v ∈ e.freeVars, ∃ n, σ v = .int n
   | .farrWrite _ idx val => (∀ v ∈ idx.freeVars, ∃ n, σ v = .int n) ∧
                             (∀ v ∈ val.freeVars, ∃ n, σ v = .int n)
+  | .label _ => True
+  | .goto _ => True
+  | .ifgoto b _ => ∀ v ∈ b.exprFreeVars, ∃ n, σ v = .int n
 
 -- ============================================================
 -- § 2. Reference compiler definitions
@@ -366,6 +369,11 @@ def refCompileStmt (s : Stmt) (offset nextTmp : Nat) : List TAC × Nat :=
     let (codeIdx, vIdx, tmp1) := refCompileExpr idx offset nextTmp
     let (codeVal, vVal, tmp2) := refCompileExpr val (offset + codeIdx.length) tmp1
     (codeIdx ++ codeVal ++ [.arrStore arr vIdx vVal .float], tmp2)
+  | .label _ => ([], nextTmp)
+  | .goto _ => ([.goto 0], nextTmp)  -- ref compiler doesn't resolve labels
+  | .ifgoto b _ =>
+    let (codeB, be, tmpB) := refCompileBool b offset nextTmp
+    (codeB ++ [.ifgoto be 0], tmpB)
 
 def refCompile (s : Stmt) : Prog :=
   let (code, _) := refCompileStmt s 0 0

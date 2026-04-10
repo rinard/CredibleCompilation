@@ -52,6 +52,9 @@ def Stmt.allVars : Stmt → List Var
   | .loop b body => b.freeVars ++ body.allVars
   | .fassign x e => x :: e.freeVars
   | .farrWrite _ idx val => idx.freeVars ++ val.freeVars
+  | .label _ => []
+  | .goto _ => []
+  | .ifgoto b _ => b.freeVars
 
 def Stmt.tmpFree (s : Stmt) : Prop := ∀ v ∈ s.allVars, v.isTmp = false
 def Stmt.ftmpFree (s : Stmt) : Prop := ∀ v ∈ s.allVars, v.isFTmp = false
@@ -207,177 +210,203 @@ theorem Stmt.interp_tmpAgree (s : Stmt) (fuel : Nat) (σ τ : Store) (am : Array
       (∀ v, v.isTmp = false → σ' v = τ' v) ∧ am'' = am' := by
   induction s generalizing fuel σ τ σ' am am' with
   | skip =>
-    simp only [Stmt.interp, Option.some.injEq, Prod.mk.injEq] at h
+    simp only [Stmt.interp] at h
     obtain ⟨rfl, rfl⟩ := h
     exact ⟨τ, am, by simp [Stmt.interp], hagree, rfl⟩
   | assign x e =>
+    unfold Stmt.tmpFree Stmt.allVars at htf
     have htf_e : ∀ v ∈ e.freeVars, v.isTmp = false :=
-      fun w hw => htf w (List.mem_cons_of_mem x hw)
-    have hiSafe_eq : e.isSafe σ am decls = e.isSafe τ am decls :=
+      fun v hv => htf v (List.mem_cons_of_mem x hv)
+    have heval : e.eval σ am = e.eval τ am := SExpr.eval_tmpAgree e σ τ am hagree htf_e
+    have hsafe : e.isSafe σ am decls = e.isSafe τ am decls :=
       SExpr.isSafe_tmpAgree e σ τ am decls hagree htf_e
     simp only [Stmt.interp] at h
-    by_cases hiSafe : e.isSafe σ am decls
-    · simp [hiSafe] at h; obtain ⟨rfl, rfl⟩ := h
-      refine ⟨τ[x ↦ .int (e.eval τ am)], am, by simp [Stmt.interp, ← hiSafe_eq, hiSafe], ?_, rfl⟩
-      intro v hv; simp only [Store.update]; split
-      · exact congrArg (Value.int ·) (SExpr.eval_tmpAgree e σ τ am hagree htf_e)
-      · exact hagree v hv
-    · simp [hiSafe] at h
+    split at h
+    · rename_i hs
+      obtain ⟨rfl, rfl⟩ := h
+      refine ⟨τ[x ↦ .int (e.eval τ am)], am, ?_, ?_, rfl⟩
+      · simp only [Stmt.interp]; rw [← hsafe]; simp [hs]
+      · intro v hv; simp only [Store.update]; split
+        · rw [heval]
+        · exact hagree v hv
+    · simp at h
   | bassign x b =>
+    unfold Stmt.tmpFree Stmt.allVars at htf
     have htf_b : ∀ v ∈ b.freeVars, v.isTmp = false :=
-      fun w hw => htf w (List.mem_cons_of_mem x hw)
-    have hiSafe_eq : b.isSafe σ am decls = b.isSafe τ am decls :=
+      fun v hv => htf v (List.mem_cons_of_mem x hv)
+    have heval : b.eval σ am = b.eval τ am := SBool.eval_tmpAgree b σ τ am hagree htf_b
+    have hsafe : b.isSafe σ am decls = b.isSafe τ am decls :=
       SBool.isSafe_tmpAgree b σ τ am decls hagree htf_b
     simp only [Stmt.interp] at h
-    by_cases hiSafe : b.isSafe σ am decls
-    · simp [hiSafe] at h; obtain ⟨rfl, rfl⟩ := h
-      refine ⟨τ[x ↦ .bool (b.eval τ am)], am, by simp [Stmt.interp, ← hiSafe_eq, hiSafe], ?_, rfl⟩
-      intro v hv; simp only [Store.update]; split
-      · exact congrArg (Value.bool ·) (SBool.eval_tmpAgree b σ τ am hagree htf_b)
-      · exact hagree v hv
-    · simp [hiSafe] at h
+    split at h
+    · rename_i hs
+      obtain ⟨rfl, rfl⟩ := h
+      refine ⟨τ[x ↦ .bool (b.eval τ am)], am, ?_, ?_, rfl⟩
+      · simp only [Stmt.interp]; rw [← hsafe]; simp [hs]
+      · intro v hv; simp only [Store.update]; split
+        · rw [heval]
+        · exact hagree v hv
+    · simp at h
   | arrWrite arr idx val =>
+    unfold Stmt.tmpFree Stmt.allVars at htf
     have htf_idx : ∀ v ∈ idx.freeVars, v.isTmp = false :=
       fun v hv => htf v (List.mem_append_left _ hv)
     have htf_val : ∀ v ∈ val.freeVars, v.isTmp = false :=
       fun v hv => htf v (List.mem_append_right _ hv)
-    have hiSafe_idx : idx.isSafe σ am decls = idx.isSafe τ am decls :=
+    have heval_idx : idx.eval σ am = idx.eval τ am := SExpr.eval_tmpAgree idx σ τ am hagree htf_idx
+    have heval_val : val.eval σ am = val.eval τ am := SExpr.eval_tmpAgree val σ τ am hagree htf_val
+    have hsafe_idx : idx.isSafe σ am decls = idx.isSafe τ am decls :=
       SExpr.isSafe_tmpAgree idx σ τ am decls hagree htf_idx
-    have hiSafe_val : val.isSafe σ am decls = val.isSafe τ am decls :=
+    have hsafe_val : val.isSafe σ am decls = val.isSafe τ am decls :=
       SExpr.isSafe_tmpAgree val σ τ am decls hagree htf_val
-    have heval_idx : idx.eval σ am = idx.eval τ am :=
-      SExpr.eval_tmpAgree idx σ τ am hagree htf_idx
-    have heval_val : val.eval σ am = val.eval τ am :=
-      SExpr.eval_tmpAgree val σ τ am hagree htf_val
-    simp only [Stmt.interp] at h ⊢
-    rw [← hiSafe_idx, ← hiSafe_val, ← heval_idx, ← heval_val]
-    by_cases hc : idx.isSafe σ am decls && val.isSafe σ am decls && decide ((idx.eval σ am) < arraySizeBv decls arr)
-    · simp [hc] at h; obtain ⟨rfl, rfl⟩ := h
-      exact ⟨τ, am.write arr (idx.eval σ am) (val.eval σ am), by simp [hc], hagree, rfl⟩
-    · simp [hc] at h
+    simp only [Stmt.interp] at h
+    split at h
+    · rename_i hs
+      obtain ⟨rfl, rfl⟩ := h
+      simp [Bool.and_eq_true, decide_eq_true_eq] at hs
+      refine ⟨τ, am.write arr (idx.eval τ am) (val.eval τ am), ?_, hagree, ?_⟩
+      · simp only [Stmt.interp]
+        rw [← hsafe_idx, ← hsafe_val, ← heval_idx]
+        simp [hs.1.1, hs.1.2, hs.2]
+      · rw [heval_idx, heval_val]
+    · simp at h
   | barrWrite arr idx bval =>
-    have htf_idx : ∀ v ∈ idx.freeVars, v.isTmp = false :=
+    unfold Stmt.tmpFree Stmt.allVars at htf
+    have htf_idx : ∀ v ∈ (idx : SExpr).freeVars, v.isTmp = false :=
       fun v hv => htf v (List.mem_append_left _ hv)
     have htf_bval : ∀ v ∈ bval.freeVars, v.isTmp = false :=
       fun v hv => htf v (List.mem_append_right _ hv)
-    have hiSafe_idx : (idx : SExpr).isSafe σ am decls = (idx : SExpr).isSafe τ am decls :=
-      SExpr.isSafe_tmpAgree idx σ τ am decls hagree htf_idx
-    have hiSafe_bval : bval.isSafe σ am decls = bval.isSafe τ am decls :=
-      SBool.isSafe_tmpAgree bval σ τ am decls hagree htf_bval
-    have heval_idx : idx.eval σ am = idx.eval τ am :=
+    have heval_idx : (idx : SExpr).eval σ am = (idx : SExpr).eval τ am :=
       SExpr.eval_tmpAgree idx σ τ am hagree htf_idx
-    have heval_bval : bval.eval σ am = bval.eval τ am :=
-      SBool.eval_tmpAgree bval σ τ am hagree htf_bval
-    simp only [Stmt.interp] at h ⊢
-    rw [← hiSafe_idx, ← hiSafe_bval, ← heval_idx, ← heval_bval]
-    by_cases hc : (idx : SExpr).isSafe σ am decls && bval.isSafe σ am decls && decide ((idx.eval σ am) < arraySizeBv decls arr)
-    · simp [hc] at h; obtain ⟨rfl, rfl⟩ := h
-      exact ⟨τ, am.write arr (idx.eval σ am) (if bval.eval σ am then 1 else 0),
-             by simp [hc], hagree, rfl⟩
-    · simp [hc] at h
-  | seq s₁ s₂ ih₁ ih₂ =>
+    have heval_bval : bval.eval σ am = bval.eval τ am := SBool.eval_tmpAgree bval σ τ am hagree htf_bval
+    have hsafe_idx : (idx : SExpr).isSafe σ am decls = (idx : SExpr).isSafe τ am decls :=
+      SExpr.isSafe_tmpAgree idx σ τ am decls hagree htf_idx
+    have hsafe_bval : bval.isSafe σ am decls = bval.isSafe τ am decls :=
+      SBool.isSafe_tmpAgree bval σ τ am decls hagree htf_bval
     simp only [Stmt.interp] at h
-    cases hq : s₁.interp fuel σ am decls with
-    | none => simp [hq] at h
-    | some p₁ =>
-      simp [hq] at h
-      have htf₁ : s₁.tmpFree := fun v hv => htf v (List.mem_append_left _ hv)
-      have htf₂ : s₂.tmpFree := fun v hv => htf v (List.mem_append_right _ hv)
-      obtain ⟨τ₁, am₁, hτ₁, hagree₁, ham₁⟩ := ih₁ fuel σ τ am hagree htf₁ p₁.1 p₁.2 hq
-      subst ham₁
-      obtain ⟨τ', am'', hτ', hagree', ham'⟩ := ih₂ fuel p₁.1 τ₁ p₁.2 hagree₁ htf₂ σ' am' h
-      refine ⟨τ', am'', ?_, hagree', ham'⟩
-      simp only [Stmt.interp]; rw [hτ₁]; simp [hτ']
-  | ite b s₁ s₂ ih₁ ih₂ =>
+    split at h
+    · rename_i hs
+      simp [Bool.and_eq_true, decide_eq_true_eq] at hs
+      simp at h; obtain ⟨rfl, rfl⟩ := h
+      refine ⟨τ, am.write arr (idx.eval τ am) (if bval.eval τ am then 1 else 0), ?_, hagree, ?_⟩
+      · simp only [Stmt.interp]
+        rw [← hsafe_idx, ← hsafe_bval, ← heval_idx]
+        simp [hs.1.1, hs.1.2, hs.2]
+      · simp [heval_idx, heval_bval]
+    · simp at h
+  | seq s1 s2 ih1 ih2 =>
+    have htf1 : s1.tmpFree := fun v hv => htf v (List.mem_append_left _ hv)
+    have htf2 : s2.tmpFree := fun v hv => htf v (List.mem_append_right _ hv)
+    simp only [Stmt.interp, bind, Option.bind] at h
+    cases h1 : s1.interp fuel σ am decls with
+    | none => simp [h1] at h
+    | some p =>
+      obtain ⟨σ₁, am₁⟩ := p
+      simp [h1] at h
+      obtain ⟨τ₁, am₁', h1', hagree', rfl⟩ := ih1 (htf := htf1) (hagree := hagree) (h := h1)
+      obtain ⟨τ₂, am₂', h2', hagree'', rfl⟩ := ih2 (htf := htf2) (hagree := hagree') (h := h)
+      exact ⟨τ₂, am₂', by simp only [Stmt.interp, bind, Option.bind]; simp [h1', h2'], hagree'', rfl⟩
+  | ite b s1 s2 ih1 ih2 =>
+    unfold Stmt.tmpFree Stmt.allVars at htf
     have htf_b : ∀ v ∈ b.freeVars, v.isTmp = false :=
       fun v hv => htf v (List.mem_append_left _ (List.mem_append_left _ hv))
-    have hbool : b.eval σ am = b.eval τ am := SBool.eval_tmpAgree b σ τ am hagree htf_b
-    have hiSafe_b : b.isSafe σ am decls = b.isSafe τ am decls :=
+    have htf1 : s1.tmpFree :=
+      fun v hv => htf v (List.mem_append_left _ (List.mem_append_right _ hv))
+    have htf2 : s2.tmpFree := fun v hv => htf v (List.mem_append_right _ hv)
+    have heval : b.eval σ am = b.eval τ am := SBool.eval_tmpAgree b σ τ am hagree htf_b
+    have hsafe : b.isSafe σ am decls = b.isSafe τ am decls :=
       SBool.isSafe_tmpAgree b σ τ am decls hagree htf_b
     simp only [Stmt.interp] at h
-    by_cases hbs : b.isSafe σ am decls
-    · simp [hbs] at h
-      cases hb : b.eval σ am with
-      | true =>
-        simp [hb] at h
-        have htf₁ : s₁.tmpFree :=
-          fun v hv => htf v (List.mem_append_left _ (List.mem_append_right _ hv))
-        obtain ⟨τ', am'', hτ', hagree', ham'⟩ := ih₁ fuel σ τ am hagree htf₁ σ' am' h
-        exact ⟨τ', am'', by simp [Stmt.interp, ← hiSafe_b, hbs, ← hbool, hb, hτ'], hagree', ham'⟩
-      | false =>
-        simp [hb] at h
-        have htf₂ : s₂.tmpFree := fun v hv => htf v (List.mem_append_right _ hv)
-        obtain ⟨τ', am'', hτ', hagree', ham'⟩ := ih₂ fuel σ τ am hagree htf₂ σ' am' h
-        exact ⟨τ', am'', by simp [Stmt.interp, ← hiSafe_b, hbs, ← hbool, hb, hτ'], hagree', ham'⟩
-    · simp [hbs] at h
-  | loop b body ih =>
+    split at h
+    · rename_i hbs
+      cases heval' : b.eval σ am
+      · simp [heval'] at h
+        obtain ⟨τ', am'', h', hagree', rfl⟩ := ih2 (htf := htf2) (hagree := hagree) (h := h)
+        refine ⟨τ', am'', ?_, hagree', rfl⟩
+        simp only [Stmt.interp]; rw [← hsafe]; simp [hbs, ← heval, heval', h']
+      · simp [heval'] at h
+        obtain ⟨τ', am'', h', hagree', rfl⟩ := ih1 (htf := htf1) (hagree := hagree) (h := h)
+        refine ⟨τ', am'', ?_, hagree', rfl⟩
+        simp only [Stmt.interp]; rw [← hsafe]; simp [hbs, ← heval, heval', h']
+    · simp at h
+  | loop b body ihb =>
+    unfold Stmt.tmpFree Stmt.allVars at htf
     have htf_b : ∀ v ∈ b.freeVars, v.isTmp = false :=
       fun v hv => htf v (List.mem_append_left _ hv)
+    have htf_body : body.tmpFree := fun v hv => htf v (List.mem_append_right _ hv)
     induction fuel generalizing σ τ σ' am am' with
-    | zero => simp [Stmt.interp] at h
-    | succ fuel' ihf =>
-      have hbool : b.eval σ am = b.eval τ am := SBool.eval_tmpAgree b σ τ am hagree htf_b
-      have hiSafe_b : b.isSafe σ am decls = b.isSafe τ am decls :=
+    | zero => simp only [Stmt.interp] at h; simp at h
+    | succ fuel' ih_fuel =>
+      have heval : b.eval σ am = b.eval τ am := SBool.eval_tmpAgree b σ τ am hagree htf_b
+      have hsafe : b.isSafe σ am decls = b.isSafe τ am decls :=
         SBool.isSafe_tmpAgree b σ τ am decls hagree htf_b
       simp only [Stmt.interp] at h
-      by_cases hbs : b.isSafe σ am decls
-      · simp [hbs] at h
-        cases hb : b.eval σ am with
-        | true =>
-          simp [hb] at h
-          cases hq : body.interp fuel' σ am decls with
-          | none => simp [hq] at h
-          | some p₁ =>
-            simp [hq] at h
-            have htf_body : body.tmpFree :=
-              fun v hv => htf v (List.mem_append_right _ hv)
-            obtain ⟨τ₁, am₁, hτ₁, hagree₁, ham₁⟩ := ih fuel' σ τ am hagree htf_body p₁.1 p₁.2 hq
-            subst ham₁
-            obtain ⟨τ', am'', hτ', hagree', ham'⟩ := ihf p₁.1 τ₁ p₁.2 hagree₁ σ' am' h
-            refine ⟨τ', am'', ?_, hagree', ham'⟩
-            simp [Stmt.interp, ← hiSafe_b, hbs, ← hbool, hb, hτ₁, hτ']
-        | false =>
-          simp [hb] at h
+      split at h
+      · rename_i hbs
+        cases heval' : b.eval σ am
+        · simp [heval'] at h
           obtain ⟨rfl, rfl⟩ := h
           refine ⟨τ, am, ?_, hagree, rfl⟩
-          simp [Stmt.interp, ← hiSafe_b, hbs, ← hbool, hb]
-      · simp [hbs] at h
+          simp only [Stmt.interp]; rw [← hsafe]; simp [hbs, ← heval, heval']
+        · simp [heval'] at h
+          cases h_body : body.interp fuel' σ am decls with
+          | none => simp [h_body] at h
+          | some p =>
+            obtain ⟨σ₁, am₁⟩ := p
+            simp [h_body] at h
+            obtain ⟨τ₁, am₁', h_body', hagree', rfl⟩ :=
+              ihb (htf := htf_body) (hagree := hagree) (h := h_body)
+            obtain ⟨τ₂, am₂', h_loop', hagree'', rfl⟩ :=
+              ih_fuel (hagree := hagree') (h := h)
+            refine ⟨τ₂, am₂', ?_, hagree'', rfl⟩
+            simp only [Stmt.interp]; rw [← hsafe]; simp [hbs, ← heval, heval', h_body', h_loop']
+      · simp at h
   | fassign x e =>
+    unfold Stmt.tmpFree Stmt.allVars at htf
     have htf_e : ∀ v ∈ e.freeVars, v.isTmp = false :=
-      fun w hw => htf w (List.mem_cons_of_mem x hw)
-    have hiSafe_eq : e.isSafe σ am decls = e.isSafe τ am decls :=
+      fun v hv => htf v (List.mem_cons_of_mem x hv)
+    have heval : e.eval σ am = e.eval τ am := SExpr.eval_tmpAgree e σ τ am hagree htf_e
+    have hsafe : e.isSafe σ am decls = e.isSafe τ am decls :=
       SExpr.isSafe_tmpAgree e σ τ am decls hagree htf_e
     simp only [Stmt.interp] at h
-    by_cases hiSafe : e.isSafe σ am decls
-    · simp [hiSafe] at h; obtain ⟨rfl, rfl⟩ := h
-      refine ⟨τ[x ↦ .float (e.eval τ am)], am, by simp [Stmt.interp, ← hiSafe_eq, hiSafe], ?_, rfl⟩
-      intro v hv; simp only [Store.update]; split
-      · exact congrArg (Value.float ·) (SExpr.eval_tmpAgree e σ τ am hagree htf_e)
-      · exact hagree v hv
-    · simp [hiSafe] at h
+    split at h
+    · rename_i hs
+      obtain ⟨rfl, rfl⟩ := h
+      refine ⟨τ[x ↦ .float (e.eval τ am)], am, ?_, ?_, rfl⟩
+      · simp only [Stmt.interp]; rw [← hsafe]; simp [hs, heval]
+      · intro v hv; simp only [Store.update]; split
+        · rw [heval]
+        · exact hagree v hv
+    · simp at h
   | farrWrite arr idx val =>
+    unfold Stmt.tmpFree Stmt.allVars at htf
     have htf_idx : ∀ v ∈ idx.freeVars, v.isTmp = false :=
       fun v hv => htf v (List.mem_append_left _ hv)
     have htf_val : ∀ v ∈ val.freeVars, v.isTmp = false :=
       fun v hv => htf v (List.mem_append_right _ hv)
-    have hiSafe_idx : idx.isSafe σ am decls = idx.isSafe τ am decls :=
+    have heval_idx : idx.eval σ am = idx.eval τ am := SExpr.eval_tmpAgree idx σ τ am hagree htf_idx
+    have heval_val : val.eval σ am = val.eval τ am := SExpr.eval_tmpAgree val σ τ am hagree htf_val
+    have hsafe_idx : idx.isSafe σ am decls = idx.isSafe τ am decls :=
       SExpr.isSafe_tmpAgree idx σ τ am decls hagree htf_idx
-    have hiSafe_val : val.isSafe σ am decls = val.isSafe τ am decls :=
+    have hsafe_val : val.isSafe σ am decls = val.isSafe τ am decls :=
       SExpr.isSafe_tmpAgree val σ τ am decls hagree htf_val
-    have heval_idx : idx.eval σ am = idx.eval τ am :=
-      SExpr.eval_tmpAgree idx σ τ am hagree htf_idx
-    have heval_val : val.eval σ am = val.eval τ am :=
-      SExpr.eval_tmpAgree val σ τ am hagree htf_val
     simp only [Stmt.interp] at h
     split at h
-    · simp at h; obtain ⟨rfl, rfl⟩ := h
-      simp only [Bool.and_eq_true, decide_eq_true_eq] at *
-      rename_i hcond
-      obtain ⟨⟨hs_i, hs_v⟩, hb⟩ := hcond
+    · rename_i hs
+      simp at h; obtain ⟨rfl, rfl⟩ := h
+      simp [Bool.and_eq_true, decide_eq_true_eq] at hs
       refine ⟨τ, am.write arr (idx.eval τ am) (val.eval τ am), ?_, hagree, ?_⟩
-      · simp [Stmt.interp, ← hiSafe_idx, ← hiSafe_val, hs_i, hs_v, ← heval_idx, hb]
+      · simp only [Stmt.interp]
+        rw [← hsafe_idx, ← hsafe_val, ← heval_idx]
+        simp [hs.1.1, hs.1.2, hs.2]
       · rw [heval_idx, heval_val]
     · simp at h
+  | label _ =>
+    simp only [Stmt.interp] at h
+    obtain ⟨rfl, rfl⟩ := h
+    exact ⟨τ, am, by simp [Stmt.interp], hagree, rfl⟩
+  | goto _ => simp only [Stmt.interp] at h; simp at h
+  | ifgoto _ _ => simp only [Stmt.interp] at h; simp at h
 
 -- ============================================================
 -- § 4. Safety (division + bounds)
@@ -437,6 +466,9 @@ def Stmt.safe (fuel : Nat) (σ : Store) (am : ArrayMem)
   | .fassign _ e => e.safe σ am decls
   | .farrWrite arr idx val =>
     idx.safe σ am decls ∧ val.safe σ am decls ∧ (idx.eval σ am) < arraySizeBv decls arr
+  | .label _ => True
+  | .goto _ => True
+  | .ifgoto b _ => b.safe σ am decls
 
 -- ============================================================
 -- § 4a. isSafe → safe bridge
@@ -500,85 +532,91 @@ theorem SBool.isSafe_implies_safe (sb : SBool) (σ : Store) (am : ArrayMem) (dec
 theorem Stmt.interp_some_implies_safe (s : Stmt) (fuel : Nat)
     (σ σ' : Store) (am am' : ArrayMem) (decls) :
     s.interp fuel σ am decls = some (σ', am') → s.safe fuel σ am decls := by
-  induction s generalizing fuel σ σ' am am' with
-  | skip => intro _; simp [Stmt.safe]
-  | assign _ e =>
-    intro h; simp only [Stmt.interp] at h; simp only [Stmt.safe]
-    split at h
-    · exact SExpr.isSafe_implies_safe e σ am decls ‹_›
-    · simp at h
-  | bassign _ b =>
-    intro h; simp only [Stmt.interp] at h; simp only [Stmt.safe]
-    split at h
-    · exact SBool.isSafe_implies_safe b σ am decls ‹_›
-    · simp at h
+  induction s generalizing fuel σ am σ' am' with
+  | skip => intro; simp only [Stmt.safe]
+  | assign x e =>
+    intro h; simp only [Stmt.interp] at h
+    split at h <;> simp at h
+    rename_i hs
+    simp only [Stmt.safe]
+    exact SExpr.isSafe_implies_safe e σ am decls hs
+  | bassign x b =>
+    intro h; simp only [Stmt.interp] at h
+    split at h <;> simp at h
+    rename_i hs
+    simp only [Stmt.safe]
+    exact SBool.isSafe_implies_safe b σ am decls hs
   | arrWrite arr idx val =>
-    intro h; simp only [Stmt.interp] at h; simp only [Stmt.safe]
-    split at h
-    · rename_i hc; simp only [Bool.and_eq_true, decide_eq_true_eq] at hc
-      exact ⟨SExpr.isSafe_implies_safe idx σ am decls hc.1.1,
-             SExpr.isSafe_implies_safe val σ am decls hc.1.2, hc.2⟩
-    · simp at h
+    intro h; simp only [Stmt.interp] at h
+    split at h <;> simp at h
+    rename_i hs
+    simp [Bool.and_eq_true, decide_eq_true_eq] at hs
+    simp only [Stmt.safe]
+    exact ⟨SExpr.isSafe_implies_safe idx σ am decls hs.1.1,
+           SExpr.isSafe_implies_safe val σ am decls hs.1.2, hs.2⟩
   | barrWrite arr idx bval =>
-    intro h; simp only [Stmt.interp] at h; simp only [Stmt.safe]
-    split at h
-    · rename_i hc; simp only [Bool.and_eq_true, decide_eq_true_eq] at hc
-      exact ⟨SExpr.isSafe_implies_safe idx σ am decls hc.1.1,
-             SBool.isSafe_implies_safe bval σ am decls hc.1.2, hc.2⟩
-    · simp at h
-  | seq s₁ s₂ ih₁ ih₂ =>
     intro h; simp only [Stmt.interp] at h
-    cases hq : s₁.interp fuel σ am decls with
-    | none => simp [hq] at h
-    | some p₁ =>
-      simp [hq] at h
-      simp only [Stmt.safe, hq]
-      exact ⟨ih₁ fuel σ p₁.1 am p₁.2 hq, ih₂ fuel p₁.1 σ' p₁.2 am' h⟩
-  | ite b s₁ s₂ ih₁ ih₂ =>
-    intro h; simp only [Stmt.interp] at h
-    split at h
-    · rename_i hbs
-      have hbs_safe := SBool.isSafe_implies_safe b σ am decls hbs
+    split at h <;> simp at h
+    rename_i hs
+    simp [Bool.and_eq_true, decide_eq_true_eq] at hs
+    simp only [Stmt.safe]
+    exact ⟨SExpr.isSafe_implies_safe idx σ am decls hs.1.1,
+           SBool.isSafe_implies_safe bval σ am decls hs.1.2, hs.2⟩
+  | seq s1 s2 ih1 ih2 =>
+    intro h; simp only [Stmt.interp, bind, Option.bind] at h
+    cases h1 : s1.interp fuel σ am decls with
+    | none => simp [h1] at h
+    | some p =>
+      obtain ⟨σ₁, am₁⟩ := p
+      simp [h1] at h
       simp only [Stmt.safe]
-      cases hb : b.eval σ am with
-      | true => simp [hb] at h; exact ⟨hbs_safe, by simp [hb]; exact ih₁ fuel σ σ' am am' h⟩
-      | false => simp [hb] at h; exact ⟨hbs_safe, by simp [hb]; exact ih₂ fuel σ σ' am am' h⟩
+      refine ⟨ih1 fuel σ σ₁ am am₁ h1, ?_⟩
+      rw [h1]; exact ih2 fuel σ₁ σ' am₁ am' h
+  | ite b s1 s2 ih1 ih2 =>
+    intro h; simp only [Stmt.interp] at h
+    split at h <;> rename_i hbs
+    · simp only [Stmt.safe]
+      refine ⟨SBool.isSafe_implies_safe b σ am decls hbs, ?_⟩
+      cases heval : b.eval σ am <;> simp [heval] at h ⊢
+      · exact ih2 fuel σ σ' am am' h
+      · exact ih1 fuel σ σ' am am' h
     · simp at h
-  | loop b body ih =>
-    intro h
-    induction fuel generalizing σ σ' am am' with
-    | zero => simp [Stmt.interp] at h
-    | succ fuel' ihf =>
+  | loop b body ihb =>
+    induction fuel generalizing σ am σ' am' with
+    | zero => intro h; simp only [Stmt.interp] at h; simp at h
+    | succ fuel' ih_fuel =>
+      intro h
       simp only [Stmt.interp] at h
-      split at h
-      · rename_i hbs
-        have hbs_safe := SBool.isSafe_implies_safe b σ am decls hbs
-        simp only [Stmt.safe]
-        cases hb : b.eval σ am with
-        | false =>
-          simp [hb] at h
-          exact ⟨hbs_safe, by simp [hb]⟩
-        | true =>
-          simp [hb] at h
-          cases hq : body.interp fuel' σ am decls with
-          | none => simp [hq] at h
-          | some p₁ =>
-            simp [hq] at h
-            refine ⟨hbs_safe, ?_⟩; simp [hb]; refine ⟨ih fuel' σ p₁.1 am p₁.2 hq, ?_⟩
-            exact ihf p₁.1 σ' p₁.2 am' h
+      split at h <;> rename_i hbs
+      · rw [Stmt.safe.eq_9]
+        refine ⟨SBool.isSafe_implies_safe b σ am decls hbs, ?_⟩
+        cases heval : b.eval σ am <;> simp [heval] at h ⊢
+        cases h_body : body.interp fuel' σ am decls with
+        | none => simp [h_body] at h
+        | some p =>
+          obtain ⟨σ₁, am₁⟩ := p
+          simp [h_body] at h
+          refine ⟨ihb fuel' σ σ₁ am am₁ h_body, ?_⟩
+          simp [h_body]
+          exact ih_fuel σ₁ σ' am₁ am' h
       · simp at h
-  | fassign _ e =>
-    intro h; simp only [Stmt.interp] at h; simp only [Stmt.safe]
-    split at h
-    · exact SExpr.isSafe_implies_safe e σ am decls ‹_›
-    · simp at h
+  | fassign x e =>
+    intro h; simp only [Stmt.interp] at h
+    split at h <;> simp at h
+    rename_i hs
+    simp only [Stmt.safe]
+    exact SExpr.isSafe_implies_safe e σ am decls hs
   | farrWrite arr idx val =>
-    intro h; simp only [Stmt.interp] at h; simp only [Stmt.safe]
-    split at h
-    · rename_i hc; simp only [Bool.and_eq_true, decide_eq_true_eq] at hc
-      exact ⟨SExpr.isSafe_implies_safe idx σ am decls hc.1.1,
-             SExpr.isSafe_implies_safe val σ am decls hc.1.2, hc.2⟩
-    · simp at h
+    intro h; simp only [Stmt.interp] at h
+    split at h <;> simp at h
+    rename_i hs
+    simp [Bool.and_eq_true, decide_eq_true_eq] at hs
+    simp only [Stmt.safe]
+    exact ⟨SExpr.isSafe_implies_safe idx σ am decls hs.1.1,
+           SExpr.isSafe_implies_safe val σ am decls hs.1.2, hs.2⟩
+  | label _ => intro; simp only [Stmt.safe]
+  | goto _ => intro h; simp only [Stmt.interp] at h; simp at h
+  | ifgoto _ _ => intro h; simp only [Stmt.interp] at h; simp at h
 
 -- ============================================================
 -- § 4b. Integer typing (all arithmetic-position variables have int values)
@@ -618,6 +656,9 @@ def Stmt.typedVars (fuel : Nat) (σ : Store) (am : ArrayMem)
   | .farrWrite _ idx val =>
     (idx.typedVars σ am ∧ idx.wrapEval σ am = .int (idx.eval σ am)) ∧
     (val.typedVars σ am ∧ val.wrapEval σ am = .float (val.eval σ am))
+  | .label _ => True
+  | .goto _ => True
+  | .ifgoto b _ => b.typedVars σ am
 
 -- ============================================================
 -- § 4c. Bridge: typeCheck → tmpFree
@@ -822,7 +863,7 @@ theorem checkExpr_typedVars {lookup : Var → Option VarTy}
     | .float =>
       simp [Program.checkExpr] at hchk
       have ⟨htv_e, _, hwf_e⟩ := ih hchk
-      exact ⟨sorry, fun h => absurd h (by decide), fun _ => rfl⟩
+      exact ⟨⟨hwf_e rfl, htv_e⟩, fun h => absurd h (by decide), fun _ => rfl⟩
     | .int => simp [Program.checkExpr] at hchk
     | .bool => simp [Program.checkExpr] at hchk
   | farrRead _arr idx ih =>
@@ -883,18 +924,20 @@ private theorem checkStmt_declared {lookup : Var → Option VarTy}
   induction s with
   | skip => intro v hv; simp [Stmt.allVars] at hv
   | assign x e =>
-    simp [Program.checkStmt, Bool.and_eq_true] at h
+    simp [Program.checkStmt, Bool.and_eq_true, beq_iff_eq] at h
+    obtain ⟨hx, he⟩ := h
     intro v hv; simp [Stmt.allVars] at hv
-    rcases hv with rfl | he
-    · exact ⟨.int, h.1⟩
-    · exact checkSExpr_declared h.2 v he
+    rcases hv with rfl | hv
+    · exact ⟨.int, hx⟩
+    · exact checkSExpr_declared he v hv
   | bassign x b =>
-    simp [Program.checkStmt, Bool.and_eq_true] at h
+    simp [Program.checkStmt, Bool.and_eq_true, beq_iff_eq] at h
+    obtain ⟨hx, hb⟩ := h
     intro v hv; simp [Stmt.allVars] at hv
-    rcases hv with rfl | hb
-    · exact ⟨.bool, h.1⟩
-    · exact checkSBool_declared h.2 v hb
-  | arrWrite _ idx val =>
+    rcases hv with rfl | hv
+    · exact ⟨.bool, hx⟩
+    · exact checkSBool_declared hb v hv
+  | arrWrite arr idx val =>
     simp [Program.checkStmt, Bool.and_eq_true] at h
     obtain ⟨⟨_, hi⟩, hv⟩ := h
     intro v hv'; simp [Stmt.allVars] at hv'
@@ -904,43 +947,52 @@ private theorem checkStmt_declared {lookup : Var → Option VarTy}
   | barrWrite arr idx bval =>
     simp [Program.checkStmt, Bool.and_eq_true] at h
     obtain ⟨⟨_, hi⟩, hb⟩ := h
-    intro v hv'; simp [Stmt.allVars] at hv'
-    rcases hv' with hi' | hb'
+    intro v hv; simp [Stmt.allVars] at hv
+    rcases hv with hi' | hb'
     · exact checkSExpr_declared hi v hi'
     · exact checkSBool_declared hb v hb'
   | seq s1 s2 ih1 ih2 =>
     simp [Program.checkStmt, Bool.and_eq_true] at h
+    obtain ⟨h1, h2⟩ := h
     intro v hv; simp [Stmt.allVars] at hv
-    rcases hv with h1 | h2
-    · exact ih1 h.1 v h1
-    · exact ih2 h.2 v h2
+    rcases hv with hv1 | hv2
+    · exact ih1 h1 v hv1
+    · exact ih2 h2 v hv2
   | ite b s1 s2 ih1 ih2 =>
     simp [Program.checkStmt, Bool.and_eq_true] at h
     obtain ⟨⟨hb, h1⟩, h2⟩ := h
     intro v hv; simp [Stmt.allVars] at hv
-    rcases hv with hfb | h1v | h2v
-    · exact checkSBool_declared hb v hfb
-    · exact ih1 h1 v h1v
-    · exact ih2 h2 v h2v
+    rcases hv with hb' | hv1 | hv2
+    · exact checkSBool_declared hb v hb'
+    · exact ih1 h1 v hv1
+    · exact ih2 h2 v hv2
   | loop b body ih =>
     simp [Program.checkStmt, Bool.and_eq_true] at h
+    obtain ⟨hb, hbody⟩ := h
     intro v hv; simp [Stmt.allVars] at hv
-    rcases hv with hfb | hbv
-    · exact checkSBool_declared h.1 v hfb
-    · exact ih h.2 v hbv
+    rcases hv with hb' | hv'
+    · exact checkSBool_declared hb v hb'
+    · exact ih hbody v hv'
   | fassign x e =>
-    simp [Program.checkStmt, Bool.and_eq_true] at h
+    simp [Program.checkStmt, Bool.and_eq_true, beq_iff_eq] at h
+    obtain ⟨hx, he⟩ := h
     intro v hv; simp [Stmt.allVars] at hv
-    rcases hv with rfl | he
-    · exact ⟨.float, h.1⟩
-    · exact checkExpr_declared h.2 v he
-  | farrWrite _ idx val =>
+    rcases hv with rfl | hv
+    · exact ⟨.float, hx⟩
+    · exact checkExpr_declared he v hv
+  | farrWrite arr idx val =>
     simp [Program.checkStmt, Bool.and_eq_true] at h
     obtain ⟨⟨_, hi⟩, hv⟩ := h
     intro v hv'; simp [Stmt.allVars] at hv'
     rcases hv' with hi' | hv'
-    · exact checkExpr_declared hi v hi'
+    · exact checkSExpr_declared hi v hi'
     · exact checkExpr_declared hv v hv'
+  | label _ => intro v hv; simp [Stmt.allVars] at hv
+  | goto _ => intro v hv; simp [Stmt.allVars] at hv
+  | ifgoto b _ =>
+    simp [Program.checkStmt] at h
+    intro v hv; simp [Stmt.allVars] at hv
+    exact checkSBool_declared h v hv
 
 /-- **Bridge lemma**: A type-checked program's body is tmp-free — no variable
     in the source program uses the compiler-reserved `__t` prefix. -/
@@ -982,83 +1034,81 @@ theorem Stmt.interp_preserves_typedStore
     TypedStore Γ σ' := by
   induction s generalizing fuel σ σ' am am' with
   | skip =>
-    simp [Stmt.interp] at hinterp; obtain ⟨rfl, _⟩ := hinterp; exact hts
+    simp only [Stmt.interp] at hinterp
+    obtain ⟨rfl, _⟩ := Option.some.inj hinterp; exact hts
   | assign x e =>
     simp only [Stmt.interp] at hinterp
-    split at hinterp
-    · simp at hinterp; obtain ⟨rfl, _⟩ := hinterp
-      simp [Program.checkStmt, Bool.and_eq_true] at hchk
-      intro y; simp [Store.update]; split
-      · case isTrue heq => simp [heq, Value.typeOf_int, hcompat _ .int hchk.1]
-      · case isFalse => exact hts y
-    · simp at hinterp
+    split at hinterp <;> simp at hinterp
+    obtain ⟨rfl, _⟩ := hinterp
+    simp [Program.checkStmt, Bool.and_eq_true, beq_iff_eq] at hchk
+    exact TypedStore.update_typed hts (by simp [Value.typeOf, hcompat x .int hchk.1])
   | bassign x b =>
     simp only [Stmt.interp] at hinterp
-    split at hinterp
-    · simp at hinterp; obtain ⟨rfl, _⟩ := hinterp
-      simp [Program.checkStmt, Bool.and_eq_true] at hchk
-      intro y; simp [Store.update]; split
-      · case isTrue heq => simp [heq, Value.typeOf_bool, hcompat _ .bool hchk.1]
-      · case isFalse => exact hts y
-    · simp at hinterp
+    split at hinterp <;> simp at hinterp
+    obtain ⟨rfl, _⟩ := hinterp
+    simp [Program.checkStmt, Bool.and_eq_true, beq_iff_eq] at hchk
+    exact TypedStore.update_typed hts (by simp [Value.typeOf, hcompat x .bool hchk.1])
   | arrWrite _ _ _ =>
     simp only [Stmt.interp] at hinterp
-    split at hinterp
-    · simp at hinterp; obtain ⟨rfl, _⟩ := hinterp; exact hts
-    · simp at hinterp
+    split at hinterp <;> simp at hinterp
+    obtain ⟨rfl, _⟩ := hinterp; exact hts
   | barrWrite _ _ _ =>
     simp only [Stmt.interp] at hinterp
-    split at hinterp
-    · simp at hinterp; obtain ⟨rfl, _⟩ := hinterp; exact hts
-    · simp at hinterp
+    split at hinterp <;> simp at hinterp
+    obtain ⟨rfl, _⟩ := hinterp; exact hts
   | seq s1 s2 ih1 ih2 =>
     simp [Program.checkStmt, Bool.and_eq_true] at hchk
-    simp [Stmt.interp] at hinterp
-    cases hq : s1.interp fuel σ am arrayDecls with
-    | none => simp [hq] at hinterp
-    | some p₁ =>
-      simp [hq] at hinterp
-      exact ih2 hchk.2 (ih1 hchk.1 hts hq) hinterp
+    obtain ⟨hc1, hc2⟩ := hchk
+    simp only [Stmt.interp, bind, Option.bind] at hinterp
+    cases h1 : s1.interp fuel σ am arrayDecls with
+    | none => simp [h1] at hinterp
+    | some p =>
+      obtain ⟨σ₁, am₁⟩ := p
+      simp [h1] at hinterp
+      exact ih2 (hchk := hc2) (hts := ih1 (hchk := hc1) (hts := hts) h1) hinterp
   | ite b s1 s2 ih1 ih2 =>
     simp [Program.checkStmt, Bool.and_eq_true] at hchk
-    obtain ⟨⟨_, h1⟩, h2⟩ := hchk
+    obtain ⟨⟨_, hc1⟩, hc2⟩ := hchk
     simp only [Stmt.interp] at hinterp
     split at hinterp
-    · cases hcond : b.eval σ am with
-      | true => simp [hcond] at hinterp; exact ih1 h1 hts hinterp
-      | false => simp [hcond] at hinterp; exact ih2 h2 hts hinterp
+    · cases heval : b.eval σ am
+      · simp [heval] at hinterp
+        exact ih2 (hchk := hc2) (hts := hts) hinterp
+      · simp [heval] at hinterp
+        exact ih1 (hchk := hc1) (hts := hts) hinterp
     · simp at hinterp
-  | loop b body ih =>
+  | loop b body ihb =>
+    simp [Program.checkStmt, Bool.and_eq_true] at hchk
+    obtain ⟨_, hcbody⟩ := hchk
     induction fuel generalizing σ σ' am am' with
-    | zero => simp [Stmt.interp] at hinterp
-    | succ fuel' ihf =>
-      simp [Program.checkStmt, Bool.and_eq_true] at hchk
+    | zero => simp only [Stmt.interp] at hinterp; simp at hinterp
+    | succ fuel' ih_fuel =>
       simp only [Stmt.interp] at hinterp
       split at hinterp
-      · cases hcond : b.eval σ am with
-        | false => simp [hcond] at hinterp; obtain ⟨rfl, _⟩ := hinterp; exact hts
-        | true =>
-          simp [hcond] at hinterp
-          cases hq : body.interp fuel' σ am arrayDecls with
-          | none => simp [hq] at hinterp
-          | some p₁ =>
-            simp [hq] at hinterp
-            exact ihf (ih hchk.2 hts hq) hinterp
+      · cases heval : b.eval σ am <;> simp [heval] at hinterp
+        · obtain ⟨rfl, rfl⟩ := hinterp; exact hts
+        · cases h_body : body.interp fuel' σ am arrayDecls with
+          | none => simp [h_body] at hinterp
+          | some p =>
+            obtain ⟨σ₁, am₁⟩ := p
+            simp [h_body] at hinterp
+            exact ih_fuel (ihb (hchk := hcbody) (hts := hts) h_body) hinterp
       · simp at hinterp
   | fassign x e =>
     simp only [Stmt.interp] at hinterp
-    split at hinterp
-    · simp at hinterp; obtain ⟨rfl, _⟩ := hinterp
-      simp [Program.checkStmt, Bool.and_eq_true] at hchk
-      intro y; simp [Store.update]; split
-      · case isTrue heq => simp [heq, Value.typeOf_float, hcompat _ .float hchk.1]
-      · case isFalse => exact hts y
-    · simp at hinterp
+    split at hinterp <;> simp at hinterp
+    obtain ⟨rfl, _⟩ := hinterp
+    simp [Program.checkStmt, Bool.and_eq_true, beq_iff_eq] at hchk
+    exact TypedStore.update_typed hts (by simp [Value.typeOf, hcompat x .float hchk.1])
   | farrWrite _ _ _ =>
     simp only [Stmt.interp] at hinterp
-    split at hinterp
-    · simp at hinterp; obtain ⟨rfl, _⟩ := hinterp; exact hts
-    · simp at hinterp
+    split at hinterp <;> simp at hinterp
+    obtain ⟨rfl, _⟩ := hinterp; exact hts
+  | label _ =>
+    simp only [Stmt.interp] at hinterp
+    obtain ⟨rfl, _⟩ := Option.some.inj hinterp; exact hts
+  | goto _ => simp only [Stmt.interp] at hinterp; simp at hinterp
+  | ifgoto _ _ => simp only [Stmt.interp] at hinterp; simp at hinterp
 
 -- ============================================================
 -- § 4e. Bridge: typeCheck + TypedStore → typedVars
@@ -1109,24 +1159,26 @@ theorem checkStmt_typedVars
     (hts : TypedStore Γ σ) :
     s.typedVars fuel σ am arrayDecls := by
   induction s generalizing fuel σ am with
-  | skip => simp [Stmt.typedVars]
+  | skip => simp only [Stmt.typedVars]
   | assign x e =>
-    simp [Program.checkStmt, Bool.and_eq_true] at hchk
+    simp [Program.checkStmt, Bool.and_eq_true, beq_iff_eq] at hchk
+    obtain ⟨_, he⟩ := hchk
     simp only [Stmt.typedVars]
-    have ⟨htv, hwi, _⟩ := checkExpr_typedVars (am := am) hcompat hchk.2 hts
+    have ⟨htv, hwi, _⟩ := checkExpr_typedVars (am := am) hcompat he hts
     exact ⟨htv, hwi rfl⟩
   | bassign x b =>
     simp [Program.checkStmt, Bool.and_eq_true] at hchk
+    obtain ⟨_, hb⟩ := hchk
     simp only [Stmt.typedVars]
-    exact checkSBool_typedVars hcompat hchk.2 hts
-  | arrWrite _ idx val =>
+    exact checkSBool_typedVars hcompat hb hts
+  | arrWrite arr idx val =>
     simp [Program.checkStmt, Bool.and_eq_true] at hchk
     obtain ⟨⟨_, hi⟩, hv⟩ := hchk
     simp only [Stmt.typedVars]
     have ⟨htv_i, hwi_i, _⟩ := checkExpr_typedVars (am := am) hcompat hi hts
     have ⟨htv_v, hwi_v, _⟩ := checkExpr_typedVars (am := am) hcompat hv hts
     exact ⟨⟨htv_i, hwi_i rfl⟩, ⟨htv_v, hwi_v rfl⟩⟩
-  | barrWrite _ idx bval =>
+  | barrWrite arr idx bval =>
     simp [Program.checkStmt, Bool.and_eq_true] at hchk
     obtain ⟨⟨_, hi⟩, hb⟩ := hchk
     simp only [Stmt.typedVars]
@@ -1134,46 +1186,56 @@ theorem checkStmt_typedVars
     exact ⟨⟨htv_i, hwi_i rfl⟩, checkSBool_typedVars hcompat hb hts⟩
   | seq s1 s2 ih1 ih2 =>
     simp [Program.checkStmt, Bool.and_eq_true] at hchk
+    obtain ⟨hc1, hc2⟩ := hchk
     simp only [Stmt.typedVars]
-    refine ⟨ih1 σ am fuel hchk.1 hts, ?_⟩
-    cases hq : s1.interp fuel σ am arrayDecls with
-    | none => simp [hq]
-    | some p₁ =>
-        exact ih2 p₁.1 p₁.2 fuel hchk.2 (Stmt.interp_preserves_typedStore hcompat hchk.1 hts hq)
+    refine ⟨ih1 σ am fuel hc1 hts, ?_⟩
+    cases h1 : s1.interp fuel σ am arrayDecls with
+    | none => trivial
+    | some p =>
+      obtain ⟨σ₁, am₁⟩ := p
+      exact ih2 σ₁ am₁ fuel hc2 (Stmt.interp_preserves_typedStore hcompat hc1 hts h1)
   | ite b s1 s2 ih1 ih2 =>
     simp [Program.checkStmt, Bool.and_eq_true] at hchk
-    obtain ⟨⟨hb, h1⟩, h2⟩ := hchk
+    obtain ⟨⟨hb, hc1⟩, hc2⟩ := hchk
     simp only [Stmt.typedVars]
     refine ⟨checkSBool_typedVars hcompat hb hts, ?_⟩
     cases b.eval σ am <;> simp
-    · exact ih2 σ am fuel h2 hts
-    · exact ih1 σ am fuel h1 hts
+    · exact ih2 σ am fuel hc2 hts
+    · exact ih1 σ am fuel hc1 hts
   | loop b body ih =>
     induction fuel generalizing σ am with
-    | zero => simp [Stmt.typedVars]
-    | succ fuel' ihf =>
+    | zero => simp [Stmt.typedVars.eq_8]
+    | succ fuel' ih_fuel =>
+      rw [Stmt.typedVars.eq_9]
       simp [Program.checkStmt, Bool.and_eq_true] at hchk
-      simp only [Stmt.typedVars]
-      refine ⟨checkSBool_typedVars hcompat hchk.1 hts, ?_⟩
-      cases hcond : b.eval σ am <;> simp [hcond]
-      refine ⟨ih σ am fuel' hchk.2 hts, ?_⟩
-      cases hq : body.interp fuel' σ am arrayDecls with
-      | none => simp [hq]
-      | some p₁ =>
-        simp [hq]
-        exact ihf p₁.1 p₁.2 (Stmt.interp_preserves_typedStore hcompat hchk.2 hts hq)
+      obtain ⟨hb, hcbody⟩ := hchk
+      refine ⟨checkSBool_typedVars hcompat hb hts, ?_⟩
+      cases heval : b.eval σ am <;> simp [heval]
+      refine ⟨ih σ am fuel' hcbody hts, ?_⟩
+      cases h_body : body.interp fuel' σ am arrayDecls with
+      | none => trivial
+      | some p =>
+        obtain ⟨σ₁, am₁⟩ := p
+        exact ih_fuel σ₁ am₁ (Stmt.interp_preserves_typedStore hcompat hcbody hts h_body)
   | fassign x e =>
-    simp [Program.checkStmt, Bool.and_eq_true] at hchk
+    simp [Program.checkStmt, Bool.and_eq_true, beq_iff_eq] at hchk
+    obtain ⟨_, he⟩ := hchk
     simp only [Stmt.typedVars]
-    have ⟨htv, _, hwf⟩ := checkExpr_typedVars (am := am) hcompat hchk.2 hts
+    have ⟨htv, _, hwf⟩ := checkExpr_typedVars (am := am) hcompat he hts
     exact ⟨htv, hwf rfl⟩
-  | farrWrite _ idx val =>
+  | farrWrite arr idx val =>
     simp [Program.checkStmt, Bool.and_eq_true] at hchk
     obtain ⟨⟨_, hi⟩, hv⟩ := hchk
     simp only [Stmt.typedVars]
     have ⟨htv_i, hwi_i, _⟩ := checkExpr_typedVars (am := am) hcompat hi hts
     have ⟨htv_v, _, hwf_v⟩ := checkExpr_typedVars (am := am) hcompat hv hts
     exact ⟨⟨htv_i, hwi_i rfl⟩, ⟨htv_v, hwf_v rfl⟩⟩
+  | label _ => simp only [Stmt.typedVars]
+  | goto _ => simp only [Stmt.typedVars]
+  | ifgoto b _ =>
+    simp [Program.checkStmt] at hchk
+    simp only [Stmt.typedVars]
+    exact checkSBool_typedVars hcompat hchk hts
 
 /-- **Bridge lemma**: A type-checked program with a well-typed store satisfies typedVars. -/
 theorem Program.typeCheck_typedVars (prog : Program) (h : prog.typeCheck = true)

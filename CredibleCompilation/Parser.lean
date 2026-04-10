@@ -36,7 +36,7 @@ inductive Token where
 
 private def keywords : List String :=
   ["var", "array", "int", "bool", "float", "if", "else", "while", "skip", "true", "false",
-   "intToFloat", "floatToInt", "exp"]
+   "intToFloat", "floatToInt", "exp", "goto"]
 
 private def spanDigits : List Char → List Char × List Char
   | c :: rest => if c.isDigit then let (d, r) := spanDigits rest; (c :: d, r) else ([], c :: rest)
@@ -300,9 +300,11 @@ partial def parseStmtAtom (toks : List Token) : Except String (Stmt × List Toke
         let (b, rest'') ← parseBOr rest
         .ok (.bassign x b, rest'')
       | _ => .ok (.assign x e, rest')
+  | Token.kw "goto" :: Token.ident lbl :: rest => .ok (.goto lbl, rest)
   | Token.kw "if" :: rest => do
     let (cond, rest') ← parseBExprParen rest
     match rest' with
+    | Token.kw "goto" :: Token.ident lbl :: rest'' => .ok (.ifgoto cond lbl, rest'')
     | Token.lbrace :: rest'' => do
       let (s1, rest''') ← parseStmt rest''
       match rest''' with
@@ -312,7 +314,7 @@ partial def parseStmtAtom (toks : List Token) : Except String (Stmt × List Toke
         | Token.rbrace :: rest6 => .ok (.ite cond s1 s2, rest6)
         | _ => .error "expected '}' after else branch"
       | _ => .error "expected '} else {'"
-    | _ => .error "expected '{' after if condition"
+    | _ => .error "expected '{' or 'goto' after if condition"
   | Token.kw "while" :: rest => do
     let (cond, rest') ← parseBExprParen rest
     match rest' with
@@ -322,6 +324,7 @@ partial def parseStmtAtom (toks : List Token) : Except String (Stmt × List Toke
       | Token.rbrace :: rest4 => .ok (.loop cond body, rest4)
       | _ => .error "expected '}' after while body"
     | _ => .error "expected '{' after while condition"
+  | Token.ident lbl :: Token.colon :: rest => .ok (.label lbl, rest)
   | tok :: _ => .error s!"expected statement, got {repr tok}"
   | [] => .error "expected statement, got end of input"
 
@@ -490,6 +493,9 @@ private partial def resolveStmt (lookupVar : Var → Option VarTy)
   | .fassign x e => .fassign x (resolveSExpr lookupVar lookupArr e)
   | .farrWrite arr idx val =>
     .farrWrite arr (resolveSExpr lookupVar lookupArr idx) (resolveSExpr lookupVar lookupArr val)
+  | .label lbl => .label lbl
+  | .goto lbl => .goto lbl
+  | .ifgoto b lbl => .ifgoto (resolveSBool lookupVar lookupArr b) lbl
 
 /-- Parse a string into a `Program`. -/
 def parseProgram (input : String) : Except String Program := do

@@ -42,32 +42,28 @@ theorem compileBool_eq_refCompileBool (b : SBool) (o t : Nat) :
 theorem compileStmt_eq_refCompileStmt (s : Stmt) (o t : Nat) :
     compileStmt s o t = refCompileStmt s o t := by
   induction s generalizing o t with
-  | skip => rfl
+  | skip | label _ => rfl
   | assign x e =>
-    cases e with
-    | lit _ => rfl
-    | var _ => rfl
-    | bin op a b => simp only [compileStmt, refCompileStmt, compileExpr_eq_refCompileExpr]
-    | arrRead _ _ => simp only [compileStmt, refCompileStmt, compileExpr_eq_refCompileExpr]
-    | flit _ | fbin _ _ _ | intToFloat _ | floatToInt _ | floatExp _ | farrRead _ _ =>
-      simp only [compileStmt, refCompileStmt, compileExpr_eq_refCompileExpr]
-  | bassign x b => simp only [compileStmt, refCompileStmt, compileBool_eq_refCompileBool]
-  | fassign x e =>
-    cases e with
-    | flit _ => rfl
-    | var _ => rfl
-    | fbin op a b => simp only [compileStmt, refCompileStmt, compileExpr_eq_refCompileExpr]
-    | intToFloat e => simp only [compileStmt, refCompileStmt, compileExpr_eq_refCompileExpr]
-    | floatExp e => simp only [compileStmt, refCompileStmt, compileExpr_eq_refCompileExpr]
-    | farrRead arr idx => simp only [compileStmt, refCompileStmt, compileExpr_eq_refCompileExpr]
-    | _ => simp only [compileStmt, refCompileStmt, compileExpr_eq_refCompileExpr]
-  | arrWrite _ _ _ => simp only [compileStmt, refCompileStmt, compileExpr_eq_refCompileExpr]
-  | farrWrite _ _ _ => simp only [compileStmt, refCompileStmt, compileExpr_eq_refCompileExpr]
-  | barrWrite _ _ _ =>
+    cases e <;> simp only [compileStmt, refCompileStmt, compileExpr_eq_refCompileExpr]
+  | bassign x b =>
+    simp only [compileStmt, refCompileStmt, compileBool_eq_refCompileBool]
+  | arrWrite arr idx val =>
+    simp only [compileStmt, refCompileStmt, compileExpr_eq_refCompileExpr]
+  | barrWrite arr idx bval =>
     simp only [compileStmt, refCompileStmt, compileExpr_eq_refCompileExpr, compileBool_eq_refCompileBool]
-  | seq s1 s2 ih1 ih2 => simp only [compileStmt, refCompileStmt, ih1, ih2]
-  | ite b s1 s2 ih1 ih2 => simp only [compileStmt, refCompileStmt, compileBool_eq_refCompileBool, ih1, ih2]
-  | loop b body ih => simp only [compileStmt, refCompileStmt, compileBool_eq_refCompileBool, ih]
+  | seq s1 s2 ih1 ih2 =>
+    simp only [compileStmt, refCompileStmt, ih1, ih2]
+  | ite b s1 s2 ih1 ih2 =>
+    simp only [compileStmt, refCompileStmt, compileBool_eq_refCompileBool, ih1, ih2]
+  | loop b body ih =>
+    simp only [compileStmt, refCompileStmt, compileBool_eq_refCompileBool, ih]
+  | fassign x e =>
+    cases e <;> simp only [compileStmt, refCompileStmt, compileExpr_eq_refCompileExpr]
+  | farrWrite arr idx val =>
+    simp only [compileStmt, refCompileStmt, compileExpr_eq_refCompileExpr]
+  | goto lbl => simp [compileStmt, refCompileStmt]
+  | ifgoto b lbl =>
+    simp [compileStmt, refCompileStmt, compileBool_eq_refCompileBool]
 -- ============================================================
 -- § 16. Refinement for Program.compile (with init code)
 -- ============================================================

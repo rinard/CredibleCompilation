@@ -64,6 +64,9 @@ inductive Stmt where
   | loop     : SBool → Stmt → Stmt
   | fassign   : Var → SExpr → Stmt               -- float assignment
   | farrWrite : ArrayName → SExpr → SExpr → Stmt  -- float arr[idx] := val
+  | label    : String → Stmt                      -- label declaration (goto target)
+  | goto     : String → Stmt                      -- unconditional jump
+  | ifgoto   : SBool → String → Stmt             -- conditional jump
   deriving Repr
 
 -- Syntactic sugar
@@ -221,6 +224,9 @@ def Stmt.interp (fuel : Nat) (σ : Store) (am : ArrayMem)
        decide ((idx.eval σ am) < arraySizeBv decls arr)
     then some (σ, am.write arr (idx.eval σ am) (val.eval σ am))
     else none
+  | .label _ => some (σ, am)  -- no-op: label declarations are compilation markers
+  | .goto _ => none           -- cannot interpret goto without whole-program context
+  | .ifgoto _ _ => none       -- cannot interpret ifgoto without whole-program context
 
 -- ============================================================
 -- § 3. Compiler: While language → TAC (pure functional)
@@ -349,9 +355,70 @@ def compileBool (b : SBool) (offset nextTmp : Nat) : List TAC × BoolExpr × Nat
     let (codeB, vb, tmp2) := compileExpr b (offset + codeA.length) tmp1
     (codeA ++ codeB, .fcmp op va vb, tmp2)
 
+/-- Compute code length of a compiled expression (offset-independent). -/
+def exprCodeLen : SExpr → Nat
+  | .lit _ | .flit _ => 1
+  | .var _ => 0
+  | .bin _ a b | .fbin _ a b => exprCodeLen a + exprCodeLen b + 1
+  | .arrRead _ idx | .farrRead _ idx => exprCodeLen idx + 1
+  | .intToFloat e | .floatToInt e | .floatExp e => exprCodeLen e + 1
+
+/-- Compute code length of a compiled boolean expression (offset-independent). -/
+def boolCodeLen : SBool → Nat
+  | .lit _ | .bvar _ => 0
+  | .cmp _ a b => exprCodeLen a + exprCodeLen b
+  | .fcmp _ a b => exprCodeLen a + exprCodeLen b
+  | .not e => boolCodeLen e
+  | .and a b => boolCodeLen a + 1 + boolCodeLen b + 4
+  | .or a b => boolCodeLen a + 1 + boolCodeLen b + 4
+  | .barrRead _ idx => exprCodeLen idx + 1
+
+/-- Compute code length of a compiled statement (offset- and label-independent). -/
+def stmtCodeLen : Stmt → Nat
+  | .skip => 0
+  | .assign _ e =>
+    match e with
+    | .lit _ | .var _ => 1
+    | .bin _ a b => exprCodeLen a + exprCodeLen b + 1
+    | .arrRead _ idx => exprCodeLen idx + 2
+    | _ => exprCodeLen e + 1
+  | .bassign _ b => boolCodeLen b + 1
+  | .arrWrite _ idx val => exprCodeLen idx + exprCodeLen val + 1
+  | .barrWrite _ idx bval => exprCodeLen idx + boolCodeLen bval + 5
+  | .seq s1 s2 => stmtCodeLen s1 + stmtCodeLen s2
+  | .ite b s1 s2 => boolCodeLen b + 1 + stmtCodeLen s2 + 1 + stmtCodeLen s1
+  | .loop b body => boolCodeLen b + 1 + stmtCodeLen body + 1
+  | .fassign _ e =>
+    match e with
+    | .flit _ | .var _ => 1
+    | .fbin _ a b => exprCodeLen a + exprCodeLen b + 1
+    | .intToFloat e | .floatExp e => exprCodeLen e + 1
+    | .farrRead _ idx => exprCodeLen idx + 2
+    | _ => exprCodeLen e + 1
+  | .farrWrite _ idx val => exprCodeLen idx + exprCodeLen val + 1
+  | .label _ => 0    -- labels emit no code
+  | .goto _ => 1     -- single goto instruction
+  | .ifgoto b _ => boolCodeLen b + 1  -- condition code + ifgoto
+
+/-- Collect label→PC mappings from a statement, given the starting offset. -/
+def collectLabels : Stmt → Nat → List (String × Nat)
+  | .label name, offset => [(name, offset)]
+  | .seq s1 s2, offset =>
+    collectLabels s1 offset ++ collectLabels s2 (offset + stmtCodeLen s1)
+  | .ite b s1 s2, offset =>
+    let elseStart := offset + boolCodeLen b + 1
+    let thenStart := elseStart + stmtCodeLen s2 + 1
+    collectLabels s2 elseStart ++ collectLabels s1 thenStart
+  | .loop b body, offset =>
+    let bodyStart := offset + boolCodeLen b + 1
+    collectLabels body bodyStart
+  | _, _ => []
+
 /-- Compile a statement. Returns (code, next temp index).
-    Jump targets are pre-computed from code lengths. -/
-def compileStmt (s : Stmt) (offset nextTmp : Nat) : List TAC × Nat :=
+    Jump targets are pre-computed from code lengths.
+    `labels` maps label names to their PCs (for goto/ifgoto). -/
+def compileStmt (s : Stmt) (offset nextTmp : Nat)
+    (labels : List (String × Nat) := {}) : List TAC × Nat :=
   match s with
   | .skip => ([], nextTmp)
   | .assign x e =>
@@ -392,23 +459,23 @@ def compileStmt (s : Stmt) (offset nextTmp : Nat) : List TAC × Nat :=
        TAC.const tInt (.int (1 : BitVec 64))]
     (codeIdx ++ codeBool ++ convCode ++ [.arrStore arr vIdx tInt .int], tmp2 + 1)
   | .seq s1 s2 =>
-    let (code1, tmp1) := compileStmt s1 offset nextTmp
-    let (code2, tmp2) := compileStmt s2 (offset + code1.length) tmp1
+    let (code1, tmp1) := compileStmt s1 offset nextTmp labels
+    let (code2, tmp2) := compileStmt s2 (offset + code1.length) tmp1 labels
     (code1 ++ code2, tmp2)
   | .ite b s1 s2 =>
     let (codeB, be, tmpB) := compileBool b offset nextTmp
     -- ifgoto be <then>; <else code>; goto <end>; <then code>
     let elseStart := offset + codeB.length + 1
-    let (codeElse, tmpE) := compileStmt s2 elseStart tmpB
+    let (codeElse, tmpE) := compileStmt s2 elseStart tmpB labels
     let thenStart := elseStart + codeElse.length + 1
-    let (codeThen, tmpT) := compileStmt s1 thenStart tmpE
+    let (codeThen, tmpT) := compileStmt s1 thenStart tmpE labels
     let endLabel := thenStart + codeThen.length
     (codeB ++ [.ifgoto be thenStart] ++ codeElse ++ [.goto endLabel] ++ codeThen, tmpT)
   | .loop b body =>
     let condLabel := offset
     let (codeB, be, tmpB) := compileBool b offset nextTmp
     let bodyStart := offset + codeB.length + 1
-    let (codeBody, tmpBody) := compileStmt body bodyStart tmpB
+    let (codeBody, tmpBody) := compileStmt body bodyStart tmpB labels
     let exitLabel := bodyStart + codeBody.length + 1
     (codeB ++ [.ifgoto (.not be) exitLabel] ++ codeBody ++ [.goto condLabel], tmpBody)
   | .fassign x e =>
@@ -437,11 +504,21 @@ def compileStmt (s : Stmt) (offset nextTmp : Nat) : List TAC × Nat :=
     let (codeIdx, vIdx, tmp1) := compileExpr idx offset nextTmp
     let (codeVal, vVal, tmp2) := compileExpr val (offset + codeIdx.length) tmp1
     (codeIdx ++ codeVal ++ [.arrStore arr vIdx vVal .float], tmp2)
+  | .label _ => ([], nextTmp)  -- labels emit no code; PC tracked by collectLabels
+  | .goto lbl =>
+    let target := (labels.lookup lbl).getD 0
+    ([.goto target], nextTmp)
+  | .ifgoto b lbl =>
+    let (codeB, be, tmpB) := compileBool b offset nextTmp
+    let target := (labels.lookup lbl).getD 0
+    (codeB ++ [.ifgoto be target], tmpB)
 
 /-- Compile a while-language program to a TAC program.
+    Two-pass: first collects label→PC mappings, then emits code.
     Appends `halt` at the end. -/
 def compile (s : Stmt) : Prog :=
-  let (code, _) := compileStmt s 0 0
+  let labels := collectLabels s 0
+  let (code, _) := compileStmt s 0 0 labels
   .ofCode (code ++ [TAC.halt]).toArray
 
 -- ============================================================
@@ -490,6 +567,9 @@ def Stmt.toString : Stmt → String
   | .loop b body => s!"while {b.toString} do\n  {body.toString}"
   | .fassign x e => s!"{x} := {e.toString}"
   | .farrWrite arr idx val => s!"{arr}[{idx.toString}] := {val.toString}"
+  | .label lbl => s!"{lbl}:"
+  | .goto lbl => s!"goto {lbl}"
+  | .ifgoto b lbl => s!"if {b.toString} goto {lbl}"
 
 instance : ToString Stmt := ⟨Stmt.toString⟩
 instance : ToString SExpr := ⟨SExpr.toString⟩
@@ -591,6 +671,9 @@ def checkStmt (lookup : Var → Option VarTy) (arrayDecls : List (ArrayName × N
   | .fassign x e => lookup x == some .float && checkFExpr lookup arrayDecls e
   | .farrWrite arr idx val =>
     arrayDeclared arrayDecls arr && checkSExpr lookup arrayDecls idx && checkFExpr lookup arrayDecls val
+  | .label _ => true
+  | .goto _ => true  -- label resolution checked at compile time
+  | .ifgoto b _ => checkSBool lookup arrayDecls b
 
 /-- Full static type check: no duplicate declarations, no compiler-reserved
     temporary names in declarations, and the body is well-typed w.r.t.
@@ -638,7 +721,8 @@ private def buildTyCtx (base : TyCtx) (code : Array TAC) : TyCtx :=
     Appends `halt` at the end. -/
 def compile (prog : Program) : Prog :=
   let inits := initCode prog.decls
-  let (body, _) := compileStmt prog.body inits.length 0
+  let labels := collectLabels prog.body inits.length
+  let (body, _) := compileStmt prog.body inits.length 0 labels
   let code := (inits ++ body ++ [TAC.halt]).toArray
   { code := code
     tyCtx := buildTyCtx prog.tyCtx code
@@ -847,21 +931,22 @@ theorem compile_initExec (prog : Program)
 
 /-- Index into body code within `prog.compile`. The body starts at offset `decls.length`. -/
 theorem compile_body_getElem (prog : Program) (i : Nat)
-    (hi : i < (compileStmt prog.body prog.decls.length 0).1.length) :
+    (hi : i < (compileStmt prog.body prog.decls.length 0
+      (collectLabels prog.body prog.decls.length)).1.length) :
     prog.compile[prog.decls.length + i]? =
-      (compileStmt prog.body prog.decls.length 0).1[i]? := by
-  simp only [Prog.getElem?_code, Program.compile, List.getElem?_toArray]
-  rw [List.getElem?_append_left (by rw [List.length_append, initCode_length]; omega)]
+      (compileStmt prog.body prog.decls.length 0
+        (collectLabels prog.body prog.decls.length)).1[i]? := by
+  simp only [Prog.getElem?_code, Program.compile, List.getElem?_toArray, initCode_length]
+  rw [List.getElem?_append_left (by simp [List.length_append, initCode_length]; omega)]
   rw [List.getElem?_append_right (by rw [initCode_length]; omega)]
   simp [initCode_length]
 
 /-- The halt instruction sits right after the body code in `prog.compile`. -/
 theorem compile_halt_getElem (prog : Program) :
     prog.compile[prog.decls.length +
-      (compileStmt prog.body prog.decls.length 0).1.length]? = some .halt := by
-  simp only [Prog.getElem?_code, Program.compile, List.getElem?_toArray]
-  rw [List.getElem?_append_right (by rw [List.length_append, initCode_length]; omega)]
-  simp [List.length_append, initCode_length]
+      (compileStmt prog.body prog.decls.length 0
+        (collectLabels prog.body prog.decls.length)).1.length]? = some .halt := by
+  simp [Program.compile, initCode_length, List.length_append]
 
 -- ============================================================
 -- § 5e. Executable well-typedness check for compiled output
@@ -1280,9 +1365,10 @@ theorem compileBool_wt (prog : Program)
 theorem compileStmt_wt (prog : Program)
     (hnt : Program.noTmpDecls prog.decls = true)
     (s : Stmt) (hchk : Program.checkStmt prog.lookupTy prog.arrayDecls s = true)
-    (offset nextTmp : Nat) :
-    AllWTI prog.tyCtx (compileStmt s offset nextTmp).1 := by
-  induction s generalizing offset nextTmp with
+    (offset nextTmp : Nat)
+    (labels : List (String × Nat) := []) :
+    AllWTI prog.tyCtx (compileStmt s offset nextTmp labels).1 := by
+  induction s generalizing offset nextTmp labels with
   | skip => simp [compileStmt]; exact allWTI_nil' _
   | assign x e =>
     simp [Program.checkStmt, Bool.and_eq_true] at hchk
@@ -1361,9 +1447,9 @@ theorem compileStmt_wt (prog : Program)
     simp [Program.checkStmt, Bool.and_eq_true] at hchk
     obtain ⟨hc1, hc2⟩ := hchk
     simp only [compileStmt]
-    exact allWTI_append' (ih1 hc1 offset nextTmp)
-      (ih2 hc2 (offset + (compileStmt s1 offset nextTmp).1.length)
-                (compileStmt s1 offset nextTmp).2)
+    exact allWTI_append' (ih1 hc1 offset nextTmp labels)
+      (ih2 hc2 (offset + (compileStmt s1 offset nextTmp labels).1.length)
+                (compileStmt s1 offset nextTmp labels).2 labels)
   | ite b s1 s2 ih1 ih2 =>
     simp [Program.checkStmt, Bool.and_eq_true] at hchk
     obtain ⟨⟨hcb, hc1⟩, hc2⟩ := hchk
@@ -1373,13 +1459,13 @@ theorem compileStmt_wt (prog : Program)
     -- ((((codeB ++ [ifgoto]) ++ codeElse) ++ [goto]) ++ codeThen)
     have h_else := ih2 hc2
       (offset + (compileBool b offset nextTmp).1.length + 1)
-      (compileBool b offset nextTmp).2.2
+      (compileBool b offset nextTmp).2.2 labels
     have h_then := ih1 hc1
       (offset + (compileBool b offset nextTmp).1.length + 1 +
         (compileStmt s2 (offset + (compileBool b offset nextTmp).1.length + 1)
-          (compileBool b offset nextTmp).2.2).1.length + 1)
+          (compileBool b offset nextTmp).2.2 labels).1.length + 1)
       (compileStmt s2 (offset + (compileBool b offset nextTmp).1.length + 1)
-        (compileBool b offset nextTmp).2.2).2
+        (compileBool b offset nextTmp).2.2 labels).2 labels
     exact allWTI_append'
       (allWTI_append'
         (allWTI_append'
@@ -1394,7 +1480,7 @@ theorem compileStmt_wt (prog : Program)
     simp only [compileStmt]
     have h_body := ih hcbody
       (offset + (compileBool b offset nextTmp).1.length + 1)
-      (compileBool b offset nextTmp).2.2
+      (compileBool b offset nextTmp).2.2 labels
     exact allWTI_append'
       (allWTI_append'
         (allWTI_append' hb_wt (allWTI_one (.ifgoto (.not hb_ty))))
@@ -1454,6 +1540,16 @@ theorem compileStmt_wt (prog : Program)
       (compileExpr idx offset nextTmp).2.2
     simp only [compileStmt]
     exact allWTI_append3 hi_wt hv_wt (allWTI_one (.arrStore hi_ty hv_ty))
+  | label _ =>
+    simp [compileStmt]; exact allWTI_nil' _
+  | goto lbl =>
+    simp only [compileStmt]
+    exact allWTI_one .goto
+  | ifgoto b lbl =>
+    simp [Program.checkStmt] at hchk
+    have ⟨hb_wt, hb_ty⟩ := compileBool_wt prog hnt b hchk offset nextTmp
+    simp only [compileStmt]
+    exact allWTI_append' hb_wt (allWTI_one (.ifgoto hb_ty))
 
 -- initCode produces well-typed instructions
 theorem initCode_wt (prog : Program)
@@ -1491,10 +1587,12 @@ theorem compile_wellTyped (prog : Program) (h : prog.typeCheck = true) :
   simp [typeCheck, Bool.and_eq_true] at h
   obtain ⟨⟨hnd, hnt⟩, hchk⟩ := h
   have : prog.compile.code = (initCode prog.decls ++
-      (compileStmt prog.body (initCode prog.decls).length 0).1 ++ [TAC.halt]).toArray :=
+      (compileStmt prog.body (initCode prog.decls).length 0
+        (collectLabels prog.body (initCode prog.decls).length)).1 ++ [TAC.halt]).toArray :=
     by simp [Program.compile]
   exact allWTI_toArray' this (allWTI_append3 (initCode_wt prog hnd)
-    (compileStmt_wt prog hnt prog.body hchk _ _) (allWTI_one .halt))
+    (compileStmt_wt prog hnt prog.body hchk _ _
+      (collectLabels prog.body (initCode prog.decls).length)) (allWTI_one .halt))
 
 /-- **Corollary**: A type-checked program with a well-typed initial store
     always makes progress. The next configuration may be `run`, `halt`, or
@@ -1664,11 +1762,156 @@ theorem initCode_allSeq (decls : List (Var × VarTy)) :
   intro instr hmem; simp only [initCode, List.mem_map] at hmem
   obtain ⟨⟨_, ty⟩, _, rfl⟩ := hmem; cases ty <;> trivial
 
-/-- All jump targets in compiled statement code are ≤ offset + code.length. -/
-theorem compileStmt_allJumpsLe (s : Stmt) (offset nextTmp : Nat) :
-    AllJumpsLe (offset + (compileStmt s offset nextTmp).1.length)
-      (compileStmt s offset nextTmp).1 := by
-  induction s generalizing offset nextTmp with
+/-- All values in a label map are ≤ bound. -/
+def AllLabelsLe (bound : Nat) (labels : List (String × Nat)) : Prop :=
+  ∀ k v, (k, v) ∈ labels → v ≤ bound
+
+theorem AllLabelsLe_lookup {labels : List (String × Nat)} {bound : Nat}
+    (h : AllLabelsLe bound labels) (lbl : String) :
+    (labels.lookup lbl).getD 0 ≤ bound := by
+  induction labels with
+  | nil => simp [List.lookup, Option.getD]
+  | cons p ps ih =>
+    obtain ⟨k, v⟩ := p
+    simp only [List.lookup]
+    split
+    · -- lbl = k, lookup returns some v
+      simp [Option.getD]
+      exact h k v (by simp)
+    · -- lbl ≠ k, recurse
+      exact ih (fun k' v' hmem => h k' v' (by simp [hmem]))
+
+-- Code length lemmas: static code length functions match compiled output length
+
+theorem compileExpr_length (e : SExpr) (offset nextTmp : Nat) :
+    (compileExpr e offset nextTmp).1.length = exprCodeLen e := by
+  induction e generalizing offset nextTmp with
+  | lit _ | var _ => simp [compileExpr, exprCodeLen]
+  | bin _ a b iha ihb =>
+    simp [compileExpr, exprCodeLen, List.length_append, iha, ihb]; omega
+  | flit _ => simp [compileExpr, exprCodeLen]
+  | fbin _ a b iha ihb =>
+    simp [compileExpr, exprCodeLen, List.length_append, iha, ihb]; omega
+  | arrRead _ idx ih =>
+    simp [compileExpr, exprCodeLen, List.length_append, ih]
+  | farrRead _ idx ih =>
+    simp [compileExpr, exprCodeLen, List.length_append, ih]
+  | intToFloat e ih =>
+    simp [compileExpr, exprCodeLen, List.length_append, ih]
+  | floatToInt e ih =>
+    simp [compileExpr, exprCodeLen, List.length_append, ih]
+  | floatExp e ih =>
+    simp [compileExpr, exprCodeLen, List.length_append, ih]
+
+theorem compileBool_length (b : SBool) (offset nextTmp : Nat) :
+    (compileBool b offset nextTmp).1.length = boolCodeLen b := by
+  induction b generalizing offset nextTmp with
+  | lit _ | bvar _ => simp [compileBool, boolCodeLen]
+  | cmp _ a b =>
+    simp [compileBool, boolCodeLen, List.length_append, compileExpr_length]
+  | not b ih =>
+    simp [compileBool, boolCodeLen, ih]
+  | and a b iha ihb =>
+    simp [compileBool, boolCodeLen, List.length_append, iha, ihb]; omega
+  | or a b iha ihb =>
+    simp [compileBool, boolCodeLen, List.length_append, iha, ihb]; omega
+  | barrRead _ idx =>
+    simp [compileBool, boolCodeLen, List.length_append, compileExpr_length]
+  | fcmp _ a b =>
+    simp [compileBool, boolCodeLen, List.length_append, compileExpr_length]
+
+theorem compileStmt_length (s : Stmt) (offset nextTmp : Nat)
+    (labels : List (String × Nat)) :
+    (compileStmt s offset nextTmp labels).1.length = stmtCodeLen s := by
+  induction s generalizing offset nextTmp labels with
+  | skip => simp [compileStmt, stmtCodeLen]
+  | assign x e =>
+    cases e with
+    | lit _ => simp [compileStmt, stmtCodeLen]
+    | var _ => simp [compileStmt, stmtCodeLen]
+    | bin _ a b =>
+      simp [compileStmt, stmtCodeLen, List.length_append, compileExpr_length]; omega
+    | arrRead _ idx =>
+      simp [compileStmt, stmtCodeLen, List.length_append, compileExpr_length]
+    | flit _ | fbin _ _ _ | intToFloat _ | floatExp _ | farrRead _ _ | floatToInt _ =>
+      simp [compileStmt, stmtCodeLen, List.length_append, compileExpr_length]; try omega
+  | bassign _ b =>
+    simp [compileStmt, stmtCodeLen, List.length_append, compileBool_length]
+  | arrWrite _ idx val =>
+    simp [compileStmt, stmtCodeLen, List.length_append, compileExpr_length]; omega
+  | barrWrite _ idx bval =>
+    simp [compileStmt, stmtCodeLen, List.length_append, compileExpr_length, compileBool_length]; omega
+  | seq s1 s2 ih1 ih2 =>
+    simp [compileStmt, stmtCodeLen, List.length_append, ih1, ih2]
+  | ite b s1 s2 ih1 ih2 =>
+    simp [compileStmt, stmtCodeLen, List.length_append, compileBool_length, ih1, ih2]
+    omega
+  | loop b body ih =>
+    simp [compileStmt, stmtCodeLen, List.length_append, compileBool_length, ih]
+    omega
+  | fassign x e =>
+    cases e with
+    | flit _ => simp [compileStmt, stmtCodeLen]
+    | var _ => simp [compileStmt, stmtCodeLen]
+    | fbin _ a b =>
+      simp [compileStmt, stmtCodeLen, List.length_append, compileExpr_length]; omega
+    | intToFloat e =>
+      simp [compileStmt, stmtCodeLen, List.length_append, compileExpr_length]
+    | floatExp e =>
+      simp [compileStmt, stmtCodeLen, List.length_append, compileExpr_length]
+    | farrRead _ idx =>
+      simp [compileStmt, stmtCodeLen, List.length_append, compileExpr_length]
+    | _ =>
+      simp [compileStmt, stmtCodeLen, List.length_append, compileExpr_length]
+  | farrWrite _ idx val =>
+    simp [compileStmt, stmtCodeLen, List.length_append, compileExpr_length]; omega
+  | label _ => simp [compileStmt, stmtCodeLen]
+  | goto _ => simp [compileStmt, stmtCodeLen]
+  | ifgoto b _ =>
+    simp [compileStmt, stmtCodeLen, List.length_append, compileBool_length]
+
+-- collectLabels produces label values ≤ offset + stmtCodeLen s
+theorem collectLabels_allLabelsLe (s : Stmt) (offset : Nat) :
+    AllLabelsLe (offset + stmtCodeLen s) (collectLabels s offset) := by
+  induction s generalizing offset with
+  | label name =>
+    intro k v hmem
+    simp [collectLabels, stmtCodeLen] at hmem
+    obtain ⟨rfl, rfl⟩ := hmem
+    omega
+  | seq s1 s2 ih1 ih2 =>
+    intro k v hmem
+    simp [collectLabels] at hmem
+    simp only [stmtCodeLen]
+    rcases hmem with h1 | h2
+    · have := ih1 offset k v h1; omega
+    · have := ih2 (offset + stmtCodeLen s1) k v h2; omega
+  | ite b s1 s2 ih1 ih2 =>
+    intro k v hmem
+    simp [collectLabels] at hmem
+    simp only [stmtCodeLen]
+    rcases hmem with h2 | h1
+    · have := ih2 (offset + boolCodeLen b + 1) k v h2; omega
+    · have := ih1 (offset + boolCodeLen b + 1 + stmtCodeLen s2 + 1) k v h1; omega
+  | loop b body ih =>
+    intro k v hmem
+    simp [collectLabels] at hmem
+    simp only [stmtCodeLen]
+    have := ih (offset + boolCodeLen b + 1) k v hmem; omega
+  | skip | assign _ _ | bassign _ _ | arrWrite _ _ _ | barrWrite _ _ _
+  | fassign _ _ | farrWrite _ _ _ | goto _ | ifgoto _ _ =>
+    intro k v hmem; simp [collectLabels] at hmem
+
+/-- All jump targets in compiled statement code are ≤ bound,
+    given that all label targets are also ≤ bound. -/
+theorem compileStmt_allJumpsLe (s : Stmt) (offset nextTmp : Nat)
+    (labels : List (String × Nat))
+    (bound : Nat)
+    (hbound : offset + (compileStmt s offset nextTmp labels).1.length ≤ bound)
+    (hlabels : AllLabelsLe bound labels) :
+    AllJumpsLe bound
+      (compileStmt s offset nextTmp labels).1 := by
+  induction s generalizing offset nextTmp labels bound with
   | skip => exact AllJumpsLe_nil
   | assign x e =>
     cases e with
@@ -1695,7 +1938,7 @@ theorem compileStmt_allJumpsLe (s : Stmt) (offset nextTmp : Nat) :
         · exact compileExpr_allSeq _ _ _ instr he
         · trivial)
   | bassign _ b =>
-    simp only [compileStmt, List.length_append, List.length_singleton]
+    simp only [compileStmt, List.length_append, List.length_singleton] at hbound ⊢
     exact AllJumpsLe_append
       (AllJumpsLe_mono (compileBool_allJumpsLe b offset nextTmp _ (Nat.le_refl _)) (by omega))
       (AllJumpsLe_of_allSeq (fun instr hmem => by simp at hmem; subst hmem; trivial))
@@ -1719,15 +1962,14 @@ theorem compileStmt_allJumpsLe (s : Stmt) (offset nextTmp : Nat) :
       have := compileBool_allJumpsLe bval (offset + codeIdx.length) tmp1
         (offset + codeIdx.length + codeBool.length) (by simp [hcb])
       simp [hcb] at this; exact this
+    simp only [compileStmt, hci, hcb, List.length_append, List.length_cons, List.length_nil] at hbound
     apply AllJumpsLe_append
     · apply AllJumpsLe_append
       · apply AllJumpsLe_append
         · exact AllJumpsLe_mono hi (by omega)
         · exact AllJumpsLe_mono hb (by omega)
-      · have h_ifgt : offset + codeIdx.length + codeBool.length + 3 ≤
-            offset + (codeIdx.length + codeBool.length + (0 + 1 + 1 + 1 + 1) + (0 + 1)) := by omega
-        have h_goto : offset + codeIdx.length + codeBool.length + 3 + 1 ≤
-            offset + (codeIdx.length + codeBool.length + (0 + 1 + 1 + 1 + 1) + (0 + 1)) := by omega
+      · have h_ifgt : offset + codeIdx.length + codeBool.length + 3 ≤ bound := by omega
+        have h_goto : offset + codeIdx.length + codeBool.length + 3 + 1 ≤ bound := by omega
         intro instr hmem; simp at hmem
         rcases hmem with rfl | rfl | rfl | rfl
         · exact h_ifgt
@@ -1736,23 +1978,26 @@ theorem compileStmt_allJumpsLe (s : Stmt) (offset nextTmp : Nat) :
         · exact trivial
     · exact AllJumpsLe_of_allSeq (fun instr hmem => by simp at hmem; subst hmem; trivial)
   | seq s1 s2 ih1 ih2 =>
-    simp only [compileStmt, List.length_append]
-    exact AllJumpsLe_append (AllJumpsLe_mono (ih1 offset nextTmp) (by omega))
-      (AllJumpsLe_mono (ih2 _ _) (by omega))
+    simp only [compileStmt, List.length_append] at hbound ⊢
+    exact AllJumpsLe_append
+      (ih1 offset nextTmp labels bound (by omega) hlabels)
+      (ih2 _ _ labels bound (by omega) hlabels)
   | ite b s1 s2 ih1 ih2 =>
     match hcb : compileBool b offset nextTmp with
     | (codeB, be, tmpB) =>
-    match hs2 : compileStmt s2 (offset + codeB.length + 1) tmpB with
+    match hs2 : compileStmt s2 (offset + codeB.length + 1) tmpB labels with
     | (codeElse, tmpE) =>
-    match hs1 : compileStmt s1 (offset + codeB.length + 1 + codeElse.length + 1) tmpE with
+    match hs1 : compileStmt s1 (offset + codeB.length + 1 + codeElse.length + 1) tmpE labels with
     | (codeThen, _) =>
-    simp only [compileStmt, hcb, hs2, hs1, List.length_append, List.length_singleton]
+    simp only [compileStmt, hcb, hs2, hs1, List.length_append, List.length_singleton] at hbound ⊢
     have hb : AllJumpsLe (offset + codeB.length) codeB := by
       have := compileBool_allJumpsLe b offset nextTmp (offset + codeB.length) (by simp [hcb])
       simp [hcb] at this; exact this
-    have h2 := ih2 (offset + codeB.length + 1) tmpB
+    have h2 := ih2 (offset + codeB.length + 1) tmpB labels bound
+      (by simp only [hs2]; omega) hlabels
     simp only [hs2] at h2
-    have h1 := ih1 (offset + codeB.length + 1 + codeElse.length + 1) tmpE
+    have h1 := ih1 (offset + codeB.length + 1 + codeElse.length + 1) tmpE labels bound
+      (by simp only [hs1]; omega) hlabels
     simp only [hs1] at h1
     -- ++ is left-associative: ((((codeB ++ [ifgoto]) ++ codeElse) ++ [goto]) ++ codeThen)
     exact AllJumpsLe_append
@@ -1760,26 +2005,27 @@ theorem compileStmt_allJumpsLe (s : Stmt) (offset nextTmp : Nat) :
         (AllJumpsLe_append
           (AllJumpsLe_append (AllJumpsLe_mono hb (by omega))
             (AllJumpsLe_single_ifgoto (by omega)))
-          (AllJumpsLe_mono h2 (by omega)))
+          h2)
         (AllJumpsLe_single_goto (by omega)))
-      (AllJumpsLe_mono h1 (by omega))
+      h1
   | loop b body ih =>
     match hcb : compileBool b offset nextTmp with
     | (codeB, be, tmpB) =>
-    match hsbody : compileStmt body (offset + codeB.length + 1) tmpB with
+    match hsbody : compileStmt body (offset + codeB.length + 1) tmpB labels with
     | (codeBody, _) =>
-    simp only [compileStmt, hcb, hsbody, List.length_append, List.length_singleton]
+    simp only [compileStmt, hcb, hsbody, List.length_append, List.length_singleton] at hbound ⊢
     have hb : AllJumpsLe (offset + codeB.length) codeB := by
       have := compileBool_allJumpsLe b offset nextTmp (offset + codeB.length) (by simp [hcb])
       simp [hcb] at this; exact this
-    have hih := ih (offset + codeB.length + 1) tmpB
+    have hih := ih (offset + codeB.length + 1) tmpB labels bound
+      (by simp only [hsbody]; omega) hlabels
     simp only [hsbody] at hih
     -- ++ is left-associative: (((codeB ++ [ifgoto]) ++ codeBody) ++ [goto])
     exact AllJumpsLe_append
       (AllJumpsLe_append
         (AllJumpsLe_append (AllJumpsLe_mono hb (by omega))
           (AllJumpsLe_single_ifgoto (by omega)))
-        (AllJumpsLe_mono hih (by omega)))
+        hih)
       (AllJumpsLe_single_goto (by omega))
   | fassign x e =>
     cases e with
@@ -1824,6 +2070,16 @@ theorem compileStmt_allJumpsLe (s : Stmt) (offset nextTmp : Nat) :
       · exact compileExpr_allSeq idx _ _ instr hi
       · exact compileExpr_allSeq val _ _ instr hv
       · trivial)
+  | label _ =>
+    simp [compileStmt]
+  | goto lbl =>
+    simp only [compileStmt]
+    exact AllJumpsLe_single_goto (Nat.le_trans (AllLabelsLe_lookup hlabels lbl) (by omega))
+  | ifgoto b lbl =>
+    simp only [compileStmt, List.length_append, List.length_singleton] at hbound ⊢
+    exact AllJumpsLe_append
+      (AllJumpsLe_mono (compileBool_allJumpsLe b offset nextTmp _ (Nat.le_refl _)) (by omega))
+      (AllJumpsLe_single_ifgoto (Nat.le_trans (AllLabelsLe_lookup hlabels lbl) (by omega)))
 
 /-- Bridge: if all jump targets in `code` are ≤ `code.length`, then
     `(code ++ [halt]).toArray` is step-closed in bounds. -/
@@ -1870,11 +2126,21 @@ private theorem stepClosed_of_allJumpsLe {code : List TAC} {p : Prog}
 theorem compile_stepClosed (prog : Program) (_h : prog.typeCheck = true) :
     StepClosedInBounds prog.compile := by
   apply stepClosed_of_allJumpsLe (code := initCode prog.decls ++
-    (compileStmt prog.body (initCode prog.decls).length 0).1)
+    (compileStmt prog.body (initCode prog.decls).length 0
+      (collectLabels prog.body (initCode prog.decls).length)).1)
   · simp [Program.compile, List.append_assoc]
   · simp only [List.length_append]
-    exact AllJumpsLe_append (AllJumpsLe_of_allSeq (initCode_allSeq prog.decls))
-      (compileStmt_allJumpsLe prog.body (initCode prog.decls).length 0)
+    apply AllJumpsLe_append
+    · exact AllJumpsLe_of_allSeq (initCode_allSeq prog.decls)
+    · exact compileStmt_allJumpsLe prog.body (initCode prog.decls).length 0
+        (collectLabels prog.body (initCode prog.decls).length)
+        ((initCode prog.decls).length +
+          (compileStmt prog.body (initCode prog.decls).length 0
+            (collectLabels prog.body (initCode prog.decls).length)).1.length)
+        (by omega)
+        (by intro k v hmem
+            have := collectLabels_allLabelsLe prog.body (initCode prog.decls).length k v hmem
+            rw [compileStmt_length]; exact this)
 
 /-- **No-stuck guarantee**: A type-checked program always has a behavior —
     it either halts, errors (div-by-zero), or diverges. No execution can

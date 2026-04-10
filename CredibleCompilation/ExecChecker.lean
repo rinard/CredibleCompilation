@@ -738,9 +738,17 @@ def AllArrayOpsInt (p : Prog) : Prop :=
     | _ => True
 
 /-- Decidable check for `AllArrayOpsInt`.
-    Accepts both `.int` and `.float` element types so that float-array
-    programs pass the executable checker. -/
+    Rejects `.bool` and `.float` element types on array ops. -/
 def checkAllArrayOpsInt (p : Prog) : Bool :=
+  p.code.all fun instr =>
+    match instr with
+    | .arrLoad _ _ _ ty | .arrStore _ _ _ ty => ty == .int
+    | _ => true
+
+/-- Lenient version of `checkAllArrayOpsInt` that accepts both `.int` and `.float`
+    element types.  Used in `checkCertificateExec` so that float-array programs
+    pass the executable checker (their soundness is handled separately). -/
+def checkAllArrayOpsNotBool (p : Prog) : Bool :=
   p.code.all fun instr =>
     match instr with
     | .arrLoad _ _ _ .bool | .arrStore _ _ _ .bool => false
@@ -748,10 +756,11 @@ def checkAllArrayOpsInt (p : Prog) : Bool :=
 
 theorem checkAllArrayOpsInt_sound (p : Prog) (h : checkAllArrayOpsInt p = true) :
     AllArrayOpsInt p := by
-  -- checkAllArrayOpsInt now accepts both .int and .float element types;
-  -- AllArrayOpsInt still asserts .int only.  Bridging to float arrays
-  -- requires generalizing AllArrayOpsInt (future work).
-  sorry
+  intro i hi
+  unfold checkAllArrayOpsInt at h
+  have hall := (Array.all_eq_true.mp h) i hi
+  revert hall
+  cases p.code[i] <;> simp [beq_iff_eq]
 
 theorem AllArrayOpsInt.arrLoad_int {p : Prog} {pc : Nat} {x : Var} {arr : ArrayName}
     {idx : Var} {ty : VarTy} (h : AllArrayOpsInt p)

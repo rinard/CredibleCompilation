@@ -505,7 +505,9 @@ def applyPass (name : String) (pass : Prog → ECertificate) (p : Prog) : Except
   else .error s!"optimization certificate check failed for {name}"
 
 /-- Apply each optimization pass in sequence:
-    ConstProp → DCE → DAE → CSE → LICM → ConstHoist → Peephole.
+    ConstProp → DCE → DAE → CSE → LICM → ConstHoist → Peephole → DCE → RegAlloc.
+    DCE runs again before RegAlloc to eliminate unreachable code (e.g., dead code
+    after goto) that would otherwise cause RegAlloc's certificate check to fail.
     Each pass is checked by the executable certificate checker. -/
 def optimizePipeline (p : Prog) : Except String Prog := do
   let p ← applyPass "ConstProp" ConstPropOpt.optimize p
@@ -515,15 +517,15 @@ def optimizePipeline (p : Prog) : Except String Prog := do
   let p ← applyPass "LICM" LICMOpt.optimize p
   let p ← applyPass "ConstHoist" ConstHoistOpt.optimize p
   let p ← applyPass "Peephole" PeepholeOpt.optimize p
-  .ok p
+  let p ← applyPass "DCE" DCEOpt.optimize p
+  applyPass "RegAlloc" RegAllocOpt.optimize p
 
 def compileToAsm (input : String) : Except String String := do
   let prog ← parseProgram input
   let tac := prog.compile
   let opt ← do
     let p ← optimizePipeline tac
-    let p ← optimizePipeline p
-    applyPass "RegAlloc" RegAllocOpt.optimize p
+    optimizePipeline p
   match generateAsm opt with
   | some asm => .ok asm
   | none => .error "program failed type check"
