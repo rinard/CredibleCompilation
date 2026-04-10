@@ -2,10 +2,20 @@ var i : int, j : int, rep : int, base : int,
     dm28 : float, dm27 : float, dm26 : float, dm25 : float,
     dm24 : float, dm23 : float, dm22 : float, c0 : float,
     fuzz : float, buzz : float, fizz : float;
-array px[2525] : float;
+array px[2525] : float, spacer[39] : float;
 
-dm28 := 0.1; dm27 := 0.1; dm26 := 0.1; dm25 := 0.1;
-dm24 := 0.1; dm23 := 0.1; dm22 := 0.1; c0 := 0.1;
+fuzz := 0.001234500;
+buzz := 1.0 + fuzz;
+fizz := 1.1 * fuzz;
+i := 0;
+while (i < 39) {
+  buzz := (1.0 - fuzz) * buzz + fuzz;
+  fuzz := 0.0 - fuzz;
+  spacer[i] := (buzz - fizz) * 0.1;
+  i := i + 1
+};
+dm22 := spacer[15]; dm23 := spacer[16]; dm24 := spacer[17]; dm25 := spacer[18];
+dm26 := spacer[19]; dm27 := spacer[20]; dm28 := spacer[21]; c0 := spacer[11];
 
 fuzz := 0.001234500;
 buzz := 1.0 + fuzz;

@@ -18,18 +18,19 @@ int main(void) {
     clock_gettime(CLOCK_MONOTONIC, &t0);
 
     for (int rep = 0; rep < NREPS; rep++) {
+        signel(x, 1001);
         int ii = N;
         int ipntp = 0;
         do {
             int ipnt = ipntp;
             ipntp += ii;
             ii /= 2;
-            int i = ipntp;
+            int i = ipntp - 1;
             for (int k = ipnt + 1; k < ipntp; k += 2) {
                 i++;
                 x[i] = x[k] - v[k] * x[k-1] - v[k+1] * x[k+1];
             }
-        } while (ii > 1);
+        } while (ii > 0);
     }
 
     clock_gettime(CLOCK_MONOTONIC, &t1);

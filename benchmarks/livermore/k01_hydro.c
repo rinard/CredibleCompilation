@@ -3,16 +3,16 @@
 #include "signel.h"
 
 #define N    1001
-#define KMAX 990
+#define KMAX 1001
 #define NREPS 10000
 
 int main(void) {
-    double x[N], y[N], z[N];
+    double x[1012], y[1012], z[1012];
     double spacer[39]; signel(spacer, 39);
     double q = spacer[27], r = spacer[29], t = spacer[35];
 
-    signel(y, N);
-    signel(z, N);
+    signel(y, 1012);
+    signel(z, 1012);
 
     struct timespec t0, t1;
     clock_gettime(CLOCK_MONOTONIC, &t0);

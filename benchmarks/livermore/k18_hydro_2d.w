@@ -1,6 +1,6 @@
 var rep : int, k : int, j : int, t : float, s : float,
-    kj : int, kj1 : int, kjm1 : int, kjp1 : int,
-    kp1jm1 : int, km1j : int, kp1j : int, kp1jm1b : int,
+    kj : int, kjm1 : int, kjp1 : int,
+    kp1jm1 : int, km1j : int, kp1j : int,
     fuzz : float, buzz : float, fizz : float;
 array za[707] : float, zb[707] : float, zp[707] : float, zq[707] : float,
       zr[707] : float, zm[707] : float, zu[707] : float, zv[707] : float,
@@ -78,7 +78,7 @@ while (rep < 10000) {
   k := 1;
   while (k < 6) {
     j := 1;
-    while (j < 101) {
+    while (j < 100) {
       kj := k * 101 + j;
       kjm1 := k * 101 + (j - 1);
       kp1jm1 := (k + 1) * 101 + (j - 1);
@@ -97,12 +97,12 @@ while (rep < 10000) {
   k := 1;
   while (k < 6) {
     j := 1;
-    while (j < 101) {
+    while (j < 100) {
       kj := k * 101 + j;
       kjm1 := k * 101 + (j - 1);
       km1j := (k - 1) * 101 + j;
-      if (j + 1 < 101) { kjp1 := k * 101 + (j + 1) } else { kjp1 := kj };
-      if (k + 1 < 7) { kp1j := (k + 1) * 101 + j } else { kp1j := kj };
+      kjp1 := k * 101 + (j + 1);
+      kp1j := (k + 1) * 101 + j;
       zu[kj] := zu[kj] + s * (za[kj] * (zz[kj] - zz[kjp1])
                 - za[kjm1] * (zz[kj] - zz[kjm1])
                 - zb[kj] * (zz[kj] - zz[km1j])
@@ -119,7 +119,7 @@ while (rep < 10000) {
   k := 1;
   while (k < 6) {
     j := 1;
-    while (j < 101) {
+    while (j < 100) {
       kj := k * 101 + j;
       zr[kj] := zr[kj] + t * zu[kj];
       zz[kj] := zz[kj] + t * zv[kj];

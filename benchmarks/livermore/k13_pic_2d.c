@@ -14,24 +14,28 @@ int main(void) {
 
     /* Use init_particles layout for p arrays */
     double p_flat[NPART * 4];
-    init_particles(p_flat, NPART);
-    for (int i = 0; i < NPART; i++) {
-        p_x[i] = p_flat[i * 4 + 0];
-        p_y[i] = p_flat[i * 4 + 1];
-        p_vx[i] = p_flat[i * 4 + 2];
-        p_vy[i] = p_flat[i * 4 + 3];
-    }
+
     signel(b, NGRID*NGRID);
     signel(c, NGRID*NGRID);
-    for (int i = 0; i < NGRID*NGRID; i++) h[i] = 0.0;
     signel(y, 1001);
     signel(z, 1001);
-    for (int i = 0; i < 96; i++) { e[i] = 0; f[i] = 0; }
+    for (int i = 0; i < 96; i++) { e[i] = i % 64; f[i] = i % 64; }
 
     struct timespec t0, t1;
     clock_gettime(CLOCK_MONOTONIC, &t0);
 
     for (int rep = 0; rep < NREPS; rep++) {
+        /* Re-initialize particles each rep */
+        init_particles(p_flat, NPART);
+        for (int i = 0; i < NPART; i++) {
+            p_x[i] = p_flat[i * 4 + 0];
+            p_y[i] = p_flat[i * 4 + 1];
+            p_vx[i] = p_flat[i * 4 + 2];
+            p_vy[i] = p_flat[i * 4 + 3];
+        }
+        /* Zero h each rep */
+        for (int i = 0; i < NGRID*NGRID; i++) h[i] = 0.0;
+
         for (int ip = 0; ip < NPART; ip++) {
             int i1 = (int)p_x[ip] & (NGRID-1);
             int j1 = (int)p_y[ip] & (NGRID-1);

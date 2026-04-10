@@ -28,11 +28,21 @@ rep := 0;
 while (rep < 10000) {
   ii := 101;
   ipntp := 0;
-  while (ii > 1) {
+  ipnt := ipntp;
+  ipntp := ipntp + ii;
+  ii := ii / 2;
+  i := ipntp - 1;
+  k := ipnt + 1;
+  while (k < ipntp) {
+    i := i + 1;
+    x[i] := x[k] - v[k] * x[k - 1] - v[k + 1] * x[k + 1];
+    k := k + 2
+  };
+  while (ii > 0) {
     ipnt := ipntp;
     ipntp := ipntp + ii;
     ii := ii / 2;
-    i := ipntp;
+    i := ipntp - 1;
     k := ipnt + 1;
     while (k < ipntp) {
       i := i + 1;

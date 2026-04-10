@@ -8,7 +8,7 @@
 
 #define NJ    101
 #define NK    25
-#define NREPS 1000
+#define NREPS 10000
 
 int main(void) {
     double px[NJ * NK], vy[NK * NJ], cx[NJ * NK];
@@ -21,6 +21,7 @@ int main(void) {
     clock_gettime(CLOCK_MONOTONIC, &t0);
 
     for (int rep = 0; rep < NREPS; rep++) {
+        for (int i = 0; i < NJ * NK; i++) px[i] = 0.0;
         for (int k = 0; k < NK; k++) {
             for (int i = 0; i < NK; i++) {
                 for (int j = 0; j < NJ; j++) {

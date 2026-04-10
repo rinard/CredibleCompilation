@@ -1,4 +1,4 @@
-var k : int, rep : int, xk : float,
+var k : int, j : int, lw : int, m : int, rep : int, temp : float,
     fuzz : float, buzz : float, fizz : float;
 array x[1001] : float, y[1001] : float;
 
@@ -26,15 +26,21 @@ while (k < 1001) {
 
 rep := 0;
 while (rep < 10000) {
-  k := 5;
+  m := (1001 - 7) / 2;
+  k := 6;
   while (k < 1001) {
-    xk := x[k];
-    x[k - 4] := x[k - 4] - xk * y[k - 4];
-    x[k - 3] := x[k - 3] - xk * y[k - 3];
-    x[k - 2] := x[k - 2] - xk * y[k - 2];
-    x[k - 1] := x[k - 1] - xk * y[k - 1];
-    x[k]     := x[k]     - xk * y[k];
-    k := k + 5
+    lw := k - 6;
+    temp := x[k - 1];
+    j := 4;
+    while (j < 1001) {
+      if (lw < 1001) {
+        temp := temp - x[lw] * y[j]
+      } else { skip };
+      lw := lw + 1;
+      j := j + 5
+    };
+    x[k - 1] := y[4] * temp;
+    k := k + m
   };
   rep := rep + 1
 }

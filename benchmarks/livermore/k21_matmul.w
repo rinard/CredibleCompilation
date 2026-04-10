@@ -36,7 +36,12 @@ while (i < 2525) {
 };
 
 rep := 0;
-while (rep < 1000) {
+while (rep < 10000) {
+  i := 0;
+  while (i < 2525) {
+    px[i] := 0.0;
+    i := i + 1
+  };
   k := 0;
   while (k < 25) {
     i := 0;

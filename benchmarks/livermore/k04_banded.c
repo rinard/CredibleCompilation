@@ -15,13 +15,16 @@ int main(void) {
     clock_gettime(CLOCK_MONOTONIC, &t0);
 
     for (int rep = 0; rep < NREPS; rep++) {
-        for (int k = 5; k < N; k += 5) {
-            double xk = x[k];
-            x[k - 4] = x[k - 4] - xk * y[k - 4];
-            x[k - 3] = x[k - 3] - xk * y[k - 3];
-            x[k - 2] = x[k - 2] - xk * y[k - 2];
-            x[k - 1] = x[k - 1] - xk * y[k - 1];
-            x[k]     = x[k]     - xk * y[k];
+        signel(x, N);
+        int m = (N - 7) / 2;
+        for (int k = 6; k < N; k = k + m) {
+            int lw = k - 6;
+            double temp = x[k - 1];
+            for (int j = 4; j < N; j = j + 5) {
+                temp -= x[lw] * y[j];
+                lw++;
+            }
+            x[k - 1] = y[4] * temp;
         }
     }
 

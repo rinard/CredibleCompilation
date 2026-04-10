@@ -5,7 +5,6 @@ var rep : int, j : int, k : int, ar : float, br : float,
     fuzz : float, buzz : float, fizz : float;
 array vy[2525] : float, vh[707] : float, vf[707] : float,
       vg[707] : float, vs[707] : float;
-
 fuzz := 0.001234500;
 buzz := 1.0 + fuzz;
 fizz := 1.1 * fuzz;
@@ -16,7 +15,6 @@ while (j < 707) {
   vh[j] := (buzz - fizz) * 0.1;
   j := j + 1
 };
-
 fuzz := 0.001234500;
 buzz := 1.0 + fuzz;
 fizz := 1.1 * fuzz;
@@ -29,10 +27,9 @@ while (j < 707) {
 };
 j := 0;
 while (j < 707) {
-  if (vf[j] < 0.001) { vf[j] := 0.001 } else { skip };
+  if (vf[j] <= 0.0) { vf[j] := 0.001 } else { skip };
   j := j + 1
 };
-
 fuzz := 0.001234500;
 buzz := 1.0 + fuzz;
 fizz := 1.1 * fuzz;
@@ -43,19 +40,21 @@ while (j < 707) {
   vg[j] := (buzz - fizz) * 0.1;
   j := j + 1
 };
-
 j := 0;
 while (j < 707) {
   vs[j] := 0.0;
   j := j + 1
 };
-
+fuzz := 0.001234500;
+buzz := 1.0 + fuzz;
+fizz := 1.1 * fuzz;
 j := 0;
 while (j < 2525) {
-  vy[j] := 0.0;
+  buzz := (1.0 - fuzz) * buzz + fuzz;
+  fuzz := 0.0 - fuzz;
+  vy[j] := (buzz - fizz) * 0.1;
   j := j + 1
 };
-
 rep := 0;
 while (rep < 10000) {
   ar := 0.053;

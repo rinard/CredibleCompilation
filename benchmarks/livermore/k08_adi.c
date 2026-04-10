@@ -6,13 +6,14 @@
 #include <time.h>
 #include "signel.h"
 
-#define N     101
+#define NDIM  101
+#define N     100
 #define KXD   5
 #define NREPS 10000
 
 int main(void) {
-    double u1[2][N][KXD], u2[2][N][KXD], u3[2][N][KXD];
-    double du1[N], du2[N], du3[N];
+    double u1[2][NDIM][KXD], u2[2][NDIM][KXD], u3[2][NDIM][KXD];
+    double du1[NDIM], du2[NDIM], du3[NDIM];
     double spacer[39]; signel(spacer, 39);
     double a11 = spacer[0], a12 = spacer[1], a13 = spacer[2];
     double a21 = spacer[3], a22 = spacer[4], a23 = spacer[5];
@@ -21,12 +22,12 @@ int main(void) {
     int nl1, nl2;
 
     /* Initialise */
-    signel((double *)u1, 2 * N * KXD);
-    signel((double *)u2, 2 * N * KXD);
-    signel((double *)u3, 2 * N * KXD);
-    signel(du1, N);
-    signel(du2, N);
-    signel(du3, N);
+    signel((double *)u1, 2 * NDIM * KXD);
+    signel((double *)u2, 2 * NDIM * KXD);
+    signel((double *)u3, 2 * NDIM * KXD);
+    signel(du1, NDIM);
+    signel(du2, NDIM);
+    signel(du3, NDIM);
 
     struct timespec t0, t1;
     clock_gettime(CLOCK_MONOTONIC, &t0);
@@ -34,10 +35,10 @@ int main(void) {
     for (int l = 0; l < NREPS; l++) {
         nl1 = 0; nl2 = 1;
         for (int kx = 1; kx < 3; kx++) {
-            for (int ky = 1; ky < N; ky++) {
-                du1[ky] = u1[nl1][ky+1 < N ? ky+1 : ky][kx] - u1[nl1][ky-1][kx];
-                du2[ky] = u2[nl1][ky+1 < N ? ky+1 : ky][kx] - u2[nl1][ky-1][kx];
-                du3[ky] = u3[nl1][ky+1 < N ? ky+1 : ky][kx] - u3[nl1][ky-1][kx];
+            for (int ky = 1; ky < N - 1; ky++) {
+                du1[ky] = u1[nl1][ky+1][kx] - u1[nl1][ky-1][kx];
+                du2[ky] = u2[nl1][ky+1][kx] - u2[nl1][ky-1][kx];
+                du3[ky] = u3[nl1][ky+1][kx] - u3[nl1][ky-1][kx];
                 u1[nl2][ky][kx] = u1[nl1][ky][kx]
                     + a11*du1[ky] + a12*du2[ky] + a13*du3[ky]
                     + sig*(u1[nl1][ky][kx+1] - 2.0*u1[nl1][ky][kx] + u1[nl1][ky][kx-1]);

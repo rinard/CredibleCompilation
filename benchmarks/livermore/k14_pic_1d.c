@@ -19,12 +19,14 @@ int main(void) {
     for (int i = 0; i < 1001; i++) grd[i] = (i % 512) + 1.5;
     signel(ex_arr, 1001);
     signel(dex_arr, 1001);
-    for (int i = 0; i < 2049; i++) rh[i] = 0.0;
 
     struct timespec t0, t1;
     clock_gettime(CLOCK_MONOTONIC, &t0);
 
     for (int rep = 0; rep < NREPS; rep++) {
+        /* Re-zero rh each rep */
+        for (int i = 0; i < 2049; i++) rh[i] = 0.0;
+
         for (int k = 0; k < N; k++) {
             vx[k] = 0.0;
             xx[k] = 0.0;

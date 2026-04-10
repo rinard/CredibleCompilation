@@ -16,6 +16,7 @@ int main(void) {
     int m = 0;
     double xm, xk;
     for (int rep = 0; rep < NREPS; rep++) {
+        x[N/2] = -1.0e+10;
         m = 0;
         xm = x[0];
         for (int k = 1; k < N; k++) {

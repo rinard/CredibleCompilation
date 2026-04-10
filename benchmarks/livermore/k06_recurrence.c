@@ -6,7 +6,7 @@
 #define NREPS 1000
 
 int main(void) {
-    double w[NW], b[NW * NW];
+    double w[1001], b[NW * NW];
 
     signel(b, NW * NW);
 
@@ -14,11 +14,11 @@ int main(void) {
     clock_gettime(CLOCK_MONOTONIC, &t0);
 
     for (int rep = 0; rep < NREPS; rep++) {
-        for (int i = 0; i < NW; i++) w[i] = 0.0;
+        for (int j = 0; j < 1001; j++) w[j] = 0.0;
+        w[0] = 0.01;
         for (int i = 1; i < NW; i++) {
-            w[i] = 0.01;
             for (int k = 0; k < i; k++) {
-                w[i] = w[i] + b[k * NW + i] * w[i - k - 1];
+                w[i] += b[k * NW + i] * w[i - k - 1];
             }
         }
     }

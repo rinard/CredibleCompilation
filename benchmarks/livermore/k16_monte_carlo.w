@@ -1,19 +1,15 @@
 var rep : int, i : int, m : int, i1 : int, k : int, k2 : int, k3 : int,
     j2 : int, j4 : int, j5 : int, ii : int, lb : int, n : int,
     zval : int,
-    j4m1 : int, j4m2 : int, j5m1 : int, j5m2 : int, j5m3 : int,
-    j5m4 : int, j5m5 : int,
     r : float, s : float, t : float, tmp : float,
     fuzz : float, buzz : float, fizz : float;
 array d[300] : float, plan[300] : float, zone[300] : int;
-
-n := 100;
+n := 75;
 ii := n / 3;
 lb := ii + ii;
 r := 0.1;
 s := 0.1;
 t := 0.1;
-
 fuzz := 0.001234500;
 buzz := 1.0 + fuzz;
 fizz := 1.1 * fuzz;
@@ -24,7 +20,6 @@ while (i < 300) {
   d[i] := (buzz - fizz) * 0.1;
   i := i + 1
 };
-
 fuzz := 0.001234500;
 buzz := 1.0 + fuzz;
 fizz := 1.1 * fuzz;
@@ -35,68 +30,60 @@ while (i < 300) {
   plan[i] := (buzz - fizz) * 0.1;
   i := i + 1
 };
-
 i := 0;
 while (i < 300) {
   zone[i] := i % (n + 1);
   i := i + 1
 };
 zone[0] := 5;
-
 rep := 0;
-while (rep < 100) {
-  i1 := 1;
-  m := 1;
+while (rep < 10000) {
+  ii := n / 3;
+  lb := ii + ii;
   k2 := 0;
   k3 := 0;
-
+  i1 := 1;
+  m := 1;
   LABEL410:;
   j2 := (n + n) * (m - 1) + 1;
   k := 1;
   while (k <= n) {
     k2 := k2 + 1;
     j4 := j2 + k + k;
-    j4m1 := (j4 - 1) % 300;
-    if (j4m1 < 0) { j4m1 := j4m1 + 300 } else { skip };
-    j4m2 := (j4 - 2) % 300;
-    if (j4m2 < 0) { j4m2 := j4m2 + 300 } else { skip };
-    j5 := zone[j4m1];
-    if (j5 < 0) { j5 := 0 - j5 } else { skip };
-    if (j5 >= 300) { j5 := j5 % 300 } else { skip };
-
+    if (j4 - 1 < 0) { goto KBREAK } else { skip };
+    if (j4 - 1 >= 300) { goto KBREAK } else { skip };
+    j5 := zone[j4 - 1];
     if (j5 < n) {
-      if (j5 + lb < n) {
-        tmp := plan[j5] - t
+      if (j5 < 1) {
+        goto KBREAK
       } else {
-        if (j5 + ii < n) {
-          tmp := plan[j5] - s
+        if (j5 + lb < n) {
+          tmp := plan[j5 - 1] - t
         } else {
-          tmp := plan[j5] - r
+          if (j5 + ii < n) {
+            tmp := plan[j5 - 1] - s
+          } else {
+            tmp := plan[j5 - 1] - r
+          }
         }
       }
     } else {
       if (j5 == n) {
         goto KBREAK
       } else {
+        if (j5 - 1 < 0) { goto KBREAK } else { skip };
+        if (j5 - 1 >= 300) { goto KBREAK } else { skip };
+        if (j5 - 5 < 0) { goto KBREAK } else { skip };
         k3 := k3 + 1;
-        j5m1 := (j5 - 1) % 300;
-        if (j5m1 < 0) { j5m1 := j5m1 + 300 } else { skip };
-        j5m2 := (j5 - 2) % 300;
-        if (j5m2 < 0) { j5m2 := j5m2 + 300 } else { skip };
-        j5m3 := (j5 - 3) % 300;
-        if (j5m3 < 0) { j5m3 := j5m3 + 300 } else { skip };
-        j5m4 := (j5 - 4) % 300;
-        if (j5m4 < 0) { j5m4 := j5m4 + 300 } else { skip };
-        j5m5 := (j5 - 5) % 300;
-        if (j5m5 < 0) { j5m5 := j5m5 + 300 } else { skip };
-        tmp := d[j5m1] - (d[j5m2] * (t - d[j5m3]) * (t - d[j5m3])
-               + (s - d[j5m4]) * (s - d[j5m4])
-               + (r - d[j5m5]) * (r - d[j5m5]))
+        tmp := d[j5 - 1] - (d[j5 - 2] * (t - d[j5 - 3]) * (t - d[j5 - 3])
+               + (s - d[j5 - 4]) * (s - d[j5 - 4])
+               + (r - d[j5 - 5]) * (r - d[j5 - 5]))
       }
     };
-
-    zval := zone[j4m2];
     if (tmp < 0.0) {
+      if (j4 - 2 < 0) { goto KBREAK } else { skip };
+      if (j4 - 2 >= 300) { goto KBREAK } else { skip };
+      zval := zone[j4 - 2];
       if (zval < 0) {
         goto KCONT
       } else {
@@ -108,6 +95,9 @@ while (rep < 100) {
       }
     } else {
       if (tmp > 0.0) {
+        if (j4 - 2 < 0) { goto KBREAK } else { skip };
+        if (j4 - 2 >= 300) { goto KBREAK } else { skip };
+        zval := zone[j4 - 2];
         if (zval > 0) {
           goto KCONT
         } else {
@@ -121,7 +111,6 @@ while (rep < 100) {
         goto KBREAK
       }
     };
-
     m := m + 1;
     if (m > zone[0]) { m := 1 } else { skip };
     if (i1 != m) {

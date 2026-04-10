@@ -29,7 +29,7 @@ int main(void) {
     }
 
     clock_gettime(CLOCK_MONOTONIC, &t1);
-    double elapsed = (t0.tv_sec - t0.tv_sec) + (t1.tv_nsec - t0.tv_nsec) * 1e-9;
+    double elapsed = (t1.tv_sec - t0.tv_sec) + (t1.tv_nsec - t0.tv_nsec) * 1e-9;
     printf("elapsed: %.6f s\n", elapsed);
     printf("x[0] = %f\n", x[0]);
     return 0;

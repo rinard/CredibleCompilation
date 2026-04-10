@@ -5,12 +5,23 @@ var rep : int, kx : int, ky : int, nl1 : int, nl2 : int,
     sig : float, nl : int, idx : int, idx_yp : int, idx_ym : int, idx_xp : int, idx_xm : int,
     fuzz : float, buzz : float, fizz : float;
 array u1[1010] : float, u2[1010] : float, u3[1010] : float,
-      du1[101] : float, du2[101] : float, du3[101] : float;
+      du1[101] : float, du2[101] : float, du3[101] : float,
+      spacer[39] : float;
 
-a11 := 0.1;  a12 := 0.1;  a13 := 0.1;
-a21 := 0.1;  a22 := 0.1;  a23 := 0.1;
-a31 := 0.1;  a32 := 0.1;  a33 := 0.1;
-sig := 0.1;
+fuzz := 0.001234500;
+buzz := 1.0 + fuzz;
+fizz := 1.1 * fuzz;
+idx := 0;
+while (idx < 39) {
+  buzz := (1.0 - fuzz) * buzz + fuzz;
+  fuzz := 0.0 - fuzz;
+  spacer[idx] := (buzz - fizz) * 0.1;
+  idx := idx + 1
+};
+a11 := spacer[0];  a12 := spacer[1];  a13 := spacer[2];
+a21 := spacer[3];  a22 := spacer[4];  a23 := spacer[5];
+a31 := spacer[6];  a32 := spacer[7];  a33 := spacer[8];
+sig := spacer[33];
 
 fuzz := 0.001234500;
 buzz := 1.0 + fuzz;
@@ -85,12 +96,8 @@ while (rep < 10000) {
   kx := 1;
   while (kx < 3) {
     ky := 1;
-    while (ky < 101) {
-      if (ky + 1 < 101) {
-        idx_yp := nl1 * 505 + (ky + 1) * 5 + kx
-      } else {
-        idx_yp := nl1 * 505 + ky * 5 + kx
-      };
+    while (ky < 99) {
+      idx_yp := nl1 * 505 + (ky + 1) * 5 + kx;
       idx_ym := nl1 * 505 + (ky - 1) * 5 + kx;
       idx := nl1 * 505 + ky * 5 + kx;
       idx_xp := nl1 * 505 + ky * 5 + (kx + 1);
