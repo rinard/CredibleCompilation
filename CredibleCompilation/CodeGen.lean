@@ -176,8 +176,12 @@ private partial def genBoolExpr (varMap : List (Var × Nat))
     (smartLoadVar varMap v "x0") :: "  and w0, w0, #1" :: List.nil
   | .cmp op lv rv =>
     let cond := match op with | .eq => "eq" | .ne => "ne" | .lt => "lt" | .le => "le"
-    (smartLoadVar varMap lv "x1") :: (smartLoadVar varMap rv "x2") ::
-    "  cmp x1, x2" :: s!"  cset w0, {cond}" :: List.nil
+    match lookupReg lv, lookupReg rv with
+    | some rl, some rr =>
+      s!"  cmp {rl}, {rr}" :: s!"  cset w0, {cond}" :: List.nil
+    | _, _ =>
+      (smartLoadVar varMap lv "x1") :: (smartLoadVar varMap rv "x2") ::
+      "  cmp x1, x2" :: s!"  cset w0, {cond}" :: List.nil
   | .cmpLit op v n =>
     let cond := match op with | .eq => "eq" | .ne => "ne" | .lt => "lt" | .le => "le"
     (smartLoadVar varMap v "x1") :: List.nil ++
@@ -187,8 +191,12 @@ private partial def genBoolExpr (varMap : List (Var × Nat))
     genBoolExpr varMap e ++ ("  eor w0, w0, #1" :: List.nil)
   | .fcmp op lv rv =>
     let cond := match op with | .feq => "eq" | .fne => "ne" | .flt => "mi" | .fle => "ls"
-    (smartLoadVarFP varMap lv "d1") :: (smartLoadVarFP varMap rv "d2") ::
-    "  fcmp d1, d2" :: s!"  cset w0, {cond}" :: List.nil
+    match lookupReg lv, lookupReg rv with
+    | some rl, some rr =>
+      s!"  fcmp {rl}, {rr}" :: s!"  cset w0, {cond}" :: List.nil
+    | _, _ =>
+      (smartLoadVarFP varMap lv "d1") :: (smartLoadVarFP varMap rv "d2") ::
+      "  fcmp d1, d2" :: s!"  cset w0, {cond}" :: List.nil
 
 -- ============================================================
 -- § 4. Instruction codegen
@@ -228,19 +236,33 @@ private def genInstr (varMap : List (Var × Nat))
       | none, some rd => [loadVar varMap src rd]
       | none, none => [loadVar varMap src "x0", storeVar varMap dst "x0"]
   | .binop dst op lv rv =>
-    let opInstr := match op with
-      | .add => ["  add x0, x1, x2"]
-      | .sub => ["  sub x0, x1, x2"]
-      | .mul => ["  mul x0, x1, x2"]
-      | .div => ["  sdiv x0, x1, x2"]
-      | .mod => ["  sdiv x0, x1, x2", "  msub x0, x0, x2, x1"]
-    if op == .div || op == .mod then
-      [smartLoadVar varMap rv "x2", "  cbz x2, .Ldiv_by_zero",
-       smartLoadVar varMap lv "x1", smartLoadVar varMap rv "x2"] ++
-      opInstr ++ [smartStoreVar varMap dst "x0"]
-    else
-      [smartLoadVar varMap lv "x1", smartLoadVar varMap rv "x2"] ++
-      opInstr ++ [smartStoreVar varMap dst "x0"]
+    match lookupReg dst, lookupReg lv, lookupReg rv with
+    | some rd, some rl, some rr =>
+      if op == .div || op == .mod then
+        if op == .div then
+          [s!"  cbz {rr}, .Ldiv_by_zero", s!"  sdiv {rd}, {rl}, {rr}"]
+        else
+          [s!"  cbz {rr}, .Ldiv_by_zero", s!"  sdiv {rd}, {rl}, {rr}",
+           s!"  msub {rd}, {rd}, {rr}, {rl}"]
+      else match op with
+        | .add => [s!"  add {rd}, {rl}, {rr}"]
+        | .sub => [s!"  sub {rd}, {rl}, {rr}"]
+        | .mul => [s!"  mul {rd}, {rl}, {rr}"]
+        | _ => [s!"  add {rd}, {rl}, {rr}"]
+    | _, _, _ =>
+      let opInstr := match op with
+        | .add => ["  add x0, x1, x2"]
+        | .sub => ["  sub x0, x1, x2"]
+        | .mul => ["  mul x0, x1, x2"]
+        | .div => ["  sdiv x0, x1, x2"]
+        | .mod => ["  sdiv x0, x1, x2", "  msub x0, x0, x2, x1"]
+      if op == .div || op == .mod then
+        [smartLoadVar varMap rv "x2", "  cbz x2, .Ldiv_by_zero",
+         smartLoadVar varMap lv "x1", smartLoadVar varMap rv "x2"] ++
+        opInstr ++ [smartStoreVar varMap dst "x0"]
+      else
+        [smartLoadVar varMap lv "x1", smartLoadVar varMap rv "x2"] ++
+        opInstr ++ [smartStoreVar varMap dst "x0"]
   | .boolop dst be =>
     genBoolExpr varMap be ++ [smartStoreVar varMap dst "x0"]
   | .goto l =>
@@ -276,28 +298,42 @@ private def genInstr (varMap : List (Var × Nat))
     s!"  add x8, x8, _arr_{_arr}@PAGEOFF" ::
     "  str x2, [x8, x1, lsl #3]" :: List.nil
   | .fbinop dst op lv rv =>
-    let opInstr := match op with
-      | .fadd => "  fadd d0, d1, d2"
-      | .fsub => "  fsub d0, d1, d2"
-      | .fmul => "  fmul d0, d1, d2"
-      | .fdiv => "  fdiv d0, d1, d2"
-    (smartLoadVarFP varMap lv "d1") ::
-    (smartLoadVarFP varMap rv "d2") ::
-    opInstr :: (smartStoreVarFP varMap dst "d0") :: List.nil
+    let opName := match op with
+      | .fadd => "fadd" | .fsub => "fsub" | .fmul => "fmul" | .fdiv => "fdiv"
+    match lookupReg dst, lookupReg lv, lookupReg rv with
+    | some rd, some rl, some rr =>
+      [s!"  {opName} {rd}, {rl}, {rr}"]
+    | _, _, _ =>
+      (smartLoadVarFP varMap lv "d1") ::
+      (smartLoadVarFP varMap rv "d2") ::
+      s!"  {opName} d0, d1, d2" :: (smartStoreVarFP varMap dst "d0") :: List.nil
   | .intToFloat dst src =>
-    (smartLoadVar varMap src "x0") ::
-    "  scvtf d0, x0" ::
-    (smartStoreVarFP varMap dst "d0") :: List.nil
+    match lookupReg dst, lookupReg src with
+    | some rd, some rs => [s!"  scvtf {rd}, {rs}"]
+    | _, _ =>
+      (smartLoadVar varMap src "x0") ::
+      "  scvtf d0, x0" ::
+      (smartStoreVarFP varMap dst "d0") :: List.nil
   | .floatToInt dst src =>
-    (smartLoadVarFP varMap src "d0") ::
-    "  fcvtzs x0, d0" ::
-    (smartStoreVar varMap dst "x0") :: List.nil
+    match lookupReg dst, lookupReg src with
+    | some rd, some rs => [s!"  fcvtzs {rd}, {rs}"]
+    | _, _ =>
+      (smartLoadVarFP varMap src "d0") ::
+      "  fcvtzs x0, d0" ::
+      (smartStoreVar varMap dst "x0") :: List.nil
   | .floatExp dst src =>
-    (smartLoadVarFP varMap src "d0") ::
-    "  stp x29, x30, [sp, #-16]!" ::
-    "  bl _exp" ::
-    "  ldp x29, x30, [sp], #16" ::
-    (smartStoreVarFP varMap dst "d0") :: List.nil
+    match lookupReg dst, lookupReg src with
+    | some rd, some rs =>
+      let load := if rs == "d0" then [] else [s!"  fmov d0, {rs}"]
+      let store := if rd == "d0" then [] else [s!"  fmov {rd}, d0"]
+      load ++ ["  stp x29, x30, [sp, #-16]!", "  bl _exp",
+               "  ldp x29, x30, [sp], #16"] ++ store
+    | _, _ =>
+      (smartLoadVarFP varMap src "d0") ::
+      "  stp x29, x30, [sp, #-16]!" ::
+      "  bl _exp" ::
+      "  ldp x29, x30, [sp], #16" ::
+      (smartStoreVarFP varMap dst "d0") :: List.nil
 
 -- ============================================================
 -- § 5. Program codegen
