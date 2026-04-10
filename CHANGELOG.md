@@ -4,6 +4,23 @@ Chronological record of what was built and why, to reconstruct the sequence of d
 
 ---
 
+## Three performance optimizations (2026-04-10)
+
+**Goal:** Close the gap vs clang -O2 on Livermore Loops benchmarks.
+
+### 1. Copy coalescing in CodeGen
+When all operands of an instruction are register-allocated (`__xN`/`__dN`), emit direct register-to-register ARM64 instructions instead of routing through scratch registers d0/d1/d2 or x0/x1/x2. Applied to fbinop, binop, intToFloat, floatToInt, floatExp, and cmp/fcmp comparisons. E.g. `fmul d3, d5, d6` instead of `fmov d1,d5; fmov d2,d6; fmul d0,d1,d2; fmov d3,d0`.
+
+### 2. Constant hoisting (ConstHoistOpt pass)
+New `ConstHoistOpt` pass that detects `const x v` instructions where ConstProp analysis shows `x` already holds `v`, and replaces with `goto (pc+1)`. Peephole compacts these. Runs after LICM in pipeline. Uses only ConstProp invariants — completely independent of CSE analysis, avoiding checker simplification conflicts.
+
+### 3. Bounds check elision via interval analysis
+Forward dataflow interval analysis in CodeGen tracking `[lo, hi)` per integer variable at each PC. Worklist algorithm with widening at back edges. Refines intervals at `ifgoto` branch points (handles cmp/cmpLit with lt/le and negations). When arrLoad/arrStore index is provably in `[0, arrSize)`, the `cmp`/`b.hs` bounds check is omitted. CodeGen-level only, no certificate impact.
+
+**Files changed:** CodeGen.lean (~250 lines), ConstHoistOpt.lean (new, ~70 lines), LICMOpt.lean (reverted to CSE-only).
+
+---
+
 ## Add exp() float intrinsic + K22 Planck radiation benchmark (2026-04-10)
 
 **Goal:** Add `exp(x)` (e^x) as a unary float→float intrinsic, following the intToFloat/floatToInt pattern. Enable Livermore K22 (Planck radiation) benchmark.
