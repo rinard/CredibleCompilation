@@ -68,6 +68,15 @@ while (k < 707) {
   k := k + 1
 };
 
+k := 0;
+while (k < 707) {
+  zr[k] := zr[k] * 0.1;
+  zb[k] := zb[k] * 0.1;
+  zu[k] := zu[k] * 0.1;
+  zv[k] := zv[k] * 0.1;
+  k := k + 1
+};
+
 rep := 0;
 while (rep < 100000) {
   j := 1;

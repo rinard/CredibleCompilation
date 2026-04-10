@@ -16,6 +16,12 @@ int main(void) {
     signel((double *)zu, 7 * 101);
     signel((double *)zv, 7 * 101);
     signel((double *)zz, 7 * 101);
+    /* Scale coefficients for stable relaxation */
+    for (int i = 0; i < 7; i++)
+        for (int jj = 0; jj < 101; jj++) {
+            zr[i][jj] *= 0.1; zb[i][jj] *= 0.1;
+            zu[i][jj] *= 0.1; zv[i][jj] *= 0.1;
+        }
 
     struct timespec t0, t1;
     clock_gettime(CLOCK_MONOTONIC, &t0);
