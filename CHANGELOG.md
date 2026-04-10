@@ -4,6 +4,28 @@ Chronological record of what was built and why, to reconstruct the sequence of d
 
 ---
 
+## Extract bounds check elision into BoundsOpt module (2026-04-10)
+
+**Goal:** Factor the interval analysis for bounds check elision out of CodeGen into a standalone `BoundsOpt.lean` module. CodeGen independently verifies the invariant claims before eliding bounds checks, so a buggy analysis can never produce unsafe code.
+
+### Design rationale
+
+Explored adding `arrLoadSafe`/`arrStoreSafe` TAC constructors with "no bounds error" semantics, but this design has fundamental issues:
+1. Every subsequent optimization pass must preserve the bounds invariant — no guarantee that index variable mappings maintain the in-bounds property across simulation chains.
+2. If an `arrLoadSafe` instruction reaches CodeGen without valid verification, CodeGen silently generates out-of-bounds memory accesses. The formal correctness proofs hold vacuously (precondition unmet) but real hardware reads garbage.
+
+Instead: no new TAC constructors. `BoundsOpt.lean` contains the interval analysis as a standalone module. CodeGen imports it, runs the analysis, and checks the results at each `arrLoad`/`arrStore` before deciding to elide bounds checks. If invariants are absent or insufficient, CodeGen always emits bounds checks.
+
+### Changes
+
+- **BoundsOpt.lean** (new): interval domain (`IRange`, `IMap`), transfer function, condition refinement, worklist solver with widening, `analyzeIntervals` entry point. All definitions are public (not `private`) for reuse.
+- **CodeGen.lean**: removed embedded interval analysis (~130 lines). Now imports `BoundsOpt` and calls `BoundsOpt.analyzeIntervals`. `genInstr` uses `BoundsOpt.imLookup`/`BoundsOpt.IRange.inBounds` to check invariants at each array access.
+- **CredibleCompilation.lean**: added `import CredibleCompilation.BoundsOpt`.
+
+No TAC, proof, or optimizer changes. Benchmark results unchanged.
+
+---
+
 ## Three performance optimizations (2026-04-10)
 
 **Goal:** Close the gap vs clang -O2 on Livermore Loops benchmarks.

@@ -19,7 +19,7 @@ int main(void) {
         for (int i = 1; i < NW; i++) {
             w[i] = 0.01;
             for (int k = 0; k < i; k++) {
-                w[i] = w[i] + b[i * NW + k] * w[i - k - 1];
+                w[i] = w[i] + b[k * NW + i] * w[i - k - 1];
             }
         }
     }

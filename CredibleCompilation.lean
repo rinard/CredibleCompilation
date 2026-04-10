@@ -12,6 +12,7 @@ import CredibleCompilation.Examples.DCEOptExamples
 import CredibleCompilation.LICMOpt
 import CredibleCompilation.Examples.LICMOptExamples
 import CredibleCompilation.PeepholeOpt
+import CredibleCompilation.BoundsOpt
 import CredibleCompilation.Examples.PeepholeOptExamples
 import CredibleCompilation.WhileLang
 import CredibleCompilation.Examples.WhileExamples
