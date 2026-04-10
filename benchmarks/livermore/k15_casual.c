@@ -5,6 +5,7 @@
    Note: sqrt replaced with (a*a+b*b) to match WhileLang version. */
 #include <stdio.h>
 #include <time.h>
+#include "signel.h"
 
 #define NZ    101
 #define NG    7
@@ -14,14 +15,17 @@
 int main(void) {
     double vy[VYROWS][NZ], vh[NG][NZ], vf[NG][NZ], vg[NG][NZ], vs[NG][NZ];
 
-    /* Initialise arrays with deterministic values */
+    /* Initialise arrays with signel */
+    signel((double *)vh, NG * NZ);
+    signel((double *)vf, NG * NZ);
+    signel((double *)vg, NG * NZ);
+    /* Ensure vf is positive (used as divisor) */
     for (int j = 0; j < NG; j++)
-        for (int k = 0; k < NZ; k++) {
-            vh[j][k] = (j + 1) * 0.01 + k * 0.001;
-            vf[j][k] = (j + 1) * 0.02 + k * 0.003 + 0.001;
-            vg[j][k] = (j + 1) * 0.015 + k * 0.002;
+        for (int k = 0; k < NZ; k++)
+            if (vf[j][k] <= 0.0) vf[j][k] = 0.001;
+    for (int j = 0; j < NG; j++)
+        for (int k = 0; k < NZ; k++)
             vs[j][k] = 0.0;
-        }
     for (int j = 0; j < VYROWS; j++)
         for (int k = 0; k < NZ; k++)
             vy[j][k] = 0.0;

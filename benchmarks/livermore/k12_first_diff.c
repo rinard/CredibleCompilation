@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <time.h>
+#include "signel.h"
 
 #define N     1001
 #define NREPS 10000
@@ -7,9 +8,7 @@
 int main(void) {
     double x[N], y[N];
 
-    for (int i = 0; i < N; i++) {
-        y[i] = i * 0.01;
-    }
+    signel(y, N);
 
     struct timespec t0, t1;
     clock_gettime(CLOCK_MONOTONIC, &t0);

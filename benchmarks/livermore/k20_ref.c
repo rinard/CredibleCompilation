@@ -1,34 +1,39 @@
 /* K20 — Discrete ordinates transport (Livermore Loop 20) — netlib reference */
 #include <stdio.h>
 #include <time.h>
+#include "signel.h"
 
 static double x[1001], y[1001], z[1001], w[1001], v[1001];
 static double u[1001], g[1001], xx[1001], vx[1001];
 
 int main(void) {
     int k, n = 1000, rep;
-    double di, dk, dn, s, t;
+    double di, dn;
+    double spacer[39]; signel(spacer, 39);
+    double dk = spacer[14], s = spacer[31], t = spacer[35];
 
+    signel(x, 1001);
+    signel(y, 1001);
+    signel(z, 1001);
+    signel(w, 1001);
+    signel(v, 1001);
+    signel(u, 1001);
+    signel(g, 1001);
+    signel(xx, 1001);
+    signel(vx, 1001);
+    /* Ensure xx[k]+dk and vx[k]+v[k]*dn are nonzero */
     for (int i = 0; i < 1001; i++) {
-        x[i]  = i * 0.001 + 0.5;
-        y[i]  = i * 0.001 + 0.5;
-        z[i]  = i * 0.001 + 0.5;
-        w[i]  = i * 0.001 + 0.5;
-        v[i]  = i * 0.001 + 0.5;
-        u[i]  = i * 0.001 + 0.5;
-        g[i]  = i * 0.001 + 0.1;  /* keep g small so di is well-behaved */
-        xx[i] = i * 0.001 + 1.0;  /* ensure xx[k]+dk nonzero */
-        vx[i] = i * 0.001 + 2.0;  /* ensure vx[k]+v[k]*dn nonzero */
+        xx[i] += 1.0;
+        vx[i] += 2.0;
     }
-    dk = 1.5; s = 0.001; t = 100.0;
 
     struct timespec t0, t1;
     clock_gettime(CLOCK_MONOTONIC, &t0);
 
     for (rep = 0; rep < 10000; rep++) {
         /* re-init xx to avoid drift */
-        for (int i = 0; i < 1001; i++)
-            xx[i] = i * 0.001 + 1.0;
+        signel(xx, 1001);
+        for (int i = 0; i < 1001; i++) xx[i] += 1.0;
 
         for (k = 0; k < n; k++) {
             di = y[k] - g[k]/(xx[k] + dk);

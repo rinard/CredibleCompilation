@@ -1,26 +1,72 @@
 var rep : int, k : int, j : int, t : float, s : float,
     kj : int, kj1 : int, kjm1 : int, kjp1 : int,
-    kp1jm1 : int, km1j : int, kp1j : int, kp1jm1b : int;
+    kp1jm1 : int, km1j : int, kp1j : int, kp1jm1b : int,
+    fuzz : float, buzz : float, fizz : float;
 array za[707] : float, zb[707] : float, zp[707] : float, zq[707] : float,
       zr[707] : float, zm[707] : float, zu[707] : float, zv[707] : float,
       zz[707] : float;
 
+fuzz := 0.001234500;
+buzz := 1.0 + fuzz;
+fizz := 1.1 * fuzz;
 k := 0;
-while (k < 7) {
-  j := 0;
-  while (j < 101) {
-    kj := k * 101 + j;
-    zp[kj] := intToFloat(k + 1) * 0.01 + intToFloat(j) * 0.001;
-    zq[kj] := intToFloat(k + 1) * 0.005 + intToFloat(j) * 0.0005;
-    zr[kj] := intToFloat(k + 1) * 0.02 + intToFloat(j) * 0.002 + 0.5;
-    zm[kj] := intToFloat(k + 1) * 0.03 + intToFloat(j) * 0.003 + 1.0;
-    zz[kj] := intToFloat(k + 1) * 0.015 + intToFloat(j) * 0.0015;
-    zu[kj] := 0.0;
-    zv[kj] := 0.0;
-    za[kj] := 0.0;
-    zb[kj] := 0.0;
-    j := j + 1
-  };
+while (k < 707) {
+  buzz := (1.0 - fuzz) * buzz + fuzz;
+  fuzz := 0.0 - fuzz;
+  zp[k] := (buzz - fizz) * 0.1;
+  k := k + 1
+};
+
+fuzz := 0.001234500;
+buzz := 1.0 + fuzz;
+fizz := 1.1 * fuzz;
+k := 0;
+while (k < 707) {
+  buzz := (1.0 - fuzz) * buzz + fuzz;
+  fuzz := 0.0 - fuzz;
+  zq[k] := (buzz - fizz) * 0.1;
+  k := k + 1
+};
+
+fuzz := 0.001234500;
+buzz := 1.0 + fuzz;
+fizz := 1.1 * fuzz;
+k := 0;
+while (k < 707) {
+  buzz := (1.0 - fuzz) * buzz + fuzz;
+  fuzz := 0.0 - fuzz;
+  zr[k] := (buzz - fizz) * 0.1;
+  k := k + 1
+};
+
+fuzz := 0.001234500;
+buzz := 1.0 + fuzz;
+fizz := 1.1 * fuzz;
+k := 0;
+while (k < 707) {
+  buzz := (1.0 - fuzz) * buzz + fuzz;
+  fuzz := 0.0 - fuzz;
+  zm[k] := (buzz - fizz) * 0.1 + 10.0;
+  k := k + 1
+};
+
+fuzz := 0.001234500;
+buzz := 1.0 + fuzz;
+fizz := 1.1 * fuzz;
+k := 0;
+while (k < 707) {
+  buzz := (1.0 - fuzz) * buzz + fuzz;
+  fuzz := 0.0 - fuzz;
+  zz[k] := (buzz - fizz) * 0.1;
+  k := k + 1
+};
+
+k := 0;
+while (k < 707) {
+  zu[k] := 0.0;
+  zv[k] := 0.0;
+  za[k] := 0.0;
+  zb[k] := 0.0;
   k := k + 1
 };
 

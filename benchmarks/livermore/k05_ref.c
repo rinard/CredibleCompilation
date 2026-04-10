@@ -1,25 +1,23 @@
 /* K5 — Tri-diagonal elimination (Livermore Loop 5) — netlib reference */
 #include <stdio.h>
 #include <time.h>
+#include "signel.h"
 
 static double x[1001], y[1001], z[1001];
 
 int main(void) {
     int i, n = 1001, rep;
 
-    for (int j = 0; j < 1001; j++) {
-        x[j] = j * 0.001 + 0.5;
-        y[j] = j * 0.001 + 0.3;
-        z[j] = j * 0.001 + 0.1;
-    }
+    signel(x, 1001);
+    signel(y, 1001);
+    signel(z, 1001);
 
     struct timespec t0, t1;
     clock_gettime(CLOCK_MONOTONIC, &t0);
 
     for (rep = 0; rep < 10000; rep++) {
         /* reset x each rep */
-        for (int j = 0; j < 1001; j++)
-            x[j] = j * 0.001 + 0.5;
+        signel(x, 1001);
 
         for (i = 1; i < n; i++) {
             x[i] = z[i] * (y[i] - x[i - 1]);

@@ -1,22 +1,98 @@
-var k : int, rep : int, dk : float, s : float, t : float, di : float, dn : float;
+var k : int, rep : int, dk : float, s : float, t : float, di : float, dn : float,
+    fuzz : float, buzz : float, fizz : float;
 array y[1001] : float, g[1001] : float, xx[1001] : float, z[1001] : float, w[1001] : float, v[1001] : float, u[1001] : float, vv[1001] : float, x[1001] : float;
 
+dk := 0.1;
+s  := 0.1;
+t  := 0.1;
+
+fuzz := 0.001234500;
+buzz := 1.0 + fuzz;
+fizz := 1.1 * fuzz;
 k := 0;
 while (k < 1001) {
-  y[k]  := intToFloat(k) * 0.01 + 1.0;
-  g[k]  := intToFloat(k) * 0.005;
-  xx[k] := intToFloat(k) * 0.02 + 0.5;
-  z[k]  := intToFloat(k) * 0.003;
-  w[k]  := intToFloat(k) * 0.001 + 0.1;
-  v[k]  := intToFloat(k) * 0.004;
-  u[k]  := intToFloat(k) * 0.002 + 0.3;
-  vv[k] := intToFloat(k) * 0.006 + 1.0;
+  buzz := (1.0 - fuzz) * buzz + fuzz;
+  fuzz := 0.0 - fuzz;
+  y[k] := (buzz - fizz) * 0.1;
   k := k + 1
 };
 
-dk := 1.5;
-s  := 0.001;
-t  := 100.0;
+fuzz := 0.001234500;
+buzz := 1.0 + fuzz;
+fizz := 1.1 * fuzz;
+k := 0;
+while (k < 1001) {
+  buzz := (1.0 - fuzz) * buzz + fuzz;
+  fuzz := 0.0 - fuzz;
+  g[k] := (buzz - fizz) * 0.1;
+  k := k + 1
+};
+
+fuzz := 0.001234500;
+buzz := 1.0 + fuzz;
+fizz := 1.1 * fuzz;
+k := 0;
+while (k < 1001) {
+  buzz := (1.0 - fuzz) * buzz + fuzz;
+  fuzz := 0.0 - fuzz;
+  xx[k] := (buzz - fizz) * 0.1 + 1.0;
+  k := k + 1
+};
+
+fuzz := 0.001234500;
+buzz := 1.0 + fuzz;
+fizz := 1.1 * fuzz;
+k := 0;
+while (k < 1001) {
+  buzz := (1.0 - fuzz) * buzz + fuzz;
+  fuzz := 0.0 - fuzz;
+  z[k] := (buzz - fizz) * 0.1;
+  k := k + 1
+};
+
+fuzz := 0.001234500;
+buzz := 1.0 + fuzz;
+fizz := 1.1 * fuzz;
+k := 0;
+while (k < 1001) {
+  buzz := (1.0 - fuzz) * buzz + fuzz;
+  fuzz := 0.0 - fuzz;
+  w[k] := (buzz - fizz) * 0.1;
+  k := k + 1
+};
+
+fuzz := 0.001234500;
+buzz := 1.0 + fuzz;
+fizz := 1.1 * fuzz;
+k := 0;
+while (k < 1001) {
+  buzz := (1.0 - fuzz) * buzz + fuzz;
+  fuzz := 0.0 - fuzz;
+  v[k] := (buzz - fizz) * 0.1;
+  k := k + 1
+};
+
+fuzz := 0.001234500;
+buzz := 1.0 + fuzz;
+fizz := 1.1 * fuzz;
+k := 0;
+while (k < 1001) {
+  buzz := (1.0 - fuzz) * buzz + fuzz;
+  fuzz := 0.0 - fuzz;
+  u[k] := (buzz - fizz) * 0.1;
+  k := k + 1
+};
+
+fuzz := 0.001234500;
+buzz := 1.0 + fuzz;
+fizz := 1.1 * fuzz;
+k := 0;
+while (k < 1001) {
+  buzz := (1.0 - fuzz) * buzz + fuzz;
+  fuzz := 0.0 - fuzz;
+  vv[k] := (buzz - fizz) * 0.1 + 2.0;
+  k := k + 1
+};
 
 rep := 0;
 while (rep < 10000) {

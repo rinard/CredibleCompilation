@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <math.h>
 #include <time.h>
+#include "signel.h"
 
 static double vy[25][101], vh[7][101], vf[7][101], vg[7][101], vs[7][101];
 
@@ -9,16 +10,15 @@ int main(void) {
     int j, k, n = 101, ng, nz, rep;
     double ar, br, r, s, t;
 
-    for (int i = 0; i < 25; i++)
-        for (int jj = 0; jj < 101; jj++)
-            vy[i][jj] = (i * 101 + jj) * 0.001 + 0.5;
+    signel((double *)vy, 25 * 101);
+    signel((double *)vh, 7 * 101);
+    signel((double *)vf, 7 * 101);
+    /* Ensure vf is positive (used as divisor) */
     for (int i = 0; i < 7; i++)
-        for (int jj = 0; jj < 101; jj++) {
-            vh[i][jj] = (i * 101 + jj) * 0.001 + 0.5;
-            vf[i][jj] = (i * 101 + jj) * 0.001 + 0.5;  /* positive */
-            vg[i][jj] = (i * 101 + jj) * 0.001 + 0.5;
-            vs[i][jj] = (i * 101 + jj) * 0.001 + 0.5;
-        }
+        for (int jj = 0; jj < 101; jj++)
+            if (vf[i][jj] <= 0.0) vf[i][jj] = 0.001;
+    signel((double *)vg, 7 * 101);
+    signel((double *)vs, 7 * 101);
 
     struct timespec t0, t1;
     clock_gettime(CLOCK_MONOTONIC, &t0);

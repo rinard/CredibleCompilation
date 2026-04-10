@@ -1,27 +1,69 @@
-var ip : int, rep : int, i1 : int, j1 : int, i2 : int, j2 : int;
+var ip : int, rep : int, i1 : int, j1 : int, i2 : int, j2 : int,
+    fuzz : float, buzz : float, fizz : float, ds : float, dw : float;
 array p_x[64] : float, p_y[64] : float, p_vx[64] : float, p_vy[64] : float, b[4096] : float, c[4096] : float, h[4096] : float, y[1001] : float, z[1001] : float, e[96] : int, f[96] : int;
 
+ds := 1.0;
+dw := 0.5;
 ip := 0;
 while (ip < 64) {
-  p_x[ip] := intToFloat(ip % 64) + 0.5;
-  p_y[ip] := intToFloat(ip / 64) + 0.5;
-  p_vx[ip] := 0.001;
-  p_vy[ip] := 0.001;
+  p_x[ip] := ds;
+  ds := ds + dw;
+  p_y[ip] := ds;
+  ds := ds + dw;
+  p_vx[ip] := ds;
+  ds := ds + dw;
+  p_vy[ip] := ds;
+  ds := ds + dw;
+  ip := ip + 1
+};
+
+fuzz := 0.001234500;
+buzz := 1.0 + fuzz;
+fizz := 1.1 * fuzz;
+ip := 0;
+while (ip < 4096) {
+  buzz := (1.0 - fuzz) * buzz + fuzz;
+  fuzz := 0.0 - fuzz;
+  b[ip] := (buzz - fizz) * 0.1;
+  ip := ip + 1
+};
+
+fuzz := 0.001234500;
+buzz := 1.0 + fuzz;
+fizz := 1.1 * fuzz;
+ip := 0;
+while (ip < 4096) {
+  buzz := (1.0 - fuzz) * buzz + fuzz;
+  fuzz := 0.0 - fuzz;
+  c[ip] := (buzz - fizz) * 0.1;
   ip := ip + 1
 };
 
 ip := 0;
 while (ip < 4096) {
-  b[ip] := intToFloat(ip) * 0.0001;
-  c[ip] := intToFloat(ip) * 0.00005;
   h[ip] := 0.0;
   ip := ip + 1
 };
 
+fuzz := 0.001234500;
+buzz := 1.0 + fuzz;
+fizz := 1.1 * fuzz;
 ip := 0;
 while (ip < 1001) {
-  y[ip] := 0.001;
-  z[ip] := 0.001;
+  buzz := (1.0 - fuzz) * buzz + fuzz;
+  fuzz := 0.0 - fuzz;
+  y[ip] := (buzz - fizz) * 0.1;
+  ip := ip + 1
+};
+
+fuzz := 0.001234500;
+buzz := 1.0 + fuzz;
+fizz := 1.1 * fuzz;
+ip := 0;
+while (ip < 1001) {
+  buzz := (1.0 - fuzz) * buzz + fuzz;
+  fuzz := 0.0 - fuzz;
+  z[ip] := (buzz - fizz) * 0.1;
   ip := ip + 1
 };
 

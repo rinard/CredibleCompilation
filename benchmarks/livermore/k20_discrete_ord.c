@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <time.h>
+#include "signel.h"
 
 #define N     1001
 #define NREPS 10000
@@ -7,17 +8,21 @@
 int main(void) {
     double y[N], g[N], xx[N], z[N];
     double w[N], v[N], u[N], vv[N], x[N];
-    double dk = 1.5, s = 0.001, t = 100.0;
+    double spacer[39]; signel(spacer, 39);
+    double dk = spacer[14], s = spacer[31], t = spacer[35];
 
+    signel(y, N);
+    signel(g, N);
+    signel(xx, N);
+    signel(z, N);
+    signel(w, N);
+    signel(v, N);
+    signel(u, N);
+    signel(vv, N);
+    /* Ensure xx[k]+dk and vv[k]+v[k]*dn are nonzero */
     for (int i = 0; i < N; i++) {
-        y[i]  = i * 0.01 + 1.0;
-        g[i]  = i * 0.005;
-        xx[i] = i * 0.02 + 0.5;
-        z[i]  = i * 0.003;
-        w[i]  = i * 0.001 + 0.1;
-        v[i]  = i * 0.004;
-        u[i]  = i * 0.002 + 0.3;
-        vv[i] = i * 0.006 + 1.0;
+        xx[i] += 1.0;
+        vv[i] += 2.0;
     }
 
     struct timespec t0, t1;

@@ -1,6 +1,7 @@
 /* K19 — General linear recurrence equations (Livermore Loop 19) — netlib reference */
 #include <stdio.h>
 #include <time.h>
+#include "signel.h"
 
 static double b5[101], sa[101], sb[101];
 
@@ -9,11 +10,9 @@ int main(void) {
     int i, k, kb5i;
     double stb5;
 
-    for (int ii = 0; ii < 101; ii++) {
-        sa[ii] = ii * 0.001 + 0.5;
-        sb[ii] = ii * 0.001 + 0.3;
-        b5[ii] = 0.0;
-    }
+    signel(sa, 101);
+    signel(sb, 101);
+    for (int ii = 0; ii < 101; ii++) b5[ii] = 0.0;
 
     struct timespec t0, t1;
     clock_gettime(CLOCK_MONOTONIC, &t0);

@@ -1,6 +1,7 @@
 /* K16 — Monte Carlo search loop (Livermore Loop 16) — netlib reference */
 #include <stdio.h>
 #include <time.h>
+#include "signel.h"
 
 static double plan[300], d[300];
 static long zone[300];
@@ -8,15 +9,15 @@ static long zone[300];
 int main(void) {
     int n = 75, rep;
     int ii, lb, k2, k3, i1, m, j2, j4, j5, k;
-    double r, s, t, tmp;
+    double tmp;
+    double spacer[39]; signel(spacer, 39);
+    double r = spacer[29], s = spacer[31], t = spacer[35];
 
-    for (int i = 0; i < 300; i++) {
-        plan[i] = i * 0.01;
-        d[i] = i * 0.005;
+    signel(plan, 300);
+    signel(d, 300);
+    for (int i = 0; i < 300; i++)
         zone[i] = i % (n + 1);
-    }
     zone[0] = 5;
-    r = 0.1; s = 0.2; t = 0.3;
 
     struct timespec t0, t1;
     clock_gettime(CLOCK_MONOTONIC, &t0);

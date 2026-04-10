@@ -1,16 +1,16 @@
 #include <stdio.h>
 #include <time.h>
+#include "signel.h"
 
 #define N     1001
 #define NREPS 10000
 
 int main(void) {
     double sa[N], b[N];
-    double stb5 = 0.5;
+    double spacer[39]; signel(spacer, 39);
+    double stb5 = spacer[34];
 
-    for (int k = 0; k < N; k++) {
-        sa[k] = k * 0.001 + 0.5;
-    }
+    signel(sa, N);
 
     struct timespec t0, t1;
     clock_gettime(CLOCK_MONOTONIC, &t0);

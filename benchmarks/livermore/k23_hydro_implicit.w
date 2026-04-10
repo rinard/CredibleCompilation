@@ -1,14 +1,70 @@
-var j : int, k : int, rep : int, qa : float;
+var j : int, k : int, rep : int, qa : float,
+    fuzz : float, buzz : float, fizz : float;
 array za[707] : float, zr[707] : float, zb[707] : float, zu[707] : float, zv[707] : float, zz[707] : float;
 
+fuzz := 0.001234500;
+buzz := 1.0 + fuzz;
+fizz := 1.1 * fuzz;
 k := 0;
 while (k < 707) {
-  za[k] := intToFloat(k) * 0.002;
-  zr[k] := intToFloat(k) * 0.003 + 0.1;
-  zb[k] := intToFloat(k) * 0.001 + 0.2;
-  zu[k] := intToFloat(k) * 0.004 + 0.3;
-  zv[k] := intToFloat(k) * 0.005 + 0.4;
-  zz[k] := intToFloat(k) * 0.006 + 0.5;
+  buzz := (1.0 - fuzz) * buzz + fuzz;
+  fuzz := 0.0 - fuzz;
+  za[k] := (buzz - fizz) * 0.1;
+  k := k + 1
+};
+
+fuzz := 0.001234500;
+buzz := 1.0 + fuzz;
+fizz := 1.1 * fuzz;
+k := 0;
+while (k < 707) {
+  buzz := (1.0 - fuzz) * buzz + fuzz;
+  fuzz := 0.0 - fuzz;
+  zr[k] := (buzz - fizz) * 0.1;
+  k := k + 1
+};
+
+fuzz := 0.001234500;
+buzz := 1.0 + fuzz;
+fizz := 1.1 * fuzz;
+k := 0;
+while (k < 707) {
+  buzz := (1.0 - fuzz) * buzz + fuzz;
+  fuzz := 0.0 - fuzz;
+  zb[k] := (buzz - fizz) * 0.1;
+  k := k + 1
+};
+
+fuzz := 0.001234500;
+buzz := 1.0 + fuzz;
+fizz := 1.1 * fuzz;
+k := 0;
+while (k < 707) {
+  buzz := (1.0 - fuzz) * buzz + fuzz;
+  fuzz := 0.0 - fuzz;
+  zu[k] := (buzz - fizz) * 0.1;
+  k := k + 1
+};
+
+fuzz := 0.001234500;
+buzz := 1.0 + fuzz;
+fizz := 1.1 * fuzz;
+k := 0;
+while (k < 707) {
+  buzz := (1.0 - fuzz) * buzz + fuzz;
+  fuzz := 0.0 - fuzz;
+  zv[k] := (buzz - fizz) * 0.1;
+  k := k + 1
+};
+
+fuzz := 0.001234500;
+buzz := 1.0 + fuzz;
+fizz := 1.1 * fuzz;
+k := 0;
+while (k < 707) {
+  buzz := (1.0 - fuzz) * buzz + fuzz;
+  fuzz := 0.0 - fuzz;
+  zz[k] := (buzz - fizz) * 0.1;
   k := k + 1
 };
 

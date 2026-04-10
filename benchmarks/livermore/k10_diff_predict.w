@@ -1,14 +1,26 @@
-var i : int, j : int, rep : int, base : int, ar : float, br : float, cr : float;
+var i : int, j : int, rep : int, base : int, ar : float, br : float, cr : float,
+    fuzz : float, buzz : float, fizz : float;
 array px[2525] : float, cx[2525] : float;
 
+fuzz := 0.001234500;
+buzz := 1.0 + fuzz;
+fizz := 1.1 * fuzz;
 i := 0;
-while (i < 101) {
-  j := 0;
-  while (j < 25) {
-    px[i * 25 + j] := (intToFloat(i) + 1.0) * 0.01 + intToFloat(j) * 0.001;
-    cx[i * 25 + j] := (intToFloat(i) + 1.0) * 0.02 + intToFloat(j) * 0.002;
-    j := j + 1
-  };
+while (i < 2525) {
+  buzz := (1.0 - fuzz) * buzz + fuzz;
+  fuzz := 0.0 - fuzz;
+  px[i] := (buzz - fizz) * 0.1;
+  i := i + 1
+};
+
+fuzz := 0.001234500;
+buzz := 1.0 + fuzz;
+fizz := 1.1 * fuzz;
+i := 0;
+while (i < 2525) {
+  buzz := (1.0 - fuzz) * buzz + fuzz;
+  fuzz := 0.0 - fuzz;
+  cx[i] := (buzz - fizz) * 0.1;
   i := i + 1
 };
 

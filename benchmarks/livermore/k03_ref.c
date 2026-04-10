@@ -1,6 +1,7 @@
 /* K3 — Inner product (Livermore Loop 3) — netlib reference */
 #include <stdio.h>
 #include <time.h>
+#include "signel.h"
 
 static double z[1001], x[1001];
 
@@ -8,10 +9,8 @@ int main(void) {
     int k, n = 1001, rep;
     double q;
 
-    for (int i = 0; i < 1001; i++) {
-        z[i] = i * 0.001 + 0.5;
-        x[i] = i * 0.001 + 0.3;
-    }
+    signel(z, 1001);
+    signel(x, 1001);
 
     struct timespec t0, t1;
     clock_gettime(CLOCK_MONOTONIC, &t0);

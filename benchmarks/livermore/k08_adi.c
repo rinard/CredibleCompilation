@@ -4,6 +4,7 @@
    ky range 1..n-1 (1..100), kx range 1..2. */
 #include <stdio.h>
 #include <time.h>
+#include "signel.h"
 
 #define N     101
 #define KXD   5
@@ -12,25 +13,20 @@
 int main(void) {
     double u1[2][N][KXD], u2[2][N][KXD], u3[2][N][KXD];
     double du1[N], du2[N], du3[N];
-    double a11 = 0.1, a12 = 0.2, a13 = 0.3;
-    double a21 = 0.05, a22 = 0.15, a23 = 0.25;
-    double a31 = 0.02, a32 = 0.12, a33 = 0.22;
-    double sig = 0.5;
+    double spacer[39]; signel(spacer, 39);
+    double a11 = spacer[0], a12 = spacer[1], a13 = spacer[2];
+    double a21 = spacer[3], a22 = spacer[4], a23 = spacer[5];
+    double a31 = spacer[6], a32 = spacer[7], a33 = spacer[8];
+    double sig = spacer[33];
     int nl1, nl2;
 
     /* Initialise */
-    for (int nl = 0; nl < 2; nl++)
-        for (int ky = 0; ky < N; ky++)
-            for (int kx = 0; kx < KXD; kx++) {
-                u1[nl][ky][kx] = (nl + 1) * 0.01 * ky + 0.001 * kx;
-                u2[nl][ky][kx] = (nl + 1) * 0.02 * ky + 0.002 * kx;
-                u3[nl][ky][kx] = (nl + 1) * 0.03 * ky + 0.003 * kx;
-            }
-    for (int ky = 0; ky < N; ky++) {
-        du1[ky] = 0.0;
-        du2[ky] = 0.0;
-        du3[ky] = 0.0;
-    }
+    signel((double *)u1, 2 * N * KXD);
+    signel((double *)u2, 2 * N * KXD);
+    signel((double *)u3, 2 * N * KXD);
+    signel(du1, N);
+    signel(du2, N);
+    signel(du3, N);
 
     struct timespec t0, t1;
     clock_gettime(CLOCK_MONOTONIC, &t0);

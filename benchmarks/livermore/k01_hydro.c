@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <time.h>
+#include "signel.h"
 
 #define N    1001
 #define KMAX 990
@@ -7,12 +8,11 @@
 
 int main(void) {
     double x[N], y[N], z[N];
-    double q = 1.5, r = 2.0, t = 3.0;
+    double spacer[39]; signel(spacer, 39);
+    double q = spacer[27], r = spacer[29], t = spacer[35];
 
-    for (int i = 0; i < N; i++) {
-        y[i] = i * 0.01;
-        z[i] = i * 0.02 + 1.0;
-    }
+    signel(y, N);
+    signel(z, N);
 
     struct timespec t0, t1;
     clock_gettime(CLOCK_MONOTONIC, &t0);

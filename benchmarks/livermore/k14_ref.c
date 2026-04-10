@@ -1,6 +1,7 @@
 /* K14 — 1-D PIC (Livermore Loop 14) — netlib reference */
 #include <stdio.h>
 #include <time.h>
+#include "signel.h"
 
 static double vx[1001], xx[1001], xi[1001], ex1[1001], dex1[1001];
 static double ex[1001], dex[1001], grd[1001], rx[1001], rh[2049];
@@ -8,12 +9,14 @@ static long ix[1001], ir[1001];
 
 int main(void) {
     int k, n = 1001, rep;
-    double flx = 0.001;
+    double spacer[39]; signel(spacer, 39);
+    double flx = spacer[26];
 
+    /* grd must be valid grid indices */
+    for (int i = 0; i < 1001; i++) grd[i] = (i % 512) + 1.5;
+    signel(ex, 1001);
+    signel(dex, 1001);
     for (int i = 0; i < 1001; i++) {
-        grd[i] = (i % 512) + 1.5;
-        ex[i] = i * 0.001;
-        dex[i] = i * 0.0005;
         vx[i] = xx[i] = xi[i] = ex1[i] = dex1[i] = rx[i] = 0.0;
         ix[i] = ir[i] = 0;
     }

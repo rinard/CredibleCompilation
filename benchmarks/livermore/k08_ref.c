@@ -1,24 +1,22 @@
 /* K8 — ADI integration (Livermore Loop 8) — netlib reference */
 #include <stdio.h>
 #include <time.h>
+#include "signel.h"
 
 static double u1[2][101][5], u2[2][101][5], u3[2][101][5];
 static double du1[101], du2[101], du3[101];
 
 int main(void) {
     int kx, ky, nl1, nl2, n = 100, rep;
-    double a11 = 0.1, a12 = 0.2, a13 = 0.3;
-    double a21 = 0.1, a22 = 0.2, a23 = 0.3;
-    double a31 = 0.1, a32 = 0.2, a33 = 0.3;
-    double sig = 0.05;
+    double spacer[39]; signel(spacer, 39);
+    double a11 = spacer[0], a12 = spacer[1], a13 = spacer[2];
+    double a21 = spacer[3], a22 = spacer[4], a23 = spacer[5];
+    double a31 = spacer[6], a32 = spacer[7], a33 = spacer[8];
+    double sig = spacer[33];
 
-    for (int p = 0; p < 2; p++)
-        for (int i = 0; i < 101; i++)
-            for (int j = 0; j < 5; j++) {
-                u1[p][i][j] = (p * 101 * 5 + i * 5 + j) * 0.001;
-                u2[p][i][j] = (p * 101 * 5 + i * 5 + j) * 0.001 + 0.1;
-                u3[p][i][j] = (p * 101 * 5 + i * 5 + j) * 0.001 + 0.2;
-            }
+    signel((double *)u1, 2 * 101 * 5);
+    signel((double *)u2, 2 * 101 * 5);
+    signel((double *)u3, 2 * 101 * 5);
 
     struct timespec t0, t1;
     clock_gettime(CLOCK_MONOTONIC, &t0);

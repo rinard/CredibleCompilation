@@ -1,6 +1,7 @@
 /* K13 — 2-D PIC (Livermore Loop 13) — netlib reference */
 #include <stdio.h>
 #include <time.h>
+#include "signel.h"
 
 static double p[64][4];
 static double b[64][64], c[64][64], h[64][64];
@@ -11,22 +12,14 @@ int main(void) {
     int ip, n = 64, rep;
     int i1, j1, i2, j2;
 
-    for (ip = 0; ip < 64; ip++) {
-        p[ip][0] = ip % 64 + 0.5;
-        p[ip][1] = ip / 64 + 0.5;
-        p[ip][2] = 0.001;
-        p[ip][3] = 0.001;
-    }
+    init_particles((double *)p, 64);
+    signel((double *)b, 64 * 64);
+    signel((double *)c, 64 * 64);
     for (int i = 0; i < 64; i++)
-        for (int j = 0; j < 64; j++) {
-            b[i][j] = (i * 64 + j) * 0.0001;
-            c[i][j] = (i * 64 + j) * 0.0001;
+        for (int j = 0; j < 64; j++)
             h[i][j] = 0.0;
-        }
-    for (int i = 0; i < 1001; i++) {
-        y[i] = 0.001;
-        z[i] = 0.001;
-    }
+    signel(y, 1001);
+    signel(z, 1001);
     for (int i = 0; i < 96; i++) {
         e[i] = i % 64;
         f[i] = i % 64;
@@ -37,12 +30,7 @@ int main(void) {
 
     for (rep = 0; rep < 10000; rep++) {
         /* re-init p each rep to avoid drift */
-        for (ip = 0; ip < 64; ip++) {
-            p[ip][0] = ip % 64 + 0.5;
-            p[ip][1] = ip / 64 + 0.5;
-            p[ip][2] = 0.001;
-            p[ip][3] = 0.001;
-        }
+        init_particles((double *)p, 64);
         for (int i = 0; i < 64; i++)
             for (int j = 0; j < 64; j++)
                 h[i][j] = 0.0;

@@ -1,16 +1,32 @@
-var q : float, r : float, t : float, k : int, rep : int;
+var q : float, r : float, t : float, k : int, rep : int,
+    fuzz : float, buzz : float, fizz : float;
 array x[1001] : float, y[1001] : float, z[1001] : float;
 
+q := 0.1;
+r := 0.1;
+t := 0.1;
+
+fuzz := 0.001234500;
+buzz := 1.0 + fuzz;
+fizz := 1.1 * fuzz;
 k := 0;
 while (k < 1001) {
-  y[k] := intToFloat(k) * 0.01;
-  z[k] := intToFloat(k) * 0.02 + 1.0;
+  buzz := (1.0 - fuzz) * buzz + fuzz;
+  fuzz := 0.0 - fuzz;
+  y[k] := (buzz - fizz) * 0.1;
   k := k + 1
 };
 
-q := 1.5;
-r := 2.0;
-t := 3.0;
+fuzz := 0.001234500;
+buzz := 1.0 + fuzz;
+fizz := 1.1 * fuzz;
+k := 0;
+while (k < 1001) {
+  buzz := (1.0 - fuzz) * buzz + fuzz;
+  fuzz := 0.0 - fuzz;
+  z[k] := (buzz - fizz) * 0.1;
+  k := k + 1
+};
 
 rep := 0;
 while (rep < 10000) {

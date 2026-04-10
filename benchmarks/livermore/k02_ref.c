@@ -1,24 +1,22 @@
 /* K2 — ICCG excerpt (Livermore Loop 2) — netlib reference */
 #include <stdio.h>
 #include <time.h>
+#include "signel.h"
 
 static double x[1001], v[1001];
 
 int main(void) {
     int k, i, ii, ipnt, ipntp, n = 101, rep;
 
-    for (int j = 0; j < 1001; j++) {
-        x[j] = j * 0.001 + 0.5;
-        v[j] = j * 0.001 + 0.1;
-    }
+    signel(x, 1001);
+    signel(v, 1001);
 
     struct timespec t0, t1;
     clock_gettime(CLOCK_MONOTONIC, &t0);
 
     for (rep = 0; rep < 10000; rep++) {
         /* reset x each rep so results don't blow up */
-        for (int j = 0; j < 1001; j++)
-            x[j] = j * 0.001 + 0.5;
+        signel(x, 1001);
 
         ii = n;
         ipntp = 0;

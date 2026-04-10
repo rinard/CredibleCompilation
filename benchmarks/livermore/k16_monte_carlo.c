@@ -6,30 +6,24 @@
 #include <stdio.h>
 #include <time.h>
 #include <stdint.h>
+#include "signel.h"
 
 #define N     100
-#define NREPS 10000
+#define NREPS 100
 
 int main(void) {
     double d[300], plan[300];
     int zone[300];
     int ii = N / 3;
     int lb = ii + ii;
-    double r = 0.1, s = 0.2, t = 0.3;
-    int64_t seed = 54321;
+    double spacer[39]; signel(spacer, 39);
+    double r = spacer[29], s = spacer[31], t = spacer[35];
 
     /* Initialise arrays */
-    for (int i = 0; i < 300; i++) {
-        seed = seed * 6364136223846793005LL + 1442695040888963407LL;
-        d[i] = (seed % 1000) * 0.001;
-        if (d[i] < 0) d[i] = -d[i];
-        seed = seed * 6364136223846793005LL + 1442695040888963407LL;
-        plan[i] = (seed % 500) * 0.001;
-        if (plan[i] < 0) plan[i] = -plan[i];
-        seed = seed * 6364136223846793005LL + 1442695040888963407LL;
-        zone[i] = (int)(seed % 200);
-        if (zone[i] < 0) zone[i] = -zone[i];
-    }
+    signel(d, 300);
+    signel(plan, 300);
+    for (int i = 0; i < 300; i++)
+        zone[i] = i % (N + 1);
     zone[0] = 5;  /* max m value */
 
     struct timespec t0, t1;

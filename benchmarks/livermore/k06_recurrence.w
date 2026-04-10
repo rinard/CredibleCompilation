@@ -1,9 +1,15 @@
-var i : int, k : int, rep : int;
+var i : int, k : int, rep : int,
+    fuzz : float, buzz : float, fizz : float;
 array w[64] : float, b[4096] : float;
 
+fuzz := 0.001234500;
+buzz := 1.0 + fuzz;
+fizz := 1.1 * fuzz;
 i := 0;
 while (i < 4096) {
-  b[i] := intToFloat(i) * 0.0001;
+  buzz := (1.0 - fuzz) * buzz + fuzz;
+  fuzz := 0.0 - fuzz;
+  b[i] := (buzz - fizz) * 0.1;
   i := i + 1
 };
 

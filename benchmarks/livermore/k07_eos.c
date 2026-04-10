@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <time.h>
+#include "signel.h"
 
 /* K7 — Equation of state fragment
    Original Fortran: n=995, 3-level Horner with R, T, Q */
@@ -9,13 +10,12 @@
 
 int main(void) {
     double x[1001], y[1001], z[1001], u[1001];
-    double r = 0.5, t = 0.3, q = 0.2;
+    double spacer[39]; signel(spacer, 39);
+    double r = spacer[29], t = spacer[35], q = spacer[27];
 
-    for (int i = 0; i < 1001; i++) {
-        y[i] = i * 0.01;
-        z[i] = i * 0.02 + 1.0;
-        u[i] = i * 0.003 + 0.5;
-    }
+    signel(y, 1001);
+    signel(z, 1001);
+    signel(u, 1001);
 
     struct timespec t0, t1;
     clock_gettime(CLOCK_MONOTONIC, &t0);

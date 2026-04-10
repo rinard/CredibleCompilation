@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <time.h>
+#include "signel.h"
 
 /* Original K21: px[j][i] += vy[k][i] * cx[j][k]
    px[101][25], vy[25][101], cx[101][25]
@@ -12,17 +13,9 @@
 int main(void) {
     double px[NJ * NK], vy[NK * NJ], cx[NJ * NK];
 
-    for (int i = 0; i < NJ; i++) {
-        for (int j = 0; j < NK; j++) {
-            px[i * NK + j] = (i + j) * 0.01;
-            cx[i * NK + j] = (i - j + NK) * 0.01;
-        }
-    }
-    for (int i = 0; i < NK; i++) {
-        for (int j = 0; j < NJ; j++) {
-            vy[i * NJ + j] = (i * j % 50) * 0.002;
-        }
-    }
+    signel(px, NJ * NK);
+    signel(vy, NK * NJ);
+    signel(cx, NJ * NK);
 
     struct timespec t0, t1;
     clock_gettime(CLOCK_MONOTONIC, &t0);

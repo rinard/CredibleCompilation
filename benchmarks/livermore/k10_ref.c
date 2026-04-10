@@ -1,6 +1,7 @@
 /* K10 — Difference predictors (Livermore Loop 10) — netlib reference */
 #include <stdio.h>
 #include <time.h>
+#include "signel.h"
 
 static double px[101][25], cx[101][25];
 
@@ -8,11 +9,8 @@ int main(void) {
     int i, n = 101, rep;
     double ar, br, cr;
 
-    for (int r = 0; r < 101; r++)
-        for (int c = 0; c < 25; c++) {
-            px[r][c] = (r * 25 + c) * 0.001;
-            cx[r][c] = (r * 25 + c) * 0.001 + 0.5;
-        }
+    signel((double *)px, 101 * 25);
+    signel((double *)cx, 101 * 25);
 
     struct timespec t0, t1;
     clock_gettime(CLOCK_MONOTONIC, &t0);

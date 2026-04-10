@@ -1,24 +1,37 @@
-var i : int, j : int, k : int, rep : int;
+var i : int, j : int, k : int, rep : int,
+    fuzz : float, buzz : float, fizz : float;
 array px[2525] : float, vy[2525] : float, cx[2525] : float;
 
+fuzz := 0.001234500;
+buzz := 1.0 + fuzz;
+fizz := 1.1 * fuzz;
 i := 0;
-while (i < 101) {
-  j := 0;
-  while (j < 25) {
-    px[i * 25 + j] := intToFloat(i + j) * 0.01;
-    cx[i * 25 + j] := intToFloat(i - j + 25) * 0.01;
-    j := j + 1
-  };
+while (i < 2525) {
+  buzz := (1.0 - fuzz) * buzz + fuzz;
+  fuzz := 0.0 - fuzz;
+  px[i] := (buzz - fizz) * 0.1;
   i := i + 1
 };
 
+fuzz := 0.001234500;
+buzz := 1.0 + fuzz;
+fizz := 1.1 * fuzz;
 i := 0;
-while (i < 25) {
-  j := 0;
-  while (j < 101) {
-    vy[i * 101 + j] := intToFloat(i * j % 50) * 0.002;
-    j := j + 1
-  };
+while (i < 2525) {
+  buzz := (1.0 - fuzz) * buzz + fuzz;
+  fuzz := 0.0 - fuzz;
+  cx[i] := (buzz - fizz) * 0.1;
+  i := i + 1
+};
+
+fuzz := 0.001234500;
+buzz := 1.0 + fuzz;
+fizz := 1.1 * fuzz;
+i := 0;
+while (i < 2525) {
+  buzz := (1.0 - fuzz) * buzz + fuzz;
+  fuzz := 0.0 - fuzz;
+  vy[i] := (buzz - fizz) * 0.1;
   i := i + 1
 };
 

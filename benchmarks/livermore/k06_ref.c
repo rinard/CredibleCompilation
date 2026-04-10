@@ -1,6 +1,7 @@
 /* K6 — General linear recurrence equations (Livermore Loop 6) — netlib reference */
 #include <stdio.h>
 #include <time.h>
+#include "signel.h"
 
 static double w[1001];
 static double b[64][64];
@@ -8,9 +9,7 @@ static double b[64][64];
 int main(void) {
     int i, k, n = 64, rep;
 
-    for (int r = 0; r < 64; r++)
-        for (int c = 0; c < 64; c++)
-            b[r][c] = (r * 64 + c) * 0.001;
+    signel((double *)b, 64 * 64);
 
     struct timespec t0, t1;
     clock_gettime(CLOCK_MONOTONIC, &t0);

@@ -1,16 +1,18 @@
 #include <stdio.h>
 #include <time.h>
+#include "signel.h"
 
 #define N     1024
 #define NREPS 10000
 
 int main(void) {
     double vy[N];
-    double dt = 0.01;
+    double spacer[39]; signel(spacer, 39);
+    double dt = spacer[35];
 
-    for (int i = 0; i < N; i++) {
-        vy[i] = (i - 512) * 0.01;
-    }
+    signel(vy, N);
+    /* Make some values negative so the conditional fires */
+    for (int i = 0; i < N; i += 2) vy[i] = -vy[i];
 
     struct timespec t0, t1;
     clock_gettime(CLOCK_MONOTONIC, &t0);

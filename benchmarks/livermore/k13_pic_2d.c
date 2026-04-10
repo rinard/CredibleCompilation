@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <time.h>
+#include "signel.h"
 
 #define NPART 64
 #define NGRID 64
@@ -11,18 +12,20 @@ int main(void) {
     double y[1001], z[1001];
     long e[96], f[96];
 
+    /* Use init_particles layout for p arrays */
+    double p_flat[NPART * 4];
+    init_particles(p_flat, NPART);
     for (int i = 0; i < NPART; i++) {
-        p_x[i] = (i % NGRID) + 0.5;
-        p_y[i] = (i / NGRID) + 0.5;
-        p_vx[i] = 0.001;
-        p_vy[i] = 0.001;
+        p_x[i] = p_flat[i * 4 + 0];
+        p_y[i] = p_flat[i * 4 + 1];
+        p_vx[i] = p_flat[i * 4 + 2];
+        p_vy[i] = p_flat[i * 4 + 3];
     }
-    for (int i = 0; i < NGRID*NGRID; i++) {
-        b[i] = i * 0.0001;
-        c[i] = i * 0.00005;
-        h[i] = 0.0;
-    }
-    for (int i = 0; i < 1001; i++) { y[i] = 0.001; z[i] = 0.001; }
+    signel(b, NGRID*NGRID);
+    signel(c, NGRID*NGRID);
+    for (int i = 0; i < NGRID*NGRID; i++) h[i] = 0.0;
+    signel(y, 1001);
+    signel(z, 1001);
     for (int i = 0; i < 96; i++) { e[i] = 0; f[i] = 0; }
 
     struct timespec t0, t1;

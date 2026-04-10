@@ -1,36 +1,50 @@
 var rep : int, i : int, m : int, i1 : int, k : int, k2 : int, k3 : int,
     j2 : int, j4 : int, j5 : int, ii : int, lb : int, n : int,
-    seed : int, brk : int, done : int, zval : int,
+    brk : int, done : int, zval : int,
     j4m1 : int, j4m2 : int, j5m1 : int, j5m2 : int, j5m3 : int,
     j5m4 : int, j5m5 : int, cont : int,
-    r : float, s : float, t : float, tmp : float;
+    r : float, s : float, t : float, tmp : float,
+    fuzz : float, buzz : float, fizz : float;
 array d[300] : float, plan[300] : float, zone[300] : int;
 
 n := 100;
 ii := n / 3;
 lb := ii + ii;
 r := 0.1;
-s := 0.2;
-t := 0.3;
-seed := 54321;
+s := 0.1;
+t := 0.1;
+
+fuzz := 0.001234500;
+buzz := 1.0 + fuzz;
+fizz := 1.1 * fuzz;
+i := 0;
+while (i < 300) {
+  buzz := (1.0 - fuzz) * buzz + fuzz;
+  fuzz := 0.0 - fuzz;
+  d[i] := (buzz - fizz) * 0.1;
+  i := i + 1
+};
+
+fuzz := 0.001234500;
+buzz := 1.0 + fuzz;
+fizz := 1.1 * fuzz;
+i := 0;
+while (i < 300) {
+  buzz := (1.0 - fuzz) * buzz + fuzz;
+  fuzz := 0.0 - fuzz;
+  plan[i] := (buzz - fizz) * 0.1;
+  i := i + 1
+};
 
 i := 0;
 while (i < 300) {
-  seed := seed * 6364136223846793005 + 1442695040888963407;
-  d[i] := intToFloat(seed % 1000) * 0.001;
-  if (d[i] < 0.0) { d[i] := 0.0 - d[i] } else { skip };
-  seed := seed * 6364136223846793005 + 1442695040888963407;
-  plan[i] := intToFloat(seed % 500) * 0.001;
-  if (plan[i] < 0.0) { plan[i] := 0.0 - plan[i] } else { skip };
-  seed := seed * 6364136223846793005 + 1442695040888963407;
-  zone[i] := seed % 200;
-  if (zone[i] < 0) { zone[i] := 0 - zone[i] } else { skip };
+  zone[i] := i % (n + 1);
   i := i + 1
 };
 zone[0] := 5;
 
 rep := 0;
-while (rep < 10000) {
+while (rep < 100) {
   i1 := 1;
   m := 1;
   k2 := 0;

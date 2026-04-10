@@ -1,14 +1,14 @@
 /* K24 — Find location of first minimum in array (Livermore Loop 24) — netlib reference */
 #include <stdio.h>
 #include <time.h>
+#include "signel.h"
 
 static double x[1001];
 
 int main(void) {
     int k, m, n = 1001, rep;
 
-    for (int i = 0; i < 1001; i++)
-        x[i] = i * 0.001 + 0.5;
+    signel(x, 1001);
 
     struct timespec t0, t1;
     clock_gettime(CLOCK_MONOTONIC, &t0);

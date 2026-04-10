@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <time.h>
+#include "signel.h"
 
 #define N     1001
 #define NREPS 10000
@@ -10,13 +11,14 @@ int main(void) {
     double vx[1001], xx[1001], rx[1001];
     double rh[2049];
     long ix[1001], ir[1001];
-    double flx = 0.001;
+    double spacer[39]; signel(spacer, 39);
+    double flx = spacer[26];
 
-    for (int i = 0; i < 1001; i++) {
-        grd[i] = (i % 1001) + 1.5;
-        ex_arr[i] = i * 0.001;
-        dex_arr[i] = i * 0.0005;
-    }
+    signel(grd, 1001);
+    /* Scale grd to be valid grid indices (1..512) */
+    for (int i = 0; i < 1001; i++) grd[i] = (i % 512) + 1.5;
+    signel(ex_arr, 1001);
+    signel(dex_arr, 1001);
     for (int i = 0; i < 2049; i++) rh[i] = 0.0;
 
     struct timespec t0, t1;

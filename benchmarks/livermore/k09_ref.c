@@ -1,17 +1,17 @@
 /* K9 — Integrate predictors (Livermore Loop 9) — netlib reference */
 #include <stdio.h>
 #include <time.h>
+#include "signel.h"
 
 static double px[101][25];
 
 int main(void) {
     int i, n = 101, rep;
-    double dm22 = 0.1, dm23 = 0.2, dm24 = 0.3, dm25 = 0.4;
-    double dm26 = 0.5, dm27 = 0.6, dm28 = 0.7, c0 = 0.1;
+    double spacer[39]; signel(spacer, 39);
+    double dm22 = spacer[15], dm23 = spacer[16], dm24 = spacer[17], dm25 = spacer[18];
+    double dm26 = spacer[19], dm27 = spacer[20], dm28 = spacer[21], c0 = spacer[11];
 
-    for (int r = 0; r < 101; r++)
-        for (int c = 0; c < 25; c++)
-            px[r][c] = (r * 25 + c) * 0.001;
+    signel((double *)px, 101 * 25);
 
     struct timespec t0, t1;
     clock_gettime(CLOCK_MONOTONIC, &t0);

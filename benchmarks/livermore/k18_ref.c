@@ -1,6 +1,7 @@
 /* K18 — 2-D explicit hydrodynamics (Livermore Loop 18) — netlib reference */
 #include <stdio.h>
 #include <time.h>
+#include "signel.h"
 
 static double za[7][101], zp[7][101], zq[7][101], zr[7][101];
 static double zm[7][101], zb[7][101], zu[7][101], zv[7][101], zz[7][101];
@@ -9,18 +10,21 @@ int main(void) {
     int j, k, kn, jn, n = 100, rep;
     double t, s;
 
+    signel((double *)zp, 7 * 101);
+    signel((double *)zq, 7 * 101);
+    signel((double *)zr, 7 * 101);
+    signel((double *)zm, 7 * 101);
+    /* Ensure zm is large enough to damp division */
+    for (int i = 0; i < 7; i++)
+        for (int jj = 0; jj < 101; jj++)
+            zm[i][jj] += 10.0;
+    signel((double *)zz, 7 * 101);
     for (int i = 0; i < 7; i++)
         for (int jj = 0; jj < 101; jj++) {
-            double val = (i * 101 + jj) * 0.001 + 0.5;
-            za[i][jj] = val;
-            zp[i][jj] = val;
-            zq[i][jj] = val;
-            zr[i][jj] = val;
-            zm[i][jj] = val + 1.0;  /* ensure nonzero */
-            zb[i][jj] = val;
-            zu[i][jj] = val;
-            zv[i][jj] = val;
-            zz[i][jj] = val;
+            za[i][jj] = 0.0;
+            zb[i][jj] = 0.0;
+            zu[i][jj] = 0.0;
+            zv[i][jj] = 0.0;
         }
 
     struct timespec t0, t1;

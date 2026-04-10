@@ -3,6 +3,7 @@
    px is [101][25]. Scalars: dm22..dm28, c0. n=101. */
 #include <stdio.h>
 #include <time.h>
+#include "signel.h"
 
 #define N     101
 #define NCOL  25
@@ -10,13 +11,12 @@
 
 int main(void) {
     double px[N][NCOL];
-    double dm28 = 0.01, dm27 = 0.02, dm26 = 0.03, dm25 = 0.04;
-    double dm24 = 0.05, dm23 = 0.06, dm22 = 0.07, c0 = 0.5;
+    double spacer[39]; signel(spacer, 39);
+    double dm28 = spacer[21], dm27 = spacer[20], dm26 = spacer[19], dm25 = spacer[18];
+    double dm24 = spacer[17], dm23 = spacer[16], dm22 = spacer[15], c0 = spacer[11];
 
     /* Initialise */
-    for (int i = 0; i < N; i++)
-        for (int j = 0; j < NCOL; j++)
-            px[i][j] = (i + 1) * 0.01 + j * 0.001;
+    signel((double *)px, N * NCOL);
 
     struct timespec t0, t1;
     clock_gettime(CLOCK_MONOTONIC, &t0);

@@ -1,31 +1,58 @@
 var rep : int, j : int, k : int, ar : float, br : float,
     r : float, s : float, t : float, jk : int, jk1 : int,
     jp1k : int, jm1k : int, jkm1 : int, jkp1 : int,
-    jp1km1 : int, jm1kp1 : int;
+    jp1km1 : int, jm1kp1 : int,
+    fuzz : float, buzz : float, fizz : float;
 array vy[2525] : float, vh[707] : float, vf[707] : float,
       vg[707] : float, vs[707] : float;
 
+fuzz := 0.001234500;
+buzz := 1.0 + fuzz;
+fizz := 1.1 * fuzz;
 j := 0;
-while (j < 7) {
-  k := 0;
-  while (k < 101) {
-    jk := j * 101 + k;
-    vh[jk] := intToFloat(j + 1) * 0.01 + intToFloat(k) * 0.001;
-    vf[jk] := intToFloat(j + 1) * 0.02 + intToFloat(k) * 0.003 + 0.001;
-    vg[jk] := intToFloat(j + 1) * 0.015 + intToFloat(k) * 0.002;
-    vs[jk] := 0.0;
-    k := k + 1
-  };
+while (j < 707) {
+  buzz := (1.0 - fuzz) * buzz + fuzz;
+  fuzz := 0.0 - fuzz;
+  vh[j] := (buzz - fizz) * 0.1;
+  j := j + 1
+};
+
+fuzz := 0.001234500;
+buzz := 1.0 + fuzz;
+fizz := 1.1 * fuzz;
+j := 0;
+while (j < 707) {
+  buzz := (1.0 - fuzz) * buzz + fuzz;
+  fuzz := 0.0 - fuzz;
+  vf[j] := (buzz - fizz) * 0.1;
+  j := j + 1
+};
+j := 0;
+while (j < 707) {
+  if (vf[j] < 0.001) { vf[j] := 0.001 } else { skip };
+  j := j + 1
+};
+
+fuzz := 0.001234500;
+buzz := 1.0 + fuzz;
+fizz := 1.1 * fuzz;
+j := 0;
+while (j < 707) {
+  buzz := (1.0 - fuzz) * buzz + fuzz;
+  fuzz := 0.0 - fuzz;
+  vg[j] := (buzz - fizz) * 0.1;
   j := j + 1
 };
 
 j := 0;
-while (j < 25) {
-  k := 0;
-  while (k < 101) {
-    vy[j * 101 + k] := 0.0;
-    k := k + 1
-  };
+while (j < 707) {
+  vs[j] := 0.0;
+  j := j + 1
+};
+
+j := 0;
+while (j < 2525) {
+  vy[j] := 0.0;
   j := j + 1
 };
 

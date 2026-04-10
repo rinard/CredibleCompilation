@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <time.h>
+#include "signel.h"
 
 /* Original K23: 2-D implicit hydrodynamics
    za[j][k] += 0.175*(qa - za[j][k])
@@ -18,14 +19,12 @@
 int main(void) {
     double za[NTOT], zr[NTOT], zb[NTOT], zu[NTOT], zv[NTOT], zz[NTOT];
 
-    for (int i = 0; i < NTOT; i++) {
-        za[i] = i * 0.002;
-        zr[i] = i * 0.003 + 0.1;
-        zb[i] = i * 0.001 + 0.2;
-        zu[i] = i * 0.004 + 0.3;
-        zv[i] = i * 0.005 + 0.4;
-        zz[i] = i * 0.006 + 0.5;
-    }
+    signel(za, NTOT);
+    signel(zr, NTOT);
+    signel(zb, NTOT);
+    signel(zu, NTOT);
+    signel(zv, NTOT);
+    signel(zz, NTOT);
 
     struct timespec t0, t1;
     clock_gettime(CLOCK_MONOTONIC, &t0);

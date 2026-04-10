@@ -1,6 +1,7 @@
 /* K21 — Matrix*matrix product (Livermore Loop 21) — netlib reference */
 #include <stdio.h>
 #include <time.h>
+#include "signel.h"
 
 static double px[101][25], vy[25][101], cx[101][25];
 
@@ -8,13 +9,10 @@ int main(void) {
     int i, j, k, n = 101, rep;
 
     for (int ii = 0; ii < 101; ii++)
-        for (int jj = 0; jj < 25; jj++) {
+        for (int jj = 0; jj < 25; jj++)
             px[ii][jj] = 0.0;
-            cx[ii][jj] = (ii * 25 + jj) * 0.001;
-        }
-    for (int ii = 0; ii < 25; ii++)
-        for (int jj = 0; jj < 101; jj++)
-            vy[ii][jj] = (ii * 101 + jj) * 0.001;
+    signel((double *)cx, 101 * 25);
+    signel((double *)vy, 25 * 101);
 
     struct timespec t0, t1;
     clock_gettime(CLOCK_MONOTONIC, &t0);

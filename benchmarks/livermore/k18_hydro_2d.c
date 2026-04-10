@@ -4,6 +4,7 @@
    kn=6, jn=101. Scalars: t=0.0037, s=0.0041. */
 #include <stdio.h>
 #include <time.h>
+#include "signel.h"
 
 #define JN  101
 #define KN  6
@@ -14,14 +15,18 @@ int main(void) {
     double za[KD][JN], zb[KD][JN], zp[KD][JN], zq[KD][JN];
     double zr[KD][JN], zm[KD][JN], zu[KD][JN], zv[KD][JN], zz[KD][JN];
 
-    /* Initialise arrays with deterministic values */
+    /* Initialise arrays with signel */
+    signel((double *)zp, KD * JN);
+    signel((double *)zq, KD * JN);
+    signel((double *)zr, KD * JN);
+    signel((double *)zm, KD * JN);
+    /* Ensure zm is large enough to damp division */
+    for (int k = 0; k < KD; k++)
+        for (int j = 0; j < JN; j++)
+            zm[k][j] += 10.0;
+    signel((double *)zz, KD * JN);
     for (int k = 0; k < KD; k++)
         for (int j = 0; j < JN; j++) {
-            zp[k][j] = (k + 1) * 0.01 + j * 0.001;
-            zq[k][j] = (k + 1) * 0.005 + j * 0.0005;
-            zr[k][j] = (k + 1) * 0.02 + j * 0.002 + 0.5;
-            zm[k][j] = (k + 1) * 0.03 + j * 0.003 + 1.0;
-            zz[k][j] = (k + 1) * 0.015 + j * 0.0015;
             zu[k][j] = 0.0;
             zv[k][j] = 0.0;
             za[k][j] = 0.0;

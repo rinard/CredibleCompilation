@@ -3,6 +3,7 @@
    px[101][25], cx[101][25]. n=101. */
 #include <stdio.h>
 #include <time.h>
+#include "signel.h"
 
 #define N     101
 #define NCOL  25
@@ -12,11 +13,8 @@ int main(void) {
     double px[N][NCOL], cx[N][NCOL];
 
     /* Initialise */
-    for (int i = 0; i < N; i++)
-        for (int j = 0; j < NCOL; j++) {
-            px[i][j] = (i + 1) * 0.01 + j * 0.001;
-            cx[i][j] = (i + 1) * 0.02 + j * 0.002;
-        }
+    signel((double *)px, N * NCOL);
+    signel((double *)cx, N * NCOL);
 
     struct timespec t0, t1;
     clock_gettime(CLOCK_MONOTONIC, &t0);

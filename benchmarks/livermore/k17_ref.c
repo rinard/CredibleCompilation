@@ -1,6 +1,7 @@
 /* K17 — Implicit, conditional computation (Livermore Loop 17) — netlib reference */
 #include <stdio.h>
 #include <time.h>
+#include "signel.h"
 
 static double vsp[101], vstp[101], vxne[101], vxnd[101];
 static double ve3[101], vlr[101], vlin[101];
@@ -10,30 +11,26 @@ int main(void) {
     int i, j, ink;
     double scale, xnm, e6, e3, xnei, xnc;
 
-    for (int ii = 0; ii < 101; ii++) {
-        vsp[ii]  = ii * 0.01 + 0.5;
-        vstp[ii] = ii * 0.01 + 0.5;
-        vxne[ii] = ii * 0.01 + 0.5;
-        vxnd[ii] = ii * 0.01 + 0.5;
-        ve3[ii]  = ii * 0.01 + 0.5;
-        vlr[ii]  = ii * 0.01 + 0.5;
-        vlin[ii] = ii * 0.01 + 0.5;
-    }
+    signel(vsp, 101);
+    signel(vstp, 101);
+    signel(vxne, 101);
+    signel(vxnd, 101);
+    signel(ve3, 101);
+    signel(vlr, 101);
+    signel(vlin, 101);
 
     struct timespec t0, t1;
     clock_gettime(CLOCK_MONOTONIC, &t0);
 
     for (rep = 0; rep < 10000; rep++) {
         /* re-init to avoid accumulation */
-        for (int ii = 0; ii < 101; ii++) {
-            vsp[ii]  = ii * 0.01 + 0.5;
-            vstp[ii] = ii * 0.01 + 0.5;
-            vxne[ii] = ii * 0.01 + 0.5;
-            vxnd[ii] = ii * 0.01 + 0.5;
-            ve3[ii]  = ii * 0.01 + 0.5;
-            vlr[ii]  = ii * 0.01 + 0.5;
-            vlin[ii] = ii * 0.01 + 0.5;
-        }
+        signel(vsp, 101);
+        signel(vstp, 101);
+        signel(vxne, 101);
+        signel(vxnd, 101);
+        signel(ve3, 101);
+        signel(vlr, 101);
+        signel(vlin, 101);
 
         i = n-1; j = 0; ink = -1;
         scale = 5.0/3.0; xnm = 1.0/3.0; e6 = 1.03/3.07;

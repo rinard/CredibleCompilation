@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <time.h>
+#include "signel.h"
 
 /* K2 — ICCG excerpt (Incomplete Cholesky - Conjugate Gradient)
    Original Fortran: n=101, halving do-while with stride-2 inner loop */
@@ -10,10 +11,8 @@
 int main(void) {
     double x[1001], v[1001];
 
-    for (int i = 0; i < 1001; i++) {
-        x[i] = i * 0.01;
-        v[i] = i * 0.001 + 0.1;
-    }
+    signel(x, 1001);
+    signel(v, 1001);
 
     struct timespec t0, t1;
     clock_gettime(CLOCK_MONOTONIC, &t0);

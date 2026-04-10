@@ -1,6 +1,7 @@
 /* K23 — 2-D implicit hydrodynamics (Livermore Loop 23) — netlib reference */
 #include <stdio.h>
 #include <time.h>
+#include "signel.h"
 
 static double za[7][101], zr[7][101], zb[7][101];
 static double zu[7][101], zv[7][101], zz[7][101];
@@ -9,16 +10,12 @@ int main(void) {
     int j, k, n = 100, rep;
     double qa;
 
-    for (int i = 0; i < 7; i++)
-        for (int jj = 0; jj < 101; jj++) {
-            double val = (i * 101 + jj) * 0.001 + 0.5;
-            za[i][jj] = val;
-            zr[i][jj] = val;
-            zb[i][jj] = val;
-            zu[i][jj] = val;
-            zv[i][jj] = val;
-            zz[i][jj] = val;
-        }
+    signel((double *)za, 7 * 101);
+    signel((double *)zr, 7 * 101);
+    signel((double *)zb, 7 * 101);
+    signel((double *)zu, 7 * 101);
+    signel((double *)zv, 7 * 101);
+    signel((double *)zz, 7 * 101);
 
     struct timespec t0, t1;
     clock_gettime(CLOCK_MONOTONIC, &t0);

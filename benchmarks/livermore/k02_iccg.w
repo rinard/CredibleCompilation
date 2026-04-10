@@ -1,10 +1,26 @@
-var k : int, i : int, rep : int, ii : int, ipnt : int, ipntp : int;
+var k : int, i : int, rep : int, ii : int, ipnt : int, ipntp : int,
+    fuzz : float, buzz : float, fizz : float;
 array x[1001] : float, v[1001] : float;
 
+fuzz := 0.001234500;
+buzz := 1.0 + fuzz;
+fizz := 1.1 * fuzz;
 k := 0;
 while (k < 1001) {
-  x[k] := intToFloat(k) * 0.01;
-  v[k] := intToFloat(k) * 0.001 + 0.1;
+  buzz := (1.0 - fuzz) * buzz + fuzz;
+  fuzz := 0.0 - fuzz;
+  x[k] := (buzz - fizz) * 0.1;
+  k := k + 1
+};
+
+fuzz := 0.001234500;
+buzz := 1.0 + fuzz;
+fizz := 1.1 * fuzz;
+k := 0;
+while (k < 1001) {
+  buzz := (1.0 - fuzz) * buzz + fuzz;
+  fuzz := 0.0 - fuzz;
+  v[k] := (buzz - fizz) * 0.1;
   k := k + 1
 };
 

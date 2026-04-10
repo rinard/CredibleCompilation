@@ -2,39 +2,81 @@ var rep : int, kx : int, ky : int, nl1 : int, nl2 : int,
     a11 : float, a12 : float, a13 : float,
     a21 : float, a22 : float, a23 : float,
     a31 : float, a32 : float, a33 : float,
-    sig : float, nl : int, idx : int, idx_yp : int, idx_ym : int, idx_xp : int, idx_xm : int;
+    sig : float, nl : int, idx : int, idx_yp : int, idx_ym : int, idx_xp : int, idx_xm : int,
+    fuzz : float, buzz : float, fizz : float;
 array u1[1010] : float, u2[1010] : float, u3[1010] : float,
       du1[101] : float, du2[101] : float, du3[101] : float;
 
-nl := 0;
-while (nl < 2) {
-  ky := 0;
-  while (ky < 101) {
-    kx := 0;
-    while (kx < 5) {
-      idx := nl * 505 + ky * 5 + kx;
-      u1[idx] := intToFloat(nl + 1) * 0.01 * intToFloat(ky) + 0.001 * intToFloat(kx);
-      u2[idx] := intToFloat(nl + 1) * 0.02 * intToFloat(ky) + 0.002 * intToFloat(kx);
-      u3[idx] := intToFloat(nl + 1) * 0.03 * intToFloat(ky) + 0.003 * intToFloat(kx);
-      kx := kx + 1
-    };
-    ky := ky + 1
-  };
-  nl := nl + 1
+a11 := 0.1;  a12 := 0.1;  a13 := 0.1;
+a21 := 0.1;  a22 := 0.1;  a23 := 0.1;
+a31 := 0.1;  a32 := 0.1;  a33 := 0.1;
+sig := 0.1;
+
+fuzz := 0.001234500;
+buzz := 1.0 + fuzz;
+fizz := 1.1 * fuzz;
+idx := 0;
+while (idx < 1010) {
+  buzz := (1.0 - fuzz) * buzz + fuzz;
+  fuzz := 0.0 - fuzz;
+  u1[idx] := (buzz - fizz) * 0.1;
+  idx := idx + 1
 };
 
+fuzz := 0.001234500;
+buzz := 1.0 + fuzz;
+fizz := 1.1 * fuzz;
+idx := 0;
+while (idx < 1010) {
+  buzz := (1.0 - fuzz) * buzz + fuzz;
+  fuzz := 0.0 - fuzz;
+  u2[idx] := (buzz - fizz) * 0.1;
+  idx := idx + 1
+};
+
+fuzz := 0.001234500;
+buzz := 1.0 + fuzz;
+fizz := 1.1 * fuzz;
+idx := 0;
+while (idx < 1010) {
+  buzz := (1.0 - fuzz) * buzz + fuzz;
+  fuzz := 0.0 - fuzz;
+  u3[idx] := (buzz - fizz) * 0.1;
+  idx := idx + 1
+};
+
+fuzz := 0.001234500;
+buzz := 1.0 + fuzz;
+fizz := 1.1 * fuzz;
 ky := 0;
 while (ky < 101) {
-  du1[ky] := 0.0;
-  du2[ky] := 0.0;
-  du3[ky] := 0.0;
+  buzz := (1.0 - fuzz) * buzz + fuzz;
+  fuzz := 0.0 - fuzz;
+  du1[ky] := (buzz - fizz) * 0.1;
   ky := ky + 1
 };
 
-a11 := 0.1;  a12 := 0.2;  a13 := 0.3;
-a21 := 0.05; a22 := 0.15; a23 := 0.25;
-a31 := 0.02; a32 := 0.12; a33 := 0.22;
-sig := 0.5;
+fuzz := 0.001234500;
+buzz := 1.0 + fuzz;
+fizz := 1.1 * fuzz;
+ky := 0;
+while (ky < 101) {
+  buzz := (1.0 - fuzz) * buzz + fuzz;
+  fuzz := 0.0 - fuzz;
+  du2[ky] := (buzz - fizz) * 0.1;
+  ky := ky + 1
+};
+
+fuzz := 0.001234500;
+buzz := 1.0 + fuzz;
+fizz := 1.1 * fuzz;
+ky := 0;
+while (ky < 101) {
+  buzz := (1.0 - fuzz) * buzz + fuzz;
+  fuzz := 0.0 - fuzz;
+  du3[ky] := (buzz - fizz) * 0.1;
+  ky := ky + 1
+};
 
 rep := 0;
 while (rep < 10000) {
