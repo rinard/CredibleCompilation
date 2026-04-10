@@ -1,29 +1,41 @@
-var i : int, rep : int, t : float, ar : float, cr : float;
-array cx0[1024] : float, cx1[1024] : float, cx2[1024] : float, cx3[1024] : float, cx4[1024] : float;
+var i : int, j : int, rep : int, base : int, ar : float, br : float, cr : float;
+array px[2525] : float, cx[2525] : float;
 
 i := 0;
-while (i < 1024) {
-  cx0[i] := intToFloat(i) * 0.01;
-  cx1[i] := intToFloat(i) * 0.005;
-  cx2[i] := intToFloat(i) * 0.003;
-  cx3[i] := intToFloat(i) * 0.002;
-  cx4[i] := intToFloat(i) * 0.001;
+while (i < 101) {
+  j := 0;
+  while (j < 25) {
+    px[i * 25 + j] := (intToFloat(i) + 1.0) * 0.01 + intToFloat(j) * 0.001;
+    cx[i * 25 + j] := (intToFloat(i) + 1.0) * 0.02 + intToFloat(j) * 0.002;
+    j := j + 1
+  };
   i := i + 1
 };
-
-t := 0.037;
 
 rep := 0;
 while (rep < 10000) {
   i := 0;
-  while (i < 1024) {
-    ar := cx4[i];
-    cr := t * ar + cx3[i];
-    ar := t * cr + cx2[i];
-    cr := t * ar + cx1[i];
-    ar := t * cr + cx0[i];
-    cx0[i] := ar;
-    cx1[i] := cr;
+  while (i < 101) {
+    base := i * 25;
+    ar := cx[base + 4];
+    br := ar - px[base + 4];
+    px[base + 4] := ar;
+    cr := br - px[base + 5];
+    px[base + 5] := br;
+    ar := cr - px[base + 6];
+    px[base + 6] := cr;
+    br := ar - px[base + 7];
+    px[base + 7] := ar;
+    cr := br - px[base + 8];
+    px[base + 8] := br;
+    ar := cr - px[base + 9];
+    px[base + 9] := cr;
+    br := ar - px[base + 10];
+    px[base + 10] := ar;
+    cr := br - px[base + 11];
+    px[base + 11] := br;
+    px[base + 13] := cr - px[base + 12];
+    px[base + 12] := cr;
     i := i + 1
   };
   rep := rep + 1

@@ -1,28 +1,41 @@
 #include <stdio.h>
 #include <time.h>
 
-#define DIM   32
-#define N     (DIM * DIM)
+/* Original K23: 2-D implicit hydrodynamics
+   za[j][k] += 0.175*(qa - za[j][k])
+   qa = za[j+1][k]*zr[j][k] + za[j-1][k]*zb[j][k]
+      + za[j][k+1]*zu[j][k] + za[j][k-1]*zv[j][k] + zz[j][k]
+   Arrays are [7][101], j=1..5, k=1..n-1 (n=101) */
+
+#define NJ    7
+#define NK    101
+#define NTOT  (NJ * NK)
 #define NREPS 100000
 
-int main(void) {
-    double za[N], zp[N];
+/* Flatten [j][k] as [j + k*NJ] (column-major matching Fortran) */
+#define IDX(j,k) ((j) + (k) * NJ)
 
-    for (int i = 0; i < N; i++) {
-        zp[i] = i * 0.01 + 0.5;
+int main(void) {
+    double za[NTOT], zr[NTOT], zb[NTOT], zu[NTOT], zv[NTOT], zz[NTOT];
+
+    for (int i = 0; i < NTOT; i++) {
         za[i] = i * 0.002;
+        zr[i] = i * 0.003 + 0.1;
+        zb[i] = i * 0.001 + 0.2;
+        zu[i] = i * 0.004 + 0.3;
+        zv[i] = i * 0.005 + 0.4;
+        zz[i] = i * 0.006 + 0.5;
     }
 
     struct timespec t0, t1;
     clock_gettime(CLOCK_MONOTONIC, &t0);
 
     for (int rep = 0; rep < NREPS; rep++) {
-        for (int j = 1; j < DIM - 1; j++) {
-            for (int k = 1; k < DIM - 1; k++) {
-                int idx = j * DIM + k;
-                double qa = zp[(j - 1) * DIM + k + 1] + zp[(j + 1) * DIM + k + 1]
-                          - zp[(j - 1) * DIM + k - 1] - zp[(j + 1) * DIM + k - 1];
-                za[idx] = za[idx] + 0.175 * (qa - za[idx]);
+        for (int j = 1; j < 6; j++) {
+            for (int k = 1; k < NK - 1; k++) {
+                double qa = za[IDX(j+1,k)]*zr[IDX(j,k)] + za[IDX(j-1,k)]*zb[IDX(j,k)]
+                          + za[IDX(j,k+1)]*zu[IDX(j,k)] + za[IDX(j,k-1)]*zv[IDX(j,k)] + zz[IDX(j,k)];
+                za[IDX(j,k)] += 0.175 * (qa - za[IDX(j,k)]);
             }
         }
     }
@@ -30,6 +43,6 @@ int main(void) {
     clock_gettime(CLOCK_MONOTONIC, &t1);
     double elapsed = (t1.tv_sec - t0.tv_sec) + (t1.tv_nsec - t0.tv_nsec) * 1e-9;
     printf("elapsed: %.6f s\n", elapsed);
-    printf("za[DIM+1] = %f\n", za[DIM + 1]);
+    printf("za[0] = %f\n", za[IDX(1,1)]);
     return 0;
 }

@@ -1,8 +1,8 @@
 var k : int, rep : int, dk : float, s : float, t : float, di : float, dn : float;
-array y[1024] : float, g[1024] : float, xx[1024] : float, z[1024] : float, w[1024] : float, v[1024] : float, u[1024] : float, vv[1024] : float, x[1024] : float;
+array y[1001] : float, g[1001] : float, xx[1001] : float, z[1001] : float, w[1001] : float, v[1001] : float, u[1001] : float, vv[1001] : float, x[1001] : float;
 
 k := 0;
-while (k < 1024) {
+while (k < 1001) {
   y[k]  := intToFloat(k) * 0.01 + 1.0;
   g[k]  := intToFloat(k) * 0.005;
   xx[k] := intToFloat(k) * 0.02 + 0.5;
@@ -21,7 +21,7 @@ t  := 100.0;
 rep := 0;
 while (rep < 10000) {
   k := 0;
-  while (k < 1024) {
+  while (k < 1000) {
     di := y[k] - g[k] / (xx[k] + dk);
     dn := 0.0;
     if (di < 0.0 - 0.0001) {

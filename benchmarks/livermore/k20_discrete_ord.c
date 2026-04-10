@@ -1,7 +1,7 @@
 #include <stdio.h>
 #include <time.h>
 
-#define N     1024
+#define N     1001
 #define NREPS 10000
 
 int main(void) {
@@ -24,7 +24,7 @@ int main(void) {
     clock_gettime(CLOCK_MONOTONIC, &t0);
 
     for (int rep = 0; rep < NREPS; rep++) {
-        for (int k = 0; k < N; k++) {
+        for (int k = 0; k < N - 1; k++) {
             double di = y[k] - g[k] / (xx[k] + dk);
             double dn = 0.0;
             if (di < -0.0001 || di > 0.0001) {

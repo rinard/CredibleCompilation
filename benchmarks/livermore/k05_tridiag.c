@@ -1,7 +1,7 @@
 #include <stdio.h>
 #include <time.h>
 
-#define N     1024
+#define N     1001
 #define NREPS 10000
 
 int main(void) {

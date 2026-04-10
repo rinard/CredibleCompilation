@@ -1,39 +1,54 @@
+/* K10 — Difference Predictors
+   Original Livermore Loop kernel 10.
+   px[101][25], cx[101][25]. n=101. */
 #include <stdio.h>
 #include <time.h>
 
-#define N     1024
+#define N     101
+#define NCOL  25
 #define NREPS 10000
 
 int main(void) {
-    double cx0[N], cx1[N], cx2[N], cx3[N], cx4[N];
-    double t = 0.037;
+    double px[N][NCOL], cx[N][NCOL];
 
-    for (int i = 0; i < N; i++) {
-        cx0[i] = i * 0.01;
-        cx1[i] = i * 0.005;
-        cx2[i] = i * 0.003;
-        cx3[i] = i * 0.002;
-        cx4[i] = i * 0.001;
-    }
+    /* Initialise */
+    for (int i = 0; i < N; i++)
+        for (int j = 0; j < NCOL; j++) {
+            px[i][j] = (i + 1) * 0.01 + j * 0.001;
+            cx[i][j] = (i + 1) * 0.02 + j * 0.002;
+        }
 
     struct timespec t0, t1;
     clock_gettime(CLOCK_MONOTONIC, &t0);
 
-    for (int rep = 0; rep < NREPS; rep++) {
+    for (int l = 0; l < NREPS; l++) {
         for (int i = 0; i < N; i++) {
-            double ar = cx4[i];
-            double cr = t * ar + cx3[i];
-            ar = t * cr + cx2[i];
-            cr = t * ar + cx1[i];
-            ar = t * cr + cx0[i];
-            cx0[i] = ar;
-            cx1[i] = cr;
+            double ar, br, cr;
+            ar       =      cx[i][4];
+            br       = ar - px[i][4];
+            px[i][4] = ar;
+            cr       = br - px[i][5];
+            px[i][5] = br;
+            ar       = cr - px[i][6];
+            px[i][6] = cr;
+            br       = ar - px[i][7];
+            px[i][7] = ar;
+            cr       = br - px[i][8];
+            px[i][8] = br;
+            ar       = cr - px[i][9];
+            px[i][9] = cr;
+            br       = ar - px[i][10];
+            px[i][10] = ar;
+            cr       = br - px[i][11];
+            px[i][11] = br;
+            px[i][13] = cr - px[i][12];
+            px[i][12] = cr;
         }
     }
 
     clock_gettime(CLOCK_MONOTONIC, &t1);
     double elapsed = (t1.tv_sec - t0.tv_sec) + (t1.tv_nsec - t0.tv_nsec) * 1e-9;
     printf("elapsed: %.6f s\n", elapsed);
-    printf("cx0[0] = %f\n", cx0[0]);
+    printf("px[50][4] = %f\n", px[50][4]);
     return 0;
 }

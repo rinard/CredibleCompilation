@@ -1,8 +1,8 @@
 #include <stdio.h>
 #include <time.h>
 
-#define N    1024
-#define KMAX 1000
+#define N    1001
+#define KMAX 990
 #define NREPS 10000
 
 int main(void) {

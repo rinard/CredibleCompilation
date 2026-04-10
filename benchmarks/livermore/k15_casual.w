@@ -1,31 +1,79 @@
-var i : int, rep : int, seed : int, idx : int, ng : int;
-array vx[1024] : float, ix1[1024] : int;
+var rep : int, j : int, k : int, ar : float, br : float,
+    r : float, s : float, t : float, jk : int, jk1 : int,
+    jp1k : int, jm1k : int, jkm1 : int, jkp1 : int,
+    jp1km1 : int, jm1kp1 : int;
+array vy[2525] : float, vh[707] : float, vf[707] : float,
+      vg[707] : float, vs[707] : float;
 
-seed := 12345;
-i := 0;
-while (i < 1024) {
-  seed := seed * 6364136223846793005 + 1442695040888963407;
-  vx[i] := intToFloat(seed % 1000) * 0.001;
-  i := i + 1
+j := 0;
+while (j < 7) {
+  k := 0;
+  while (k < 101) {
+    jk := j * 101 + k;
+    vh[jk] := intToFloat(j + 1) * 0.01 + intToFloat(k) * 0.001;
+    vf[jk] := intToFloat(j + 1) * 0.02 + intToFloat(k) * 0.003 + 0.001;
+    vg[jk] := intToFloat(j + 1) * 0.015 + intToFloat(k) * 0.002;
+    vs[jk] := 0.0;
+    k := k + 1
+  };
+  j := j + 1
+};
+
+j := 0;
+while (j < 25) {
+  k := 0;
+  while (k < 101) {
+    vy[j * 101 + k] := 0.0;
+    k := k + 1
+  };
+  j := j + 1
 };
 
 rep := 0;
 while (rep < 10000) {
-  ng := 0;
-  i := 0;
-  while (i < 1024) {
-    seed := seed * 6364136223846793005 + 1442695040888963407;
-    idx := seed % 512;
-    if (idx < 0) { idx := 0 - idx } else { skip };
-    ix1[ng] := idx;
-    ng := ng + 1;
-    i := i + 1
-  };
-  i := 0;
-  while (i < ng) {
-    idx := ix1[i];
-    vx[idx] := vx[idx] + 1.0;
-    i := i + 1
+  ar := 0.053;
+  br := 0.073;
+  j := 1;
+  while (j < 7) {
+    k := 1;
+    while (k < 101) {
+      jk := j * 101 + k;
+      jp1k := (j + 1) * 101 + k;
+      jkm1 := j * 101 + (k - 1);
+      jp1km1 := (j + 1) * 101 + (k - 1);
+      if (j + 1 >= 7) {
+        vy[jk] := 0.0
+      } else {
+        if (vh[jp1k] > vh[jk]) { t := ar } else { t := br };
+        if (vf[jk] < vf[jkm1]) {
+          if (vh[jkm1] > vh[jp1km1]) { r := vh[jkm1] } else { r := vh[jp1km1] };
+          s := vf[jkm1]
+        } else {
+          if (vh[jk] > vh[jp1k]) { r := vh[jk] } else { r := vh[jp1k] };
+          s := vf[jk]
+        };
+        vy[jk] := (vg[jk] * vg[jk] + r * r) * t / s;
+        jkp1 := j * 101 + (k + 1);
+        jm1k := (j - 1) * 101 + k;
+        jm1kp1 := (j - 1) * 101 + (k + 1);
+        if (k + 1 >= 101) {
+          vs[jk] := 0.0
+        } else {
+          if (vf[jk] < vf[jm1k]) {
+            if (vg[jm1k] > vg[jm1kp1]) { r := vg[jm1k] } else { r := vg[jm1kp1] };
+            s := vf[jm1k];
+            t := br
+          } else {
+            if (vg[jk] > vg[jkp1]) { r := vg[jk] } else { r := vg[jkp1] };
+            s := vf[jk];
+            t := ar
+          };
+          vs[jk] := (vh[jk] * vh[jk] + r * r) * t / s
+        }
+      };
+      k := k + 1
+    };
+    j := j + 1
   };
   rep := rep + 1
 }

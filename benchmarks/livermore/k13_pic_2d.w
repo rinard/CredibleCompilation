@@ -1,8 +1,8 @@
 var ip : int, rep : int, i1 : int, j1 : int, i2 : int, j2 : int;
-array p_x[512] : float, p_y[512] : float, p_vx[512] : float, p_vy[512] : float, b[4096] : float, c[4096] : float, h[4096] : float, y[1001] : float, z[1001] : float, e[96] : int, f[96] : int;
+array p_x[64] : float, p_y[64] : float, p_vx[64] : float, p_vy[64] : float, b[4096] : float, c[4096] : float, h[4096] : float, y[1001] : float, z[1001] : float, e[96] : int, f[96] : int;
 
 ip := 0;
-while (ip < 512) {
+while (ip < 64) {
   p_x[ip] := intToFloat(ip % 64) + 0.5;
   p_y[ip] := intToFloat(ip / 64) + 0.5;
   p_vx[ip] := 0.001;
@@ -27,15 +27,15 @@ while (ip < 1001) {
 
 ip := 0;
 while (ip < 96) {
-  e[ip] := ip % 64;
-  f[ip] := ip % 64;
+  e[ip] := 0;
+  f[ip] := 0;
   ip := ip + 1
 };
 
 rep := 0;
 while (rep < 10000) {
   ip := 0;
-  while (ip < 512) {
+  while (ip < 64) {
     i1 := floatToInt(p_x[ip]) % 64;
     if (i1 < 0) { i1 := i1 + 64 } else { skip };
     j1 := floatToInt(p_y[ip]) % 64;

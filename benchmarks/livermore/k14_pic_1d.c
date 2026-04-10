@@ -1,23 +1,23 @@
 #include <stdio.h>
 #include <time.h>
 
-#define N     512
+#define N     1001
 #define NREPS 10000
 
 int main(void) {
     double grd[1001], dex_arr[1001], xi[1001];
     double ex_arr[1001], ex1[1001], dex1[1001];
     double vx[1001], xx[1001], rx[1001];
-    double rh[2048];
+    double rh[2049];
     long ix[1001], ir[1001];
     double flx = 0.001;
 
     for (int i = 0; i < 1001; i++) {
-        grd[i] = (i % 512) + 1.5;
+        grd[i] = (i % 1001) + 1.5;
         ex_arr[i] = i * 0.001;
         dex_arr[i] = i * 0.0005;
     }
-    for (int i = 0; i < 2048; i++) rh[i] = 0.0;
+    for (int i = 0; i < 2049; i++) rh[i] = 0.0;
 
     struct timespec t0, t1;
     clock_gettime(CLOCK_MONOTONIC, &t0);

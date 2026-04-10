@@ -1,7 +1,7 @@
 #include <stdio.h>
 #include <time.h>
 
-#define NPART 512
+#define NPART 64
 #define NGRID 64
 #define NREPS 10000
 
@@ -23,7 +23,7 @@ int main(void) {
         h[i] = 0.0;
     }
     for (int i = 0; i < 1001; i++) { y[i] = 0.001; z[i] = 0.001; }
-    for (int i = 0; i < 96; i++) { e[i] = i % NGRID; f[i] = i % NGRID; }
+    for (int i = 0; i < 96; i++) { e[i] = 0; f[i] = 0; }
 
     struct timespec t0, t1;
     clock_gettime(CLOCK_MONOTONIC, &t0);

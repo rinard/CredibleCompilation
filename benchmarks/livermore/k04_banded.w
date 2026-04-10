@@ -1,8 +1,8 @@
 var k : int, rep : int, xk : float;
-array x[1024] : float, y[1024] : float;
+array x[1001] : float, y[1001] : float;
 
 k := 0;
-while (k < 1024) {
+while (k < 1001) {
   x[k] := intToFloat(k) * 0.01 + 1.0;
   y[k] := intToFloat(k) * 0.001;
   k := k + 1
@@ -11,7 +11,7 @@ while (k < 1024) {
 rep := 0;
 while (rep < 10000) {
   k := 5;
-  while (k < 1024) {
+  while (k < 1001) {
     xk := x[k];
     x[k - 4] := x[k - 4] - xk * y[k - 4];
     x[k - 3] := x[k - 3] - xk * y[k - 3];

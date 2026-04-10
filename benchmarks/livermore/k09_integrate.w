@@ -1,25 +1,29 @@
-var i : int, rep : int, c0 : float, c1 : float, c2 : float, c3 : float;
-array px[1024] : float, cx1[1024] : float, cx2[1024] : float, cx3[1024] : float;
+var i : int, j : int, rep : int, base : int,
+    dm28 : float, dm27 : float, dm26 : float, dm25 : float,
+    dm24 : float, dm23 : float, dm22 : float, c0 : float;
+array px[2525] : float;
 
 i := 0;
-while (i < 1024) {
-  px[i]  := intToFloat(i) * 0.01;
-  cx1[i] := intToFloat(i) * 0.005;
-  cx2[i] := intToFloat(i) * 0.003;
-  cx3[i] := intToFloat(i) * 0.001;
+while (i < 101) {
+  j := 0;
+  while (j < 25) {
+    px[i * 25 + j] := (intToFloat(i) + 1.0) * 0.01 + intToFloat(j) * 0.001;
+    j := j + 1
+  };
   i := i + 1
 };
 
-c0 := 0.5;
-c1 := 0.25;
-c2 := 0.125;
-c3 := 0.0625;
+dm28 := 0.01; dm27 := 0.02; dm26 := 0.03; dm25 := 0.04;
+dm24 := 0.05; dm23 := 0.06; dm22 := 0.07; c0 := 0.5;
 
 rep := 0;
 while (rep < 10000) {
   i := 0;
-  while (i < 1024) {
-    px[i] := c0 * px[i] + c1 * cx1[i] + c2 * cx2[i] + c3 * cx3[i];
+  while (i < 101) {
+    base := i * 25;
+    px[base] := dm28 * px[base + 12] + dm27 * px[base + 11] + dm26 * px[base + 10]
+              + dm25 * px[base + 9]  + dm24 * px[base + 8]  + dm23 * px[base + 7]
+              + dm22 * px[base + 6]  + c0 * (px[base + 4] + px[base + 5]) + px[base + 2];
     i := i + 1
   };
   rep := rep + 1

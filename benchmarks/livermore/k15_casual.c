@@ -1,42 +1,74 @@
+/* K15 — Casual Fortran (Development version)
+   Original Livermore Loop kernel 15.
+   2D arrays: vy[25][101], vh,vf,vg,vs[7][101].
+   ng=7, nz=101. Scalars: ar=0.053, br=0.073, r, s, t.
+   Note: sqrt replaced with (a*a+b*b) to match WhileLang version. */
 #include <stdio.h>
 #include <time.h>
-#include <stdint.h>
-#include <stdlib.h>
 
-#define N     1024
+#define NZ    101
+#define NG    7
+#define VYROWS 25
 #define NREPS 10000
 
 int main(void) {
-    double vx[N];
-    int64_t ix1[N];
-    int64_t seed = 12345;
+    double vy[VYROWS][NZ], vh[NG][NZ], vf[NG][NZ], vg[NG][NZ], vs[NG][NZ];
 
-    for (int i = 0; i < N; i++) {
-        seed = seed * 6364136223846793005LL + 1442695040888963407LL;
-        vx[i] = (seed % 1000) * 0.001;
-    }
+    /* Initialise arrays with deterministic values */
+    for (int j = 0; j < NG; j++)
+        for (int k = 0; k < NZ; k++) {
+            vh[j][k] = (j + 1) * 0.01 + k * 0.001;
+            vf[j][k] = (j + 1) * 0.02 + k * 0.003 + 0.001;
+            vg[j][k] = (j + 1) * 0.015 + k * 0.002;
+            vs[j][k] = 0.0;
+        }
+    for (int j = 0; j < VYROWS; j++)
+        for (int k = 0; k < NZ; k++)
+            vy[j][k] = 0.0;
 
     struct timespec t0, t1;
     clock_gettime(CLOCK_MONOTONIC, &t0);
 
-    for (int rep = 0; rep < NREPS; rep++) {
-        int ng = 0;
-        for (int i = 0; i < N; i++) {
-            seed = seed * 6364136223846793005LL + 1442695040888963407LL;
-            int64_t idx = seed % 512;
-            if (idx < 0) idx = -idx;
-            ix1[ng] = idx;
-            ng++;
-        }
-        for (int i = 0; i < ng; i++) {
-            int64_t idx = ix1[i];
-            vx[idx] = vx[idx] + 1.0;
+    double ar, br, r, s, t;
+    for (int l = 0; l < NREPS; l++) {
+        ar = 0.053; br = 0.073;
+        for (int j = 1; j < NG; j++) {
+            for (int k = 1; k < NZ; k++) {
+                if ((j + 1) >= NG) {
+                    vy[j][k] = 0.0;
+                    /* skip rest — original uses continue */
+                } else {
+                    if (vh[j+1][k] > vh[j][k]) t = ar; else t = br;
+                    if (vf[j][k] < vf[j][k-1]) {
+                        if (vh[j][k-1] > vh[j+1][k-1]) r = vh[j][k-1]; else r = vh[j+1][k-1];
+                        s = vf[j][k-1];
+                    } else {
+                        if (vh[j][k] > vh[j+1][k]) r = vh[j][k]; else r = vh[j+1][k];
+                        s = vf[j][k];
+                    }
+                    vy[j][k] = (vg[j][k]*vg[j][k] + r*r) * t / s;
+
+                    if ((k + 1) >= NZ) {
+                        vs[j][k] = 0.0;
+                        /* skip rest — original uses continue */
+                    } else {
+                        if (vf[j][k] < vf[j-1][k]) {
+                            if (vg[j-1][k] > vg[j-1][k+1]) r = vg[j-1][k]; else r = vg[j-1][k+1];
+                            s = vf[j-1][k]; t = br;
+                        } else {
+                            if (vg[j][k] > vg[j][k+1]) r = vg[j][k]; else r = vg[j][k+1];
+                            s = vf[j][k]; t = ar;
+                        }
+                        vs[j][k] = (vh[j][k]*vh[j][k] + r*r) * t / s;
+                    }
+                }
+            }
         }
     }
 
     clock_gettime(CLOCK_MONOTONIC, &t1);
     double elapsed = (t1.tv_sec - t0.tv_sec) + (t1.tv_nsec - t0.tv_nsec) * 1e-9;
     printf("elapsed: %.6f s\n", elapsed);
-    printf("vx[0] = %f\n", vx[0]);
+    printf("vy[3][50] = %f\n", vy[3][50]);
     return 0;
 }
