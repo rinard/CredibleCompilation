@@ -287,6 +287,10 @@ opaque intToFloatBv : BitVec 64 → BitVec 64
     Opaque — corresponds to ARM64 `fcvtzs`. -/
 opaque floatToIntBv : BitVec 64 → BitVec 64
 
+/-- Compute e^x for a float (BitVec 64).
+    Opaque — corresponds to ARM64 `bl _exp`. -/
+opaque floatExpBv : BitVec 64 → BitVec 64
+
 /-- Convert a Lean Float to its IEEE 754 bit representation as BitVec 64.
     Uses `Float.toBits` for proper bit reinterpretation (not truncation). -/
 def floatToBits (f : Float) : BitVec 64 :=
@@ -333,6 +337,7 @@ inductive Expr where
   | fcmpE    : FloatCmpOp → Expr → Expr → Expr        -- .bool (fop.eval a b)
   | intToFloat : Expr → Expr                           -- .float (intToFloat (e.toInt))
   | floatToInt : Expr → Expr                           -- .int (floatToInt (e.toFloat))
+  | floatExp  : Expr → Expr                            -- .float (exp(e.toFloat))
   | farrRead : ArrayName → Expr → Expr                -- .float (am.read arr idx)
   deriving Repr, DecidableEq
 
@@ -353,6 +358,7 @@ def Expr.eval (σ : Store) (am : ArrayMem) : Expr → Value
   | .fcmpE op a b      => .bool (FloatCmpOp.eval op (a.eval σ am).toFloat (b.eval σ am).toFloat)
   | .intToFloat e      => .float (intToFloatBv (e.eval σ am).toInt)
   | .floatToInt e      => .int (floatToIntBv (e.eval σ am).toFloat)
+  | .floatExp e        => .float (floatExpBv (e.eval σ am).toFloat)
   | .farrRead arr idx  => .float (am.read arr (idx.eval σ am).toInt)
 
 /-- Does an expression contain any `arrRead` or `farrRead` sub-expression? -/
@@ -370,6 +376,7 @@ def Expr.hasArrRead : Expr → Bool
   | .fcmpE _ a b   => a.hasArrRead || b.hasArrRead
   | .intToFloat e  => e.hasArrRead
   | .floatToInt e  => e.hasArrRead
+  | .floatExp e    => e.hasArrRead
   | .farrRead _ _  => true
 
 /-- For arrRead-free expressions, evaluation is independent of the array memory. -/
@@ -406,6 +413,8 @@ theorem Expr.eval_noArrRead (e : Expr) (σ : Store) (am₁ am₂ : ArrayMem)
   | intToFloat e ih =>
     simp only [hasArrRead] at h; simp only [Expr.eval]; rw [ih h]
   | floatToInt e ih =>
+    simp only [hasArrRead] at h; simp only [Expr.eval]; rw [ih h]
+  | floatExp e ih =>
     simp only [hasArrRead] at h; simp only [Expr.eval]; rw [ih h]
   | farrRead _ _ => simp [hasArrRead] at h
 

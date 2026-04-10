@@ -4,6 +4,59 @@ Chronological record of what was built and why, to reconstruct the sequence of d
 
 ---
 
+## Add exp() float intrinsic + K22 Planck radiation benchmark (2026-04-10)
+
+**Goal:** Add `exp(x)` (e^x) as a unary float→float intrinsic, following the intToFloat/floatToInt pattern. Enable Livermore K22 (Planck radiation) benchmark.
+
+### Changes across ~22 files
+
+**Core definitions:**
+- `Core.lean`: opaque `floatExpBv : BitVec 64 → BitVec 64`, `Expr.floatExp` constructor, eval/hasArrRead/eval_noArrRead cases
+- `TAC.lean`: `TAC.floatExp : Var → Var → TAC`, `Step.floatExp`/`Step.floatExp_typeError`, isScalar/successors/deterministic/store_congr/mem_successors
+- `TypeSystem.lean`: `WellTypedInstr.floatExp` (Γ x = .float → Γ y = .float), checker, progress, preservation, no_typeError, type_safety
+
+**Source language + parser:**
+- `WhileLang.lean`: `SExpr.floatExp`, compile/typecheck/eval/toString/isSafe + all proof cases (compileExpr_wt, compileStmt_wt, IsSeqInstr, compileExpr_allSeq, compileStmt_allJumpsLe)
+- `Parser.lean`: `"exp"` keyword, `exp(...)` parsing in parseAtom, isFloatExpr/resolveSExpr cases
+
+**Optimizer infrastructure:**
+- `ExecChecker.lean`: simplify, substSym, execSymbolic, successors, instrVars, isNonZeroLit, buildInstrCerts1to1, computeNextPC
+- All 7 optimization passes: ConstPropOpt, CSEOpt, LICMOpt (no change needed), DAEOpt, DCEOpt, PeepholeOpt, RegAllocOpt
+
+**Code generation:**
+- `CodeGen.lean`: `bl _exp` with d0 in/out, save/restore x29,x30 around call; collectVars
+
+**Proofs (sorry where needed):**
+- PropChecker, SoundnessBridge, CompilerCorrectness, RefCompiler/{Defs,Correctness,ErrorHandling,Metatheory,Refinement}, ArmSemantics, ArmCorrectness
+
+**Benchmark:**
+- `benchmarks/livermore/k22_planck.w` and `k22_planck.c`: Planck radiation kernel x/(e^x - 1), 1024 elements × 10000 reps. WhileLang achieves 1.0x vs C -O2.
+
+---
+
+## Div-safety chain: prove 3 of 4 sorrys, substantial progress on transRel_sound (2026-04-10)
+
+**Goal:** Prove the 4 div-safety sorrys in SoundnessBridge.lean. These form a dependency chain around division-by-zero safety in the soundness bridge between executable Bool checkers and Prop-level specifications.
+
+### Changes
+
+**ExecChecker.lean:**
+- Strengthened `checkOrigPathBoundsOk` to also reject div/mod binops at intermediate orig path labels (prevents div-by-zero in multi-step original paths)
+
+**SoundnessBridge.lean:**
+- **Proved `checkDivPreservationExec_sound`**: error preservation for div-by-zero and array-bounds errors. Case-splits the error step (Step.error, arrLoad_boundsError, arrStore_boundsError), extracts checker info per pc_t, transfers values through the store relation (eRelToStoreRel), and constructs matching error steps in the original program.
+- **Eliminated `checkBinopSafe_sound` sorry**: replaced the impossible runtime-variable case with a `hDivSafe` parameter on `execPath_sound_gen`. The parameter provides div-safety for the first instruction; `hRestNoDivMod` covers intermediate labels (no div/mod allowed).
+- **Proved `execPath_sound_gen` sorry**: uses `hDivSafe` for the first binop instruction, derives `hDivSafe₁` for recursive call via `hRestNoDivMod` (intermediate instructions can't be div/mod).
+- **Substantial progress on `transRel_sound`**: proved the `hDivSafe` derivation (from `checkDivPreservationExec` + transformed step safety + store relation transfer), proved `hOrigBounds` (from `hOrigFirstOk` + bounds preservation), and scaffolded the main proof calling `execPath_sound`. Remaining: post-state relation via `checkRelConsistency`, array memory equality, and edge case (orig has div/mod but transformed instruction is not a binop).
+- Updated `checkOrigPathBoundsOk_extract` to extract both scalar and no-div/mod conditions
+- Updated `checkAllTransitionsExec_sound` to thread `hdivpres` through to `transRel_sound`
+
+### Sorry count: 10 declarations with sorry (was 10), but SoundnessBridge reduced from 4 decls to 1 decl
+- SoundnessBridge: 3 sorry lines in `transRel_sound` (was 4 sorrys in 4 declarations)
+- ExecChecker: 1, ArmSemantics: 2 decls, ArmCorrectness: 4 decls (unchanged)
+
+---
+
 ## Prove fassign/farrWrite cases, float ErrorHandling, delete intTyped (2026-04-10)
 
 **Goal:** Prove remaining float-related sorry cases in Correctness.lean and ErrorHandling.lean, delete deprecated `intTyped` infrastructure. 29→25 sorrys (−4 net, but also fixed a pre-existing sorry in ErrorHandling barrWrite).

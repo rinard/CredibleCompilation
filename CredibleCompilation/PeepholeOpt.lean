@@ -104,7 +104,7 @@ def buildInstrCerts (prog : Prog) (origMap : Array Nat)
       { pc_orig := origPC, transitions := ([] : List ETransCorr) }
     | some (.const _ _) | some (.copy _ _) | some (.binop _ _ _ _) | some (.boolop _ _)
     | some (.arrLoad _ _ _ _) | some (.arrStore _ _ _ _)
-    | some (.fbinop _ _ _ _) | some (.intToFloat _ _) | some (.floatToInt _ _) =>
+    | some (.fbinop _ _ _ _) | some (.intToFloat _ _) | some (.floatToInt _ _) | some (.floatExp _ _) =>
       -- Successor is origPC + 1; skip through removed PCs to origMap[i+1]
       let nextOrigPC := origMap.getD (i + 1) 0
       { pc_orig := origPC,

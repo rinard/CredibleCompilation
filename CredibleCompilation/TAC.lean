@@ -42,12 +42,13 @@ inductive TAC where
   | fbinop   : Var → FloatBinOp → Var → Var → TAC       -- x := y fop z (float binary op)
   | intToFloat : Var → Var → TAC                          -- x := intToFloat(y)
   | floatToInt : Var → Var → TAC                          -- x := floatToInt(y)
+  | floatExp   : Var → Var → TAC                          -- x := exp(y) (float)
   deriving Repr, DecidableEq
 
 /-- A scalar instruction is one that does not touch ArrayMem. -/
 def TAC.isScalar : TAC → Bool
   | .const .. | .copy .. | .binop .. | .boolop .. | .goto .. | .ifgoto .. | .halt => true
-  | .fbinop .. | .intToFloat .. | .floatToInt .. => true
+  | .fbinop .. | .intToFloat .. | .floatToInt .. | .floatExp .. => true
   | .arrLoad .. | .arrStore .. => false
 
 /-- A program: TAC code together with its type context and observable variables. -/
@@ -238,6 +239,14 @@ inductive Step (p : Prog) : Cfg → Cfg → Prop where
       (σ y).typeOf ≠ .float →
       Step p (.run pc σ am) (.typeError σ am)
 
+  | floatExp {f : BitVec 64} : p[pc]? = some (.floatExp x y) →
+      σ y = .float f →
+      Step p (.run pc σ am) (.run (pc + 1) (σ[x ↦ .float (floatExpBv f)]) am)
+
+  | floatExp_typeError : p[pc]? = some (.floatExp x y) →
+      (σ y).typeOf ≠ .float →
+      Step p (.run pc σ am) (.typeError σ am)
+
 
 -- p ⊩ c ⟶ c'   (⊩ avoids conflict with Lean's reserved ⊢)
 notation:50 p " ⊩ " c " ⟶ " c' => Step p c c'
@@ -246,7 +255,7 @@ notation:50 p " ⊩ " c " ⟶ " c' => Step p c c'
 def TAC.successors (instr : TAC) (pc : Label) : List Label :=
   match instr with
   | .const _ _ | .copy _ _ | .binop _ _ _ _ | .boolop _ _ => [pc + 1]
-  | .fbinop _ _ _ _ | .intToFloat _ _ | .floatToInt _ _ => [pc + 1]
+  | .fbinop _ _ _ _ | .intToFloat _ _ | .floatToInt _ _ | .floatExp _ _ => [pc + 1]
   | .arrLoad _ _ _ _ | .arrStore _ _ _ _ => [pc + 1]
   | .goto l        => [l]
   | .ifgoto _ l    => [l, pc + 1]
@@ -270,6 +279,7 @@ theorem Step.mem_successors {p : Prog} {pc pc' : Nat} {σ σ' : Store} {am am' :
   | fbinop h _ _       => exact ⟨_, h, by simp [TAC.successors]⟩
   | intToFloat h _     => exact ⟨_, h, by simp [TAC.successors]⟩
   | floatToInt h _     => exact ⟨_, h, by simp [TAC.successors]⟩
+  | floatExp h _       => exact ⟨_, h, by simp [TAC.successors]⟩
 
 /-- A step from an in-bounds PC to a run-config stays in-bounds.
     This is the Prop-level condition for totality. -/
@@ -439,6 +449,10 @@ theorem Step.store_congr {p : Prog} {pc : Nat} {σ τ : Store} {am : ArrayMem} {
     exact ⟨_, .floatToInt h (by rw [← hagree]; exact hy)⟩
   | floatToInt_typeError h hne =>
     exact ⟨_, .floatToInt_typeError h (by simp [Value.typeOf] at hne ⊢; rwa [← hagree])⟩
+  | floatExp h hy =>
+    exact ⟨_, .floatExp h (by rw [← hagree]; exact hy)⟩
+  | floatExp_typeError h hne =>
+    exact ⟨_, .floatExp_typeError h (by simp [Value.typeOf] at hne ⊢; rwa [← hagree])⟩
 
 -- ============================================================
 -- § 10. Observable output at a configuration

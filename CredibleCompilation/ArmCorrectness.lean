@@ -1069,6 +1069,11 @@ theorem genInstr_correct (prog : ArmProg) (vm : VarMap) (pcMap : Nat → Nat)
     sorry
   | floatToInt_typeError hinstr hne =>
     exact absurd (Step.floatToInt_typeError (am := am) hinstr hne) (Step.no_typeError_of_wellTyped hPC_bound hWT hTS)
+  | floatExp hinstr hy =>
+    -- floatExp not yet supported in ARM backend
+    sorry
+  | floatExp_typeError hinstr hne =>
+    exact absurd (Step.floatExp_typeError (am := am) hinstr hne) (Step.no_typeError_of_wellTyped hPC_bound hWT hTS)
 
 /-- Main backward simulation: every TAC step is matched by ARM64 steps.
     Directly delegates to `genInstr_correct`. -/

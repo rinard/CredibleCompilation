@@ -71,6 +71,7 @@ def Expr.simplify (inv : EInv) : Expr → Expr
   | .fcmpE op a b   => .fcmpE op (a.simplify inv) (b.simplify inv)
   | .intToFloat e   => .intToFloat (e.simplify inv)
   | .floatToInt e   => .floatToInt (e.simplify inv)
+  | .floatExp e     => .floatExp (e.simplify inv)
   | .farrRead arr idx => .farrRead arr (idx.simplify inv)
 
 -- ============================================================
@@ -124,6 +125,7 @@ def execSymbolic (ss : SymStore) (sam : SymArrayMem) (instr : TAC) : SymStore ×
   | .fbinop x op y z => (ssSet ss x (.fbin op (ssGet ss y) (ssGet ss z)), sam)
   | .intToFloat x y => (ssSet ss x (.intToFloat (ssGet ss y)), sam)
   | .floatToInt x y => (ssSet ss x (.floatToInt (ssGet ss y)), sam)
+  | .floatExp x y   => (ssSet ss x (.floatExp (ssGet ss y)), sam)
   | .arrLoad x arr idx _ => (ssSet ss x (samGet sam arr (ssGet ss idx)), sam)
   | .arrStore arr idx val _ => (ss, (arr, ssGet ss idx, ssGet ss val) :: sam)
   | _               => (ss, sam)
@@ -147,7 +149,7 @@ def execPath (orig : Prog) (ss : SymStore) (sam : SymArrayMem) (pc : Label) :
 def successors (instr : TAC) (pc : Label) : List Label :=
   match instr with
   | .const _ _ | .copy _ _ | .binop _ _ _ _ | .boolop _ _ => [pc + 1]
-  | .fbinop _ _ _ _ | .intToFloat _ _ | .floatToInt _ _ => [pc + 1]
+  | .fbinop _ _ _ _ | .intToFloat _ _ | .floatToInt _ _ | .floatExp _ _ => [pc + 1]
   | .arrLoad _ _ _ _ | .arrStore _ _ _ _ => [pc + 1]
   | .goto l        => [l]
   | .ifgoto _ l    => [l, pc + 1]
@@ -163,7 +165,7 @@ def Expr.isNonZeroLit : Expr → Bool
   | .blit true => true
   | .blit false | .var _ | .bin _ _ _ => false
   | .tobool _ | .cmpE _ _ _ | .cmpLitE _ _ _ | .notE _ | .andE _ _ | .orE _ _ | .arrRead _ _ => false
-  | .flit _ | .fbin _ _ _ | .fcmpE _ _ _ | .intToFloat _ | .floatToInt _ | .farrRead _ _ => false
+  | .flit _ | .fbin _ _ _ | .fcmpE _ _ _ | .intToFloat _ | .floatToInt _ | .floatExp _ | .farrRead _ _ => false
 
 /-- Symbolically evaluate a BoolExpr under a symbolic store and invariant.
     Returns `some true`/`some false` if the result can be determined, `none` otherwise. -/
@@ -211,6 +213,7 @@ def collectAllVars (p1 p2 : Prog) : List Var :=
     | .fbinop x _ y z => [x, y, z]
     | .intToFloat x y => [x, y]
     | .floatToInt x y => [x, y]
+    | .floatExp x y   => [x, y]
     | .arrLoad x _ idx _ => [x, idx]
     | .arrStore _ idx val _ => [idx, val]
     | .ifgoto b _    => b.vars
@@ -327,7 +330,7 @@ def buildInstrCerts1to1 (trans : Prog) : Array EInstrCert :=
     match trans[i]? with
     | some .halt => { pc_orig := i, transitions := ([] : List ETransCorr) }
     | some (.const _ _) | some (.copy _ _) | some (.binop _ _ _ _) | some (.boolop _ _)
-    | some (.fbinop _ _ _ _) | some (.intToFloat _ _) | some (.floatToInt _ _)
+    | some (.fbinop _ _ _ _) | some (.intToFloat _ _) | some (.floatToInt _ _) | some (.floatExp _ _)
     | some (.arrLoad _ _ _ _) | some (.arrStore _ _ _ _) =>
       { pc_orig := i, transitions := [{ origLabels := [i + 1] }] }
     | some (.goto l) =>
@@ -399,6 +402,7 @@ def Expr.substSym (ss : SymStore) : Expr → Expr
   | .fcmpE op a b    => .fcmpE op (a.substSym ss) (b.substSym ss)
   | .intToFloat e    => .intToFloat (e.substSym ss)
   | .floatToInt e    => .floatToInt (e.substSym ss)
+  | .floatExp e      => .floatExp (e.substSym ss)
   | .farrRead arr idx => .farrRead arr (idx.substSym ss)
 
 /-- Check that a single invariant atom `(x, e)` is preserved by an instruction.
@@ -485,7 +489,7 @@ def checkHaltObservableExec (cert : ECertificate) : Bool :=
 def computeNextPC (instr : TAC) (pc : Label) (ss : SymStore) (inv : EInv) : Option Label :=
   match instr with
   | .const _ _ | .copy _ _ | .binop _ _ _ _ | .boolop _ _ => some (pc + 1)
-  | .fbinop _ _ _ _ | .intToFloat _ _ | .floatToInt _ _ => some (pc + 1)
+  | .fbinop _ _ _ _ | .intToFloat _ _ | .floatToInt _ _ | .floatExp _ _ => some (pc + 1)
   | .arrLoad _ _ _ _ | .arrStore _ _ _ _ => some (pc + 1)
   | .goto l => some l
   | .ifgoto b l =>
@@ -694,10 +698,12 @@ def checkOrigPathBoundsOk (cert : ECertificate) : Bool :=
            | some (.arrLoad ..) | some (.arrStore ..) => true
            | _ => false
          | _ => true) &&
-        -- All intermediate orig path labels have scalar instructions
+        -- All intermediate orig path labels have scalar, non-div/mod instructions
         ic.transitions.all fun tc =>
           tc.origLabels.dropLast.all fun l =>
             match cert.orig[l]? with
+            | some (.binop _ .div _ _) => false
+            | some (.binop _ .mod _ _) => false
             | some instr => instr.isScalar
             | none => true
       | none => false

@@ -135,12 +135,11 @@ theorem samGet_sound (sam : SymArrayMem) (σ₀ : Store) (am₀ am : ArrayMem)
 -- ============================================================
 
 /-- Convert an executable expression relation to a Prop-level store relation.
-    Uses `buildSubstMap` to create a pair-based relation: for every `(v, e_o)`
-    in `buildSubstMap rel`, `σ_t v = e_o.eval σ_o am_o`.
-    Variables not in the relation have no constraint. -/
+    For every variable `v`, `σ_t v = (ssGet (buildSubstMap rel) v).eval σ_o am_o`.
+    Variables not in the map default to `.var v`, giving `σ_t v = σ_o v`. -/
 def eRelToStoreRel (rel : EExprRel) : PStoreRel :=
   fun σ_o am_o σ_t _am_t =>
-    (buildSubstMap rel).Forall fun (v, e_o) => σ_t v = e_o.eval σ_o am_o
+    ∀ v, σ_t v = (ssGet (buildSubstMap rel) v).eval σ_o am_o
 
 /-- Lift an executable certificate to a Prop-based certificate. -/
 def toPCertificate (dc : ECertificate) : PCertificate :=
@@ -277,6 +276,9 @@ theorem Expr.simplify_sound (inv : EInv) (e : Expr) (σ : Store) (am : ArrayMem)
   | floatToInt _ ih =>
     simp only [Expr.simplify, Expr.eval]
     rw [ih]
+  | floatExp _ ih =>
+    simp only [Expr.simplify, Expr.eval]
+    rw [ih]
   | farrRead arr idx ih =>
     simp only [Expr.simplify, Expr.eval]
     rw [ih]
@@ -311,7 +313,7 @@ theorem checkStartCorrespondenceExec_sound (dc : ECertificate)
       rw [show dc.instrCerts.getInternal 0 hbound = ic from hget]
       show eRelToStoreRel ic.rel σ am σ am
       rw [hrel_ic]
-      simp [eRelToStoreRel, buildSubstMap, List.Forall]
+      intro v; simp [ssGet, buildSubstMap, Expr.eval]
   · contradiction
 
 /-- **Condition 2a**: checkInvariantsAtStartExec → checkInvariantsAtStartProp -/
@@ -358,7 +360,9 @@ private theorem forall_rel_identity {rel : EExprRel} {σ_o σ_t : Store} {am_o a
     (hcons : eRelToStoreRel rel σ_o am_o σ_t am_t)
     (v : Var) (hid : ssGet (buildSubstMap rel) v = .var v) :
     σ_t v = σ_o v := by
-  sorry
+  have := hcons v
+  rw [hid, Expr.eval] at this
+  exact this
 
 /-- **Condition 4b**: checkHaltObservableExec → checkHaltObservableProp -/
 theorem checkHaltObservableExec_sound (dc : ECertificate)
@@ -600,15 +604,33 @@ theorem execSymbolic_sound (ss : SymStore) (sam : SymArrayMem) (instr : TAC)
       rw [hsrc]
     · rw [ssGet_ssSet_other _ _ _ _ hvd, hrepr]
       exact (Store.update_other σ dest v _ hvd).symm
+  | floatExp dest src =>
+    simp only [execSymbolic]
+    obtain ⟨f, hf⟩ : ∃ f : BitVec 64, σ src = .float f := by
+      revert hstep; generalize _sbam = am; generalize _sbam' = am'; intro hstep; cases hstep <;> simp_all
+    have hstep' : Step prog (Cfg.run pc σ _sbam) (Cfg.run (pc + 1) (σ[dest ↦ .float (floatExpBv f)]) _sbam) :=
+      Step.floatExp hinstr hf
+    have := step_det _ hstep'
+    have hσ' : σ' = σ[dest ↦ .float (floatExpBv f)] := (Cfg.run.inj this).2.1.symm
+    rw [hσ']
+    by_cases hvd : v = dest
+    · rw [hvd, ssGet_ssSet_same]
+      simp only [Expr.eval, Store.update_self]
+      have hsrc : ((ssGet ss src).eval σ₀ am).toFloat = f := by
+        rw [hrepr src, hf]; rfl
+      rw [hsrc]
+    · rw [ssGet_ssSet_other _ _ _ _ hvd, hrepr]
+      exact (Store.update_other σ dest v _ hvd).symm
 
-/-- Empty expression relation yields trivially true store relation. -/
-private theorem eRelToStoreRel_nil : eRelToStoreRel [] = fun _σ_o _am_o _σ_t _am_t => True := by
-  funext σ_o am_o σ_t am_t; simp [eRelToStoreRel, buildSubstMap, List.Forall]
+/-- Empty expression relation means σ_t = σ_o (identity). -/
+private theorem eRelToStoreRel_nil :
+    eRelToStoreRel [] = fun σ_o _am_o σ_t _am_t => ∀ v, σ_t v = σ_o v := by
+  funext σ_o am_o σ_t am_t; simp [eRelToStoreRel, ssGet, buildSubstMap, Expr.eval]
 
-/-- Empty expression relation is trivially satisfied. -/
-private theorem eRelToStoreRel_nil_triv {σ₁ σ₂ : Store} {am₁ am₂ : ArrayMem} :
-    eRelToStoreRel [] σ₁ am₁ σ₂ am₂ := by
-  rw [eRelToStoreRel_nil]; trivial
+/-- Empty expression relation is satisfied when stores agree. -/
+private theorem eRelToStoreRel_nil_triv {σ : Store} {am₁ am₂ : ArrayMem} :
+    eRelToStoreRel [] σ am₁ σ am₂ := by
+  intro v; simp [ssGet, buildSubstMap, Expr.eval]
 
 /-- Initial symbolic store represents identity: ssGet [] v evaluates to σ v. -/
 private theorem ssGet_nil (σ : Store) (am : ArrayMem) (v : Var) :
@@ -651,6 +673,7 @@ private theorem Expr.substSym_nil : ∀ (e : Expr), e.substSym ([] : SymStore) =
   | fcmpE op a b iha ihb => simp [Expr.substSym, iha, ihb]
   | intToFloat e ih => simp [Expr.substSym, ih]
   | floatToInt e ih => simp [Expr.substSym, ih]
+  | floatExp e ih => simp [Expr.substSym, ih]
   | farrRead arr idx ih => simp [Expr.substSym, ih]
 
 -- ============================================================
@@ -691,6 +714,8 @@ theorem Expr.substSym_sound (ss : SymStore) (e : Expr) (σ₀ σ' : Store)
   | intToFloat e ih =>
     simp only [Expr.substSym, Expr.eval]; rw [ih]
   | floatToInt e ih =>
+    simp only [Expr.substSym, Expr.eval]; rw [ih]
+  | floatExp e ih =>
     simp only [Expr.substSym, Expr.eval]; rw [ih]
   | farrRead arr idx ih =>
     simp only [Expr.substSym, Expr.eval]; rw [ih]
@@ -795,6 +820,7 @@ theorem step_run_instr {p : Prog} {pc pc' : Label} {σ σ' : Store} {am am' : Ar
   | fbinop h _ _ => exact ⟨_, h⟩
   | intToFloat h _ => exact ⟨_, h⟩
   | floatToInt h _ => exact ⟨_, h⟩
+  | floatExp h _ => exact ⟨_, h⟩
 
 /-- A step target is always in the successors list. -/
 theorem step_successor {p : Prog} {pc pc' : Label} {σ σ' : Store} {am am' : ArrayMem}
@@ -816,6 +842,7 @@ theorem step_successor {p : Prog} {pc pc' : Label} {σ σ' : Store} {am am' : Ar
   | fbinop h _ _ => have := instr_eq h; subst this; simp [successors]
   | intToFloat h _ => have := instr_eq h; subst this; simp [successors]
   | floatToInt h _ => have := instr_eq h; subst this; simp [successors]
+  | floatExp h _ => have := instr_eq h; subst this; simp [successors]
 
 private theorem and_true_split {a b : Bool} (h : (a && b) = true) :
     a = true ∧ b = true := by
@@ -900,6 +927,7 @@ private def instrVars (instr : TAC) : List Var :=
   | .fbinop x _ y z => [x, y, z]
   | .intToFloat x y => [x, y]
   | .floatToInt x y => [x, y]
+  | .floatExp x y => [x, y]
   | .arrLoad x _ idx _ => [x, idx]
   | .arrStore _ idx val _ => [idx, val]
   | .ifgoto b _    => b.vars
@@ -970,6 +998,8 @@ private theorem execSymbolic_preserves_var (ss : SymStore) (sam : SymArrayMem)
     simp [instrVars] at hv; simp only [execSymbolic]; exact ssGet_ssSet_other ss x v _ hv.1
   | floatToInt x y =>
     simp [instrVars] at hv; simp only [execSymbolic]; exact ssGet_ssSet_other ss x v _ hv.1
+  | floatExp x y =>
+    simp [instrVars] at hv; simp only [execSymbolic]; exact ssGet_ssSet_other ss x v _ hv.1
   | boolop x _ =>
     simp [instrVars] at hv; simp only [execSymbolic]; exact ssGet_ssSet_other ss x v _ hv
   | goto _ => rfl
@@ -1010,7 +1040,7 @@ private theorem isNonZeroLit_sound {e : Expr} (h : e.isNonZeroLit = true) :
   | var => simp [Expr.isNonZeroLit] at h
   | bin => simp [Expr.isNonZeroLit] at h
   | tobool _ | cmpE _ _ _ | cmpLitE _ _ _ | notE _ | andE _ _ | orE _ _ | arrRead _ _ => simp [Expr.isNonZeroLit] at h
-  | flit _ | fbin _ _ _ | fcmpE _ _ _ | intToFloat _ | floatToInt _ | farrRead _ _ => simp [Expr.isNonZeroLit] at h
+  | flit _ | fbin _ _ _ | fcmpE _ _ _ | intToFloat _ | floatToInt _ | floatExp _ | farrRead _ _ => simp [Expr.isNonZeroLit] at h
 
 /-- Soundness of `BoolExpr.symEval`: if symbolic evaluation returns a result,
     it agrees with runtime evaluation. -/
@@ -1096,38 +1126,9 @@ private theorem checkInstrAliasOk_arrLoad_noalias
     rw [hs1, hs2]; simp [Value.toInt]
     exact fun h => hlit h
 
-/-- If `checkBinopSafe` passes for a binop instruction, then the operation is safe
-    (denominator non-zero for div/mod). -/
-private theorem checkBinopSafe_sound {x : Var} {op : BinOp} {y z : Var}
-    {ss : SymStore} {inv : EInv} {σ₀ σ : Store} {am₀ : ArrayMem}
-    {a b : BitVec 64}
-    (hcheck : checkBinopSafe (.binop x op y z) ss inv = true)
-    (hrepr : ∀ v, (ssGet ss v).eval σ₀ am₀ = σ v)
-    (hinv : EInv.toProp inv σ₀ am₀)
-    (hzb : σ z = .int b) : op.safe a b := by
-  cases op with
-  | add | sub | mul => exact True.intro
-  | div | mod =>
-    simp only [checkBinopSafe] at hcheck
-    simp only [BinOp.safe]
-    generalize hsim : (ssGet ss z).simplify inv = sz at hcheck
-    cases sz with
-    | lit n =>
-      simp only [bne_iff_ne] at hcheck
-      have heval : (ssGet ss z).eval σ₀ am₀ = .int n := by
-        have := Expr.simplify_sound inv (ssGet ss z) σ₀ am₀ hinv
-        rw [hsim, Expr.eval] at this; exact this.symm
-      have hbn : b = n := by
-        have : σ z = .int n := by rw [← hrepr z]; exact heval
-        rw [hzb] at this; exact Value.int.inj this
-      rw [hbn]; exact hcheck
-    | _ => sorry  -- runtime divisor: safety guaranteed by div-preservation check
-
 /-- Generalized path execution soundness with arbitrary initial symbolic store.
-    The path check includes symbolic branch-direction verification for ifgoto.
-    `branchInfo` provides the branch direction for the first step's ifgoto when
-    symbolic analysis is inconclusive. `hbranch` guarantees the runtime store
-    matches the branch direction. -/
+    `hDivSafe` provides div-safety for the first binop on the path.
+    `hRestNoDivMod` guarantees no div/mod at intermediate labels. -/
 private theorem execPath_sound_gen (orig : Prog) (ss : SymStore) (sam : SymArrayMem) (inv : EInv)
     (σ₀ σ : Store) (pc : Label) (labels : List Label) (pc' : Label)
     (branchInfo : Option (BoolExpr × Bool))
@@ -1145,7 +1146,12 @@ private theorem execPath_sound_gen (orig : Prog) (ss : SymStore) (sam : SymArray
         ((∃ x, orig[pc]? = some (.arrLoad x arr idx ty)) ∨
          (∃ val, orig[pc]? = some (.arrStore arr idx val ty))) →
         σ idx = .int idxVal → idxVal < orig.arraySizeBv arr)
-    (hRestScalar : ∀ l ∈ labels.dropLast, ∀ instr, orig[l]? = some instr → instr.isScalar = true) :
+    (hRestScalar : ∀ l ∈ labels.dropLast, ∀ instr, orig[l]? = some instr → instr.isScalar = true)
+    (hDivSafe : labels ≠ [] → ∀ x (op : BinOp) y z (a b : BitVec 64),
+        orig[pc]? = some (.binop x op y z) →
+        σ y = .int a → σ z = .int b → op.safe a b)
+    (hRestNoDivMod : ∀ l ∈ labels.dropLast, ∀ x y z,
+        orig[l]? ≠ some (.binop x .div y z) ∧ orig[l]? ≠ some (.binop x .mod y z)) :
     ∃ σ' am', Steps orig (Cfg.run pc σ am) (Cfg.run pc' σ' am') ∧
           (∀ v, (ssGet (execPath orig ss sam pc labels).1 v).eval σ₀ am₀ = σ' v) ∧
           SamCoherent (execPath orig ss sam pc labels).2 σ₀ am₀ am' := by
@@ -1228,7 +1234,8 @@ private theorem execPath_sound_gen (orig : Prog) (ss : SymStore) (sam : SymArray
             obtain ⟨b, hzb⟩ : ∃ b : BitVec 64, σ z = .int b := by
               cases hwti with | binop _ _ hz =>
               exact Value.int_of_typeOf_int (by rw [hts z]; exact hz)
-            have hsafe : op.safe a b := sorry -- div safety: proven by div-preservation
+            have hsafe : op.safe a b :=
+              hDivSafe (List.cons_ne_nil _ _) x op y z a b horig_opt hya hzb
             have hs : Step orig (.run pc σ am) (.run (pc + 1) (σ[x ↦ .int (op.eval a b)]) am) :=
               Step.binop horig_opt hya hzb hsafe
             exact ⟨σ[x ↦ .int (op.eval a b)], am, hs, (fun v => by
@@ -1416,6 +1423,29 @@ private theorem execPath_sound_gen (orig : Prog) (ss : SymStore) (sam : SymArray
                 rw [hsrc]
               · rw [ssGet_ssSet_other _ _ _ _ hvd, hrepr]
                 exact (Store.update_other σ x v _ hvd).symm), hinv, hsamCoh⟩
+          | floatExp x y =>
+            simp [computeNextPC] at hnext_opt
+            rw [hnext_opt.symm]
+            have hpc_lt : pc < orig.size := bound_of_getElem? horig_opt
+            have hwti := hwtp pc hpc_lt
+            have hinstr_eq : orig[pc] = .floatExp x y :=
+              Option.some.inj ((Array.getElem?_eq_getElem hpc_lt).symm.trans horig_opt)
+            rw [hinstr_eq] at hwti
+            obtain ⟨f, hf⟩ : ∃ f : BitVec 64, σ y = .float f := by
+              cases hwti with | floatExp _ hy =>
+              exact Value.float_of_typeOf_float (by rw [hts y]; exact hy)
+            have hs : Step orig (.run pc σ am) (.run (pc + 1) (σ[x ↦ .float (floatExpBv f)]) am) :=
+              Step.floatExp horig_opt hf
+            exact ⟨σ[x ↦ .float (floatExpBv f)], am, hs, (fun v => by
+              simp only [execSymbolic]
+              by_cases hvd : v = x
+              · rw [hvd, ssGet_ssSet_same]
+                simp only [Expr.eval, Store.update_self]
+                have hsrc : ((ssGet ss y).eval σ₀ am₀).toFloat = f := by
+                  rw [hrepr y, hf]; rfl
+                rw [hsrc]
+              · rw [ssGet_ssSet_other _ _ _ _ hvd, hrepr]
+                exact (Store.update_other σ x v _ hvd).symm), hinv, hsamCoh⟩
         | none =>
           -- computeNextPC returned none; use branchInfo fallback
           cases hbi : branchInfo with
@@ -1482,9 +1512,34 @@ private theorem execPath_sound_gen (orig : Prog) (ss : SymStore) (sam : SymArray
           have hdr : (nextPC :: h :: t).dropLast = nextPC :: (h :: t).dropLast := by
             simp [List.dropLast]
           exact hRestScalar l (hdr ▸ List.mem_cons_of_mem _ hmem)
+      -- Derive hDivSafe₁ for the recursive call: intermediate labels can't be div/mod
+      have hDivSafe₁ : rest ≠ [] → ∀ x (op : BinOp) y z (a b : BitVec 64),
+          orig[nextPC]? = some (.binop x op y z) →
+          σ₁ y = .int a → σ₁ z = .int b → op.safe a b := by
+        intro hne x_l op_l y_l z_l a_l b_l horig_l _hy_l _hz_l
+        have hmem : nextPC ∈ (nextPC :: rest).dropLast := by
+          cases rest with
+          | nil => exact absurd rfl hne
+          | cons _ _ => simp [List.dropLast]
+        have ⟨hnd, hnm⟩ := hRestNoDivMod nextPC hmem x_l y_l z_l
+        cases op_l with
+        | add | sub | mul => exact True.intro
+        | div => exact absurd horig_l hnd
+        | mod => exact absurd horig_l hnm
+      -- Derive hRestNoDivMod₁ for the recursive call
+      have hRestNoDivMod₁ : ∀ l ∈ rest.dropLast, ∀ x y z,
+          orig[l]? ≠ some (.binop x .div y z) ∧ orig[l]? ≠ some (.binop x .mod y z) := by
+        intro l hmem
+        cases rest with
+        | nil => simp [List.dropLast] at hmem
+        | cons h t =>
+          have hdr : (nextPC :: h :: t).dropLast = nextPC :: (h :: t).dropLast := by
+            simp [List.dropLast]
+          exact hRestNoDivMod l (hdr ▸ List.mem_cons_of_mem _ hmem)
       obtain ⟨σ', am', hsteps_rest, hrepr_final, hsamCoh'⟩ :=
         ih (execSymbolic ss sam instr).1 (execSymbolic ss sam instr).2 σ₁ nextPC none am₁ hts₁ hrepr'
           hsamCoh₁ hpath_inner (fun _ _ h => by simp at h) hOrigBounds₁ hRestScalar₁
+          hDivSafe₁ hRestNoDivMod₁
       have hexec_sam : (execPath orig ss sam pc (nextPC :: rest)).2 =
           (execPath orig (execSymbolic ss sam instr).1 (execSymbolic ss sam instr).2 nextPC rest).2 := by
         simp [execPath, horig_opt]
@@ -1509,12 +1564,18 @@ private theorem execPath_sound (orig : Prog) (inv : EInv) (σ : Store)
         ((∃ x, orig[pc]? = some (.arrLoad x arr idx ty)) ∨
          (∃ val, orig[pc]? = some (.arrStore arr idx val ty))) →
         σ idx = .int idxVal → idxVal < orig.arraySizeBv arr)
-    (hRestScalar : ∀ l ∈ labels.dropLast, ∀ instr, orig[l]? = some instr → instr.isScalar = true) :
+    (hRestScalar : ∀ l ∈ labels.dropLast, ∀ instr, orig[l]? = some instr → instr.isScalar = true)
+    (hDivSafe : labels ≠ [] → ∀ x (op : BinOp) y z (a b : BitVec 64),
+        orig[pc]? = some (.binop x op y z) →
+        σ y = .int a → σ z = .int b → op.safe a b)
+    (hRestNoDivMod : ∀ l ∈ labels.dropLast, ∀ x y z,
+        orig[l]? ≠ some (.binop x .div y z) ∧ orig[l]? ≠ some (.binop x .mod y z)) :
     ∃ σ' am', Steps orig (Cfg.run pc σ am) (Cfg.run pc' σ' am') ∧
           (∀ v, (ssGet (execPath orig ([] : SymStore) ([] : SymArrayMem) pc labels).1 v).eval σ am = σ' v) ∧
           SamCoherent (execPath orig ([] : SymStore) ([] : SymArrayMem) pc labels).2 σ am am' :=
   execPath_sound_gen orig ([] : SymStore) ([] : SymArrayMem) inv σ σ pc labels pc' branchInfo am am
     Γ hwtp hts hrepr hinv (samCoherent_nil σ am) hInvNoArrRead hpath hbranch hAllInt hOrigBounds hRestScalar
+    hDivSafe hRestNoDivMod
 
 /-- If the store relation holds (∀ x, σ_t x = (ssGet ss x).eval σ_o), then evaluating
     `e` at `σ_t` equals evaluating `e.substSym ss` at `σ_o`. Follows from `substSym_sound`. -/
@@ -1623,6 +1684,11 @@ private theorem relGetOrigExpr_eq_ssGet_buildSubstMap (rel : EExprRel) (x : Var)
       exact ih
     | floatToInt e =>
       have hbeq : (Expr.floatToInt e == Expr.var x) = false := by
+        rw [beq_eq_false_iff_ne]; exact Expr.noConfusion
+      simp only [relGetOrigExpr, List.find?, buildSubstMap, List.filterMap, hbeq]
+      exact ih
+    | floatExp e =>
+      have hbeq : (Expr.floatExp e == Expr.var x) = false := by
         rw [beq_eq_false_iff_ne]; exact Expr.noConfusion
       simp only [relGetOrigExpr, List.find?, buildSubstMap, List.filterMap, hbeq]
       exact ih
@@ -1767,6 +1833,7 @@ private theorem branchInfo_of_step {prog : Prog} {pc pc' : Label} {σ σ' : Stor
       | fbinop h _ _ => exact absurd (hinstr.symm.trans h) (by simp)
       | intToFloat h _ => exact absurd (hinstr.symm.trans h) (by simp)
       | floatToInt h _ => exact absurd (hinstr.symm.trans h) (by simp)
+      | floatExp h _ => exact absurd (hinstr.symm.trans h) (by simp)
     · simp [hguard] at hbi
   | _ => simp [transBranchInfo] at hbi
 
@@ -1895,7 +1962,7 @@ private theorem checkRelConsistency_amCheck
   rw [Bool.and_eq_true] at ham
   exact ⟨beq_iff_eq.mp ham.1, ham.2⟩
 
-set_option maxHeartbeats 1600000 in
+set_option maxHeartbeats 6400000 in
 /-- Soundness of checkTransitionRelProp from the Bool checks.
     Given: checkOrigPath and checkRelConsistency both pass, the original path
     produces steps reaching the target with store relation preserved.
@@ -1907,6 +1974,7 @@ private theorem transRel_sound (dc : ECertificate)
     (hAllInt_trans : AllArrayOpsInt dc.trans)
     (hbndpres : checkBoundsPreservationExec dc = true)
     (harrsize : checkArraySizesExec dc = true)
+    (hdivpres : checkDivPreservationExec dc = true)
     (pc_t pc_t' : Label)
     (dic : EInstrCert) (dtc : ETransCorr) (instr : TAC)
     (pc_o' : Label)
@@ -1921,6 +1989,8 @@ private theorem transRel_sound (dc : ECertificate)
     (hrel_eq : dtc.rel = dic.rel)
     (hRestScalar : ∀ l ∈ dtc.origLabels.dropLast,
         ∀ i, dc.orig[l]? = some i → i.isScalar = true)
+    (hRestNoDivMod : ∀ l ∈ dtc.origLabels.dropLast, ∀ x y z,
+        dc.orig[l]? ≠ some (.binop x .div y z) ∧ dc.orig[l]? ≠ some (.binop x .mod y z))
     (hpath : checkOrigPath dc.orig ([] : SymStore) ([] : SymArrayMem) (dc.inv_orig.getD dic.pc_orig ([] : EInv))
       dic.pc_orig dtc.origLabels pc_o'
       (branchInfoWithRel instr dtc.rel pc_t pc_t') = true)
@@ -1935,7 +2005,139 @@ private theorem transRel_sound (dc : ECertificate)
       { origLabels := dtc.origLabels
         storeRel := eRelToStoreRel dtc.rel
         storeRel_next := eRelToStoreRel dtc.rel_next } := by
-  sorry
+  -- Unfold checkTransitionRelProp and introduce all quantified variables
+  intro σ_t σ_t' σ_o am_t am_t' am_o hinv_t hinv_o hstorerel ham_eq htyped hstep
+  subst ham_eq  -- am_o is replaced by am_t everywhere
+  -- The store relation gives us: ∀ v, σ_t v = (ssGet (buildSubstMap dtc.rel) v).eval σ_o am_t
+  have hcons : ∀ v, σ_t v = (ssGet (buildSubstMap dtc.rel) v).eval σ_o am_t := hstorerel
+  -- Derive hDivSafe for the first instruction on the original path
+  have hDivSafe : dtc.origLabels ≠ [] → ∀ x (op : BinOp) y_o z_o (a b : BitVec 64),
+      dc.orig[dic.pc_orig]? = some (.binop x op y_o z_o) →
+      σ_o y_o = .int a → σ_o z_o = .int b → op.safe a b := by
+    intro _hne x_o op_o y_o z_o a_o b_o horig hya hzb
+    cases op_o with
+    | add | sub | mul => exact True.intro
+    | div | mod =>
+      -- Extract div-preservation info for pc_t
+      simp only [checkDivPreservationExec, List.all_eq_true, List.mem_range] at hdivpres
+      have hpc_bound := bound_of_getElem? hinstr
+      have hpc_check := hdivpres pc_t hpc_bound
+      -- Case split on the transformed instruction
+      revert hstep hpc_check; cases instr with
+      | binop x_t op_t y_t z_t =>
+        intro hstep hpc_check
+        rw [hinstr] at hpc_check
+        have hgetD : dc.instrCerts.getD pc_t default = dic := by
+          simp [Array.getD, dif_pos (bound_of_getElem? hdic)]
+          exact (Array.getElem?_eq_some_iff.mp hdic).2
+        rw [hgetD] at hpc_check; rw [horig] at hpc_check
+        rw [Bool.and_eq_true] at hpc_check; obtain ⟨h12, hz_rel⟩ := hpc_check
+        rw [Bool.and_eq_true] at h12; obtain ⟨hop_eq, hy_rel⟩ := h12
+        -- From the step: extract a_t, b_t and op_t.safe a_t b_t
+        have ⟨a_t, b_t, hya_t, hzb_t, hsafe_t⟩ : ∃ a_t b_t : BitVec 64,
+            σ_t y_t = .int a_t ∧ σ_t z_t = .int b_t ∧ op_t.safe a_t b_t := by
+          cases hstep <;> simp_all
+        -- Transfer via store relation (unify dtc.rel and dic.rel)
+        have hσt_y := hcons y_t; rw [hrel_eq] at hσt_y
+        rw [beq_iff_eq.mp hy_rel, Expr.eval] at hσt_y
+        have hσt_z := hcons z_t; rw [hrel_eq] at hσt_z
+        rw [beq_iff_eq.mp hz_rel, Expr.eval] at hσt_z
+        have ha_eq : a_o = a_t := Value.int.inj ((hya).symm.trans (hσt_y ▸ hya_t))
+        have hb_eq : b_o = b_t := Value.int.inj ((hzb).symm.trans (hσt_z ▸ hzb_t))
+        subst ha_eq; subst hb_eq
+        simp only [BinOp.safe]; rw [beq_iff_eq.mp hop_eq] at hsafe_t; exact hsafe_t
+      | _ => intro hstep hpc_check; simp [BinOp.safe]; sorry
+  -- Derive arguments for execPath_sound
+  set inv_o := dc.inv_orig.getD dic.pc_orig ([] : EInv) with hinv_o_def
+  have hrepr_nil : ∀ v, (ssGet ([] : SymStore) v).eval σ_o am_t = σ_o v :=
+    ssGet_nil σ_o am_t
+  have hInvNoArrRead : inv_o.all (fun (_, e) => !e.hasArrRead) = true := by
+    simp only [inv_o]
+    exact noArrRead_of_inv_all dc.inv_orig hnoarr_orig dic.pc_orig
+  have hbranch : ∀ cond taken, branchInfoWithRel instr dtc.rel pc_t pc_t' = some (cond, taken) →
+      cond.eval σ_o = taken := by
+    intro cond taken hbi
+    exact branchInfo_of_step_with_rel hinstr hstep hcons hbi
+  -- Array bounds for the first instruction
+  have hOrigBounds : dtc.origLabels ≠ [] → ∀ arr idx (idxVal : BitVec 64) ty,
+      ((∃ x, dc.orig[dic.pc_orig]? = some (.arrLoad x arr idx ty)) ∨
+       (∃ val, dc.orig[dic.pc_orig]? = some (.arrStore arr idx val ty))) →
+      σ_o idx = .int idxVal → idxVal < dc.orig.arraySizeBv arr := by
+    intro _hne arr_o idx_o idxVal_o ty_o hinstr_arr hidxVal_o
+    -- From hOrigFirstOk: either the first orig instruction is scalar (contradiction with
+    -- arrLoad/arrStore since isScalar = false for those), or the trans instr is an array op
+    cases hOrigFirstOk with
+    | inl hscalar =>
+      -- Original instruction is scalar, but arrLoad/arrStore is not scalar → contradiction
+      cases hinstr_arr with
+      | inl h => obtain ⟨x, hload⟩ := h; exact absurd (hscalar _ hload) (by simp [TAC.isScalar])
+      | inr h => obtain ⟨val, hstore⟩ := h; exact absurd (hscalar _ hstore) (by simp [TAC.isScalar])
+    | inr harray =>
+      -- Trans instruction is an array op. Extract bounds from the transformed step
+      -- and transfer via bounds-preservation + store relation + array sizes
+      simp only [checkBoundsPreservationExec, List.all_eq_true, List.mem_range] at hbndpres
+      have hpc_bound := bound_of_getElem? hinstr
+      have hpc_check := hbndpres pc_t hpc_bound; rw [hinstr] at hpc_check
+      have hgetD : dc.instrCerts.getD pc_t default = dic := by
+        simp [Array.getD, dif_pos (bound_of_getElem? hdic)]
+        exact (Array.getElem?_eq_some_iff.mp hdic).2
+      rw [hgetD] at hpc_check
+      simp only [checkArraySizesExec, beq_iff_eq] at harrsize
+      -- Case-split on whether trans is arrLoad or arrStore
+      cases harray with
+      | inl h =>
+        obtain ⟨x_t, arr_t, idx_t, ty_t, htrans_eq⟩ := h
+        subst htrans_eq
+        -- bounds-pres check gives: matching arrLoad in orig with same array and related index
+        cases hinstr_arr with
+        | inl h =>
+          obtain ⟨x_o, horig⟩ := h; rw [horig] at hpc_check
+          rw [Bool.and_eq_true] at hpc_check; obtain ⟨harr_eq, hidx_eq⟩ := hpc_check
+          have harr : arr_t = arr_o := beq_iff_eq.mp harr_eq
+          have hidx_rel : ssGet (buildSubstMap dic.rel) idx_t = .var idx_o := beq_iff_eq.mp hidx_eq
+          -- From the step, extract the index value and bounds
+          have ⟨idxVal_t, hidx_t, hbnd_t⟩ : ∃ iv : BitVec 64,
+              σ_t idx_t = .int iv ∧ iv < dc.trans.arraySizeBv arr_t := by
+            cases hstep <;> simp_all
+          -- Transfer via store relation
+          have hσt_idx := hcons idx_t; rw [hrel_eq] at hσt_idx
+          rw [hidx_rel, Expr.eval] at hσt_idx
+          have : idxVal_o = idxVal_t := Value.int.inj (hidxVal_o.symm.trans (hσt_idx ▸ hidx_t))
+          subst this
+          rw [← harr]; simp [Prog.arraySizeBv, harrsize]; exact hbnd_t
+        | inr h =>
+          obtain ⟨val_o, horig⟩ := h; rw [horig] at hpc_check; simp at hpc_check
+      | inr h =>
+        obtain ⟨arr_t, idx_t, val_t, ty_t, htrans_eq⟩ := h
+        subst htrans_eq
+        cases hinstr_arr with
+        | inl h =>
+          obtain ⟨x_o, horig⟩ := h; rw [horig] at hpc_check; simp at hpc_check
+        | inr h =>
+          obtain ⟨val_o, horig⟩ := h; rw [horig] at hpc_check
+          rw [Bool.and_eq_true] at hpc_check; obtain ⟨harr_eq, hidx_eq⟩ := hpc_check
+          have harr : arr_t = arr_o := beq_iff_eq.mp harr_eq
+          have hidx_rel : ssGet (buildSubstMap dic.rel) idx_t = .var idx_o := beq_iff_eq.mp hidx_eq
+          have ⟨idxVal_t, hidx_t, _, hbnd_t⟩ : ∃ iv : BitVec 64,
+              σ_t idx_t = .int iv ∧ (σ_t val_t).typeOf = ty_t ∧ iv < dc.trans.arraySizeBv arr_t := by
+            cases hstep <;> simp_all
+          have hσt_idx := hcons idx_t; rw [hrel_eq] at hσt_idx
+          rw [hidx_rel, Expr.eval] at hσt_idx
+          have : idxVal_o = idxVal_t := Value.int.inj (hidxVal_o.symm.trans (hσt_idx ▸ hidx_t))
+          subst this
+          rw [← harr]; simp [Prog.arraySizeBv, harrsize]; exact hbnd_t
+  -- Execute the original path
+  obtain ⟨σ_o', am_o', hsteps_orig, hrepr_final, hsamCoh_final⟩ :=
+    execPath_sound dc.orig inv_o σ_o dic.pc_orig dtc.origLabels pc_o'
+      (branchInfoWithRel instr dtc.rel pc_t pc_t') am_t
+      dc.tyCtx hwtp htyped hAllInt_orig hrepr_nil hinv_o hInvNoArrRead
+      hpath hbranch hOrigBounds hRestScalar hDivSafe hRestNoDivMod
+  -- Construct the result
+  refine ⟨σ_o', am_o', hsteps_orig, ?_, ?_⟩
+  · -- Post-state store relation: eRelToStoreRel dtc.rel_next σ_o' am_o' σ_t' am_t'
+    sorry
+  · -- Array memory equality: am_t' = am_o'
+    sorry
 
 /-- Extract Bool information from checkAllTransitionsExec for a specific step. -/
 private theorem extractTransCheck (dc : ECertificate)
@@ -2017,16 +2219,15 @@ private theorem checkOrigPathBoundsOk_extract (dc : ECertificate)
     ((∀ i, dc.orig[dic.pc_orig]? = some i → i.isScalar = true) ∨
      (∃ x arr idx ty, instr = .arrLoad x arr idx ty) ∨
      (∃ arr idx val ty, instr = .arrStore arr idx val ty)) ∧
-    -- Part 2: intermediate orig path labels are scalar
+    -- Part 2: intermediate orig path labels are scalar and non-div/mod
     (∀ dtc ∈ dic.transitions, ∀ l ∈ dtc.origLabels.dropLast,
-        ∀ i, dc.orig[l]? = some i → i.isScalar = true) := by
+        (∀ i, dc.orig[l]? = some i → i.isScalar = true) ∧
+        (∀ x y z, dc.orig[l]? ≠ some (.binop x .div y z) ∧
+                   dc.orig[l]? ≠ some (.binop x .mod y z))) := by
   unfold checkOrigPathBoundsOk at h
   have hpb := (List.all_eq_true.mp h) pc_t (List.mem_range.mpr hpc)
   simp only [hinstr] at hpb
-  -- After simp [hinstr], hpb has form: (match dc.instrCerts[pc_t]? with ...) = true
-  -- Rewrite hdic in hpb to reduce the instrCerts match
   simp only [hdic] at hpb
-  -- Now hpb : (...) && dic.transitions.all (...) = true
   rw [Bool.and_eq_true] at hpb
   obtain ⟨hfirst, hrest⟩ := hpb
   constructor
@@ -2036,15 +2237,18 @@ private theorem checkOrigPathBoundsOk_extract (dc : ECertificate)
     | arrStore arr idx val ty => exact Or.inr (Or.inr ⟨arr, idx, val, ty, rfl⟩)
     | halt => exact absurd rfl hne
     | _ =>
-      -- Trans is scalar. From hfirst, if orig is arrLoad/arrStore, check returns false.
-      -- So orig must be scalar.
       left; intro i hi; revert hfirst; rw [hi]
       cases i <;> simp [TAC.isScalar]
-  · -- Part 2: intermediate labels are scalar
-    intro dtc hmem l hmem_l i hi
+  · -- Part 2: intermediate labels are scalar and non-div/mod
+    intro dtc hmem l hmem_l
     have htc := (List.all_eq_true.mp hrest) dtc hmem
-    have := List.all_eq_true.mp htc l hmem_l
-    revert this; rw [hi]; exact id
+    have hcheck := List.all_eq_true.mp htc l hmem_l
+    constructor
+    · intro i hi; revert hcheck; rw [hi]
+      cases i with
+      | binop x op y z => cases op <;> simp [TAC.isScalar]
+      | _ => simp [TAC.isScalar]
+    · intro x y z; constructor <;> (intro heq; have := List.all_eq_true.mp htc l hmem_l; rw [heq] at this; simp at this)
 
 /-- **Condition 3**: checkAllTransitionsExec → checkAllTransitionsProp -/
 theorem checkAllTransitionsExec_sound (dc : ECertificate)
@@ -2055,6 +2259,7 @@ theorem checkAllTransitionsExec_sound (dc : ECertificate)
     (hAllInt_trans : AllArrayOpsInt dc.trans)
     (hbndpres : checkBoundsPreservationExec dc = true)
     (harrsize : checkArraySizesExec dc = true)
+    (hdivpres : checkDivPreservationExec dc = true)
     (hpathbounds : checkOrigPathBoundsOk dc = true)
     (h : checkAllTransitionsExec dc = true) :
     checkAllTransitionsProp dc.tyCtx (toPCertificate dc) := by
@@ -2108,15 +2313,18 @@ theorem checkAllTransitionsExec_sound (dc : ECertificate)
     -- Extract per-pc info from checkOrigPathBoundsOk
     have ⟨hOrigFirstOk, hRestAll⟩ := checkOrigPathBoundsOk_extract dc hpathbounds
       pc_t (bound_of_getElem? hinstr) hinstr hne_halt hdic
-    -- hRestScalar for this specific dtc
+    -- hRestScalar and hRestNoDivMod for this specific dtc
     have hRestScalar : ∀ l ∈ dtc.origLabels.dropLast,
         ∀ i, dc.orig[l]? = some i → i.isScalar = true :=
-      hRestAll dtc hdtc_mem
+      fun l hmem => (hRestAll dtc hdtc_mem l hmem).1
+    have hRestNoDivMod : ∀ l ∈ dtc.origLabels.dropLast, ∀ x y z,
+        dc.orig[l]? ≠ some (.binop x .div y z) ∧ dc.orig[l]? ≠ some (.binop x .mod y z) :=
+      fun l hmem => (hRestAll dtc hdtc_mem l hmem).2
     -- Extract rel equality
     have hrel_eq_dtc : dtc.rel = dic.rel := hrel_eq
-    exact transRel_sound dc hwtp hnoarr_orig hAllInt_orig hAllInt_trans hbndpres harrsize
+    exact transRel_sound dc hwtp hnoarr_orig hAllInt_orig hAllInt_trans hbndpres harrsize hdivpres
       pc_t pc_t' dic dtc _ ((dc.instrCerts.getD pc_t' default).pc_orig) hdic
-      hnoarr_dtc_rel hnoarr_dtc_rel_next hinstr hOrigFirstOk hrel_eq_dtc hRestScalar
+      hnoarr_dtc_rel hnoarr_dtc_rel_next hinstr hOrigFirstOk hrel_eq_dtc hRestScalar hRestNoDivMod
       hpath' hrelcheck
 
 -- ============================================================
@@ -2204,7 +2412,94 @@ theorem checkDivPreservationExec_sound (dc : ECertificate)
     (harrsize : checkArraySizesExec dc = true)
     (hwtp : WellTypedProg dc.tyCtx dc.orig) :
     checkErrorPreservationProp (toPCertificate dc) := by
-  sorry
+  intro pc_t σ_t σ_o am_t am_o hpc_bound hrel _hinv_t _hinv_o htyped hstep
+  -- Normalize toPCertificate projections
+  simp only [toCertificate_trans] at hpc_bound hstep
+  simp only [toCertificate_orig, toCertificate_tyCtx] at htyped ⊢
+  simp only [toPCertificate] at hrel ⊢
+  set ic := dc.instrCerts.getD pc_t default with hic_def
+  -- Only Step.error, arrLoad_boundsError, arrStore_boundsError produce Cfg.error
+  cases hstep with
+  | error hinstr hya hzb hunsafe =>
+    rename_i _ op y z a b
+    -- Extract div-preservation checker info for pc_t
+    simp only [checkDivPreservationExec, List.all_eq_true, List.mem_range] at h
+    have hpc := h pc_t hpc_bound; rw [hinstr] at hpc
+    generalize horig : dc.orig[ic.pc_orig]? = oi at hpc
+    cases oi with
+    | none => simp at hpc
+    | some instr_o =>
+      cases instr_o with
+      | binop x' op' y' z' =>
+        rw [Bool.and_eq_true] at hpc; obtain ⟨h12, hz_eq⟩ := hpc
+        rw [Bool.and_eq_true] at h12; obtain ⟨hop_eq, hy_eq⟩ := h12
+        have hop : op = op' := beq_iff_eq.mp hop_eq
+        have hy_rel : ssGet (buildSubstMap ic.rel) y = .var y' := beq_iff_eq.mp hy_eq
+        have hz_rel : ssGet (buildSubstMap ic.rel) z = .var z' := beq_iff_eq.mp hz_eq
+        -- Transfer values through store relation
+        have hσt_y := hrel y; rw [hy_rel, Expr.eval] at hσt_y
+        have hσt_z := hrel z; rw [hz_rel, Expr.eval] at hσt_z
+        have hya' : σ_o y' = .int a := by rw [← hσt_y]; exact hya
+        have hzb' : σ_o z' = .int b := by rw [← hσt_z]; exact hzb
+        exact ⟨σ_o, am_o, Steps.single (Step.error horig hya' hzb' (hop ▸ hunsafe))⟩
+      | _ => simp at hpc
+  | arrLoad_boundsError hinstr hidx_val hbnd_fail =>
+    rename_i idxVal arr _ idx _
+    -- Extract bounds-preservation checker info for pc_t
+    simp only [checkBoundsPreservationExec, List.all_eq_true, List.mem_range] at hbndpres
+    have hpc := hbndpres pc_t hpc_bound; rw [hinstr] at hpc
+    generalize horig : dc.orig[ic.pc_orig]? = oi at hpc
+    cases oi with
+    | none => simp at hpc
+    | some instr_o =>
+      cases instr_o with
+      | arrLoad x' arr' idx' ty' =>
+        rw [Bool.and_eq_true] at hpc; obtain ⟨harr_eq, hidx_eq⟩ := hpc
+        have harr : arr = arr' := beq_iff_eq.mp harr_eq
+        have hidx_rel : ssGet (buildSubstMap ic.rel) idx = .var idx' := beq_iff_eq.mp hidx_eq
+        -- Transfer index value
+        have hσt_idx := hrel idx; rw [hidx_rel, Expr.eval] at hσt_idx
+        have hidx' : σ_o idx' = .int idxVal := by rw [← hσt_idx]; exact hidx_val
+        -- Transfer bounds failure via equal array sizes
+        simp only [checkArraySizesExec, beq_iff_eq] at harrsize
+        have hsize_eq : dc.orig.arraySizeBv arr' = dc.trans.arraySizeBv arr := by
+          simp [Prog.arraySizeBv, harr, harrsize]
+        have hbnd_fail' : ¬ (idxVal < dc.orig.arraySizeBv arr') := hsize_eq ▸ hbnd_fail
+        exact ⟨σ_o, am_o, Steps.single (Step.arrLoad_boundsError horig hidx' hbnd_fail')⟩
+      | _ => simp at hpc
+  | arrStore_boundsError hinstr hidx_val hty_val hbnd_fail =>
+    rename_i _ idxVal arr idx val
+    -- Extract bounds-preservation checker info for pc_t
+    simp only [checkBoundsPreservationExec, List.all_eq_true, List.mem_range] at hbndpres
+    have hpc := hbndpres pc_t hpc_bound; rw [hinstr] at hpc
+    generalize horig : dc.orig[ic.pc_orig]? = oi at hpc
+    cases oi with
+    | none => simp at hpc
+    | some instr_o =>
+      cases instr_o with
+      | arrStore arr' idx' val' ty' =>
+        rw [Bool.and_eq_true] at hpc; obtain ⟨harr_eq, hidx_eq⟩ := hpc
+        have harr : arr = arr' := beq_iff_eq.mp harr_eq
+        have hidx_rel : ssGet (buildSubstMap ic.rel) idx = .var idx' := beq_iff_eq.mp hidx_eq
+        -- Transfer index value
+        have hσt_idx := hrel idx; rw [hidx_rel, Expr.eval] at hσt_idx
+        have hidx' : σ_o idx' = .int idxVal := by rw [← hσt_idx]; exact hidx_val
+        -- Transfer bounds failure via equal array sizes
+        simp only [checkArraySizesExec, beq_iff_eq] at harrsize
+        have hsize_eq : dc.orig.arraySizeBv arr' = dc.trans.arraySizeBv arr := by
+          simp [Prog.arraySizeBv, harr, harrsize]
+        have hbnd_fail' : ¬ (idxVal < dc.orig.arraySizeBv arr') := hsize_eq ▸ hbnd_fail
+        -- Get (σ_o val').typeOf = ty' from WellTypedProg + TypedStore
+        have hpc_lt : ic.pc_orig < dc.orig.size := bound_of_getElem? horig
+        have hwti := hwtp ic.pc_orig hpc_lt
+        have hinstr_eq : dc.orig[ic.pc_orig] = .arrStore arr' idx' val' ty' :=
+          Option.some.inj ((Array.getElem?_eq_getElem hpc_lt).symm.trans horig)
+        rw [hinstr_eq] at hwti
+        have ⟨_hidx_ty, hval_ty⟩ : dc.tyCtx idx' = .int ∧ dc.tyCtx val' = ty' := by
+          cases hwti with | arrStore h1 h2 => exact ⟨h1, h2⟩
+        have hty' : (σ_o val').typeOf = ty' := by rw [htyped val']; exact hval_ty
+        exact ⟨σ_o, am_o, Steps.single (Step.arrStore_boundsError horig hidx' hty' hbnd_fail')⟩
+      | _ => simp at hpc
 
 -- ============================================================
 -- § 9. Main soundness theorem
@@ -2257,6 +2552,8 @@ theorem checkSuccessorsInBounds_sound (dc : ECertificate)
       have := hall pc hpc; simp [hi, successors] at this; exact this
     | floatToInt hi _ =>
       have := hall pc hpc; simp [hi, successors] at this; exact this
+    | floatExp hi _ =>
+      have := hall pc hpc; simp [hi, successors] at this; exact this
 
 theorem soundness_bridge
     (dc : ECertificate) (h : checkCertificateExec dc = true)
@@ -2301,7 +2598,7 @@ theorem soundness_bridge
     start_corr    := checkStartCorrespondenceExec_sound dc h_startcorr hrel0
     start_inv     := checkInvariantsAtStartExec_sound dc h_invstart
     inv_preserved := checkInvariantsPreservedExec_sound dc h_invpres h_noarr_o h_noarr_t (checkAllArrayOpsInt_sound dc.orig h_allint_o) (checkAllArrayOpsInt_sound dc.trans h_allint_t)
-    transitions   := checkAllTransitionsExec_sound dc (checkWellTypedProg_sound hwt_orig) h_noarr_o h_noarr_rels (checkAllArrayOpsInt_sound dc.orig h_allint_o) (checkAllArrayOpsInt_sound dc.trans h_allint_t) h_bndpres h_arrsize h_pathbounds h_trans
+    transitions   := checkAllTransitionsExec_sound dc (checkWellTypedProg_sound hwt_orig) h_noarr_o h_noarr_rels (checkAllArrayOpsInt_sound dc.orig h_allint_o) (checkAllArrayOpsInt_sound dc.trans h_allint_t) h_bndpres h_arrsize h_div h_pathbounds h_trans
     halt_corr     := checkHaltCorrespondenceExec_sound dc h_haltcorr
     halt_obs      := checkHaltObservableExec_sound dc h_haltobs
     nonterm       := checkNonterminationExec_sound dc h_nonterm

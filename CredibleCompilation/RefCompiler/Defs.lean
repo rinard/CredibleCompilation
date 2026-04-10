@@ -223,6 +223,10 @@ def refCompileExpr (e : SExpr) (offset nextTmp : Nat) : List TAC × Var × Nat :
     let (codeE, ve, tmp1) := refCompileExpr e offset nextTmp
     let t := tmpName tmp1
     (codeE ++ [.floatToInt t ve], t, tmp1 + 1)
+  | .floatExp e =>
+    let (codeE, ve, tmp1) := refCompileExpr e offset nextTmp
+    let t := ftmpName tmp1
+    (codeE ++ [.floatExp t ve], t, tmp1 + 1)
   | .farrRead arr idx =>
     let (codeIdx, vIdx, tmp1) := refCompileExpr idx offset nextTmp
     let t := ftmpName tmp1
@@ -348,6 +352,9 @@ def refCompileStmt (s : Stmt) (offset nextTmp : Nat) : List TAC × Nat :=
     | .intToFloat e =>
       let (codeE, ve, tmp1) := refCompileExpr e offset nextTmp
       (codeE ++ [.intToFloat x ve], tmp1)
+    | .floatExp e =>
+      let (codeE, ve, tmp1) := refCompileExpr e offset nextTmp
+      (codeE ++ [.floatExp x ve], tmp1)
     | .farrRead arr idx =>
       let (codeIdx, vIdx, tmp1) := refCompileExpr idx offset nextTmp
       let t := ftmpName tmp1
@@ -479,6 +486,13 @@ theorem FragExec.single_floatToInt {p : Prog} {pc : Nat} {σ : Store} {am : Arra
     (hy : σ y = .float f) :
     FragExec p pc σ (pc + 1) (σ[x ↦ .int (floatToIntBv f)]) am am :=
   Steps.single (Step.floatToInt h hy)
+
+theorem FragExec.single_floatExp {p : Prog} {pc : Nat} {σ : Store} {am : ArrayMem}
+    {x y : Var} {f : BitVec 64}
+    (h : p[pc]? = some (.floatExp x y))
+    (hy : σ y = .float f) :
+    FragExec p pc σ (pc + 1) (σ[x ↦ .float (floatExpBv f)]) am am :=
+  Steps.single (Step.floatExp h hy)
 
 theorem FragExec.single_arrStore_float {p : Prog} {pc : Nat} {σ : Store} {am : ArrayMem}
     {arr : ArrayName} {idx val : Var} {idxVal v : BitVec 64}

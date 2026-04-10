@@ -14,7 +14,17 @@ theorem SExpr.isSafe_of_safe (e : SExpr) (σ : Store) (am : ArrayMem)
     cases op <;> simp_all [SExpr.safe, SExpr.isSafe, decide_eq_true_eq]
   | arrRead arr idx ih =>
     simp [SExpr.safe] at h; simp [SExpr.isSafe, ih h.1, decide_eq_true_eq, h.2]
-  | flit _ | fbin _ _ _ _ _ | intToFloat _ _ | floatToInt _ _ | farrRead _ _ _ => sorry
+  | flit _ => simp [SExpr.isSafe]
+  | fbin _ a b iha ihb =>
+    simp [SExpr.safe] at h; simp [SExpr.isSafe, iha h.1, ihb h.2]
+  | intToFloat e ih =>
+    simp [SExpr.safe] at h; simp [SExpr.isSafe, ih h]
+  | floatToInt e ih =>
+    simp [SExpr.safe] at h; simp [SExpr.isSafe, ih h]
+  | floatExp e ih =>
+    simp [SExpr.safe] at h; simp [SExpr.isSafe, ih h]
+  | farrRead arr idx ih =>
+    simp [SExpr.safe] at h; simp [SExpr.isSafe, ih h.1, decide_eq_true_eq, h.2]
 
 theorem SBool.isSafe_of_safe (sb : SBool) (σ : Store) (am : ArrayMem)
     (decls : List (ArrayName × Nat × VarTy))
@@ -38,7 +48,9 @@ theorem SBool.isSafe_of_safe (sb : SBool) (σ : Store) (am : ArrayMem)
     simp [SBool.safe] at h
     have hih := SExpr.isSafe_of_safe idx σ am decls h.1
     simp [SBool.isSafe, hih, decide_eq_true_eq, h.2]
-  | fcmp _ _ _ => sorry
+  | fcmp _ a b =>
+    simp [SBool.safe] at h
+    simp [SBool.isSafe, SExpr.isSafe_of_safe a σ am decls h.1, SExpr.isSafe_of_safe b σ am decls h.2]
 
 private theorem Stmt.interp_ne_none_of_safe_assign (x : Var) (e : SExpr) (σ : Store) (am : ArrayMem)
     (decls : List (ArrayName × Nat × VarTy))
@@ -69,6 +81,21 @@ private theorem Stmt.interp_ne_none_of_safe_barrWrite (arr : ArrayName) (idx : S
   simp only [Stmt.safe] at hsafe
   simp [Stmt.interp, SExpr.isSafe_of_safe idx σ am decls hsafe.1,
         SBool.isSafe_of_safe bval σ am decls hsafe.2.1, decide_eq_true_eq, hsafe.2.2]
+
+private theorem Stmt.interp_ne_none_of_safe_fassign (x : Var) (e : SExpr) (σ : Store) (am : ArrayMem)
+    (decls : List (ArrayName × Nat × VarTy))
+    (hsafe : (Stmt.fassign x e).safe 0 σ am decls) :
+    (Stmt.fassign x e).interp 0 σ am decls ≠ none := by
+  simp only [Stmt.safe] at hsafe
+  simp [Stmt.interp, SExpr.isSafe_of_safe e σ am decls hsafe]
+
+private theorem Stmt.interp_ne_none_of_safe_farrWrite (arr : ArrayName) (idx val : SExpr) (σ : Store) (am : ArrayMem)
+    (decls : List (ArrayName × Nat × VarTy))
+    (hsafe : (Stmt.farrWrite arr idx val).safe 0 σ am decls) :
+    (Stmt.farrWrite arr idx val).interp 0 σ am decls ≠ none := by
+  simp only [Stmt.safe] at hsafe
+  simp [Stmt.interp, SExpr.isSafe_of_safe idx σ am decls hsafe.1,
+        SExpr.isSafe_of_safe val σ am decls hsafe.2.1, decide_eq_true_eq, hsafe.2.2]
 
 /-!
 # Reference Compiler: Metatheory
@@ -154,8 +181,8 @@ theorem Stmt.interp_fuel_succ (s : Stmt) :
     intro _ _ _ _ _ h; simp_all [Stmt.interp]
   | barrWrite arr idx bval =>
     intro _ _ _ _ _ h; simp_all [Stmt.interp]
-  | fassign _ _ => sorry
-  | farrWrite _ _ _ => sorry
+  | fassign _ _ => intro _ _ _ _ _ h; simp_all [Stmt.interp]
+  | farrWrite _ _ _ => intro _ _ _ _ _ h; simp_all [Stmt.interp]
   | seq s₁ s₂ ih₁ ih₂ =>
     intro fuel σ am decls r h
     simp only [Stmt.interp.eq_6] at h ⊢
@@ -225,8 +252,8 @@ theorem Stmt.safe_fuel_succ (s : Stmt) :
     intro _ _ _ _ h; simp_all [Stmt.safe]
   | barrWrite arr idx bval =>
     intro _ _ _ _ h; simp_all [Stmt.safe]
-  | fassign _ _ => sorry
-  | farrWrite _ _ _ => sorry
+  | fassign _ _ => intro _ _ _ _ h; simp_all [Stmt.safe]
+  | farrWrite _ _ _ => intro _ _ _ _ h; simp_all [Stmt.safe]
   | seq s₁ s₂ ih₁ ih₂ =>
     intro fuel σ am decls h
     rw [Stmt.safe.eq_6] at h ⊢
@@ -445,8 +472,8 @@ theorem refCompileStmt_diverges (s : Stmt) (σ : Store) (am : ArrayMem)
   | bassign x b => intro _; exfalso; exact Stmt.interp_ne_none_of_safe_bassign x b σ am p.arrayDecls (hsafe 0) (hdiv 0)
   | arrWrite arr idx val => intro _; exfalso; exact Stmt.interp_ne_none_of_safe_arrWrite arr idx val σ am p.arrayDecls (hsafe 0) (hdiv 0)
   | barrWrite arr idx bval => intro _; exfalso; exact Stmt.interp_ne_none_of_safe_barrWrite arr idx bval σ am p.arrayDecls (hsafe 0) (hdiv 0)
-  | fassign _ _ => sorry
-  | farrWrite _ _ _ => sorry
+  | fassign x e => intro _; exfalso; exact Stmt.interp_ne_none_of_safe_fassign x e σ am p.arrayDecls (hsafe 0) (hdiv 0)
+  | farrWrite arr idx val => intro _; exfalso; exact Stmt.interp_ne_none_of_safe_farrWrite arr idx val σ am p.arrayDecls (hsafe 0) (hdiv 0)
   | seq s₁ s₂ ih₁ ih₂ =>
     intro N
     -- Either s₁ diverges, or s₁ terminates and s₂ diverges

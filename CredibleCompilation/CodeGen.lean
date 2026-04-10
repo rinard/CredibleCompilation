@@ -50,6 +50,8 @@ private def collectVars (p : Prog) : List Var :=
                           if a.contains y then a else a ++ [y]
     | .floatToInt x y  => let a := if acc.contains x then acc else acc ++ [x]
                           if a.contains y then a else a ++ [y]
+    | .floatExp x y    => let a := if acc.contains x then acc else acc ++ [x]
+                          if a.contains y then a else a ++ [y]
     | .goto _          => acc
     | .ifgoto _ _      => acc
     | .halt            => acc
@@ -290,6 +292,12 @@ private def genInstr (varMap : List (Var × Nat))
     (smartLoadVarFP varMap src "d0") ::
     "  fcvtzs x0, d0" ::
     (smartStoreVar varMap dst "x0") :: List.nil
+  | .floatExp dst src =>
+    (smartLoadVarFP varMap src "d0") ::
+    "  stp x29, x30, [sp, #-16]!" ::
+    "  bl _exp" ::
+    "  ldp x29, x30, [sp], #16" ::
+    (smartStoreVarFP varMap dst "d0") :: List.nil
 
 -- ============================================================
 -- § 5. Program codegen

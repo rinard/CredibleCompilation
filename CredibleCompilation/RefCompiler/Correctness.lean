@@ -61,6 +61,12 @@ theorem refCompileExpr_nextTmp_ge (e : SExpr) (offset nextTmp : Nat) :
     generalize refCompileExpr _ offset nextTmp = ri at hi ⊢
     obtain ⟨codeE, ve, tmp1⟩ := ri; simp at hi ⊢
     omega
+  | floatExp _ ih =>
+    dsimp only [refCompileExpr]
+    have hi := ih offset nextTmp
+    generalize refCompileExpr _ offset nextTmp = ri at hi ⊢
+    obtain ⟨codeE, ve, tmp1⟩ := ri; simp at hi ⊢
+    omega
   | farrRead _ _ ih =>
     dsimp only [refCompileExpr]
     have hi := ih offset nextTmp
@@ -160,6 +166,13 @@ theorem refCompileExpr_result_bound (e : SExpr) (offset nextTmp : Nat)
     generalize refCompileExpr e offset nextTmp = ri at hge ⊢
     obtain ⟨codeE, ve, tmp1⟩ := ri; simp at hge ⊢
     exact ⟨tmp1, hge, by omega, rfl⟩
+  | floatExp e _ =>
+    left
+    dsimp only [refCompileExpr]
+    have hge := refCompileExpr_nextTmp_ge e offset nextTmp
+    generalize refCompileExpr e offset nextTmp = ri at hge ⊢
+    obtain ⟨codeE, ve, tmp1⟩ := ri; simp at hge ⊢
+    exact ftmpName_not_isTmp tmp1
   | farrRead arr idx _ =>
     left
     dsimp only [refCompileExpr]
@@ -217,6 +230,13 @@ theorem refCompileExpr_result_ftmp_bound (e : SExpr) (offset nextTmp : Nat)
     generalize refCompileExpr e offset nextTmp = ri at hge ⊢
     obtain ⟨codeE, ve, tmp1⟩ := ri; simp at hge ⊢
     exact tmpName_not_isFTmp tmp1
+  | floatExp e _ =>
+    right
+    dsimp only [refCompileExpr]
+    have hge := refCompileExpr_nextTmp_ge e offset nextTmp
+    generalize refCompileExpr e offset nextTmp = ri at hge ⊢
+    obtain ⟨codeE, ve, tmp1⟩ := ri; simp at hge ⊢
+    exact ⟨tmp1, hge, by omega, rfl⟩
   | farrRead arr idx _ =>
     right
     dsimp only [refCompileExpr]
@@ -633,6 +653,40 @@ theorem refCompileExpr_correct (e : SExpr) (offset nextTmp : Nat)
       have hge := refCompileExpr_nextTmp_ge e offset nextTmp
       rw [hri] at hge; simp at hge
       rw [Store.update_other _ _ _ _ (Ne.symm tmpName_ne_ftmpName)]
+      exact hfprev_e k hk
+  | floatExp e ih =>
+    obtain ⟨hwrap_e, htv_e⟩ :=
+      show e.wrapEval σ am = .float (e.eval σ am) ∧ e.typedVars σ am from htypedv
+    dsimp only [refCompileExpr] at hcode ⊢
+    generalize hri : refCompileExpr e offset nextTmp = ri at hcode ⊢
+    obtain ⟨codeE, ve, tmp1⟩ := ri
+    simp only [] at hcode ⊢
+    have hcodeE : CodeAt (refCompileExpr e offset nextTmp).1 p offset := by
+      rw [hri]; exact hcode.left
+    have hconv : p[offset + codeE.length]? = some (.floatExp (ftmpName tmp1) ve) := by
+      have := hcode.right.head; simpa using this
+    obtain ⟨σ_e, hexec_e, hval_e, hntmp_e, hprev_e, hfprev_e⟩ :=
+      ih offset nextTmp σ_tac htf hftf htv_e (by simp [SExpr.safe] at hsafe ⊢; exact hsafe) hagree hcodeE
+    rw [hri] at hexec_e hval_e; simp at hexec_e hval_e
+    have hval_e_float : σ_e ve = .float (e.eval σ am) := by rw [hval_e, hwrap_e]
+    have hexec_conv := FragExec.single_floatExp (am := am) hconv hval_e_float
+    refine ⟨σ_e[ftmpName tmp1 ↦ .float (floatExpBv (e.eval σ am))],
+            ?_, ?_, ?_, ?_, ?_⟩
+    · have h12 := FragExec.trans' hexec_e hexec_conv
+      simp only [List.length_append, List.length_cons, List.length_nil] at h12 ⊢
+      exact h12
+    · simp only [SExpr.wrapEval]; rw [Store.update_self]
+    · intro w hw1 hw2
+      rw [Store.update_isFTmp_ne (ftmpName_isFTmp tmp1) hw2, hntmp_e w hw1 hw2]
+    · intro k hk
+      have hge := refCompileExpr_nextTmp_ge e offset nextTmp
+      rw [hri] at hge; simp at hge
+      rw [Store.update_other _ _ _ _ (tmpName_ne_ftmpName)]
+      exact hprev_e k hk
+    · intro k hk
+      have hge := refCompileExpr_nextTmp_ge e offset nextTmp
+      rw [hri] at hge; simp at hge
+      rw [Store.update_ftmpName_ne (by omega)]
       exact hfprev_e k hk
   | farrRead arr idx ih =>
     have hsafe_idx : idx.safe σ am p.arrayDecls := by
@@ -1624,6 +1678,29 @@ theorem refCompileStmt_correct (s : Stmt) (fuel : Nat) (σ σ' : Store) (am am' 
         split
         · next h => rw [beq_iff_eq] at h; subst h; rw [hval_e]
         · exact (hntmp_e v hv1 hv2).trans (hagree v hv1 hv2)
+    | floatExp fee =>
+      dsimp only [refCompileStmt] at hcode ⊢
+      generalize hre : refCompileExpr (.floatExp fee) offset nextTmp = re at hcode ⊢
+      obtain ⟨codeE, ve, tmp1⟩ := re
+      simp only [] at hcode ⊢
+      have hcodeE : CodeAt (refCompileExpr (.floatExp fee) offset nextTmp).1 p offset := by
+        rw [hre]; exact hcode.left
+      have hcopy : p[offset + codeE.length]? = some (.copy x ve) := by
+        have := hcode.right.head; simpa using this
+      obtain ⟨σ_e, hexec_e, hval_e, hntmp_e, hprev_e, hfprev_e⟩ :=
+        refCompileExpr_correct (.floatExp fee) offset nextTmp σ σ_tac am p htf_e hftf_e htv_e hsafe_e hagree hcodeE
+      rw [hre] at hexec_e hval_e; simp at hexec_e hval_e
+      rw [hwrap_e] at hval_e
+      have hexec_copy := FragExec.single_copy (am := am) hcopy (σ := σ_e)
+      refine ⟨σ_e[x ↦ σ_e ve], ?_, ?_⟩
+      · have h12 := FragExec.trans' hexec_e hexec_copy
+        simp only [List.length_append, List.length_cons, List.length_nil] at h12 ⊢
+        exact h12
+      · intro v hv1 hv2
+        simp only [Store.update]
+        split
+        · next h => rw [beq_iff_eq] at h; subst h; rw [hval_e]
+        · exact (hntmp_e v hv1 hv2).trans (hagree v hv1 hv2)
     | farrRead farr fidx =>
       dsimp only [refCompileStmt] at hcode ⊢
       generalize hre : refCompileExpr (.farrRead farr fidx) offset nextTmp = re at hcode ⊢
@@ -2047,6 +2124,37 @@ theorem refCompileStmt_correct (s : Stmt) (fuel : Nat) (σ σ' : Store) (am am' 
       have hexec_itf := FragExec.single_intToFloat (am := am) hintToFloat hval_e
       refine ⟨σ_e[x ↦ .float (intToFloatBv (ie.eval σ am))], ?_, ?_⟩
       · have h12 := FragExec.trans' hexec_e hexec_itf
+        simp only [List.length_append, List.length_cons, List.length_nil] at h12 ⊢
+        exact h12
+      · intro v hv1 hv2
+        simp only [SExpr.eval, Store.update]
+        split
+        · rfl
+        · exact (hntmp_e v hv1 hv2).trans (hagree v hv1 hv2)
+    | floatExp fee =>
+      -- Specialized: codeE ++ [.floatExp x ve]
+      have htf_fee : ∀ v ∈ fee.freeVars, v.isTmp = false :=
+        fun v hv => htf_e v (by simp [SExpr.freeVars]; exact hv)
+      have hftf_fee : ∀ v ∈ fee.freeVars, v.isFTmp = false :=
+        fun v hv => hftf_e v (by simp [SExpr.freeVars]; exact hv)
+      have htv_fee : fee.typedVars σ am := by simp [SExpr.typedVars] at htv_e; exact htv_e.2
+      have hwrap_fee : fee.wrapEval σ am = .float (fee.eval σ am) := by simp [SExpr.typedVars] at htv_e; exact htv_e.1
+      have hsafe_fee : fee.safe σ am p.arrayDecls := by simp [SExpr.safe] at hsafe_e; exact hsafe_e
+      dsimp only [refCompileStmt] at hcode ⊢
+      generalize hre : refCompileExpr fee offset nextTmp = re at hcode ⊢
+      obtain ⟨codeE, ve, tmp1⟩ := re
+      simp only [] at hcode ⊢
+      have hcodeE : CodeAt (refCompileExpr fee offset nextTmp).1 p offset := by
+        rw [hre]; exact hcode.left
+      have hfloatExp : p[offset + codeE.length]? = some (.floatExp x ve) := by
+        have := hcode.right.head; simpa using this
+      obtain ⟨σ_e, hexec_e, hval_e, hntmp_e, hprev_e, hfprev_e⟩ :=
+        refCompileExpr_correct fee offset nextTmp σ σ_tac am p htf_fee hftf_fee htv_fee hsafe_fee hagree hcodeE
+      rw [hre] at hexec_e hval_e; simp at hexec_e hval_e
+      rw [hwrap_fee] at hval_e
+      have hexec_fe := FragExec.single_floatExp (am := am) hfloatExp hval_e
+      refine ⟨σ_e[x ↦ .float (floatExpBv (fee.eval σ am))], ?_, ?_⟩
+      · have h12 := FragExec.trans' hexec_e hexec_fe
         simp only [List.length_append, List.length_cons, List.length_nil] at h12 ⊢
         exact h12
       · intro v hv1 hv2

@@ -376,6 +376,9 @@ def formalGenInstr (vm : VarMap) (pcMap : Nat → Nat) (instr : TAC)
   | .floatToInt _dst _src =>
     -- floatToInt not yet supported in ARM backend
     sorry
+  | .floatExp _dst _src =>
+    -- floatExp not yet supported in ARM backend
+    sorry
 
 -- ============================================================
 -- § 9. CodeAt and helper lemmas

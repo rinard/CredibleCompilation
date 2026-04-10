@@ -161,7 +161,8 @@ theorem inv_preserved_steps {inv : PInvariantMap} {p : Prog}
       | refl => exact absurd hc' Cfg.noConfusion
       | step s _ => exact absurd s Step.no_step_from_error
     | binop_typeError h _ | arrLoad_typeError h _ | arrStore_typeError h _
-    | fbinop_typeError h _ | intToFloat_typeError h _ | floatToInt_typeError h _ => cases rest with
+    | fbinop_typeError h _ | intToFloat_typeError h _ | floatToInt_typeError h _
+    | floatExp_typeError h _ => cases rest with
       | refl => exact absurd hc' Cfg.noConfusion
       | step s _ => exact absurd s Step.no_step_from_typeError
     | const h => exact ih _ _ _ rfl (hpres _ _ am hinv _ _ am (Step.const h)) _ _ _ hc'
@@ -176,6 +177,7 @@ theorem inv_preserved_steps {inv : PInvariantMap} {p : Prog}
     | fbinop h hy hz => exact ih _ _ _ rfl (hpres _ _ am hinv _ _ am (Step.fbinop h hy hz)) _ _ _ hc'
     | intToFloat h hy => exact ih _ _ _ rfl (hpres _ _ am hinv _ _ am (Step.intToFloat h hy)) _ _ _ hc'
     | floatToInt h hy => exact ih _ _ _ rfl (hpres _ _ am hinv _ _ am (Step.floatToInt h hy)) _ _ _ hc'
+    | floatExp h hy => exact ih _ _ _ rfl (hpres _ _ am hinv _ _ am (Step.floatExp h hy)) _ _ _ hc'
     | arrLoad_boundsError h _ _ => cases rest with
       | refl => exact absurd hc' Cfg.noConfusion
       | step s _ => exact absurd s Step.no_step_from_error
@@ -208,7 +210,8 @@ theorem type_preservation_steps {Γ : TyCtx} {p : Prog} (hwtp : WellTypedProg Γ
       | refl => exact absurd hc' Cfg.noConfusion
       | step s _ => exact absurd s Step.no_step_from_error
     | binop_typeError h _ | arrLoad_typeError h _ | arrStore_typeError h _
-    | fbinop_typeError h _ | intToFloat_typeError h _ | floatToInt_typeError h _ => cases rest with
+    | fbinop_typeError h _ | intToFloat_typeError h _ | floatToInt_typeError h _
+    | floatExp_typeError h _ => cases rest with
       | refl => exact absurd hc' Cfg.noConfusion
       | step s _ => exact absurd s Step.no_step_from_typeError
     | const h => exact ih _ _ _ rfl (type_preservation hwtp hts (bound_of_getElem? h) (Step.const (am := am) h)) _ _ _ hc'
@@ -223,6 +226,7 @@ theorem type_preservation_steps {Γ : TyCtx} {p : Prog} (hwtp : WellTypedProg Γ
     | fbinop h hy hz => exact ih _ _ _ rfl (type_preservation hwtp hts (bound_of_getElem? h) (Step.fbinop (am := am) h hy hz)) _ _ _ hc'
     | intToFloat h hy => exact ih _ _ _ rfl (type_preservation hwtp hts (bound_of_getElem? h) (Step.intToFloat (am := am) h hy)) _ _ _ hc'
     | floatToInt h hy => exact ih _ _ _ rfl (type_preservation hwtp hts (bound_of_getElem? h) (Step.floatToInt (am := am) h hy)) _ _ _ hc'
+    | floatExp h hy => exact ih _ _ _ rfl (type_preservation hwtp hts (bound_of_getElem? h) (Step.floatExp (am := am) h hy)) _ _ _ hc'
     | arrLoad_boundsError h _ _ => cases rest with
       | refl => exact absurd hc' Cfg.noConfusion
       | step s _ => exact absurd s Step.no_step_from_error
@@ -277,7 +281,8 @@ private theorem steps_to_halt_decompose {p : Prog} {pc₀ : Nat} {σ₀ : Store}
       | refl => exact absurd hc' Cfg.noConfusion
       | step s _ => exact absurd s Step.no_step_from_error
     | binop_typeError h _ | arrLoad_typeError h _ | arrStore_typeError h _
-    | fbinop_typeError h _ | intToFloat_typeError h _ | floatToInt_typeError h _ => cases rest with
+    | fbinop_typeError h _ | intToFloat_typeError h _ | floatToInt_typeError h _
+    | floatExp_typeError h _ => cases rest with
       | refl => exact absurd hc' Cfg.noConfusion
       | step s _ => exact absurd s Step.no_step_from_typeError
     | const h =>
@@ -316,6 +321,9 @@ private theorem steps_to_halt_decompose {p : Prog} {pc₀ : Nat} {σ₀ : Store}
     | floatToInt h hy =>
       obtain ⟨pc, σ, am, hpre, hhalt, heq⟩ := ih _ _ _ rfl _ _ hc'
       exact ⟨pc, σ, am, Steps.step (Step.floatToInt (am := am₀) h hy) hpre, hhalt, heq⟩
+    | floatExp h hy =>
+      obtain ⟨pc, σ, am, hpre, hhalt, heq⟩ := ih _ _ _ rfl _ _ hc'
+      exact ⟨pc, σ, am, Steps.step (Step.floatExp (am := am₀) h hy) hpre, hhalt, heq⟩
     | arrLoad_boundsError h _ _ => cases rest with
       | refl => exact absurd hc' Cfg.noConfusion
       | step s _ => exact absurd s Step.no_step_from_error
@@ -673,7 +681,8 @@ private theorem steps_run_in_bounds {p : Prog} (hclosed : StepClosedInBounds p)
       | refl => exact absurd hc' Cfg.noConfusion
       | step s _ => exact absurd s Step.no_step_from_error
     | binop_typeError h _ | arrLoad_typeError h _ | arrStore_typeError h _
-    | fbinop_typeError h _ | intToFloat_typeError h _ | floatToInt_typeError h _ => cases rest with
+    | fbinop_typeError h _ | intToFloat_typeError h _ | floatToInt_typeError h _
+    | floatExp_typeError h _ => cases rest with
       | refl => exact absurd hc' Cfg.noConfusion
       | step s _ => exact absurd s Step.no_step_from_typeError
     | const h =>
@@ -700,6 +709,8 @@ private theorem steps_run_in_bounds {p : Prog} (hclosed : StepClosedInBounds p)
       exact ih _ _ _ rfl (hclosed.2 _ _ _ _ _ _ hpc (Step.intToFloat (am := am) h hy)) _ _ _ hc'
     | floatToInt h hy =>
       exact ih _ _ _ rfl (hclosed.2 _ _ _ _ _ _ hpc (Step.floatToInt (am := am) h hy)) _ _ _ hc'
+    | floatExp h hy =>
+      exact ih _ _ _ rfl (hclosed.2 _ _ _ _ _ _ hpc (Step.floatExp (am := am) h hy)) _ _ _ hc'
     | arrLoad_boundsError h _ _ => cases rest with
       | refl => exact absurd hc' Cfg.noConfusion
       | step s _ => exact absurd s Step.no_step_from_error
@@ -773,7 +784,8 @@ private theorem steps_to_error_decompose {p : Prog} {pc₀ : Nat} {σ₀ σ_e : 
       | refl => cases hc'; exact ⟨pc₀, σ₀, am₀, Steps.refl, Step.error h hy hz hs, rfl⟩
       | step s _ => exact absurd s Step.no_step_from_error
     | binop_typeError h _ | arrLoad_typeError h _ | arrStore_typeError h _
-    | fbinop_typeError h _ | intToFloat_typeError h _ | floatToInt_typeError h _ => cases rest with
+    | fbinop_typeError h _ | intToFloat_typeError h _ | floatToInt_typeError h _
+    | floatExp_typeError h _ => cases rest with
       | refl => exact absurd hc' Cfg.noConfusion
       | step s _ => exact absurd s Step.no_step_from_typeError
     | const h =>
@@ -812,6 +824,9 @@ private theorem steps_to_error_decompose {p : Prog} {pc₀ : Nat} {σ₀ σ_e : 
     | floatToInt h hy =>
       obtain ⟨pc, σ, am, hpre, herr, heq⟩ := ih _ _ _ rfl _ _ hc'
       exact ⟨pc, σ, am, Steps.step (Step.floatToInt (am := am₀) h hy) hpre, herr, heq⟩
+    | floatExp h hy =>
+      obtain ⟨pc, σ, am, hpre, herr, heq⟩ := ih _ _ _ rfl _ _ hc'
+      exact ⟨pc, σ, am, Steps.step (Step.floatExp (am := am₀) h hy) hpre, herr, heq⟩
     | arrLoad_boundsError h hidx hob =>
       cases rest with
       | refl => cases hc'; exact ⟨pc₀, σ₀, am₀, Steps.refl, Step.arrLoad_boundsError h hidx hob, rfl⟩

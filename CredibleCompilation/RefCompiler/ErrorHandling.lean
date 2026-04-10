@@ -212,6 +212,21 @@ theorem refCompileExpr_stuck (e : SExpr) (offset nextTmp : Nat) (σ σ_tac : Sto
     rw [hre] at hlt; simp at hlt
     exact ⟨pc_s, σ_s, hfrag, hstuck,
       by simp [List.length_append]; omega⟩
+  | floatExp e ih =>
+    simp only [SExpr.safe] at hunsafe
+    obtain ⟨hwrap_e, htv_e⟩ :=
+      show e.wrapEval σ am = .float (e.eval σ am) ∧ e.typedVars σ am from htypedv
+    dsimp only [refCompileExpr] at hcode ⊢
+    generalize hre : refCompileExpr e offset nextTmp = re at hcode ⊢
+    obtain ⟨codeE, ve, tmp1⟩ := re
+    simp only [] at hcode ⊢
+    have hcodeE : CodeAt (refCompileExpr e offset nextTmp).1 p offset := by
+      rw [hre]; exact hcode.left
+    obtain ⟨pc_s, σ_s, hfrag, hstuck, hlt⟩ :=
+      ih offset nextTmp σ_tac htf hftf htv_e hunsafe hagree hcodeE
+    rw [hre] at hlt; simp at hlt
+    exact ⟨pc_s, σ_s, hfrag, hstuck,
+      by simp [List.length_append]; omega⟩
   | farrRead arr idx ih =>
     simp only [SExpr.safe] at hunsafe
     obtain ⟨hwrap_idx, htv_idx⟩ :=
@@ -734,6 +749,17 @@ theorem refCompileStmt_stuck (s : Stmt) (fuel : Nat) (σ σ' : Store) (am am' : 
       rw [hre] at hlt; simp at hlt
       exact ⟨pc_s, σ_s, am, hfrag, hstuck,
         by simp [List.length_append, List.length_cons, List.length_nil]; omega⟩
+    | floatExp fee =>
+      dsimp only [refCompileStmt] at hcode ⊢
+      generalize hre : refCompileExpr (.floatExp fee) offset nextTmp = re at hcode ⊢
+      obtain ⟨codeE, ve, tmp1⟩ := re; simp only [] at hcode ⊢
+      have hcodeE : CodeAt (refCompileExpr (.floatExp fee) offset nextTmp).1 p offset := by
+        rw [hre]; exact hcode.left
+      obtain ⟨pc_s, σ_s, hfrag, hstuck, hlt⟩ :=
+        refCompileExpr_stuck (.floatExp fee) offset nextTmp σ σ_tac am p htf_e hftf_e htv_e hunsafe hagree hcodeE
+      rw [hre] at hlt; simp at hlt
+      exact ⟨pc_s, σ_s, am, hfrag, hstuck,
+        by simp [List.length_append, List.length_cons, List.length_nil]; omega⟩
     | farrRead farr fidx =>
       dsimp only [refCompileStmt] at hcode ⊢
       generalize hre : refCompileExpr (.farrRead farr fidx) offset nextTmp = re at hcode ⊢
@@ -1115,6 +1141,19 @@ theorem refCompileStmt_stuck (s : Stmt) (fuel : Nat) (σ σ' : Store) (am am' : 
         rw [hre]; exact hcode.left
       obtain ⟨pc_s, σ_s, hfrag, hstuck, hlt⟩ :=
         refCompileExpr_stuck ie offset nextTmp σ σ_tac am p htf_e hftf_e htv_ie hunsafe hagree hcodeE
+      rw [hre] at hlt; simp at hlt
+      exact ⟨pc_s, σ_s, am, hfrag, hstuck,
+        by simp [List.length_append, List.length_cons, List.length_nil]; omega⟩
+    | floatExp fee =>
+      -- Specialized: codeE ++ [.floatExp x ve]
+      have htv_fee : fee.typedVars σ am := by simp [SExpr.typedVars] at htv_e; exact htv_e.2
+      dsimp only [refCompileStmt] at hcode ⊢
+      generalize hre : refCompileExpr fee offset nextTmp = re at hcode ⊢
+      obtain ⟨codeE, ve, tmp1⟩ := re; simp only [] at hcode ⊢
+      have hcodeE : CodeAt (refCompileExpr fee offset nextTmp).1 p offset := by
+        rw [hre]; exact hcode.left
+      obtain ⟨pc_s, σ_s, hfrag, hstuck, hlt⟩ :=
+        refCompileExpr_stuck fee offset nextTmp σ σ_tac am p htf_e hftf_e htv_fee hunsafe hagree hcodeE
       rw [hre] at hlt; simp at hlt
       exact ⟨pc_s, σ_s, am, hfrag, hstuck,
         by simp [List.length_append, List.length_cons, List.length_nil]; omega⟩
@@ -1684,6 +1723,17 @@ theorem refCompileStmt_unsafe (s : Stmt) (fuel : Nat) (σ : Store) (am : ArrayMe
       rw [hre] at hlt; simp at hlt
       exact ⟨pc_s, σ_s, am, hfrag, hstuck,
         by simp [List.length_append, List.length_cons, List.length_nil]; omega⟩
+    | floatExp fee =>
+      dsimp only [refCompileStmt] at hcode ⊢
+      generalize hre : refCompileExpr (.floatExp fee) offset nextTmp = re at hcode ⊢
+      obtain ⟨codeE, ve, tmp1⟩ := re; simp only [] at hcode ⊢
+      have hcodeE : CodeAt (refCompileExpr (.floatExp fee) offset nextTmp).1 p offset := by
+        rw [hre]; exact hcode.left
+      obtain ⟨pc_s, σ_s, hfrag, hstuck, hlt⟩ :=
+        refCompileExpr_stuck (.floatExp fee) offset nextTmp σ σ_tac am p htf_e hftf_e htv_e hunsafe hagree hcodeE
+      rw [hre] at hlt; simp at hlt
+      exact ⟨pc_s, σ_s, am, hfrag, hstuck,
+        by simp [List.length_append, List.length_cons, List.length_nil]; omega⟩
     | farrRead farr fidx =>
       dsimp only [refCompileStmt] at hcode ⊢
       generalize hre : refCompileExpr (.farrRead farr fidx) offset nextTmp = re at hcode ⊢
@@ -2026,6 +2076,18 @@ theorem refCompileStmt_unsafe (s : Stmt) (fuel : Nat) (σ : Store) (am : ArrayMe
         rw [hre]; exact hcode.left
       obtain ⟨pc_s, σ_s, hfrag, hstuck, hlt⟩ :=
         refCompileExpr_stuck ie offset nextTmp σ σ_tac am p htf_e hftf_e htv_ie hunsafe hagree hcodeE
+      rw [hre] at hlt; simp at hlt
+      exact ⟨pc_s, σ_s, am, hfrag, hstuck,
+        by simp [List.length_append, List.length_cons, List.length_nil]; omega⟩
+    | floatExp fee =>
+      have htv_fee : fee.typedVars σ am := by simp [SExpr.typedVars] at htv_e; exact htv_e.2
+      dsimp only [refCompileStmt] at hcode ⊢
+      generalize hre : refCompileExpr fee offset nextTmp = re at hcode ⊢
+      obtain ⟨codeE, ve, tmp1⟩ := re; simp only [] at hcode ⊢
+      have hcodeE : CodeAt (refCompileExpr fee offset nextTmp).1 p offset := by
+        rw [hre]; exact hcode.left
+      obtain ⟨pc_s, σ_s, hfrag, hstuck, hlt⟩ :=
+        refCompileExpr_stuck fee offset nextTmp σ σ_tac am p htf_e hftf_e htv_fee hunsafe hagree hcodeE
       rw [hre] at hlt; simp at hlt
       exact ⟨pc_s, σ_s, am, hfrag, hstuck,
         by simp [List.length_append, List.length_cons, List.length_nil]; omega⟩
