@@ -59,19 +59,6 @@ def Stmt.allVars : Stmt → List Var
 def Stmt.tmpFree (s : Stmt) : Prop := ∀ v ∈ s.allVars, v.isTmp = false
 def Stmt.ftmpFree (s : Stmt) : Prop := ∀ v ∈ s.allVars, v.isFTmp = false
 
-/-- A statement contains no `goto` or `ifgoto` nodes.  The ref-compiler encodes
-    goto as `[.goto 0]` (an absolute jump to address 0), which is not provably
-    divergent at an arbitrary offset.  All real WhileLang programs are gotoFree
-    before label resolution, so this is harmless in practice. -/
-def Stmt.gotoFree : Stmt → Prop
-  | .skip | .assign _ _ | .bassign _ _ | .label _ => True
-  | .arrWrite _ _ _ | .barrWrite _ _ _ => True
-  | .fassign _ _ | .farrWrite _ _ _ => True
-  | .seq s1 s2 => s1.gotoFree ∧ s2.gotoFree
-  | .ite _ s1 s2 => s1.gotoFree ∧ s2.gotoFree
-  | .loop _ body => body.gotoFree
-  | .goto _ => False
-  | .ifgoto _ _ => False
 
 -- ============================================================
 -- § 2. Expression evaluation congruence
@@ -419,8 +406,19 @@ theorem Stmt.interp_tmpAgree (s : Stmt) (fuel : Nat) (σ τ : Store) (am : Array
     simp only [Stmt.interp] at h
     obtain ⟨rfl, rfl⟩ := h
     exact ⟨τ, am, by simp [Stmt.interp], hagree, rfl⟩
-  | goto _ => simp only [Stmt.interp] at h; simp at h
-  | ifgoto _ _ => simp only [Stmt.interp] at h; simp at h
+  | goto _ =>
+    simp only [Stmt.interp] at h
+    obtain ⟨rfl, rfl⟩ := h
+    exact ⟨τ, am, by simp [Stmt.interp], hagree, rfl⟩
+  | ifgoto b _ =>
+    simp only [Stmt.interp] at h
+    split at h
+    · obtain ⟨rfl, rfl⟩ := h
+      have hsafe : b.isSafe σ am decls = b.isSafe τ am decls :=
+        SBool.isSafe_tmpAgree b σ τ am decls hagree (fun v hv => htf v hv)
+      refine ⟨τ, am, ?_, hagree, rfl⟩
+      simp only [Stmt.interp]; rw [← hsafe]; simp [‹_ = true›]
+    · simp at h
 
 -- ============================================================
 -- § 4. Safety (division + bounds)
@@ -629,8 +627,12 @@ theorem Stmt.interp_some_implies_safe (s : Stmt) (fuel : Nat)
     exact ⟨SExpr.isSafe_implies_safe idx σ am decls hs.1.1,
            SExpr.isSafe_implies_safe val σ am decls hs.1.2, hs.2⟩
   | label _ => intro; simp only [Stmt.safe]
-  | goto _ => intro h; simp only [Stmt.interp] at h; simp at h
-  | ifgoto _ _ => intro h; simp only [Stmt.interp] at h; simp at h
+  | goto _ => intro; simp only [Stmt.safe]
+  | ifgoto b _ =>
+    intro h; simp only [Stmt.interp] at h
+    split at h
+    · simp only [Stmt.safe]; exact SBool.isSafe_implies_safe b σ am decls ‹_›
+    · simp at h
 
 -- ============================================================
 -- § 4b. Integer typing (all arithmetic-position variables have int values)
@@ -1121,8 +1123,14 @@ theorem Stmt.interp_preserves_typedStore
   | label _ =>
     simp only [Stmt.interp] at hinterp
     obtain ⟨rfl, _⟩ := Option.some.inj hinterp; exact hts
-  | goto _ => simp only [Stmt.interp] at hinterp; simp at hinterp
-  | ifgoto _ _ => simp only [Stmt.interp] at hinterp; simp at hinterp
+  | goto _ =>
+    simp only [Stmt.interp] at hinterp
+    obtain ⟨rfl, _⟩ := Option.some.inj hinterp; exact hts
+  | ifgoto _ _ =>
+    simp only [Stmt.interp] at hinterp
+    split at hinterp
+    · obtain ⟨rfl, _⟩ := Option.some.inj hinterp; exact hts
+    · simp at hinterp
 
 -- ============================================================
 -- § 4e. Bridge: typeCheck + TypedStore → typedVars

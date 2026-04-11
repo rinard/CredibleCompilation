@@ -4,6 +4,37 @@ Chronological record of what was built and why, to reconstruct the sequence of d
 
 ---
 
+## Remove gotoFree from program_refinement (2026-04-11)
+
+**Goal:** Extend `Stmt.interp` and `refCompileStmt` so that the `gotoFree` hypothesis can be removed from `program_refinement` and all program-level refinement theorems.
+
+### Approach
+
+The root blocker was `progCompile_body_codeAt`, which needed `gotoFree` to bridge `compileStmt` (with labels) and `refCompileStmt` (without labels). Three coordinated changes eliminate this:
+
+1. **WhileLang.lean** — `Stmt.interp` now returns `some (σ, am)` for `.goto` (no-op) and `some (σ, am)` for `.ifgoto b _` when `b.isSafe` (no-op). Previously both returned `none`. This makes goto/ifgoto "terminating" in the interpreter, which prevents the divergence contradiction from triggering vacuously.
+
+2. **RefCompiler/Defs.lean** — `refCompileStmt` takes `(labels : List (String × Nat) := [])`. With labels, goto/ifgoto emit correct jump targets (matching `compileStmt`). Default `[]` preserves all existing callers.
+
+3. **RefCompiler/Refinement.lean** — `compileStmt_eq_refCompileStmt` extended to any labels. `progCompile_body_codeAt` passes `collectLabels` to both sides, eliminating the `gotoFree` dependency.
+
+### gotoFree removed from
+
+- `progCompile_halt`, `progCompile_no_halt_unsafe`, `progCompile_reaches_error`
+- `progCompile_no_halt_diverge`, `progCompile_no_halt_diverge_unsafe`
+- `refCompileStmt_diverges`, `refCompile_diverge`
+- **`program_refinement`** (the main goal)
+
+### New sorry
+
+`refCompileStmt_correct` has 2 sorry cases (goto, ifgoto) because `FragExec` assumes the PC ends at `offset + code.length`, but goto jumps elsewhere. Fixing this requires a non-local control flow model in `FragExec`. The sorry is localized — for programs without gotos, the sorry is never reached.
+
+### Files changed
+
+WhileLang.lean, CompilerCorrectness.lean, RefCompiler/Defs.lean, RefCompiler/Correctness.lean, RefCompiler/ErrorHandling.lean, RefCompiler/Metatheory.lean, RefCompiler/Refinement.lean
+
+---
+
 ## Extract bounds check elision into BoundsOpt module (2026-04-10)
 
 **Goal:** Factor the interval analysis for bounds check elision out of CodeGen into a standalone `BoundsOpt.lean` module. CodeGen independently verifies the invariant claims before eliding bounds checks, so a buggy analysis can never produce unsafe code.

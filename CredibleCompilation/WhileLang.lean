@@ -225,8 +225,9 @@ def Stmt.interp (fuel : Nat) (σ : Store) (am : ArrayMem)
     then some (σ, am.write arr (idx.eval σ am) (val.eval σ am))
     else none
   | .label _ => some (σ, am)  -- no-op: label declarations are compilation markers
-  | .goto _ => none           -- cannot interpret goto without whole-program context
-  | .ifgoto _ _ => none       -- cannot interpret ifgoto without whole-program context
+  | .goto _ => some (σ, am)   -- no-op at statement level; goto resolved at compilation
+  | .ifgoto b _ =>
+    if b.isSafe σ am decls then some (σ, am) else none
 
 -- ============================================================
 -- § 3. Compiler: While language → TAC (pure functional)

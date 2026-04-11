@@ -377,7 +377,8 @@ private theorem loop_one_iter
     (hds_body : body.safe fuel₀ σ am p.arrayDecls)
     (htypedv_body : body.typedVars fuel₀ σ am p.arrayDecls)
     (hagree : ∀ v, v.isTmp = false → v.isFTmp = false → σ_tac v = σ v)
-    (hcode : CodeAt (refCompileStmt (.loop b body) offset nextTmp).1 p offset) :
+    (labels : List (String × Nat) := [])
+    (hcode : CodeAt (refCompileStmt (.loop b body) offset nextTmp labels).1 p offset) :
     ∃ σ₁_tac k,
       RefStepsN p k (Cfg.run offset σ_tac am) (Cfg.run offset σ₁_tac am₁) ∧
       (∀ v, v.isTmp = false → v.isFTmp = false → σ₁_tac v = σ₁ v) ∧ 1 ≤ k := by
@@ -385,7 +386,7 @@ private theorem loop_one_iter
   dsimp only [refCompileStmt] at hcode
   generalize hrcb : refCompileBool b offset nextTmp = rcb at hcode
   obtain ⟨codeBool, be, tmpB⟩ := rcb
-  generalize hrcbody : refCompileStmt body (offset + codeBool.length + 1) tmpB = rcbody at hcode
+  generalize hrcbody : refCompileStmt body (offset + codeBool.length + 1) tmpB labels = rcbody at hcode
   obtain ⟨codeBody, tmpBody⟩ := rcbody
   simp only [] at hcode
   -- Extract sub-proofs
@@ -414,14 +415,14 @@ private theorem loop_one_iter
     simp [BoolExpr.eval, heval_bool, hb]
   have hexec_if := FragExec.single_iffalse (am := am) hifg hnotbe
   -- Step 3: Execute body
-  have hcbody : CodeAt (refCompileStmt body (offset + codeBool.length + 1) tmpB).1 p
+  have hcbody : CodeAt (refCompileStmt body (offset + codeBool.length + 1) tmpB labels).1 p
       (offset + codeBool.length + 1) := by
     rw [hrcbody]; have := hcode.left.right
     simp only [List.length_append, List.length_cons, List.length_nil] at this
     rwa [show offset + (codeBool.length + 1) = offset + codeBool.length + 1 from by omega] at this
   obtain ⟨σ_body, hexec_body, hagree_body⟩ :=
     refCompileStmt_correct body fuel₀ σ σ₁ am am₁ (offset + codeBool.length + 1) tmpB p
-      σ_bool hbody_res htf_body hftf_body hds_body htypedv_body hagree_bool hcbody
+      σ_bool hbody_res htf_body hftf_body hds_body htypedv_body hagree_bool (labels := labels) hcbody
   rw [hrcbody] at hexec_body; simp at hexec_body
   -- Step 4: goto back to condLabel
   have hgoto_back : p[offset + codeBool.length + 1 + codeBody.length]? =
@@ -446,12 +447,12 @@ theorem refCompileStmt_diverges (s : Stmt) (σ : Store) (am : ArrayMem)
     (offset nextTmp : Nat) (p : Prog) (σ_tac : Store)
     (htmpfree : s.tmpFree)
     (hftmpfree : s.ftmpFree)
-    (hgotofree : s.gotoFree)
     (hdiv : ∀ fuel, s.interp fuel σ am p.arrayDecls = none)
     (hsafe : ∀ fuel, s.safe fuel σ am p.arrayDecls)
     (htypedv : ∀ fuel, s.typedVars fuel σ am p.arrayDecls)
     (hagree : ∀ v, v.isTmp = false → v.isFTmp = false → σ_tac v = σ v)
-    (hcode : CodeAt (refCompileStmt s offset nextTmp).1 p offset) :
+    (labels : List (String × Nat) := [])
+    (hcode : CodeAt (refCompileStmt s offset nextTmp labels).1 p offset) :
     ∀ N, ∃ n, n ≥ N ∧ ∃ pc' σ' am', RefStepsN p n (Cfg.run offset σ_tac am) (Cfg.run pc' σ' am') := by
   induction s generalizing σ am offset nextTmp σ_tac with
   | skip => exact absurd (hdiv 0) (by simp [Stmt.interp])
@@ -480,17 +481,19 @@ theorem refCompileStmt_diverges (s : Stmt) (σ : Store) (am : ArrayMem)
     have h1 := SExpr.isSafe_of_safe idx σ am _ hi
     have h2 := SExpr.isSafe_of_safe val σ am _ hv
     exact absurd (hdiv 0) (by simp [Stmt.interp, h1, h2, decide_eq_true_eq.mpr hb])
-  | goto _ => exact hgotofree.elim
-  | ifgoto _ _ => exact hgotofree.elim
+  | goto _ => exact absurd (hdiv 0) (by simp [Stmt.interp])
+  | ifgoto b _ =>
+    have hbs := SBool.isSafe_of_safe b σ am p.arrayDecls (by simpa [Stmt.safe] using hsafe 0)
+    exact absurd (hdiv 0) (by simp [Stmt.interp, hbs])
   | seq s1 s2 ih1 ih2 =>
     have htf1 : s1.tmpFree := fun v hv => htmpfree v (List.mem_append_left _ hv)
     have htf2 : s2.tmpFree := fun v hv => htmpfree v (List.mem_append_right _ hv)
     have hftf1 : s1.ftmpFree := fun v hv => hftmpfree v (List.mem_append_left _ hv)
     have hftf2 : s2.ftmpFree := fun v hv => hftmpfree v (List.mem_append_right _ hv)
     dsimp only [refCompileStmt] at hcode ⊢
-    generalize hrc1 : refCompileStmt s1 offset nextTmp = rc1 at hcode ⊢
+    generalize hrc1 : refCompileStmt s1 offset nextTmp labels = rc1 at hcode ⊢
     obtain ⟨code1, tmp1⟩ := rc1
-    generalize hrc2 : refCompileStmt s2 (offset + code1.length) tmp1 = rc2 at hcode ⊢
+    generalize hrc2 : refCompileStmt s2 (offset + code1.length) tmp1 labels = rc2 at hcode ⊢
     obtain ⟨code2, tmp2⟩ := rc2; simp only [] at hcode ⊢
     by_cases hs1_div : ∀ fuel, s1.interp fuel σ am p.arrayDecls = none
     · -- s1 diverges
@@ -500,7 +503,7 @@ theorem refCompileStmt_diverges (s : Stmt) (σ : Store) (am : ArrayMem)
         intro fuel; have h := htypedv fuel; simp only [Stmt.typedVars] at h; exact h.1
       intro N
       obtain ⟨n, hn, pc', σ', am', hsteps⟩ :=
-        ih1 σ am offset nextTmp σ_tac htf1 hftf1 hgotofree.1 hs1_div hs1_safe hs1_tv hagree
+        ih1 σ am offset nextTmp σ_tac htf1 hftf1 hs1_div hs1_safe hs1_tv hagree
           (by rw [hrc1]; exact hcode.left) N
       exact ⟨n, hn, pc', σ', am', hsteps⟩
     · -- s1 terminates for some fuel
@@ -514,7 +517,7 @@ theorem refCompileStmt_diverges (s : Stmt) (σ : Store) (am : ArrayMem)
       -- Execute s1
       obtain ⟨σ_1, hexec_1, hagree_1⟩ :=
         refCompileStmt_correct s1 f₀ σ σ₁ am am₁ offset nextTmp p σ_tac hf₀ htf1 hftf1
-          hs1_safe hs1_tv hagree (by rw [hrc1]; exact hcode.left)
+          hs1_safe hs1_tv hagree (labels := labels) (by rw [hrc1]; exact hcode.left)
       rw [hrc1] at hexec_1; simp at hexec_1
       obtain ⟨k₁, hk₁⟩ := hexec_1.to_RefStepsN
       -- s2 diverges
@@ -544,7 +547,7 @@ theorem refCompileStmt_diverges (s : Stmt) (σ : Store) (am : ArrayMem)
         exact Stmt.typedVars_of_le s2 fuel (max f₀ fuel) σ₁ am₁ _ h2 (by omega)
       intro N
       obtain ⟨n₂, hn₂, pc', σ', am', hsteps₂⟩ :=
-        ih2 σ₁ am₁ (offset + code1.length) tmp1 σ_1 htf2 hftf2 hgotofree.2 hs2_div hs2_safe hs2_tv
+        ih2 σ₁ am₁ (offset + code1.length) tmp1 σ_1 htf2 hftf2 hs2_div hs2_safe hs2_tv
           hagree_1 (by rw [hrc2]; exact hcode.right) N
       exact ⟨k₁ + n₂, by omega, pc', σ', am', RefStepsN.trans hk₁ hsteps₂⟩
   | ite b s1 s2 ih1 ih2 =>
@@ -560,10 +563,10 @@ theorem refCompileStmt_diverges (s : Stmt) (σ : Store) (am : ArrayMem)
     dsimp only [refCompileStmt] at hcode ⊢
     generalize hrcb : refCompileBool b offset nextTmp = rcb at hcode ⊢
     obtain ⟨codeBool, be, tmpB⟩ := rcb
-    generalize hrce : refCompileStmt s2 (offset + codeBool.length + 1) tmpB = rce at hcode ⊢
+    generalize hrce : refCompileStmt s2 (offset + codeBool.length + 1) tmpB labels = rce at hcode ⊢
     obtain ⟨codeElse, tmpElse⟩ := rce
     generalize hrct : refCompileStmt s1 (offset + codeBool.length + 1 + codeElse.length + 1)
-        tmpElse = rct at hcode ⊢
+        tmpElse labels = rct at hcode ⊢
     obtain ⟨codeThen, tmpThen⟩ := rct; simp only [] at hcode ⊢
     obtain ⟨σ_bool, hexec_bool, heval_bool, hntmp_bool, _, _⟩ :=
       refCompileBool_correct b offset nextTmp σ σ_tac am p htf_b hftf_b htv_b hb_safe hagree
@@ -587,7 +590,7 @@ theorem refCompileStmt_diverges (s : Stmt) (σ : Store) (am : ArrayMem)
         intro fuel; have := htypedv fuel; simp [Stmt.typedVars, heval] at this; exact this.2
       have hexec_if := FragExec.single_iffalse (am := am) hifgoto_instr (by rw [heval_bool, heval])
       obtain ⟨k_if, hk_if⟩ := hexec_if.to_RefStepsN
-      have hcode_else : CodeAt (refCompileStmt s2 (offset + codeBool.length + 1) tmpB).1 p
+      have hcode_else : CodeAt (refCompileStmt s2 (offset + codeBool.length + 1) tmpB labels).1 p
           (offset + codeBool.length + 1) := by
         rw [hrce]; have := hcode.left.left.right
         simp only [List.length_append, List.length_cons, List.length_nil] at this
@@ -595,7 +598,7 @@ theorem refCompileStmt_diverges (s : Stmt) (σ : Store) (am : ArrayMem)
             offset + codeBool.length + 1 from by omega] at this
       intro N
       obtain ⟨n₂, hn₂, pc', σ', am', hsteps₂⟩ :=
-        ih2 σ am (offset + codeBool.length + 1) tmpB σ_bool htf2 hftf2 hgotofree.2 hs2_div hs2_safe
+        ih2 σ am (offset + codeBool.length + 1) tmpB σ_bool htf2 hftf2 hs2_div hs2_safe
           hs2_tv hagree_bool hcode_else N
       obtain ⟨k_pre, hk_pre⟩ := (FragExec.trans' hexec_bool hexec_if).to_RefStepsN
       exact ⟨k_pre + n₂, by omega, pc', σ', am', RefStepsN.trans hk_pre hsteps₂⟩
@@ -613,7 +616,7 @@ theorem refCompileStmt_diverges (s : Stmt) (σ : Store) (am : ArrayMem)
       have hexec_if := FragExec.single_iftrue (am := am) hifgoto_instr (by rw [heval_bool, heval])
       obtain ⟨k_if, hk_if⟩ := hexec_if.to_RefStepsN
       have hcode_then : CodeAt (refCompileStmt s1
-          (offset + codeBool.length + 1 + codeElse.length + 1) tmpElse).1 p
+          (offset + codeBool.length + 1 + codeElse.length + 1) tmpElse labels).1 p
           (offset + codeBool.length + 1 + codeElse.length + 1) := by
         rw [hrct]; have := hcode.right
         simp only [List.length_append, List.length_cons, List.length_nil] at this
@@ -622,7 +625,7 @@ theorem refCompileStmt_diverges (s : Stmt) (σ : Store) (am : ArrayMem)
       intro N
       obtain ⟨n₁, hn₁, pc', σ', am', hsteps₁⟩ :=
         ih1 σ am (offset + codeBool.length + 1 + codeElse.length + 1) tmpElse σ_bool
-          htf1 hftf1 hgotofree.1 hs1_div hs1_safe hs1_tv hagree_bool hcode_then N
+          htf1 hftf1 hs1_div hs1_safe hs1_tv hagree_bool hcode_then N
       obtain ⟨k_pre, hk_pre⟩ := (FragExec.trans' hexec_bool hexec_if).to_RefStepsN
       exact ⟨k_pre + n₁, by omega, pc', σ', am', RefStepsN.trans hk_pre hsteps₁⟩
   | loop b body ihb =>
@@ -703,7 +706,7 @@ theorem refCompileStmt_diverges (s : Stmt) (σ : Store) (am : ArrayMem)
         dsimp only [refCompileStmt] at hcode
         generalize hrcb : refCompileBool b offset nextTmp = rcb at hcode
         obtain ⟨codeBool, be, tmpB⟩ := rcb
-        generalize hrcbody : refCompileStmt body (offset + codeBool.length + 1) tmpB = rcbody
+        generalize hrcbody : refCompileStmt body (offset + codeBool.length + 1) tmpB labels = rcbody
             at hcode
         obtain ⟨codeBody, tmpBody⟩ := rcbody; simp only [] at hcode
         obtain ⟨σ_bool, hexec_bool, heval_bool, hntmp_bool, _, _⟩ :=
@@ -719,7 +722,7 @@ theorem refCompileStmt_diverges (s : Stmt) (σ : Store) (am : ArrayMem)
         have hexec_if := FragExec.single_iffalse (am := am') (σ := σ_bool) hifg
           (by simp [BoolExpr.eval, heval_bool, hbe])
         obtain ⟨k_pre, hk_pre⟩ := (FragExec.trans' hexec_bool hexec_if).to_RefStepsN
-        have hcode_body : CodeAt (refCompileStmt body (offset + codeBool.length + 1) tmpB).1 p
+        have hcode_body : CodeAt (refCompileStmt body (offset + codeBool.length + 1) tmpB labels).1 p
             (offset + codeBool.length + 1) := by
           rw [hrcbody]; have := hcode.left.right
           simp only [List.length_append, List.length_cons, List.length_nil] at this
@@ -727,7 +730,7 @@ theorem refCompileStmt_diverges (s : Stmt) (σ : Store) (am : ArrayMem)
               offset + codeBool.length + 1 from by omega] at this
         obtain ⟨n_body, hn_body, pc', σ'', am'', hsteps_body⟩ :=
           ihb σ' am' (offset + codeBool.length + 1) tmpB σ_bool htf_body hftf_body
-            hgotofree hbody_div hbody_safe hbody_tv hagree_bool hcode_body (N + 1)
+            hbody_div hbody_safe hbody_tv hagree_bool hcode_body (N + 1)
         exact ⟨k_pre + n_body, by omega, pc', σ'', am'', RefStepsN.trans hk_pre hsteps_body⟩
       · -- Body terminates for some fuel
         push_neg at hbody_div; obtain ⟨f₀, hf₀_ne⟩ := hbody_div
@@ -741,7 +744,7 @@ theorem refCompileStmt_diverges (s : Stmt) (σ : Store) (am : ArrayMem)
           obtain ⟨_, h2⟩ := this; simp [hbe] at h2; exact h2.1
         obtain ⟨σ₁_tac, k₁, hiter₁, hagree₁, hk₁_ge⟩ :=
           loop_one_iter b body f₀ σ' σ₁ am' am₁ offset nextTmp p σ_tac' htmpfree hftmpfree
-            hbe hbs htv_b' hf₀ hbody_safe hbody_tv hagree' hcode
+            hbe hbs htv_b' hf₀ hbody_safe hbody_tv hagree' (labels := labels) hcode
         obtain ⟨hdiv₁, hsafe₁, htypedv₁⟩ := next_state_props σ' am' f₀ σ₁ am₁ hdiv' hsafe' htypedv' hf₀
         obtain ⟨n_rest, hn_rest, pc', σ'', am'', hsteps_rest⟩ :=
           ih_N σ₁ am₁ σ₁_tac hdiv₁ hsafe₁ htypedv₁ hagree₁
@@ -751,7 +754,6 @@ theorem refCompileStmt_diverges (s : Stmt) (σ : Store) (am : ArrayMem)
 theorem refCompile_diverge (s : Stmt) (σ : Store)
     (htmpfree : s.tmpFree)
     (hftmpfree : s.ftmpFree)
-    (hgotofree : s.gotoFree)
     (hdiv : ∀ fuel, s.interp fuel σ ArrayMem.init (refCompile s).arrayDecls = none)
     (hsafe : ∀ fuel, s.safe fuel σ ArrayMem.init (refCompile s).arrayDecls)
     (htypedv : ∀ fuel, s.typedVars fuel σ ArrayMem.init (refCompile s).arrayDecls) :
@@ -760,5 +762,5 @@ theorem refCompile_diverge (s : Stmt) (σ : Store)
     intro i hi; unfold refCompile; simp only [Prog.ofCode, Prog.getElem?_code, List.getElem?_toArray, Nat.zero_add]
     exact List.getElem?_append_left hi
   have hunbounded := refCompileStmt_diverges s σ ArrayMem.init 0 0 (refCompile s) σ
-    htmpfree hftmpfree hgotofree hdiv hsafe htypedv (fun _ _ _ => rfl) hcode
+    htmpfree hftmpfree hdiv hsafe htypedv (fun _ _ _ => rfl) (labels := []) hcode
   exact no_halt_of_unbounded_am hunbounded

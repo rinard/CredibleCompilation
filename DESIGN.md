@@ -13,3 +13,11 @@ Record of key design decisions for CredibleCompilation.
 4) while language needs goto statement, both conditinal and unconditional. also need clock intrinsic.
 
 5) lots of issues running optimizations on programs with dead code. run dce after all optimizations that may introduce dead code.
+
+6) Maybe add opaque noops like starttimer, endtimer, printimer that the code generator fills in appropriately to time the code.
+
+7) exp(), sqrt(), ... intrinsics
+
+8) How to handle arrays efficiently. Looks like have a separate load array base and load/store array element instructions, enables array base to be allocated in register and not reconstructed every time. 
+
+9) How to 

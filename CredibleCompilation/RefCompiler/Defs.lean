@@ -287,7 +287,8 @@ def refCompileBool (b : SBool) (offset nextTmp : Nat) : List TAC × BoolExpr × 
     let (codeB, vb, tmp2) := refCompileExpr b (offset + codeA.length) tmp1
     (codeA ++ codeB, .fcmp op va vb, tmp2)
 
-def refCompileStmt (s : Stmt) (offset nextTmp : Nat) : List TAC × Nat :=
+def refCompileStmt (s : Stmt) (offset nextTmp : Nat)
+    (labels : List (String × Nat) := []) : List TAC × Nat :=
   match s with
   | .skip => ([], nextTmp)
   | .assign x e =>
@@ -326,22 +327,22 @@ def refCompileStmt (s : Stmt) (offset nextTmp : Nat) : List TAC × Nat :=
        TAC.const tInt (.int (1 : BitVec 64))]
     (codeIdx ++ codeBool ++ convCode ++ [.arrStore arr vIdx tInt .int], tmp2 + 1)
   | .seq s1 s2 =>
-    let (code1, tmp1) := refCompileStmt s1 offset nextTmp
-    let (code2, tmp2) := refCompileStmt s2 (offset + code1.length) tmp1
+    let (code1, tmp1) := refCompileStmt s1 offset nextTmp labels
+    let (code2, tmp2) := refCompileStmt s2 (offset + code1.length) tmp1 labels
     (code1 ++ code2, tmp2)
   | .ite b s1 s2 =>
     let (codeBool, be, tmpB) := refCompileBool b offset nextTmp
     let elseStart := offset + codeBool.length + 1
-    let (codeElse, tmpElse) := refCompileStmt s2 elseStart tmpB
+    let (codeElse, tmpElse) := refCompileStmt s2 elseStart tmpB labels
     let thenStart := elseStart + codeElse.length + 1
-    let (codeThen, tmpThen) := refCompileStmt s1 thenStart tmpElse
+    let (codeThen, tmpThen) := refCompileStmt s1 thenStart tmpElse labels
     let endLabel := thenStart + codeThen.length
     (codeBool ++ [.ifgoto be thenStart] ++ codeElse ++ [.goto endLabel] ++ codeThen, tmpThen)
   | .loop b body =>
     let condLabel := offset
     let (codeBool, be, tmpB) := refCompileBool b offset nextTmp
     let bodyStart := offset + codeBool.length + 1
-    let (codeBody, tmpBody) := refCompileStmt body bodyStart tmpB
+    let (codeBody, tmpBody) := refCompileStmt body bodyStart tmpB labels
     let exitLabel := bodyStart + codeBody.length + 1
     (codeBool ++ [.ifgoto (.not be) exitLabel] ++ codeBody ++ [.goto condLabel], tmpBody)
   | .fassign x e =>
@@ -370,10 +371,13 @@ def refCompileStmt (s : Stmt) (offset nextTmp : Nat) : List TAC × Nat :=
     let (codeVal, vVal, tmp2) := refCompileExpr val (offset + codeIdx.length) tmp1
     (codeIdx ++ codeVal ++ [.arrStore arr vIdx vVal .float], tmp2)
   | .label _ => ([], nextTmp)
-  | .goto _ => ([.goto 0], nextTmp)  -- ref compiler doesn't resolve labels
-  | .ifgoto b _ =>
+  | .goto lbl =>
+    let target := (labels.lookup lbl).getD 0
+    ([.goto target], nextTmp)
+  | .ifgoto b lbl =>
     let (codeB, be, tmpB) := refCompileBool b offset nextTmp
-    (codeB ++ [.ifgoto be 0], tmpB)
+    let target := (labels.lookup lbl).getD 0
+    (codeB ++ [.ifgoto be target], tmpB)
 
 def refCompile (s : Stmt) : Prog :=
   let (code, _) := refCompileStmt s 0 0

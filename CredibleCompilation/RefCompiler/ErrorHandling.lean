@@ -503,15 +503,21 @@ theorem refCompileStmt_stuck (s : Stmt) (fuel : Nat) (σ σ' : Store) (am am' : 
     (hunsafe : ¬ s.safe fuel σ am p.arrayDecls)
     (htypedv : s.typedVars fuel σ am p.arrayDecls)
     (hagree : ∀ v, v.isTmp = false → v.isFTmp = false → σ_tac v = σ v)
-    (hcode : CodeAt (refCompileStmt s offset nextTmp).1 p offset) :
+    (labels : List (String × Nat) := [])
+    (hcode : CodeAt (refCompileStmt s offset nextTmp labels).1 p offset) :
     ∃ pc_s σ_s am_s, FragExec p offset σ_tac pc_s σ_s am am_s ∧
       Step p (Cfg.run pc_s σ_s am_s) (Cfg.error σ_s am_s) ∧
-      pc_s < offset + (refCompileStmt s offset nextTmp).1.length := by
+      pc_s < offset + (refCompileStmt s offset nextTmp labels).1.length := by
   induction s generalizing fuel σ σ' am am' offset nextTmp σ_tac with
   | skip => simp only [Stmt.safe] at hunsafe; exact absurd trivial hunsafe
   | label _ => simp only [Stmt.safe] at hunsafe; exact absurd trivial hunsafe
-  | goto _ => simp [Stmt.interp] at hinterp
-  | ifgoto _ _ => simp [Stmt.interp] at hinterp
+  | goto _ => simp only [Stmt.safe] at hunsafe; exact absurd trivial hunsafe
+  | ifgoto b _ =>
+    simp only [Stmt.safe] at hunsafe
+    simp only [Stmt.interp] at hinterp
+    split at hinterp
+    · exact absurd (SBool.isSafe_implies_safe b σ am p.arrayDecls ‹_›) hunsafe
+    · simp at hinterp
   | assign x e =>
     simp only [Stmt.safe] at hunsafe; simp only [Stmt.interp] at hinterp
     split at hinterp
@@ -562,9 +568,9 @@ theorem refCompileStmt_stuck (s : Stmt) (fuel : Nat) (σ σ' : Store) (am am' : 
       have hftf1 : s1.ftmpFree := fun v hv => hftmpfree v (List.mem_append_left _ hv)
       have hftf2 : s2.ftmpFree := fun v hv => hftmpfree v (List.mem_append_right _ hv)
       dsimp only [refCompileStmt] at hcode ⊢
-      generalize hrc1 : refCompileStmt s1 offset nextTmp = rc1 at hcode ⊢
+      generalize hrc1 : refCompileStmt s1 offset nextTmp labels = rc1 at hcode ⊢
       obtain ⟨code1, tmp1⟩ := rc1
-      generalize hrc2 : refCompileStmt s2 (offset + code1.length) tmp1 = rc2 at hcode ⊢
+      generalize hrc2 : refCompileStmt s2 (offset + code1.length) tmp1 labels = rc2 at hcode ⊢
       obtain ⟨code2, tmp2⟩ := rc2
       simp only [] at hcode ⊢
       by_cases h_s1_safe : s1.safe fuel σ am p.arrayDecls
@@ -573,7 +579,7 @@ theorem refCompileStmt_stuck (s : Stmt) (fuel : Nat) (σ σ' : Store) (am am' : 
         have h_s2_unsafe : ¬ s2.safe fuel σ₁ am₁ p.arrayDecls := fun h => hunsafe ⟨h_s1_safe, h⟩
         obtain ⟨σ_1, hexec_1, hagree_1⟩ :=
           refCompileStmt_correct s1 fuel σ σ₁ am am₁ offset nextTmp p σ_tac h1 htf1 hftf1
-            h_s1_safe htv1 hagree (by rw [hrc1]; exact hcode.left)
+            h_s1_safe htv1 hagree (labels := labels) (by rw [hrc1]; exact hcode.left)
         rw [hrc1] at hexec_1; simp at hexec_1
         obtain ⟨pc_s, σ_s, am_s, hfrag, hstuck, hlt⟩ :=
           ih2 fuel σ₁ σ' am₁ am' (offset + code1.length) tmp1 σ_1 hinterp htf2 hftf2
@@ -610,10 +616,10 @@ theorem refCompileStmt_stuck (s : Stmt) (fuel : Nat) (σ σ' : Store) (am am' : 
       dsimp only [refCompileStmt] at hcode ⊢
       generalize hrcb : refCompileBool b offset nextTmp = rcb at hcode ⊢
       obtain ⟨codeBool, be, tmpB⟩ := rcb
-      generalize hrce : refCompileStmt s2 (offset + codeBool.length + 1) tmpB = rce at hcode ⊢
+      generalize hrce : refCompileStmt s2 (offset + codeBool.length + 1) tmpB labels = rce at hcode ⊢
       obtain ⟨codeElse, tmpElse⟩ := rce
       generalize hrct : refCompileStmt s1 (offset + codeBool.length + 1 + codeElse.length + 1)
-          tmpElse = rct at hcode ⊢
+          tmpElse labels = rct at hcode ⊢
       obtain ⟨codeThen, tmpThen⟩ := rct
       simp only [] at hcode ⊢
       obtain ⟨σ_bool, hexec_bool, heval_bool, hntmp_bool, _, _⟩ :=
@@ -630,7 +636,7 @@ theorem refCompileStmt_stuck (s : Stmt) (fuel : Nat) (σ σ' : Store) (am am' : 
         simp [heval] at hinterp hbranch_unsafe htv_branch
         have hexec_if := FragExec.single_iffalse (am := am) hifgoto_instr
           (by rw [heval_bool, heval])
-        have hcode_else : CodeAt (refCompileStmt s2 (offset + codeBool.length + 1) tmpB).1 p
+        have hcode_else : CodeAt (refCompileStmt s2 (offset + codeBool.length + 1) tmpB labels).1 p
             (offset + codeBool.length + 1) := by
           rw [hrce]; have := hcode.left.left.right
           simp only [List.length_append, List.length_cons, List.length_nil] at this
@@ -648,7 +654,7 @@ theorem refCompileStmt_stuck (s : Stmt) (fuel : Nat) (σ σ' : Store) (am am' : 
         have hexec_if := FragExec.single_iftrue (am := am) hifgoto_instr
           (by rw [heval_bool, heval])
         have hcode_then : CodeAt (refCompileStmt s1
-            (offset + codeBool.length + 1 + codeElse.length + 1) tmpElse).1 p
+            (offset + codeBool.length + 1 + codeElse.length + 1) tmpElse labels).1 p
             (offset + codeBool.length + 1 + codeElse.length + 1) := by
           rw [hrct]; have := hcode.right
           simp only [List.length_append, List.length_cons, List.length_nil] at this
@@ -693,7 +699,7 @@ theorem refCompileStmt_stuck (s : Stmt) (fuel : Nat) (σ σ' : Store) (am am' : 
             dsimp only [refCompileStmt] at hcode ⊢
             generalize hrcb : refCompileBool b offset nextTmp = rcb at hcode ⊢
             obtain ⟨codeBool, be, tmpB⟩ := rcb
-            generalize hrcbody : refCompileStmt body (offset + codeBool.length + 1) tmpB = rcbody
+            generalize hrcbody : refCompileStmt body (offset + codeBool.length + 1) tmpB labels = rcbody
                 at hcode ⊢
             obtain ⟨codeBody, tmpBody⟩ := rcbody
             simp only [] at hcode ⊢
@@ -712,7 +718,7 @@ theorem refCompileStmt_stuck (s : Stmt) (fuel : Nat) (σ σ' : Store) (am am' : 
             have hexec_if := FragExec.single_iffalse (am := am) hifgoto_instr
               (by simp only [BoolExpr.eval]; rw [heval_bool, heval]; decide)
             have hcode_body : CodeAt (refCompileStmt body
-                (offset + codeBool.length + 1) tmpB).1 p
+                (offset + codeBool.length + 1) tmpB labels).1 p
                 (offset + codeBool.length + 1) := by
               rw [hrcbody]; have := hcode.left.right
               simp only [List.length_append, List.length_cons, List.length_nil] at this
@@ -725,7 +731,7 @@ theorem refCompileStmt_stuck (s : Stmt) (fuel : Nat) (σ σ' : Store) (am am' : 
               obtain ⟨σ_body, hexec_body, hagree_body⟩ :=
                 refCompileStmt_correct body fuel' σ σ₁ am am₁
                   (offset + codeBool.length + 1) tmpB p σ_bool
-                  h_body htf_body hftf_body h_body_safe htv_branch.1 hagree_bool hcode_body
+                  h_body htf_body hftf_body h_body_safe htv_branch.1 hagree_bool (labels := labels) hcode_body
               rw [hrcbody] at hexec_body; simp at hexec_body
               have hgoto_instr : p[offset + codeBool.length + 1 + codeBody.length]? =
                   some (.goto offset) := by
@@ -773,7 +779,7 @@ theorem refCompile_stuck (s : Stmt) (fuel : Nat) (σ σ' : Store)
     exact List.getElem?_append_left hi
   obtain ⟨pc_s, σ_s, am_s, hfrag, herror, _⟩ :=
     refCompileStmt_stuck s fuel σ σ' ArrayMem.init ArrayMem.init 0 0 (refCompile s) σ hinterp htmpfree hftmpfree hunsafe htypedv
-      (fun _ _ _ => rfl) hcode
+      (fun _ _ _ => rfl) (labels := []) hcode
   exact error_run_no_halt hfrag herror hhalt
 
 -- ============================================================
@@ -790,10 +796,11 @@ theorem refCompileStmt_unsafe (s : Stmt) (fuel : Nat) (σ : Store) (am : ArrayMe
     (hunsafe : ¬ s.safe fuel σ am p.arrayDecls)
     (htypedv : s.typedVars fuel σ am p.arrayDecls)
     (hagree : ∀ v, v.isTmp = false → v.isFTmp = false → σ_tac v = σ v)
-    (hcode : CodeAt (refCompileStmt s offset nextTmp).1 p offset) :
+    (labels : List (String × Nat) := [])
+    (hcode : CodeAt (refCompileStmt s offset nextTmp labels).1 p offset) :
     ∃ pc_s σ_s am_s, FragExec p offset σ_tac pc_s σ_s am am_s ∧
       Step p (Cfg.run pc_s σ_s am_s) (Cfg.error σ_s am_s) ∧
-      pc_s < offset + (refCompileStmt s offset nextTmp).1.length := by
+      pc_s < offset + (refCompileStmt s offset nextTmp labels).1.length := by
   induction s generalizing fuel σ am offset nextTmp σ_tac with
   | skip => simp only [Stmt.safe] at hunsafe; exact absurd trivial hunsafe
   | label _ => simp only [Stmt.safe] at hunsafe; exact absurd trivial hunsafe
@@ -1314,9 +1321,9 @@ theorem refCompileStmt_unsafe (s : Stmt) (fuel : Nat) (σ : Store) (am : ArrayMe
     have hftf1 : s1.ftmpFree := fun v hv => hftmpfree v (List.mem_append_left _ hv)
     have hftf2 : s2.ftmpFree := fun v hv => hftmpfree v (List.mem_append_right _ hv)
     dsimp only [refCompileStmt] at hcode ⊢
-    generalize hrc1 : refCompileStmt s1 offset nextTmp = rc1 at hcode ⊢
+    generalize hrc1 : refCompileStmt s1 offset nextTmp labels = rc1 at hcode ⊢
     obtain ⟨code1, tmp1⟩ := rc1
-    generalize hrc2 : refCompileStmt s2 (offset + code1.length) tmp1 = rc2 at hcode ⊢
+    generalize hrc2 : refCompileStmt s2 (offset + code1.length) tmp1 labels = rc2 at hcode ⊢
     obtain ⟨code2, tmp2⟩ := rc2; simp only [] at hcode ⊢
     by_cases h_s1_safe : s1.safe fuel σ am p.arrayDecls
     · -- s1 safe → need s1.interp
@@ -1331,7 +1338,7 @@ theorem refCompileStmt_unsafe (s : Stmt) (fuel : Nat) (σ : Store) (am : ArrayMe
         have h_s2_unsafe : ¬ s2.safe fuel σ₁ am₁ p.arrayDecls := fun h => hunsafe ⟨h_s1_safe, h⟩
         obtain ⟨σ_1, hexec_1, hagree_1⟩ :=
           refCompileStmt_correct s1 fuel σ σ₁ am am₁ offset nextTmp p σ_tac h1 htf1 hftf1
-            h_s1_safe htv1 hagree (by rw [hrc1]; exact hcode.left)
+            h_s1_safe htv1 hagree (labels := labels) (by rw [hrc1]; exact hcode.left)
         rw [hrc1] at hexec_1; simp at hexec_1
         obtain ⟨pc_s, σ_s, am_s, hfrag, hstuck, hlt⟩ :=
           ih2 fuel σ₁ am₁ (offset + code1.length) tmp1 σ_1 htf2 hftf2
@@ -1366,10 +1373,10 @@ theorem refCompileStmt_unsafe (s : Stmt) (fuel : Nat) (σ : Store) (am : ArrayMe
       dsimp only [refCompileStmt] at hcode ⊢
       generalize hrcb : refCompileBool b offset nextTmp = rcb at hcode ⊢
       obtain ⟨codeBool, be, tmpB⟩ := rcb
-      generalize hrce : refCompileStmt s2 (offset + codeBool.length + 1) tmpB = rce at hcode ⊢
+      generalize hrce : refCompileStmt s2 (offset + codeBool.length + 1) tmpB labels = rce at hcode ⊢
       obtain ⟨codeElse, tmpElse⟩ := rce
       generalize hrct : refCompileStmt s1 (offset + codeBool.length + 1 + codeElse.length + 1)
-          tmpElse = rct at hcode ⊢
+          tmpElse labels = rct at hcode ⊢
       obtain ⟨codeThen, tmpThen⟩ := rct; simp only [] at hcode ⊢
       obtain ⟨σ_bool, hexec_bool, heval_bool, hntmp_bool, _, _⟩ :=
         refCompileBool_correct b offset nextTmp σ σ_tac am p htf_b hftf_b htv_b hbsafe hagree
@@ -1384,7 +1391,7 @@ theorem refCompileStmt_unsafe (s : Stmt) (fuel : Nat) (σ : Store) (am : ArrayMe
       · simp [heval] at hbranch_unsafe htv_branch
         have hexec_if := FragExec.single_iffalse (am := am) hifgoto_instr
           (by rw [heval_bool, heval])
-        have hcode_else : CodeAt (refCompileStmt s2 (offset + codeBool.length + 1) tmpB).1 p
+        have hcode_else : CodeAt (refCompileStmt s2 (offset + codeBool.length + 1) tmpB labels).1 p
             (offset + codeBool.length + 1) := by
           rw [hrce]; have := hcode.left.left.right
           simp only [List.length_append, List.length_cons, List.length_nil] at this
@@ -1401,7 +1408,7 @@ theorem refCompileStmt_unsafe (s : Stmt) (fuel : Nat) (σ : Store) (am : ArrayMe
         have hexec_if := FragExec.single_iftrue (am := am) hifgoto_instr
           (by rw [heval_bool, heval])
         have hcode_then : CodeAt (refCompileStmt s1
-            (offset + codeBool.length + 1 + codeElse.length + 1) tmpElse).1 p
+            (offset + codeBool.length + 1 + codeElse.length + 1) tmpElse labels).1 p
             (offset + codeBool.length + 1 + codeElse.length + 1) := by
           rw [hrct]; have := hcode.right
           simp only [List.length_append, List.length_cons, List.length_nil] at this
@@ -1448,7 +1455,7 @@ theorem refCompileStmt_unsafe (s : Stmt) (fuel : Nat) (σ : Store) (am : ArrayMe
           dsimp only [refCompileStmt] at hcode ⊢
           generalize hrcb : refCompileBool b offset nextTmp = rcb at hcode ⊢
           obtain ⟨codeBool, be, tmpB⟩ := rcb
-          generalize hrcbody : refCompileStmt body (offset + codeBool.length + 1) tmpB = rcbody
+          generalize hrcbody : refCompileStmt body (offset + codeBool.length + 1) tmpB labels = rcbody
               at hcode ⊢
           obtain ⟨codeBody, tmpBody⟩ := rcbody; simp only [] at hcode ⊢
           obtain ⟨σ_bool, hexec_bool, heval_bool, hntmp_bool, _, _⟩ :=
@@ -1466,7 +1473,7 @@ theorem refCompileStmt_unsafe (s : Stmt) (fuel : Nat) (σ : Store) (am : ArrayMe
           have hexec_if := FragExec.single_iffalse (am := am) hifgoto_instr
             (by simp only [BoolExpr.eval]; rw [heval_bool, heval]; decide)
           have hcode_body : CodeAt (refCompileStmt body
-              (offset + codeBool.length + 1) tmpB).1 p
+              (offset + codeBool.length + 1) tmpB labels).1 p
               (offset + codeBool.length + 1) := by
             rw [hrcbody]; have := hcode.left.right
             simp only [List.length_append, List.length_cons, List.length_nil] at this
@@ -1490,7 +1497,7 @@ theorem refCompileStmt_unsafe (s : Stmt) (fuel : Nat) (σ : Store) (am : ArrayMe
               obtain ⟨σ_body, hexec_body, hagree_body⟩ :=
                 refCompileStmt_correct body fuel' σ σ₁ am am₁
                   (offset + codeBool.length + 1) tmpB p σ_bool
-                  h_body htf_body hftf_body h_body_safe htv_branch.1 hagree_bool hcode_body
+                  h_body htf_body hftf_body h_body_safe htv_branch.1 hagree_bool (labels := labels) hcode_body
               rw [hrcbody] at hexec_body; simp at hexec_body
               have hgoto_instr : p[offset + codeBool.length + 1 + codeBody.length]? =
                   some (.goto offset) := by
@@ -1541,5 +1548,5 @@ theorem refCompile_unsafe (s : Stmt) (fuel : Nat) (σ : Store)
     exact List.getElem?_append_left hi
   obtain ⟨pc_s, σ_s, am_s, hfrag, herror, _⟩ :=
     refCompileStmt_unsafe s fuel σ ArrayMem.init 0 0 (refCompile s) σ
-      htmpfree hftmpfree hunsafe htypedv (fun _ _ _ => rfl) hcode
+      htmpfree hftmpfree hunsafe htypedv (fun _ _ _ => rfl) (labels := []) hcode
   exact error_run_no_halt hfrag herror hhalt
