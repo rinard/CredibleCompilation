@@ -23,3 +23,9 @@ Record of key design decisions for CredibleCompilation.
 9) How to handle SIMD. Add SIMD instructions to TAC level code. Axioms that state equivalence of SIMD and scalar computations/loads. 
 
 10) Registers can, in principle, hold values of different types at different locations. So one register might hold bool for some ranges, int for other ranges, and array base for yet other ranges. One approach is to have program point specific typing. Another approach is to have register allocator allocate each register to hold variables of only one type during compilation unit. 
+
+11) Numbers are a problem - any mismatches between semantics and hardware causes enormous difficulties. Make semantics of numbers exactly match hardware, incuding wrapping integer overfow and IEEE floating point. 
+
+12) Make sure codegen works with register allocation information (special variable names for registers) and arrays bounds check elimination information. This means that initial system needs some kind of array bounds elimination information from an analysis like interval analysis. Codegen should check that scratch registers are not used and reject program if they are (or save on stack before use). Or just make scratch registers unnamable - interpret __x? as stack variables.
+
+13) Make sure tac programs are well typed. more generally, codegen is self validating and can refuse to generate code if checks fail.
