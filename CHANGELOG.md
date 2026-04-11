@@ -4,6 +4,21 @@ Chronological record of what was built and why, to reconstruct the sequence of d
 
 ---
 
+## Add layout completeness to WellTypedLayout, eliminate 6 none-layout sorrys (2026-04-11)
+
+**Goal:** A well-formed layout maps every variable to a location. Add completeness conjunct to `WellTypedLayout` and use it to discharge impossible `| none =>` cases.
+
+### Changes
+
+- **ArmSemantics.lean**: Extended `WellTypedLayout` with third conjunct `∀ v, layout v ≠ none`. Updated `float_not_ireg` to use `h.2.1`. Added `WellTypedLayout.complete` helper.
+- **ArmCorrectness.lean**: Added `hMapped : layout v ≠ none` parameter to `vLoadVar_exec`, `vLoadVar_eff_exec`, `vLoadVarFP_exec`, `vLoadVarFP_eff_exec`. Replaced `sorry` in their `| none =>` cases with `exact absurd hv hMapped`. Replaced `sorry` in intToFloat/floatToInt `| none =>` cases with `exact absurd hLX/hLY (hWTL.complete x/y)`. Updated all call sites (14 total) to supply `hWTL.complete v`.
+
+### Result
+
+6 sorrys eliminated. 3 remain: arrLoad, arrStore, floatExp freg.
+
+---
+
 ## Prove cmp/cmpLit/fcmp cases in verifiedGenBoolExpr_correct (2026-04-11)
 
 **Goal:** Complete the boolean expression correctness proofs for the verified codegen path (ExtStateRel/VarLayout).

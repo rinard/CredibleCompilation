@@ -1607,7 +1607,8 @@ theorem vLoadVar_exec (prog : ArmProg) (layout : VarLayout) (v : Var) (tmp : Arm
     (hPC : s.pc = startPC)
     (hCode : CodeAt prog startPC (vLoadVar layout v tmp))
     (hTmpScratch : tmp = .x0 ∨ tmp = .x1 ∨ tmp = .x2)
-    (hNotFreg : ∀ r, layout v ≠ some (.freg r)) :
+    (hNotFreg : ∀ r, layout v ≠ some (.freg r))
+    (hMapped : layout v ≠ none) :
     ∃ s', ArmSteps prog s s' ∧
         s'.regs tmp = (σ v).encode ∧
         ExtStateRel layout σ s' ∧
@@ -1659,8 +1660,7 @@ theorem vLoadVar_exec (prog : ArmProg) (layout : VarLayout) (v : Var) (tmp : Arm
       · intro r' hne; simp [ArmState.setReg, ArmState.nextPC]
         exact fun h => absurd h hne
   | some (.freg r) => exact absurd hv (hNotFreg r)
-  | none =>
-    simp [vLoadVar, hv]; exact ⟨s, .refl, sorry, hRel, rfl, by omega, rfl, fun _ _ => rfl⟩
+  | none => exact absurd hv hMapped
 
 /-- Execute vLoadVar with effective register: if v is in an ireg, use it directly (no-op);
     otherwise fall back to the scratch register. -/
@@ -1669,7 +1669,8 @@ theorem vLoadVar_eff_exec (prog : ArmProg) (layout : VarLayout) (v : Var)
     (hRel : ExtStateRel layout σ s) (hScratch : ExtScratchSafe layout)
     (hPC : s.pc = startPC)
     (hNotFreg : ∀ r, layout v ≠ some (.freg r))
-    (hFB : fallback = .x0 ∨ fallback = .x1 ∨ fallback = .x2) :
+    (hFB : fallback = .x0 ∨ fallback = .x1 ∨ fallback = .x2)
+    (hMapped : layout v ≠ none) :
     let eff := match layout v with | some (.ireg r) => r | _ => fallback
     ∀ (hCode : CodeAt prog startPC (vLoadVar layout v eff)),
     ∃ s', ArmSteps prog s s' ∧
@@ -1686,12 +1687,9 @@ theorem vLoadVar_eff_exec (prog : ArmProg) (layout : VarLayout) (v : Var)
     exact ⟨s, .refl, hRel.read_ireg hv, hRel, rfl, by omega, rfl, fun _ _ => rfl⟩
   | some (.stack off) =>
     simp only [show (match some (VarLoc.stack off) with | some (.ireg r) => r | _ => fallback) = fallback from rfl]
-    exact fun hCode => vLoadVar_exec prog layout v fallback σ s startPC hRel hScratch hPC hCode hFB hNotFreg
+    exact fun hCode => vLoadVar_exec prog layout v fallback σ s startPC hRel hScratch hPC hCode hFB hNotFreg hMapped
   | some (.freg r) => exact absurd hv (hNotFreg r)
-  | none =>
-    simp [vLoadVar, hv]
-    intro _
-    exact ⟨s, .refl, sorry, hRel, rfl, by omega, rfl, fun _ _ => rfl⟩
+  | none => exact absurd hv hMapped
 
 /-- Execute vStoreVar from x0: stores result into v's location, updating ExtStateRel. -/
 theorem vStoreVar_exec (prog : ArmProg) (layout : VarLayout) (v : Var)
@@ -1782,7 +1780,8 @@ theorem vLoadVarFP_exec (prog : ArmProg) (layout : VarLayout) (v : Var) (tmp : A
     (hPC : s.pc = startPC)
     (hCode : CodeAt prog startPC (vLoadVarFP layout v tmp))
     (hTmpScratch : tmp = .d0 ∨ tmp = .d1 ∨ tmp = .d2)
-    (hNotIreg : ∀ r, layout v ≠ some (.ireg r)) :
+    (hNotIreg : ∀ r, layout v ≠ some (.ireg r))
+    (hMapped : layout v ≠ none) :
     ∃ s', ArmSteps prog s s' ∧
         s'.fregs tmp = (σ v).encode ∧
         ExtStateRel layout σ s' ∧
@@ -1833,8 +1832,7 @@ theorem vLoadVarFP_exec (prog : ArmProg) (layout : VarLayout) (v : Var) (tmp : A
     · intro r' hr'; simp [ArmState.setFReg, ArmState.nextPC, hr']
     · simp
   | some (.ireg r) => exact absurd hv (hNotIreg r)
-  | none =>
-    simp [vLoadVarFP, hv]; exact ⟨s, .refl, sorry, hRel, rfl, by omega, rfl, fun _ _ => rfl, rfl⟩
+  | none => exact absurd hv hMapped
 
 /-- Execute vLoadVarFP with effective register: if v is in a freg, uses that freg directly;
     otherwise falls back to a scratch register. Analogous to vLoadVar_eff_exec. -/
@@ -1843,7 +1841,8 @@ theorem vLoadVarFP_eff_exec (prog : ArmProg) (layout : VarLayout) (v : Var)
     (hRel : ExtStateRel layout σ s) (hScratch : ExtScratchSafe layout)
     (hPC : s.pc = startPC)
     (hNotIreg : ∀ r, layout v ≠ some (.ireg r))
-    (hFB : fallback = .d0 ∨ fallback = .d1 ∨ fallback = .d2) :
+    (hFB : fallback = .d0 ∨ fallback = .d1 ∨ fallback = .d2)
+    (hMapped : layout v ≠ none) :
     let eff := match layout v with | some (.freg r) => r | _ => fallback
     ∀ (hCode : CodeAt prog startPC (vLoadVarFP layout v eff)),
     ∃ s', ArmSteps prog s s' ∧
@@ -1862,12 +1861,9 @@ theorem vLoadVarFP_eff_exec (prog : ArmProg) (layout : VarLayout) (v : Var)
   | some (.stack off) =>
     simp only [show (match some (VarLoc.stack off) with | some (.freg r) => r | _ => fallback) = fallback from rfl]
     exact fun hCode => vLoadVarFP_exec prog layout v fallback σ s startPC hRel hScratch hPC hCode
-      hFB hNotIreg
+      hFB hNotIreg hMapped
   | some (.ireg r) => exact absurd hv (hNotIreg r)
-  | none =>
-    simp [vLoadVarFP, hv]
-    intro _
-    exact ⟨s, .refl, sorry, hRel, rfl, by omega, rfl, fun _ _ => rfl, rfl⟩
+  | none => exact absurd hv hMapped
 
 -- ============================================================
 -- § verifiedGenBoolExpr_correct
@@ -1910,7 +1906,7 @@ theorem verifiedGenBoolExpr_correct (prog : ArmProg) (layout : VarLayout)
     have hNotFreg : ∀ r, layout x ≠ some (.freg r) := hWTL.bool_not_freg hty
     obtain ⟨s1, hSteps1, hX0_1, hRel1, _, hPC1, hAM1, _⟩ :=
       vLoadVar_exec prog layout x .x0 σ s startPC hRel hScratch hPC hCodeLoad
-        (Or.inl rfl) hNotFreg
+        (Or.inl rfl) hNotFreg (hWTL.complete x)
     -- andImm x0 x0 1
     have hAnd := hCodeAnd.head; rw [← hPC1] at hAnd
     refine ⟨_, hSteps1.trans (.single (.andImm .x0 .x0 1 hAnd)), ?_, ?_, ?_, ?_⟩
@@ -1956,11 +1952,11 @@ theorem verifiedGenBoolExpr_correct (prog : ArmProg) (layout : VarLayout)
     -- Step 1: vLoadVar lv into x1
     obtain ⟨s1, hSteps1, hX1, hRel1, _, hPC1, hAM1, hRegs1⟩ :=
       vLoadVar_exec prog layout lv .x1 σ s startPC hRel hScratch hPC hCodeLV
-        (Or.inr (Or.inl rfl)) hNotFregLV
+        (Or.inr (Or.inl rfl)) hNotFregLV (hWTL.complete lv)
     -- Step 2: vLoadVar rv into x2
     obtain ⟨s2, hSteps2, hX2, hRel2, _, hPC2, hAM2, hRegs2⟩ :=
       vLoadVar_exec prog layout rv .x2 σ s1 _ hRel1 hScratch hPC1 hCodeRV
-        (Or.inr (Or.inr rfl)) hNotFregRV
+        (Or.inr (Or.inr rfl)) hNotFregRV (hWTL.complete rv)
     -- x1 preserved through second vLoadVar (x2 ≠ x1)
     have hX1_s2 : s2.regs .x1 = (σ lv).encode := by
       rw [hRegs2 .x1 (by decide)]; exact hX1
@@ -2003,7 +1999,7 @@ theorem verifiedGenBoolExpr_correct (prog : ArmProg) (layout : VarLayout)
     -- Step 1: vLoadVar v into x1
     obtain ⟨s1, hSteps1, hX1, hRel1, _, hPC1, hAM1, hRegs1⟩ :=
       vLoadVar_exec prog layout v .x1 σ s startPC hRel hScratch hPC hCodeLV
-        (Or.inr (Or.inl rfl)) hNotFregV
+        (Or.inr (Or.inl rfl)) hNotFregV (hWTL.complete v)
     -- Step 2: loadImm64 n into x2 (preserves x1 and fregs)
     obtain ⟨s2, hSteps2, hFregs2, hX2, hStack2, hPC2, hRegs2, hAM2⟩ :=
       loadImm64_fregs_preserved prog .x2 n s1 _ hCodeImm hPC1
@@ -2056,11 +2052,11 @@ theorem verifiedGenBoolExpr_correct (prog : ArmProg) (layout : VarLayout)
     -- Step 1: vLoadVarFP lv into d1
     obtain ⟨s1, hSteps1, hD1, hRel1, hRegsI1, hPC1, hAM1, hFregs1, _⟩ :=
       vLoadVarFP_exec prog layout lv .d1 σ s startPC hRel hScratch hPC hCodeLV
-        (Or.inr (Or.inl rfl)) hNotIregLV
+        (Or.inr (Or.inl rfl)) hNotIregLV (hWTL.complete lv)
     -- Step 2: vLoadVarFP rv into d2
     obtain ⟨s2, hSteps2, hD2, hRel2, hRegsI2, hPC2, hAM2, hFregs2, _⟩ :=
       vLoadVarFP_exec prog layout rv .d2 σ s1 _ hRel1 hScratch hPC1 hCodeRV
-        (Or.inr (Or.inr rfl)) hNotIregRV
+        (Or.inr (Or.inr rfl)) hNotIregRV (hWTL.complete rv)
     -- d1 preserved through second vLoadVarFP (d2 ≠ d1)
     have hD1_s2 : s2.fregs .d1 = (σ lv).encode := by
       rw [hFregs2 .d1 (by decide)]; exact hD1
@@ -2469,7 +2465,7 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
         have hCodeR := hCodeInstr.append_right
         obtain ⟨s1, hSteps1, hX0_1, hRel1, hFregs1, hPC1, hAM1, _⟩ :=
           vLoadVar_exec prog layout y .x0 σ s (pcMap pc) hStateRel hScratch hPcRel hCodeL
-            (Or.inl rfl) hNotFregY
+            (Or.inl rfl) hNotFregY (hWTL.complete y)
         obtain ⟨s2, hSteps2, hRel2, hPC2, hAM2⟩ :=
           vStoreVar_exec prog layout x (σ y) σ s1 (pcMap pc + (vLoadVar layout y .x0).length)
             hRel1 hInjective hScratch hPC1 hX0_1 hCodeR hNotFregX
@@ -2530,12 +2526,12 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
         -- Step 1: vLoadVar y into lv_reg
         obtain ⟨s1, hSteps1, hLV_1, hRel1, _, hPC1, hAM1, hRegs1⟩ :=
           vLoadVar_eff_exec prog layout y σ s (pcMap pc) .x1 hStateRel hScratch hPcRel
-            hNotFregY (Or.inr (Or.inl rfl)) hCodeA
+            hNotFregY (Or.inr (Or.inl rfl)) (hWTL.complete y) hCodeA
         -- Step 2: vLoadVar z into rv_reg
         obtain ⟨s2, hSteps2, hRV_2, hRel2, _, hPC2_, hAM2, hRegs2⟩ :=
           vLoadVar_eff_exec prog layout z σ s1
             (pcMap pc + (vLoadVar layout y lv_reg).length) .x2
-            hRel1 hScratch hPC1 hNotFregZ (Or.inr (Or.inr rfl)) hCodeB
+            hRel1 hScratch hPC1 hNotFregZ (Or.inr (Or.inr rfl)) (hWTL.complete z) hCodeB
         have hPC2 : s2.pc = pcMap pc + (vLoadVar layout y lv_reg).length +
             (vLoadVar layout z rv_reg).length := hPC2_
         -- s2.regs lv_reg = a
@@ -2654,12 +2650,12 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
         -- Step 1: vLoadVar y into lv_reg
         obtain ⟨s1, hSteps1, hLV_1, hRel1, _, hPC1, hAM1, hRegs1⟩ :=
           vLoadVar_eff_exec prog layout y σ s (pcMap pc) .x1 hStateRel hScratch hPcRel
-            hNotFregY (Or.inr (Or.inl rfl)) hCodeA
+            hNotFregY (Or.inr (Or.inl rfl)) (hWTL.complete y) hCodeA
         -- Step 2: vLoadVar z into rv_reg
         obtain ⟨s2, hSteps2, hRV_2, hRel2, _, hPC2_, hAM2, hRegs2⟩ :=
           vLoadVar_eff_exec prog layout z σ s1
             (pcMap pc + (vLoadVar layout y lv_reg).length) .x2
-            hRel1 hScratch hPC1 hNotFregZ (Or.inr (Or.inr rfl)) hCodeB
+            hRel1 hScratch hPC1 hNotFregZ (Or.inr (Or.inr rfl)) (hWTL.complete z) hCodeB
         have hPC2 : s2.pc = pcMap pc + (vLoadVar layout y lv_reg).length +
             (vLoadVar layout z rv_reg).length := hPC2_
         -- s2.regs lv_reg = a
@@ -2871,12 +2867,12 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
     -- Step 1: vLoadVar y into lv_reg (effective)
     obtain ⟨s1, hSteps1, hLV_1, hRel1, _, hPC1, hAM1, hRegs1⟩ :=
       vLoadVar_eff_exec prog layout y σ s (pcMap pc) .x1 hStateRel hScratch hPcRel
-        hNotFregY (Or.inr (Or.inl rfl)) hCodeA
+        hNotFregY (Or.inr (Or.inl rfl)) (hWTL.complete y) hCodeA
     -- Step 2: vLoadVar z into rv_reg (effective)
     obtain ⟨s2, hSteps2, hRV_2, hRel2, _, hPC2_, hAM2, hRegs2⟩ :=
       vLoadVar_eff_exec prog layout z σ s1
         (pcMap pc + (vLoadVar layout y lv_reg).length) .x2
-        hRel1 hScratch hPC1 hNotFregZ (Or.inr (Or.inr rfl)) hCodeB
+        hRel1 hScratch hPC1 hNotFregZ (Or.inr (Or.inr rfl)) (hWTL.complete z) hCodeB
     -- Cast hPC2 to use let-bound names (definitionally equal)
     have hPC2 : s2.pc = pcMap pc + (vLoadVar layout y lv_reg).length +
         (vLoadVar layout z rv_reg).length := hPC2_
@@ -3090,11 +3086,11 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
     -- Step 1: vLoadVarFP y into lv_reg (effective)
     obtain ⟨s1, hSteps1, hLV_1, hRel1, hRegs1, hPC1, hAM1, hFregs1, hStack1⟩ :=
       vLoadVarFP_eff_exec prog layout y σ s (pcMap pc) .d1 hStateRel hScratch hPcRel
-        hNotIregY (Or.inr (Or.inl rfl)) hCodeA
+        hNotIregY (Or.inr (Or.inl rfl)) (hWTL.complete y) hCodeA
     -- Step 2: vLoadVarFP z into rv_reg (effective)
     obtain ⟨s2, hSteps2, hRV_2, hRel2, hRegs2, hPC2_, hAM2, hFregs2, hStack2⟩ :=
       vLoadVarFP_eff_exec prog layout z σ s1 _ .d2 hRel1 hScratch hPC1
-        hNotIregZ (Or.inr (Or.inr rfl)) hCodeB
+        hNotIregZ (Or.inr (Or.inr rfl)) (hWTL.complete z) hCodeB
     have hPC2 : s2.pc = pcMap pc + (vLoadVarFP layout y lv_reg).length +
         (vLoadVarFP layout z rv_reg).length := hPC2_
     -- lv_reg preserved through second load
@@ -3199,7 +3195,7 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
       -- Step 1: vLoadVar loads y into x0
       obtain ⟨s1, hSteps1, hX0_1, hRel1, hFregs1, hPC1, hAM1, _⟩ :=
         vLoadVar_exec prog layout y .x0 σ s (pcMap pc) hStateRel hScratch hPcRel hCodeL
-          (Or.inl rfl) hNotFregY
+          (Or.inl rfl) hNotFregY (hWTL.complete y)
       -- Step 2: scvtf writes directly to allocated freg r
       have hScvtf := hCodeR.head; rw [← hPC1] at hScvtf
       have hX0n : s1.regs .x0 = n := by rw [hX0_1, hy]; rfl
@@ -3220,7 +3216,7 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
       · simp [hAM2, hAM1, hArrayMem]
     | some (.ireg r) => exact absurd hLX (hNotIregX r)
     | none =>
-      sorry -- intToFloat with unmapped dst
+      exact absurd hLX (hWTL.complete x)
     | some (.stack _) =>
       -- dst_reg = .d0 (stack fallback)
       have hInstrs : instrs =
@@ -3235,7 +3231,7 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
       -- Step 1: vLoadVar loads y into x0
       obtain ⟨s1, hSteps1, hX0_1, hRel1, hFregs1, hPC1, hAM1, _⟩ :=
         vLoadVar_exec prog layout y .x0 σ s (pcMap pc) hStateRel hScratch hPcRel hCodeL
-          (Or.inl rfl) hNotFregY
+          (Or.inl rfl) hNotFregY (hWTL.complete y)
       -- Step 2: scvtf converts x0 to d0
       have hScvtf := hCodeM.head; rw [← hPC1] at hScvtf
       let s2 := s1.setFReg .d0 (intToFloatBv (s1.regs .x0)) |>.nextPC
@@ -3307,7 +3303,7 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
       · simp [hAM2, hAM1, hArrayMem]
     | some (.ireg r) => exact absurd hLY (hNotIregY r)
     | none =>
-      sorry -- floatToInt with unmapped src
+      exact absurd hLY (hWTL.complete y)
     | some (.stack _) =>
       -- src_reg = .d0 (stack fallback)
       have hInstrs : instrs =
@@ -3322,7 +3318,7 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
       -- Step 1: vLoadVarFP loads y into d0
       obtain ⟨s1, hSteps1, hD0_1, hRel1, hRegs1, hPC1, hAM1, _, _⟩ :=
         vLoadVarFP_exec prog layout y .d0 σ s (pcMap pc) hStateRel hScratch hPcRel hCodeL
-          (Or.inl rfl) hNotIregY
+          (Or.inl rfl) hNotIregY (hWTL.complete y)
       -- Step 2: fcvtzs converts d0 to x0
       have hFcvtzs := hCodeM.head; rw [← hPC1] at hFcvtzs
       let s2 := s1.setReg .x0 (floatToIntBv (s1.fregs .d0)) |>.nextPC
@@ -3371,7 +3367,7 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
     -- Step 1: vLoadVarFP loads y into d0
     obtain ⟨s1, hSteps1, hD0_1, hRel1, hRegs1, hPC1, hAM1, _, _⟩ :=
       vLoadVarFP_exec prog layout y .d0 σ s (pcMap pc) hStateRel hScratch hPcRel hCodeL
-        (Or.inl rfl) hNotIregY
+        (Or.inl rfl) hNotIregY (hWTL.complete y)
     -- Step 2: callExp applies floatExpBv to d0
     have hCall := hCodeM.head; rw [← hPC1] at hCall
     let s2 := s1.setFReg .d0 (floatExpBv (s1.fregs .d0)) |>.nextPC
