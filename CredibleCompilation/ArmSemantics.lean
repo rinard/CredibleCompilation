@@ -131,6 +131,10 @@ inductive ArmStep (prog : ArmProg) : ArmState → ArmState → Prop where
     prog[s.pc]? = some (.fmovToFP fd rn) →
     ArmStep prog s (s.setFReg fd (s.regs rn) |>.nextPC)
 
+  | fmovRR (fd fn : ArmFReg) :
+    prog[s.pc]? = some (.fmovRR fd fn) →
+    ArmStep prog s (s.setFReg fd (s.fregs fn) |>.nextPC)
+
   | fldr (fd : ArmFReg) (off : Nat) :
     prog[s.pc]? = some (.fldr fd off) →
     ArmStep prog s (s.setFReg fd (s.stack off) |>.nextPC)
@@ -717,7 +721,7 @@ def vLoadVar (layout : VarLayout) (v : Var) (tmp : ArmReg) : List ArmInstr :=
 def vLoadVarFP (layout : VarLayout) (v : Var) (tmp : ArmFReg) : List ArmInstr :=
   match layout v with
   | some (.stack off) => [.fldr tmp off]
-  | some (.freg r)    => if r == tmp then [] else []  -- no fmovRR instruction yet; variables won't alias scratch
+  | some (.freg r)    => if r == tmp then [] else [.fmovRR tmp r]
   | some (.ireg _)    => []  -- type mismatch
   | none              => []
 
@@ -733,7 +737,7 @@ def vStoreVar (layout : VarLayout) (v : Var) (tmp : ArmReg) : List ArmInstr :=
 def vStoreVarFP (layout : VarLayout) (v : Var) (tmp : ArmFReg) : List ArmInstr :=
   match layout v with
   | some (.stack off) => [.fstr tmp off]
-  | some (.freg r)    => if r == tmp then [] else []  -- no fmovRR; variables won't alias scratch
+  | some (.freg r)    => if r == tmp then [] else [.fmovRR r tmp]
   | some (.ireg _)    => []  -- type mismatch
   | none              => []
 
@@ -796,7 +800,7 @@ def verifiedGenInstr (layout : VarLayout) (pcMap : Nat → Nat) (instr : TAC)
   | .copy dst src =>
     -- Check if source is in a float register; if so, use FP path
     match layout src with
-    | some (.freg _) => some (vLoadVarFP layout src .d0 ++ vStoreVarFP layout dst .d0)
+    | some (.freg r) => some (vStoreVarFP layout dst r)
     | _ =>
       match layout dst with
       | some (.freg _) => none

@@ -153,6 +153,8 @@ inductive ArmInstr where
   -- Floating-point instructions
   /-- `fmov Dd, Xn` — move integer register to FP register. -/
   | fmovToFP : ArmFReg → ArmReg → ArmInstr
+  /-- `fmov Dd, Dn` — move FP register to FP register. -/
+  | fmovRR   : ArmFReg → ArmFReg → ArmInstr
   /-- `ldr Dd, [sp, #off]` — load FP from stack. -/
   | fldr     : ArmFReg → Nat → ArmInstr
   /-- `str Dd, [sp, #off]` — store FP to stack. -/
