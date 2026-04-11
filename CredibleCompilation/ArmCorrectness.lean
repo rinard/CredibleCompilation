@@ -1810,8 +1810,7 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
       | _ => vLoadVar layout y .x0 ++ vStoreVar layout x .x0 := rfl
     rw [heq] at hCodeInstr hPcNext
     rw [hformal] at hCodeInstr hPcNext
-    -- For now handle the non-float path (layout y is not freg)
-    sorry
+    sorry -- copy: vLoadVar + vStoreVar (or vLoadVarFP + vStoreVarFP for float)
   | binop hinstr hy hz hs =>
     sorry  -- binop: vLoadVar×2 + op + vStoreVar
   | boolop hinstr =>
