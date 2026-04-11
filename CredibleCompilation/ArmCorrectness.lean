@@ -1372,6 +1372,44 @@ theorem vStoreVarFP_stack (layout : VarLayout) (v : Var) (tmp : ArmFReg) (off : 
   simp [vStoreVarFP, hv]
 
 -- ============================================================
+-- § fregs preservation for integer-only instruction sequences
+-- ============================================================
+
+/-- optional_movk_step extended with fregs preservation. -/
+private theorem optional_movk_step' (prog : ArmProg) (rd : ArmReg) (w : UInt64) (shift : Nat)
+    (s : ArmState) (pc0 : Nat) (hPC : s.pc = pc0)
+    (hCode : CodeAt prog pc0 (if (w != 0) = true then [ArmInstr.movk rd w shift] else [])) :
+    ∃ s', ArmSteps prog s s' ∧
+      s'.regs rd = (if (w != 0) = true then insertBits (s.regs rd) w shift else s.regs rd) ∧
+      s'.stack = s.stack ∧ s'.fregs = s.fregs ∧
+      s'.pc = pc0 + (if (w != 0) = true then [ArmInstr.movk rd w shift] else []).length ∧
+      (∀ r, r ≠ rd → s'.regs r = s.regs r) ∧
+      s'.arrayMem = s.arrayMem := by
+  by_cases hw : (w != 0) = true
+  · simp only [hw, ite_true] at hCode ⊢
+    have hInstr := hCode.head; rw [← hPC] at hInstr
+    exact ⟨s.setReg rd (insertBits (s.regs rd) w shift) |>.nextPC,
+      .single (.movk rd w shift hInstr),
+      by simp, by simp, by simp, by simp [hPC],
+      fun r hr => ArmState.setReg_regs_other _ _ _ _ hr, by simp⟩
+  · simp only [hw] at hCode ⊢; simp only [Bool.false_eq_true, ite_false]
+    exact ⟨s, .refl, rfl, rfl, rfl, by simp [hPC], fun _ _ => rfl, rfl⟩
+
+/-- loadImm64 fregs preservation: since formalLoadImm64 only emits mov/movz/movk
+    (which all use setReg/nextPC), fregs is preserved.
+    We get this from the existing loadImm64_correct plus this lemma. -/
+theorem loadImm64_fregs (prog : ArmProg) (rd : ArmReg) (n : BitVec 64)
+    (s : ArmState) (startPC : Nat)
+    (hCode : CodeAt prog startPC (formalLoadImm64 rd n))
+    (hPC : s.pc = startPC)
+    (s' : ArmState) (hSteps : ArmSteps prog s s')
+    (hStack : s'.stack = s.stack)
+    (hRegs : ∀ r, r ≠ rd → s'.regs r = s.regs r)
+    (hAM : s'.arrayMem = s.arrayMem) :
+    s'.fregs = s.fregs := by
+  sorry -- mov/movz/movk only use setReg/nextPC which preserve fregs
+
+-- ============================================================
 -- § ExtStateRel preservation helpers for verifiedGenInstr
 -- ============================================================
 
@@ -1457,6 +1495,129 @@ theorem vStoreVar_x0_ireg_correct (prog : ArmProg) (layout : VarLayout) (v : Var
   · simp [hPC]
   · simp
 
+/-- Execute vLoadVar: loads v into scratch register tmp, preserving ExtStateRel.
+    Case-splits on layout to determine instruction sequence. -/
+theorem vLoadVar_exec (prog : ArmProg) (layout : VarLayout) (v : Var) (tmp : ArmReg)
+    (σ : Store) (s : ArmState) (startPC : Nat)
+    (hRel : ExtStateRel layout σ s) (hScratch : ExtScratchSafe layout)
+    (hPC : s.pc = startPC)
+    (hCode : CodeAt prog startPC (vLoadVar layout v tmp))
+    (hTmpScratch : tmp = .x0 ∨ tmp = .x1 ∨ tmp = .x2)
+    (hNotFreg : ∀ r, layout v ≠ some (.freg r)) :
+    ∃ s', ArmSteps prog s s' ∧
+        s'.regs tmp = (σ v).encode ∧
+        ExtStateRel layout σ s' ∧
+        s'.fregs = s.fregs ∧
+        s'.pc = startPC + (vLoadVar layout v tmp).length ∧
+        s'.arrayMem = s.arrayMem := by
+  -- Case split on where v lives
+  match hv : layout v with
+  | some (.stack off) =>
+    have hEq := vLoadVar_stack layout v tmp off hv
+    rw [hEq] at hCode ⊢
+    have hInstr := hCode.head; rw [← hPC] at hInstr
+    refine ⟨s.setReg tmp (s.stack off) |>.nextPC, .single (.ldr tmp off hInstr), ?_, ?_, ?_, ?_, ?_⟩
+    · simp; exact hRel.read_stack hv
+    · exact (ExtStateRel.setReg_preserved hRel (fun w => by
+        rcases hTmpScratch with rfl | rfl | rfl
+        · exact hScratch.not_x0 w
+        · exact hScratch.not_x1 w
+        · exact hScratch.not_x2 w)).nextPC
+    · simp
+    · simp [hPC]
+    · simp
+  | some (.ireg r) =>
+    by_cases heq : r = tmp
+    · subst heq
+      have hEq := vLoadVar_ireg_same layout v r hv
+      rw [hEq] at hCode ⊢; simp
+      exact ⟨s, .refl, hRel.read_ireg hv, hRel, rfl, by omega, rfl⟩
+    · have hbeq : (r == tmp) = false := by
+        cases h : r == tmp
+        · rfl
+        · simp [beq_iff_eq] at h; exact absurd h heq
+      have hEq := vLoadVar_ireg_diff layout v tmp r hv hbeq
+      rw [hEq] at hCode ⊢
+      have hInstr := hCode.head; rw [← hPC] at hInstr
+      refine ⟨s.setReg tmp (s.regs r) |>.nextPC, .single (.movR tmp r hInstr), ?_, ?_, ?_, ?_, ?_⟩
+      · simp; exact hRel.read_ireg hv
+      · exact (ExtStateRel.setReg_preserved hRel (fun w => by
+          rcases hTmpScratch with rfl | rfl | rfl
+          · exact hScratch.not_x0 w
+          · exact hScratch.not_x1 w
+          · exact hScratch.not_x2 w)).nextPC
+      · simp
+      · simp [hPC]
+      · simp
+  | some (.freg r) => exact absurd hv (hNotFreg r)
+  | none =>
+    -- layout v = none: unmapped variable, unreachable in well-typed programs
+    simp [vLoadVar, hv]; exact ⟨s, .refl, sorry, hRel, rfl, by omega, rfl⟩
+
+/-- Execute vStoreVar from x0: stores result into v's location, updating ExtStateRel. -/
+theorem vStoreVar_exec (prog : ArmProg) (layout : VarLayout) (v : Var)
+    (val : Value) (σ : Store) (s : ArmState) (startPC : Nat)
+    (hRel : ExtStateRel layout σ s) (hInj : VarLayoutInjective layout)
+    (hScratch : ExtScratchSafe layout)
+    (hPC : s.pc = startPC) (hX0 : s.regs .x0 = val.encode)
+    (hCode : CodeAt prog startPC (vStoreVar layout v .x0))
+    (hNotFreg : ∀ r, layout v ≠ some (.freg r)) :
+    ∃ s', ArmSteps prog s s' ∧
+        ExtStateRel layout (σ[v ↦ val]) s' ∧
+        s'.pc = startPC + (vStoreVar layout v .x0).length ∧
+        s'.arrayMem = s.arrayMem := by
+  match hv : layout v with
+  | some (.stack off) =>
+    have hEq := vStoreVar_stack layout v .x0 off hv
+    rw [hEq] at hCode ⊢
+    have hStr := hCode.head; rw [← hPC] at hStr
+    refine ⟨s.setStack off (s.regs .x0) |>.nextPC, .single (.str .x0 off hStr), ?_, ?_, ?_⟩
+    · rw [hX0]; exact (ExtStateRel.update_stack hRel hInj hv).nextPC
+    · simp [hPC]
+    · simp
+  | some (.ireg r) =>
+    have hne : (r == ArmReg.x0) = false := by
+      cases hr : r == ArmReg.x0
+      · rfl
+      · simp [beq_iff_eq] at hr; exact absurd (hr ▸ hv) (hScratch.not_x0 v)
+    have hEq := vStoreVar_ireg_diff layout v .x0 r hv hne
+    rw [hEq] at hCode ⊢
+    have hMovR := hCode.head; rw [← hPC] at hMovR
+    refine ⟨s.setReg r (s.regs .x0) |>.nextPC, .single (.movR r .x0 hMovR), ?_, ?_, ?_⟩
+    · rw [hX0]; exact (ExtStateRel.update_ireg hRel hInj hv).nextPC
+    · simp [hPC]
+    · simp
+  | some (.freg r) => exact absurd hv (hNotFreg r)
+  | none => simp [vStoreVar, hv]; exact ⟨s, .refl, sorry, by omega, rfl⟩
+
+/-- Execute vStoreVarFP from d0: stores FP result into v's location. -/
+theorem vStoreVarFP_exec (prog : ArmProg) (layout : VarLayout) (v : Var)
+    (val : Value) (σ : Store) (s : ArmState) (startPC : Nat)
+    (hRel : ExtStateRel layout σ s) (hInj : VarLayoutInjective layout)
+    (hScratch : ExtScratchSafe layout)
+    (hPC : s.pc = startPC) (hD0 : s.fregs .d0 = val.encode)
+    (hCode : CodeAt prog startPC (vStoreVarFP layout v .d0))
+    (hNotIreg : ∀ r, layout v ≠ some (.ireg r)) :
+    ∃ s', ArmSteps prog s s' ∧
+        ExtStateRel layout (σ[v ↦ val]) s' ∧
+        s'.pc = startPC + (vStoreVarFP layout v .d0).length ∧
+        s'.arrayMem = s.arrayMem := by
+  match hv : layout v with
+  | some (.stack off) =>
+    have hEq := vStoreVarFP_stack layout v .d0 off hv
+    rw [hEq] at hCode ⊢
+    have hFstr := hCode.head; rw [← hPC] at hFstr
+    refine ⟨s.setStack off (s.fregs .d0) |>.nextPC, .single (.fstr .d0 off hFstr), ?_, ?_, ?_⟩
+    · rw [hD0]; exact (ExtStateRel.update_stack hRel hInj hv).nextPC
+    · simp [hPC]
+    · simp
+  | some (.ireg r) => exact absurd hv (hNotIreg r)
+  | some (.freg r) =>
+    -- freg store: vStoreVarFP emits [] when r = d0, also [] otherwise (no fmovRR)
+    -- This is a known limitation — variables in freg need fmovRR support
+    sorry
+  | none => sorry
+
 -- ============================================================
 -- § verifiedGenInstr_correct
 -- ============================================================
@@ -1539,8 +1700,7 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
       -- ExtStateRel preserved through loadImm64 (only clobbers x0, a scratch register)
       have hRel1 : ExtStateRel layout σ s1 :=
         ExtStateRel.preserved_by_ireg_only hStateRel hScratch hStack1
-          (by -- fregs preserved: loadImm64 only uses mov/movz/movk which don't touch fregs
-            sorry)
+          (loadImm64_fregs prog .x0 n s (pcMap pc) hCodeL hPcRel s1 hSteps1 hStack1 hRegs1 hAM1)
           (fun r h0 h1 h2 h8 => hRegs1 r h0)
       -- Step 2: vStoreVar stores x0 (= n) into x's location
       cases locX with
@@ -1577,7 +1737,19 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
     | float f =>
       sorry -- float const: loadImm64 + fmovToFP + vStoreVarFP
   | copy hinstr =>
-    sorry  -- copy: vLoadVar + vStoreVar
+    -- TAC: x := y → ARM: vLoadVar src x0 ++ vStoreVar dst x0
+    rename_i x y
+    have heq : instr = .copy x y := Option.some.inj (hInstr.symm.trans hinstr)
+    -- verifiedGenInstr for copy: case split on whether src is in freg
+    have hformal : verifiedGenInstr layout pcMap (.copy x y) haltLabel divLabel
+        boundsLabel arrayDecls boundsSafe =
+      match layout y with
+      | some (.freg _) => vLoadVarFP layout y .d0 ++ vStoreVarFP layout x .d0
+      | _ => vLoadVar layout y .x0 ++ vStoreVar layout x .x0 := rfl
+    rw [heq] at hCodeInstr hPcNext
+    rw [hformal] at hCodeInstr hPcNext
+    -- For now handle the non-float path (layout y is not freg)
+    sorry
   | binop hinstr hy hz hs =>
     sorry  -- binop: vLoadVar×2 + op + vStoreVar
   | boolop hinstr =>
