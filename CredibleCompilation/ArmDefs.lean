@@ -14,17 +14,22 @@ Split from `AsmSemantics.lean`.
 -- § 1. Registers
 -- ============================================================
 
-/-- ARM64 registers used by the code generator. -/
+/-- ARM64 integer registers used by the code generator.
+    x0-x2: scratch, x8: array address scratch, x3-x7/x9-x18: allocatable. -/
 inductive ArmReg where
-  | x0 | x1 | x2 | x8 | x9
+  | x0  | x1  | x2  | x3  | x4  | x5  | x6  | x7
+  | x8  | x9  | x10 | x11 | x12 | x13 | x14 | x15
+  | x16 | x17 | x18
   deriving Repr, DecidableEq
 
 -- sp is implicit (stack is addressed by offset)
 -- x29/x30 are only used in prologue/epilogue (not modeled)
 
-/-- ARM64 floating-point registers used by the code generator. -/
+/-- ARM64 floating-point registers used by the code generator.
+    d0-d1: scratch, d2-d15: allocatable. -/
 inductive ArmFReg where
-  | d0 | d1 | d2
+  | d0  | d1  | d2  | d3  | d4  | d5  | d6  | d7
+  | d8  | d9  | d10 | d11 | d12 | d13 | d14 | d15
   deriving Repr, DecidableEq
 
 -- ============================================================
@@ -103,6 +108,8 @@ def ArmState.nextPC (s : ArmState) : ArmState :=
 inductive ArmInstr where
   /-- `mov Xd, #imm` — load immediate (small, fits in 16 bits). -/
   | mov      : ArmReg → BitVec 64 → ArmInstr
+  /-- `mov Xd, Xn` — register-to-register move. -/
+  | movR     : ArmReg → ArmReg → ArmInstr
   /-- `movz Xd, #imm16, lsl #shift` — move wide with zero. -/
   | movz     : ArmReg → UInt64 → Nat → ArmInstr
   /-- `movk Xd, #imm16, lsl #shift` — move wide with keep. -/

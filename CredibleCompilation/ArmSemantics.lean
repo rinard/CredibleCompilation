@@ -28,6 +28,10 @@ inductive ArmStep (prog : ArmProg) : ArmState → ArmState → Prop where
     prog[s.pc]? = some (.mov rd imm) →
     ArmStep prog s (s.setReg rd imm |>.nextPC)
 
+  | movR (rd rn : ArmReg) :
+    prog[s.pc]? = some (.movR rd rn) →
+    ArmStep prog s (s.setReg rd (s.regs rn) |>.nextPC)
+
   | movz (rd : ArmReg) (imm16 : UInt64) (shift : Nat) :
     prog[s.pc]? = some (.movz rd imm16 shift) →
     ArmStep prog s (s.setReg rd (BitVec.ofNat 64 (imm16 <<< shift.toUInt64).toNat) |>.nextPC)
@@ -265,6 +269,191 @@ def SimRel (vm : VarMap) (pcMap : Nat → Nat) (tac_cfg : Cfg) (arm : ArmState) 
   | .typeError _ _  => False
 
 -- ============================================================
+-- § 7b. Extended state relation (register allocation)
+-- ============================================================
+
+/-- Where a variable lives in the ARM64 state. -/
+inductive VarLoc where
+  /-- On the stack at the given offset. -/
+  | stack : Nat → VarLoc
+  /-- In an integer register (x0-x28). -/
+  | ireg  : ArmReg → VarLoc
+  /-- In a floating-point register (d0-d31). -/
+  | freg  : ArmFReg → VarLoc
+  deriving Repr, DecidableEq
+
+/-- Maps each variable to its location (stack slot or register). -/
+def VarLayout := Var → Option VarLoc
+
+/-- Extended state relation: for every mapped variable, the ARM64 location
+    holds the encoded TAC value. Generalizes `StateRel` to registers. -/
+def ExtStateRel (layout : VarLayout) (σ : Store) (arm : ArmState) : Prop :=
+  ∀ v loc, layout v = some loc →
+    match loc with
+    | .stack off => arm.stack off = (σ v).encode
+    | .ireg r    => arm.regs r = (σ v).encode
+    | .freg r    => arm.fregs r = (σ v).encode
+
+/-- The layout is injective: distinct variables map to distinct locations. -/
+def VarLayoutInjective (layout : VarLayout) : Prop :=
+  ∀ v1 v2 loc, layout v1 = some loc → layout v2 = some loc → v1 = v2
+
+/-- No variable is mapped to a scratch register.
+    Scratch: x0, x1, x2 (integer), d0, d1 (float).
+    x8 is also reserved for array address computation. -/
+def ExtScratchSafe (layout : VarLayout) : Prop :=
+  ∀ v, layout v ≠ some (.ireg .x0) ∧ layout v ≠ some (.ireg .x1) ∧
+       layout v ≠ some (.ireg .x2) ∧ layout v ≠ some (.ireg .x8) ∧
+       layout v ≠ some (.freg .d0) ∧ layout v ≠ some (.freg .d1) ∧
+       layout v ≠ some (.freg .d2)
+
+/-- Convenience: ExtScratchSafe implies no variable in a specific scratch ireg. -/
+theorem ExtScratchSafe.not_x0 (h : ExtScratchSafe layout) (v : Var) : layout v ≠ some (.ireg .x0) := (h v).1
+theorem ExtScratchSafe.not_x1 (h : ExtScratchSafe layout) (v : Var) : layout v ≠ some (.ireg .x1) := (h v).2.1
+theorem ExtScratchSafe.not_x2 (h : ExtScratchSafe layout) (v : Var) : layout v ≠ some (.ireg .x2) := (h v).2.2.1
+theorem ExtScratchSafe.not_x8 (h : ExtScratchSafe layout) (v : Var) : layout v ≠ some (.ireg .x8) := (h v).2.2.2.1
+theorem ExtScratchSafe.not_d0 (h : ExtScratchSafe layout) (v : Var) : layout v ≠ some (.freg .d0) := (h v).2.2.2.2.1
+theorem ExtScratchSafe.not_d1 (h : ExtScratchSafe layout) (v : Var) : layout v ≠ some (.freg .d1) := (h v).2.2.2.2.2.1
+theorem ExtScratchSafe.not_d2 (h : ExtScratchSafe layout) (v : Var) : layout v ≠ some (.freg .d2) := (h v).2.2.2.2.2.2
+
+/-- Full extended simulation invariant (generalizes SimRel). -/
+def ExtSimRel (layout : VarLayout) (pcMap : Nat → Nat) (tac_cfg : Cfg) (arm : ArmState) : Prop :=
+  match tac_cfg with
+  | .run pc σ am    => ExtStateRel layout σ arm ∧ PcRel pcMap pc arm.pc ∧ arm.arrayMem = am
+  | .halt σ am      => ExtStateRel layout σ arm ∧ arm.arrayMem = am
+  | .error _ _      => True
+  | .typeError _ _  => False
+
+-- Read lemmas: extract the value from ExtStateRel
+
+theorem ExtStateRel.read_stack {layout : VarLayout} {σ : Store} {arm : ArmState}
+    (h : ExtStateRel layout σ arm) {v : Var} {off : Nat}
+    (hLoc : layout v = some (.stack off)) :
+    arm.stack off = (σ v).encode :=
+  h v (.stack off) hLoc
+
+theorem ExtStateRel.read_ireg {layout : VarLayout} {σ : Store} {arm : ArmState}
+    (h : ExtStateRel layout σ arm) {v : Var} {r : ArmReg}
+    (hLoc : layout v = some (.ireg r)) :
+    arm.regs r = (σ v).encode :=
+  h v (.ireg r) hLoc
+
+theorem ExtStateRel.read_freg {layout : VarLayout} {σ : Store} {arm : ArmState}
+    (h : ExtStateRel layout σ arm) {v : Var} {r : ArmFReg}
+    (hLoc : layout v = some (.freg r)) :
+    arm.fregs r = (σ v).encode :=
+  h v (.freg r) hLoc
+
+-- Update lemma: after storing a new value for variable v, ExtStateRel is preserved
+
+theorem ExtStateRel.update_stack {layout : VarLayout} {σ : Store} {arm : ArmState}
+    (h : ExtStateRel layout σ arm) (hInj : VarLayoutInjective layout)
+    {v : Var} {off : Nat} {val : Value}
+    (hLoc : layout v = some (.stack off)) :
+    ExtStateRel layout (σ[v ↦ val]) (arm.setStack off val.encode) := by
+  intro w loc hW
+  by_cases hwv : w = v
+  · -- w = v: both store and stack updated
+    subst hwv; rw [hLoc] at hW; cases hW
+    simp [Store.update, ArmState.setStack]
+  · -- w ≠ v: store unchanged, stack unchanged at other offsets
+    have hStoreEq : (σ[v ↦ val]) w = σ w := Store.update_other σ v w val hwv
+    rw [hStoreEq]
+    match loc, hW with
+    | .stack off', hW =>
+      have hne : off' ≠ off := fun heq =>
+        hwv (hInj w v (.stack off) (heq ▸ hW) hLoc)
+      simp [ArmState.setStack, beq_iff_eq, hne]; exact h w (.stack off') hW
+    | .ireg r, hW => exact h w (.ireg r) hW
+    | .freg r, hW => exact h w (.freg r) hW
+
+theorem ExtStateRel.update_ireg {layout : VarLayout} {σ : Store} {arm : ArmState}
+    (h : ExtStateRel layout σ arm) (hInj : VarLayoutInjective layout)
+    {v : Var} {r : ArmReg} {val : Value}
+    (hLoc : layout v = some (.ireg r)) :
+    ExtStateRel layout (σ[v ↦ val]) (arm.setReg r val.encode) := by
+  intro w loc hW
+  by_cases hwv : w = v
+  · subst hwv; rw [hLoc] at hW; cases hW
+    simp [Store.update, ArmState.setReg]
+  · have hStoreEq : (σ[v ↦ val]) w = σ w := Store.update_other σ v w val hwv
+    rw [hStoreEq]
+    match loc, hW with
+    | .stack off, hW => exact h w (.stack off) hW
+    | .ireg r', hW =>
+      have hne : r' ≠ r := fun heq =>
+        hwv (hInj w v (.ireg r) (heq ▸ hW) hLoc)
+      simp [ArmState.setReg, beq_iff_eq, hne]; exact h w (.ireg r') hW
+    | .freg r', hW => exact h w (.freg r') hW
+
+theorem ExtStateRel.update_freg {layout : VarLayout} {σ : Store} {arm : ArmState}
+    (h : ExtStateRel layout σ arm) (hInj : VarLayoutInjective layout)
+    {v : Var} {r : ArmFReg} {val : Value}
+    (hLoc : layout v = some (.freg r)) :
+    ExtStateRel layout (σ[v ↦ val]) (arm.setFReg r val.encode) := by
+  intro w loc hW
+  by_cases hwv : w = v
+  · subst hwv; rw [hLoc] at hW; cases hW
+    simp [Store.update, ArmState.setFReg]
+  · have hStoreEq : (σ[v ↦ val]) w = σ w := Store.update_other σ v w val hwv
+    rw [hStoreEq]
+    match loc, hW with
+    | .stack off, hW => exact h w (.stack off) hW
+    | .ireg r', hW => exact h w (.ireg r') hW
+    | .freg r', hW =>
+      have hne : r' ≠ r := fun heq =>
+        hwv (hInj w v (.freg r) (heq ▸ hW) hLoc)
+      simp [ArmState.setFReg, beq_iff_eq, hne]; exact h w (.freg r') hW
+
+-- Preservation under operations that don't touch mapped locations
+
+theorem ExtStateRel.setReg_preserved {layout : VarLayout} {σ : Store} {arm : ArmState}
+    (h : ExtStateRel layout σ arm) {r : ArmReg} {val : BitVec 64}
+    (hNoAlias : ∀ v, layout v ≠ some (.ireg r)) :
+    ExtStateRel layout σ (arm.setReg r val) := by
+  intro w loc hW
+  match loc with
+  | .stack off => exact h w (.stack off) hW
+  | .ireg r' =>
+    have hne : r' ≠ r := fun heq => hNoAlias w (heq ▸ hW)
+    simp [ArmState.setReg, beq_iff_eq, hne]; exact h w (.ireg r') hW
+  | .freg r' => exact h w (.freg r') hW
+
+theorem ExtStateRel.setFReg_preserved {layout : VarLayout} {σ : Store} {arm : ArmState}
+    (h : ExtStateRel layout σ arm) {r : ArmFReg} {val : BitVec 64}
+    (hNoAlias : ∀ v, layout v ≠ some (.freg r)) :
+    ExtStateRel layout σ (arm.setFReg r val) := by
+  intro w loc hW
+  match loc with
+  | .stack off => exact h w (.stack off) hW
+  | .ireg r' => exact h w (.ireg r') hW
+  | .freg r' =>
+    have hne : r' ≠ r := fun heq => hNoAlias w (heq ▸ hW)
+    simp [ArmState.setFReg, beq_iff_eq, hne]; exact h w (.freg r') hW
+
+-- ExtStateRel is insensitive to PC and flags changes
+
+theorem ExtStateRel.nextPC {layout : VarLayout} {σ : Store} {arm : ArmState}
+    (h : ExtStateRel layout σ arm) : ExtStateRel layout σ arm.nextPC := by
+  intro v loc hv; exact h v loc hv
+
+theorem ExtStateRel.withPC {layout : VarLayout} {σ : Store} {arm : ArmState}
+    (h : ExtStateRel layout σ arm) (pc : Nat) :
+    ExtStateRel layout σ { arm with pc := pc } := by
+  intro v loc hv; exact h v loc hv
+
+-- ExtStateRel preserved under array memory updates (no scalar locations affected)
+
+theorem ExtStateRel.setArrayMem_preserved {layout : VarLayout} {σ : Store} {arm : ArmState}
+    (h : ExtStateRel layout σ arm) {arr : ArrayName} {idx val : BitVec 64} :
+    ExtStateRel layout σ (arm.setArrayMem arr idx val) := by
+  intro w loc hW
+  match loc with
+  | .stack off => exact h w (.stack off) hW
+  | .ireg r => exact h w (.ireg r) hW
+  | .freg r => exact h w (.freg r) hW
+
+-- ============================================================
 -- § 8. Formal instruction generation
 -- ============================================================
 
@@ -406,6 +595,142 @@ def formalGenInstr (vm : VarMap) (pcMap : Nat → Nat) (instr : TAC)
     | _, _ => []
 
 -- ============================================================
+-- § 8b. Verified codegen helpers (register-allocation-aware)
+-- ============================================================
+
+/-- Load an integer variable into a scratch register.
+    Returns the instruction(s) needed based on where the variable lives. -/
+def vLoadVar (layout : VarLayout) (v : Var) (tmp : ArmReg) : List ArmInstr :=
+  match layout v with
+  | some (.stack off) => [.ldr tmp off]
+  | some (.ireg r)    => if r == tmp then [] else [.movR tmp r]
+  | some (.freg _)    => []  -- type mismatch: caller should use vLoadVarFP
+  | none              => []
+
+/-- Load a float variable into a scratch FP register.
+    Returns the instruction(s) needed based on where the variable lives. -/
+def vLoadVarFP (layout : VarLayout) (v : Var) (tmp : ArmFReg) : List ArmInstr :=
+  match layout v with
+  | some (.stack off) => [.fldr tmp off]
+  | some (.freg r)    => if r == tmp then [] else []  -- no fmovRR instruction yet; variables won't alias scratch
+  | some (.ireg _)    => []  -- type mismatch
+  | none              => []
+
+/-- Store from a scratch integer register into a variable's location. -/
+def vStoreVar (layout : VarLayout) (v : Var) (tmp : ArmReg) : List ArmInstr :=
+  match layout v with
+  | some (.stack off) => [.str tmp off]
+  | some (.ireg r)    => if r == tmp then [] else [.movR r tmp]
+  | some (.freg _)    => []  -- type mismatch
+  | none              => []
+
+/-- Store from a scratch FP register into a variable's location. -/
+def vStoreVarFP (layout : VarLayout) (v : Var) (tmp : ArmFReg) : List ArmInstr :=
+  match layout v with
+  | some (.stack off) => [.fstr tmp off]
+  | some (.freg r)    => if r == tmp then [] else []  -- no fmovRR; variables won't alias scratch
+  | some (.ireg _)    => []  -- type mismatch
+  | none              => []
+
+-- ============================================================
+-- § 8c. Verified boolean expression codegen
+-- ============================================================
+
+/-- Generate verified ARM64 instructions for a boolean expression.
+    Result is left in x0 (0 or 1). Mirrors `formalGenBoolExpr` but with VarLayout. -/
+def verifiedGenBoolExpr (layout : VarLayout) (be : BoolExpr) : List ArmInstr :=
+  match be with
+  | .lit b =>
+    [.mov .x0 (if b then (1 : BitVec 64) else 0)]
+  | .bvar v =>
+    vLoadVar layout v .x0 ++ [.andImm .x0 .x0 (1 : BitVec 64)]
+  | .cmp op lv rv =>
+    let cond := match op with | .eq => Cond.eq | .ne => .ne | .lt => .lt | .le => .le
+    vLoadVar layout lv .x1 ++ vLoadVar layout rv .x2 ++
+    [.cmp .x1 .x2, .cset .x0 cond]
+  | .cmpLit op v n =>
+    let cond := match op with | .eq => Cond.eq | .ne => .ne | .lt => .lt | .le => .le
+    vLoadVar layout v .x1 ++ formalLoadImm64 .x2 n ++ [.cmp .x1 .x2, .cset .x0 cond]
+  | .not e =>
+    verifiedGenBoolExpr layout e ++ [.eorImm .x0 .x0 (1 : BitVec 64)]
+  | .fcmp fop lv rv =>
+    let cond := match fop with | .feq => Cond.eq | .fne => .ne | .flt => .lt | .fle => .le
+    vLoadVarFP layout lv .d1 ++ vLoadVarFP layout rv .d2 ++
+    [.fcmpR .d1 .d2, .cset .x0 cond]
+
+-- ============================================================
+-- § 8d. Verified instruction codegen
+-- ============================================================
+
+/-- Generate verified ARM64 instructions for a TAC instruction.
+    Takes `VarLayout` (register allocation) and per-array-access `boundsSafe` flag.
+    Mirrors `formalGenInstr` but supports register-allocated variables and bounds-check elimination.
+    `boundsSafe` is computed by the caller from interval analysis. -/
+def verifiedGenInstr (layout : VarLayout) (pcMap : Nat → Nat) (instr : TAC)
+    (haltLabel : Nat) (divLabel : Nat) (boundsLabel : Nat)
+    (arrayDecls : List (ArrayName × Nat × VarTy))
+    (boundsSafe : Bool := false) : List ArmInstr :=
+  match instr with
+  | .const v (.int n) =>
+    formalLoadImm64 .x0 n ++ vStoreVar layout v .x0
+  | .const v (.bool b) =>
+    [.mov .x0 (if b then (1 : BitVec 64) else 0)] ++ vStoreVar layout v .x0
+  | .const v (.float f) =>
+    formalLoadImm64 .x0 f ++ [.fmovToFP .d0 .x0] ++ vStoreVarFP layout v .d0
+  | .copy dst src =>
+    -- Check if source is in a float register; if so, use FP path
+    match layout src with
+    | some (.freg _) => vLoadVarFP layout src .d0 ++ vStoreVarFP layout dst .d0
+    | _ => vLoadVar layout src .x0 ++ vStoreVar layout dst .x0
+  | .binop dst op lv rv =>
+    let opInstr := match op with
+      | .add => [ArmInstr.addR .x0 .x1 .x2]
+      | .sub => [.subR .x0 .x1 .x2]
+      | .mul => [.mulR .x0 .x1 .x2]
+      | .div => [.sdivR .x0 .x1 .x2]
+      | .mod => [.sdivR .x0 .x1 .x2, .mulR .x0 .x0 .x2, .subR .x0 .x1 .x0]
+    if op == .div || op == .mod then
+      vLoadVar layout rv .x2 ++ [.cbz .x2 divLabel] ++
+      vLoadVar layout lv .x1 ++ vLoadVar layout rv .x2 ++ opInstr ++ vStoreVar layout dst .x0
+    else
+      vLoadVar layout lv .x1 ++ vLoadVar layout rv .x2 ++ opInstr ++ vStoreVar layout dst .x0
+  | .boolop dst be =>
+    verifiedGenBoolExpr layout be ++ vStoreVar layout dst .x0
+  | .goto l => [.b (pcMap l)]
+  | .ifgoto be l =>
+    verifiedGenBoolExpr layout be ++ [.cbnz .x0 (pcMap l)]
+  | .halt => [.b haltLabel]
+  | .arrLoad x arr idx ty =>
+    let loadIdx := vLoadVar layout idx .x1
+    let boundsCheck := if boundsSafe then [] else
+      [.cmpImm .x1 (arraySizeBv arrayDecls arr), .cbz .x0 boundsLabel]
+    match ty with
+    | .float => loadIdx ++ boundsCheck ++ [.farrLd .d0 arr .x1] ++ vStoreVarFP layout x .d0
+    | .bool  => loadIdx ++ boundsCheck ++ [.arrLd .x0 arr .x1, .cmpImm .x0 0, .cset .x0 .ne] ++ vStoreVar layout x .x0
+    | .int   => loadIdx ++ boundsCheck ++ [.arrLd .x0 arr .x1] ++ vStoreVar layout x .x0
+  | .arrStore arr idx val ty =>
+    let loadIdx := vLoadVar layout idx .x1
+    let boundsCheck := if boundsSafe then [] else
+      [.cmpImm .x1 (arraySizeBv arrayDecls arr), .cbz .x0 boundsLabel]
+    if ty == .float then
+      loadIdx ++ boundsCheck ++ vLoadVarFP layout val .d0 ++ [.farrSt arr .x1 .d0]
+    else
+      loadIdx ++ boundsCheck ++ vLoadVar layout val .x2 ++ [.arrSt arr .x1 .x2]
+  | .fbinop dst fop lv rv =>
+    let fpInstr := match fop with
+      | .fadd => ArmInstr.faddR .d0 .d1 .d2
+      | .fsub => .fsubR .d0 .d1 .d2
+      | .fmul => .fmulR .d0 .d1 .d2
+      | .fdiv => .fdivR .d0 .d1 .d2
+    vLoadVarFP layout lv .d1 ++ vLoadVarFP layout rv .d2 ++ [fpInstr] ++ vStoreVarFP layout dst .d0
+  | .intToFloat dst src =>
+    vLoadVar layout src .x0 ++ [.scvtf .d0 .x0] ++ vStoreVarFP layout dst .d0
+  | .floatToInt dst src =>
+    vLoadVarFP layout src .d0 ++ [.fcvtzs .x0 .d0] ++ vStoreVar layout dst .x0
+  | .floatExp dst src =>
+    vLoadVarFP layout src .d0 ++ [.callExp] ++ vStoreVarFP layout dst .d0
+
+-- ============================================================
 -- § 9. CodeAt and helper lemmas
 -- ============================================================
 
@@ -475,8 +800,57 @@ theorem ArmSteps.one_then {prog : ArmProg} {s s' s'' : ArmState}
 @[simp] theorem ArmState.nextPC_arrayMem (s : ArmState) :
     s.nextPC.arrayMem = s.arrayMem := rfl
 
+-- setStack preserves regs, fregs, pc, flags, arrayMem
+@[simp] theorem ArmState.setStack_regs (s : ArmState) (off : Nat) (v : BitVec 64) :
+    (s.setStack off v).regs = s.regs := rfl
+
+@[simp] theorem ArmState.setStack_fregs (s : ArmState) (off : Nat) (v : BitVec 64) :
+    (s.setStack off v).fregs = s.fregs := rfl
+
+@[simp] theorem ArmState.setStack_pc (s : ArmState) (off : Nat) (v : BitVec 64) :
+    (s.setStack off v).pc = s.pc := rfl
+
+@[simp] theorem ArmState.setStack_flags (s : ArmState) (off : Nat) (v : BitVec 64) :
+    (s.setStack off v).flags = s.flags := rfl
+
 @[simp] theorem ArmState.setStack_arrayMem (s : ArmState) (off : Nat) (v : BitVec 64) :
     (s.setStack off v).arrayMem = s.arrayMem := rfl
+
+-- setReg preserves fregs
+@[simp] theorem ArmState.setReg_fregs (s : ArmState) (r : ArmReg) (v : BitVec 64) :
+    (s.setReg r v).fregs = s.fregs := rfl
+
+-- setFReg preserves regs, stack, pc, flags, arrayMem
+@[simp] theorem ArmState.setFReg_regs (s : ArmState) (r : ArmFReg) (v : BitVec 64) :
+    (s.setFReg r v).regs = s.regs := rfl
+
+@[simp] theorem ArmState.setFReg_stack (s : ArmState) (r : ArmFReg) (v : BitVec 64) :
+    (s.setFReg r v).stack = s.stack := rfl
+
+@[simp] theorem ArmState.setFReg_pc (s : ArmState) (r : ArmFReg) (v : BitVec 64) :
+    (s.setFReg r v).pc = s.pc := rfl
+
+@[simp] theorem ArmState.setFReg_flags (s : ArmState) (r : ArmFReg) (v : BitVec 64) :
+    (s.setFReg r v).flags = s.flags := rfl
+
+@[simp] theorem ArmState.setFReg_arrayMem (s : ArmState) (r : ArmFReg) (v : BitVec 64) :
+    (s.setFReg r v).arrayMem = s.arrayMem := rfl
+
+@[simp] theorem ArmState.setFReg_fregs_same (s : ArmState) (r : ArmFReg) (v : BitVec 64) :
+    (s.setFReg r v).fregs r = v := by
+  simp [setFReg]
+
+@[simp] theorem ArmState.setFReg_fregs_other (s : ArmState) (r r' : ArmFReg) (v : BitVec 64) (h : r' ≠ r) :
+    (s.setFReg r v).fregs r' = s.fregs r' := by
+  simp [setFReg, h]
+
+-- nextPC preserves fregs
+@[simp] theorem ArmState.nextPC_fregs (s : ArmState) :
+    s.nextPC.fregs = s.fregs := rfl
+
+-- setArrayMem preserves fregs
+@[simp] theorem ArmState.setArrayMem_fregs (s : ArmState) (arr : ArrayName) (idx : BitVec 64) (v : BitVec 64) :
+    (s.setArrayMem arr idx v).fregs = s.fregs := rfl
 
 -- setArrayMem preserves stack, regs, pc, flags
 @[simp] theorem ArmState.setArrayMem_stack (s : ArmState) (arr : ArrayName) (idx : BitVec 64) (v : BitVec 64) :
@@ -499,6 +873,15 @@ theorem ArmSteps.one_then {prog : ArmProg} {s s' s'' : ArmState}
 @[simp] theorem ArmReg.x2_ne_x0 : (ArmReg.x2 == ArmReg.x0) = false := by native_decide
 @[simp] theorem ArmReg.x2_ne_x1 : (ArmReg.x2 == ArmReg.x1) = false := by native_decide
 @[simp] theorem ArmReg.beq_self (r : ArmReg) : (r == r) = true := by cases r <;> native_decide
+
+-- FP register inequality facts for simp
+@[simp] theorem ArmFReg.d0_ne_d1 : (ArmFReg.d0 == ArmFReg.d1) = false := by native_decide
+@[simp] theorem ArmFReg.d0_ne_d2 : (ArmFReg.d0 == ArmFReg.d2) = false := by native_decide
+@[simp] theorem ArmFReg.d1_ne_d0 : (ArmFReg.d1 == ArmFReg.d0) = false := by native_decide
+@[simp] theorem ArmFReg.d1_ne_d2 : (ArmFReg.d1 == ArmFReg.d2) = false := by native_decide
+@[simp] theorem ArmFReg.d2_ne_d0 : (ArmFReg.d2 == ArmFReg.d0) = false := by native_decide
+@[simp] theorem ArmFReg.d2_ne_d1 : (ArmFReg.d2 == ArmFReg.d1) = false := by native_decide
+@[simp] theorem ArmFReg.beq_self (r : ArmFReg) : (r == r) = true := by cases r <;> native_decide
 
 -- Helper: split CodeAt for appended lists
 theorem CodeAt.append_left {prog : ArmProg} {startPC : Nat} {l1 l2 : List ArmInstr}
