@@ -168,6 +168,9 @@ inductive ArmInstr where
   | farrLd   : ArmFReg → ArrayName → ArmReg → ArmInstr
   /-- Store to FP array: `arrayMem[arr][idxReg] ← valFReg`. -/
   | farrSt   : ArrayName → ArmReg → ArmFReg → ArmInstr
+  /-- `stp x29, x30, [sp, #-16]!; bl _exp; ldp x29, x30, [sp], #16`
+      Abstract: `d0 ← floatExpBv(d0)`, preserves everything else. -/
+  | callExp  : ArmInstr
   deriving Repr, DecidableEq
 
 /-- An ARM64 program is an array of instructions. -/

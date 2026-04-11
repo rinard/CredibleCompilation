@@ -171,6 +171,10 @@ inductive ArmStep (prog : ArmProg) : ArmState → ArmState → Prop where
     prog[s.pc]? = some (.farrSt arr idxReg valFReg) →
     ArmStep prog s (s.setArrayMem arr (s.regs idxReg) (s.fregs valFReg) |>.nextPC)
 
+  | callExp :
+    prog[s.pc]? = some .callExp →
+    ArmStep prog s (s.setFReg .d0 (floatExpBv (s.fregs .d0)) |>.nextPC)
+
 /-- Multi-step closure. -/
 inductive ArmSteps (prog : ArmProg) : ArmState → ArmState → Prop where
   | refl : ArmSteps prog s s
@@ -395,7 +399,11 @@ def formalGenInstr (vm : VarMap) (pcMap : Nat → Nat) (instr : TAC)
     | some offS, some offD =>
       [.fldr .d0 offS, .fcvtzs .x0 .d0, .str .x0 offD]
     | _, _ => []
-  | .floatExp _dst _src => []
+  | .floatExp dst src =>
+    match vm.lookup src, vm.lookup dst with
+    | some offS, some offD =>
+      [.fldr .d0 offS, .callExp, .fstr .d0 offD]
+    | _, _ => []
 
 -- ============================================================
 -- § 9. CodeAt and helper lemmas

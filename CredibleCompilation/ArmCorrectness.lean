@@ -501,7 +501,7 @@ theorem genInstr_correct (prog : ArmProg) (vm : VarMap) (pcMap : Nat → Nat)
     (hInjective : VarMapInjective vm)
     (hWT : WellTypedProg p.tyCtx p)
     (hTS : TypedStore p.tyCtx σ)
-    (hNoFloatExp : NoFloatExp p)
+
     (hPC_bound : pc < p.size)
     (cfg' : Cfg) (hStep : p ⊩ Cfg.run pc σ am ⟶ cfg')
     (hVarMap : ∀ v, ∃ off, vm.lookup v = some off)
@@ -1268,7 +1268,31 @@ theorem genInstr_correct (prog : ArmProg) (vm : VarMap) (pcMap : Nat → Nat)
   | floatToInt_typeError hinstr hne =>
     exact absurd (Step.floatToInt_typeError (am := am) hinstr hne) (Step.no_typeError_of_wellTyped hPC_bound hWT hTS)
   | floatExp hinstr hy =>
-    exact absurd hinstr (fun h => hNoFloatExp.elim h)
+    rename_i x y f
+    have heq : instr = .floatExp x y := Option.some.inj (hInstr.symm.trans hinstr)
+    obtain ⟨offS, hS⟩ := hVarMap y; obtain ⟨offD, hD⟩ := hVarMap x
+    have hformal : formalGenInstr vm pcMap (.floatExp x y) haltLabel divLabel =
+        [.fldr .d0 offS, .callExp, .fstr .d0 offD] := by
+      show (match vm.lookup y, vm.lookup x with | some _, some _ => _ | _, _ => _) = _
+      rw [hS, hD]
+    rw [heq, hformal] at hCodeInstr hPcNext
+    have h0 := hCodeInstr.head; have h1 := hCodeInstr.tail.head; have h2 := hCodeInstr.tail.tail.head
+    rw [← hPcRel] at h0 h1 h2
+    have hStackS := hStateRel y offS hS; rw [hy] at hStackS; simp [Value.encode] at hStackS
+    refine ⟨_, .step (.fldr .d0 offS h0) (.step (.callExp h1) (.single (.fstr .d0 offD h2))),
+      ?_, ?_, ?_⟩
+    · intro v off hv
+      simp only [ArmState.setStack, ArmState.setFReg, ArmState.nextPC]
+      by_cases hoff : off = offD
+      · subst hoff; simp
+        have := hInjective v x off hv hD; subst this
+        rw [Store.update_self]; simp [Value.encode, hStackS]
+      · simp [hoff]
+        have hne : v ≠ x := fun h => hoff (Option.some.inj ((h ▸ hv).symm.trans hD))
+        rw [Store.update_other _ _ _ _ hne]; exact hStateRel v off hv
+    · show s.pc + 1 + 1 + 1 = pcMap (pc + 1)
+      have := hPcNext _ _ _ rfl; simp at this; rw [this, hPcRel]
+    · simp [ArmState.setStack, ArmState.setFReg, ArmState.nextPC, hArrayMem]
   | floatExp_typeError hinstr hne =>
     exact absurd (Step.floatExp_typeError (am := am) hinstr hne) (Step.no_typeError_of_wellTyped hPC_bound hWT hTS)
 
@@ -1280,7 +1304,7 @@ theorem backward_simulation (p : Prog) (armProg : ArmProg)
     (hInjective : VarMapInjective vm)
     (hVarMap : ∀ v, ∃ off, vm.lookup v = some off)
     (hScratch : ScratchSafe vm)
-    (hNoFloatExp : NoFloatExp p)
+
     {pc : Nat} {σ : Store} {am : ArrayMem} {cfg' : Cfg} {s : ArmState}
     (hStep : p ⊩ Cfg.run pc σ am ⟶ cfg')
     (hRel : SimRel vm pcMap (.run pc σ am) s)
@@ -1293,4 +1317,4 @@ theorem backward_simulation (p : Prog) (armProg : ArmProg)
       pcMap pc' = pcMap pc + (formalGenInstr vm pcMap instr haltLabel divLabel).length) :
     ∃ s', ArmSteps armProg s s' ∧ SimRel vm pcMap cfg' s' := by
   exact genInstr_correct armProg vm pcMap p pc σ am s haltLabel divLabel
-    instr hInstr hRel hScratch hInjective hWT hTS hNoFloatExp hPC cfg' hStep hVarMap hCode hPcNext
+    instr hInstr hRel hScratch hInjective hWT hTS hPC cfg' hStep hVarMap hCode hPcNext
