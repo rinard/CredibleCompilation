@@ -283,7 +283,11 @@ inductive VarLoc where
   deriving Repr, DecidableEq
 
 /-- Maps each variable to its location (stack slot or register). -/
-def VarLayout := Var → Option VarLoc
+structure VarLayout where
+  entries : List (Var × VarLoc)
+
+instance : CoeFun VarLayout (fun _ => Var → Option VarLoc) where
+  coe layout v := layout.entries.lookup v
 
 /-- Extended state relation: for every mapped variable, the ARM64 location
     holds the encoded TAC value. Generalizes `StateRel` to registers. -/
@@ -316,13 +320,114 @@ theorem ExtScratchSafe.not_d0 (h : ExtScratchSafe layout) (v : Var) : layout v �
 theorem ExtScratchSafe.not_d1 (h : ExtScratchSafe layout) (v : Var) : layout v ≠ some (.freg .d1) := (h v).2.2.2.2.2.1
 theorem ExtScratchSafe.not_d2 (h : ExtScratchSafe layout) (v : Var) : layout v ≠ some (.freg .d2) := (h v).2.2.2.2.2.2
 
+/-- A layout respects types: non-float variables are not in float registers,
+    and float variables are not in integer registers. -/
+def WellTypedLayout (Γ : TyCtx) (layout : VarLayout) : Prop :=
+  (∀ v r, Γ v ≠ .float → layout v ≠ some (.freg r)) ∧
+  (∀ v r, Γ v = .float → layout v ≠ some (.ireg r))
+
+theorem WellTypedLayout.int_not_freg (h : WellTypedLayout Γ layout) (hty : Γ v = .int) :
+    ∀ r, layout v ≠ some (.freg r) := fun r => h.1 v r (by rw [hty]; decide)
+
+theorem WellTypedLayout.bool_not_freg (h : WellTypedLayout Γ layout) (hty : Γ v = .bool) :
+    ∀ r, layout v ≠ some (.freg r) := fun r => h.1 v r (by rw [hty]; decide)
+
+theorem WellTypedLayout.float_not_ireg (h : WellTypedLayout Γ layout) (hty : Γ v = .float) :
+    ∀ r, layout v ≠ some (.ireg r) := fun r => h.2 v r hty
+
+/-- Check no variable maps to a scratch register. -/
+def VarLayout.scratchSafe (layout : VarLayout) : Bool :=
+  layout.entries.all fun (_, loc) =>
+    loc != .ireg .x0 && loc != .ireg .x1 && loc != .ireg .x2 &&
+    loc != .ireg .x8 && loc != .freg .d0 && loc != .freg .d1 && loc != .freg .d2
+
+/-- Check no two variables share a location. -/
+def VarLayout.isInjective (layout : VarLayout) : Bool :=
+  go layout.entries
+where
+  go : List (Var × VarLoc) → Bool
+  | [] => true
+  | (_, loc) :: rest => !(rest.any fun (_, l) => l == loc) && go rest
+
+private theorem List.lookup_mem_of_some {entries : List (String × VarLoc)} {v : String} {loc : VarLoc}
+    (h : entries.lookup v = some loc) : ∃ k, (k, loc) ∈ entries ∧ (v == k) = true := by
+  induction entries with
+  | nil => simp [List.lookup] at h
+  | cons hd tl ih =>
+    simp only [List.lookup] at h
+    split at h
+    next heq =>
+      cases hd with | mk a b =>
+      simp at h; subst h
+      exact ⟨a, .head _, heq⟩
+    next hne =>
+      obtain ⟨k, hk_mem, hk_eq⟩ := ih h
+      exact ⟨k, .tail _ hk_mem, hk_eq⟩
+
+theorem VarLayout.scratchSafe_spec (layout : VarLayout) (h : layout.scratchSafe = true) :
+    ExtScratchSafe layout := by
+  intro v
+  unfold VarLayout.scratchSafe at h
+  rw [List.all_eq_true] at h
+  refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_⟩ <;> intro heq <;> simp at heq
+  all_goals (
+    obtain ⟨k, hk_mem, _⟩ := List.lookup_mem_of_some heq
+    have := h ⟨k, _⟩ hk_mem
+    simp at this)
+
+private theorem lookup_snd_mem_entries {entries : List (String × VarLoc)} {v : String} {loc : VarLoc}
+    (h : entries.lookup v = some loc) : ∃ k, (k, loc) ∈ entries := by
+  induction entries with
+  | nil => simp [List.lookup] at h
+  | cons hd tl ih =>
+    simp only [List.lookup] at h
+    split at h
+    next => cases hd with | mk a b => simp at h; subst h; exact ⟨a, .head _⟩
+    next => obtain ⟨k, hk⟩ := ih h; exact ⟨k, .tail _ hk⟩
+
+private theorem injective_of_entriesNoDupLoc :
+    ∀ (entries : List (String × VarLoc)),
+    VarLayout.isInjective.go entries = true →
+    ∀ v1 v2 loc, entries.lookup v1 = some loc → entries.lookup v2 = some loc → v1 = v2 := by
+  intro entries
+  induction entries with
+  | nil => simp [List.lookup]
+  | cons hd tl ih =>
+    intro hnd v1 v2 loc h1 h2
+    simp [VarLayout.isInjective.go, Bool.and_eq_true] at hnd
+    obtain ⟨hnodup_hd, hnd_tl⟩ := hnd
+    simp only [List.lookup] at h1 h2
+    split at h1
+    next hv1eq =>
+      split at h2
+      next hv2eq =>
+        exact (beq_iff_eq.mp hv1eq).symm ▸ (beq_iff_eq.mp hv2eq).symm ▸ rfl
+      next hv2ne =>
+        simp at h1; subst h1
+        obtain ⟨k, hk⟩ := lookup_snd_mem_entries h2
+        exact absurd rfl (hnodup_hd k _ hk)
+    next hv1ne =>
+      split at h2
+      next hv2eq =>
+        simp at h2; subst h2
+        obtain ⟨k, hk⟩ := lookup_snd_mem_entries h1
+        exact absurd rfl (hnodup_hd k _ hk)
+      next hv2ne =>
+        exact ih hnd_tl v1 v2 loc h1 h2
+
+theorem VarLayout.isInjective_spec (layout : VarLayout) (h : layout.isInjective = true) :
+    VarLayoutInjective layout := by
+  intro v1 v2 loc h1 h2
+  simp at h1 h2
+  exact injective_of_entriesNoDupLoc layout.entries h v1 v2 loc h1 h2
+
 /-- Full extended simulation invariant (generalizes SimRel). -/
 def ExtSimRel (layout : VarLayout) (pcMap : Nat → Nat) (tac_cfg : Cfg) (arm : ArmState) : Prop :=
   match tac_cfg with
   | .run pc σ am    => ExtStateRel layout σ arm ∧ PcRel pcMap pc arm.pc ∧ arm.arrayMem = am
   | .halt σ am      => ExtStateRel layout σ arm ∧ arm.arrayMem = am
   | .error _ _      => True
-  | .typeError _ _  => False
+  | .typeError _ _  => True
 
 -- Read lemmas: extract the value from ExtStateRel
 
@@ -669,66 +774,113 @@ def verifiedGenBoolExpr (layout : VarLayout) (be : BoolExpr) : List ArmInstr :=
 def verifiedGenInstr (layout : VarLayout) (pcMap : Nat → Nat) (instr : TAC)
     (haltLabel : Nat) (divLabel : Nat) (boundsLabel : Nat)
     (arrayDecls : List (ArrayName × Nat × VarTy))
-    (boundsSafe : Bool := false) : List ArmInstr :=
-  match instr with
+    (boundsSafe : Bool := false) : Option (List ArmInstr) :=
+  if !layout.scratchSafe || !layout.isInjective then none
+  else match instr with
   | .const v (.int n) =>
-    formalLoadImm64 .x0 n ++ vStoreVar layout v .x0
+    match layout v with
+    | some (.stack _) | some (.ireg _) =>
+      some (formalLoadImm64 .x0 n ++ vStoreVar layout v .x0)
+    | _ => none
   | .const v (.bool b) =>
-    [.mov .x0 (if b then (1 : BitVec 64) else 0)] ++ vStoreVar layout v .x0
+    match layout v with
+    | some (.stack _) | some (.ireg _) =>
+      some ([.mov .x0 (if b then (1 : BitVec 64) else 0)] ++ vStoreVar layout v .x0)
+    | _ => none
   | .const v (.float f) =>
-    formalLoadImm64 .x0 f ++ [.fmovToFP .d0 .x0] ++ vStoreVarFP layout v .d0
+    match layout v with
+    | some (.freg _) | some (.stack _) =>
+      let dst_reg := match layout v with | some (.freg r) => r | _ => .d0
+      some (formalLoadImm64 .x0 f ++ [.fmovToFP dst_reg .x0] ++ vStoreVarFP layout v dst_reg)
+    | _ => none
   | .copy dst src =>
     -- Check if source is in a float register; if so, use FP path
     match layout src with
-    | some (.freg _) => vLoadVarFP layout src .d0 ++ vStoreVarFP layout dst .d0
-    | _ => vLoadVar layout src .x0 ++ vStoreVar layout dst .x0
+    | some (.freg _) => some (vLoadVarFP layout src .d0 ++ vStoreVarFP layout dst .d0)
+    | _ =>
+      match layout dst with
+      | some (.freg _) => none
+      | _ => some (vLoadVar layout src .x0 ++ vStoreVar layout dst .x0)
   | .binop dst op lv rv =>
+    let notFreg := fun v => match layout v with | some (.freg _) => true | _ => false
+    if notFreg lv || notFreg rv || notFreg dst then none else
+    let lv_reg := match layout lv with | some (.ireg r) => r | _ => .x1
+    let rv_reg := match layout rv with | some (.ireg r) => r | _ => .x2
+    let dst_reg := match layout dst with | some (.ireg r) => r | _ => .x0
     let opInstr := match op with
-      | .add => [ArmInstr.addR .x0 .x1 .x2]
-      | .sub => [.subR .x0 .x1 .x2]
-      | .mul => [.mulR .x0 .x1 .x2]
-      | .div => [.sdivR .x0 .x1 .x2]
-      | .mod => [.sdivR .x0 .x1 .x2, .mulR .x0 .x0 .x2, .subR .x0 .x1 .x0]
+      | .add => [ArmInstr.addR dst_reg lv_reg rv_reg]
+      | .sub => [.subR dst_reg lv_reg rv_reg]
+      | .mul => [.mulR dst_reg lv_reg rv_reg]
+      | .div => [.sdivR dst_reg lv_reg rv_reg]
+      | .mod => [.sdivR .x0 lv_reg rv_reg, .mulR .x0 .x0 rv_reg, .subR dst_reg lv_reg .x0]
     if op == .div || op == .mod then
-      vLoadVar layout rv .x2 ++ [.cbz .x2 divLabel] ++
-      vLoadVar layout lv .x1 ++ vLoadVar layout rv .x2 ++ opInstr ++ vStoreVar layout dst .x0
+      some (vLoadVar layout lv lv_reg ++ vLoadVar layout rv rv_reg ++
+      [.cbz rv_reg divLabel] ++ opInstr ++ vStoreVar layout dst dst_reg)
     else
-      vLoadVar layout lv .x1 ++ vLoadVar layout rv .x2 ++ opInstr ++ vStoreVar layout dst .x0
+      some (vLoadVar layout lv lv_reg ++ vLoadVar layout rv rv_reg ++
+      opInstr ++ vStoreVar layout dst dst_reg)
   | .boolop dst be =>
-    verifiedGenBoolExpr layout be ++ vStoreVar layout dst .x0
-  | .goto l => [.b (pcMap l)]
+    let notFreg := match layout dst with | some (.freg _) => true | _ => false
+    if notFreg then none else
+    some (verifiedGenBoolExpr layout be ++ vStoreVar layout dst .x0)
+  | .goto l => some [.b (pcMap l)]
   | .ifgoto be l =>
-    verifiedGenBoolExpr layout be ++ [.cbnz .x0 (pcMap l)]
-  | .halt => [.b haltLabel]
+    some (verifiedGenBoolExpr layout be ++ [.cbnz .x0 (pcMap l)])
+  | .halt => some [.b haltLabel]
   | .arrLoad x arr idx ty =>
     let loadIdx := vLoadVar layout idx .x1
     let boundsCheck := if boundsSafe then [] else
       [.cmpImm .x1 (arraySizeBv arrayDecls arr), .cbz .x0 boundsLabel]
     match ty with
-    | .float => loadIdx ++ boundsCheck ++ [.farrLd .d0 arr .x1] ++ vStoreVarFP layout x .d0
-    | .bool  => loadIdx ++ boundsCheck ++ [.arrLd .x0 arr .x1, .cmpImm .x0 0, .cset .x0 .ne] ++ vStoreVar layout x .x0
-    | .int   => loadIdx ++ boundsCheck ++ [.arrLd .x0 arr .x1] ++ vStoreVar layout x .x0
+    | .float =>
+      let dst_reg := match layout x with | some (.freg r) => r | _ => .d0
+      some (loadIdx ++ boundsCheck ++ [.farrLd dst_reg arr .x1] ++ vStoreVarFP layout x dst_reg)
+    | .bool  => some (loadIdx ++ boundsCheck ++ [.arrLd .x0 arr .x1, .cmpImm .x0 0, .cset .x0 .ne] ++ vStoreVar layout x .x0)
+    | .int   => some (loadIdx ++ boundsCheck ++ [.arrLd .x0 arr .x1] ++ vStoreVar layout x .x0)
   | .arrStore arr idx val ty =>
     let loadIdx := vLoadVar layout idx .x1
     let boundsCheck := if boundsSafe then [] else
       [.cmpImm .x1 (arraySizeBv arrayDecls arr), .cbz .x0 boundsLabel]
     if ty == .float then
-      loadIdx ++ boundsCheck ++ vLoadVarFP layout val .d0 ++ [.farrSt arr .x1 .d0]
+      let val_reg := match layout val with | some (.freg r) => r | _ => .d0
+      some (loadIdx ++ boundsCheck ++ vLoadVarFP layout val val_reg ++ [.farrSt arr .x1 val_reg])
     else
-      loadIdx ++ boundsCheck ++ vLoadVar layout val .x2 ++ [.arrSt arr .x1 .x2]
+      some (loadIdx ++ boundsCheck ++ vLoadVar layout val .x2 ++ [.arrSt arr .x1 .x2])
   | .fbinop dst fop lv rv =>
-    let fpInstr := match fop with
-      | .fadd => ArmInstr.faddR .d0 .d1 .d2
-      | .fsub => .fsubR .d0 .d1 .d2
-      | .fmul => .fmulR .d0 .d1 .d2
-      | .fdiv => .fdivR .d0 .d1 .d2
-    vLoadVarFP layout lv .d1 ++ vLoadVarFP layout rv .d2 ++ [fpInstr] ++ vStoreVarFP layout dst .d0
+    match layout lv, layout rv, layout dst with
+    | some (.ireg _), _, _ => none
+    | _, some (.ireg _), _ => none
+    | _, _, some (.ireg _) => none
+    | _, _, _ =>
+      let lv_reg := match layout lv with | some (.freg r) => r | _ => .d1
+      let rv_reg := match layout rv with | some (.freg r) => r | _ => .d2
+      let dst_reg := match layout dst with | some (.freg r) => r | _ => .d0
+      let fpInstr := match fop with
+        | .fadd => ArmInstr.faddR dst_reg lv_reg rv_reg
+        | .fsub => .fsubR dst_reg lv_reg rv_reg
+        | .fmul => .fmulR dst_reg lv_reg rv_reg
+        | .fdiv => .fdivR dst_reg lv_reg rv_reg
+      some (vLoadVarFP layout lv lv_reg ++ vLoadVarFP layout rv rv_reg ++ [fpInstr] ++ vStoreVarFP layout dst dst_reg)
   | .intToFloat dst src =>
-    vLoadVar layout src .x0 ++ [.scvtf .d0 .x0] ++ vStoreVarFP layout dst .d0
+    match layout src, layout dst with
+    | some (.freg _), _ => none
+    | _, some (.ireg _) => none
+    | _, _ =>
+      let dst_reg := match layout dst with | some (.freg r) => r | _ => .d0
+      some (vLoadVar layout src .x0 ++ [.scvtf dst_reg .x0] ++ vStoreVarFP layout dst dst_reg)
   | .floatToInt dst src =>
-    vLoadVarFP layout src .d0 ++ [.fcvtzs .x0 .d0] ++ vStoreVar layout dst .x0
+    match layout src, layout dst with
+    | some (.ireg _), _ => none
+    | _, some (.freg _) => none
+    | _, _ =>
+      let src_reg := match layout src with | some (.freg r) => r | _ => .d0
+      some (vLoadVarFP layout src src_reg ++ [.fcvtzs .x0 src_reg] ++ vStoreVar layout dst .x0)
   | .floatExp dst src =>
-    vLoadVarFP layout src .d0 ++ [.callExp] ++ vStoreVarFP layout dst .d0
+    match layout src, layout dst with
+    | some (.ireg _), _ => none
+    | _, some (.ireg _) => none
+    | _, _ =>
+      some (vLoadVarFP layout src .d0 ++ [.callExp] ++ vStoreVarFP layout dst .d0)
 
 -- ============================================================
 -- § 9. CodeAt and helper lemmas

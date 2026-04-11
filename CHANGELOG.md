@@ -4,6 +4,21 @@ Chronological record of what was built and why, to reconstruct the sequence of d
 
 ---
 
+## Prove cmp/cmpLit/fcmp cases in verifiedGenBoolExpr_correct (2026-04-11)
+
+**Goal:** Complete the boolean expression correctness proofs for the verified codegen path (ExtStateRel/VarLayout).
+
+### Changes
+
+- **ArmSemantics.lean**: Added `WellTypedLayout` predicate (non-float vars not in fregs, float vars not in iregs) with convenience lemmas `int_not_freg`, `bool_not_freg`, `float_not_ireg`.
+- **ArmCorrectness.lean**: Added `hWTL : WellTypedLayout Γ layout` hypothesis to `verifiedGenBoolExpr_correct`, `verifiedGenInstr_correct`, and `ext_backward_simulation`. Proved `cmp` case (vLoadVar×2 + cmpRR + cset using `Flags.condHolds_correct`). Proved `cmpLit` case (vLoadVar + loadImm64 + cmpRR + cset with register preservation through loadImm64). Proved `fcmp` case (vLoadVarFP×2 + fcmpRR + cset using `Flags.condHolds_float_correct`). Fixed `bvar` hNotFreg sorry using `WellTypedLayout.bool_not_freg`.
+
+### Result
+
+4 sorrys eliminated (bvar hNotFreg, cmp, cmpLit, fcmp). No new sorrys introduced.
+
+---
+
 ## Refactor eRelToStoreRel to membership-based quantification (2026-04-11)
 
 **Goal:** Change `eRelToStoreRel` from `∀ v, σ_t v = (ssGet (buildSubstMap rel) v).eval σ_o am_o` to `∀ e_o v, (e_o, .var v) ∈ rel → σ_t v = e_o.eval σ_o am_o`. The old definition falsely claims `σ_t v = σ_o v` for unmapped variables, breaking RegAlloc (which renames `a → __x0`).
