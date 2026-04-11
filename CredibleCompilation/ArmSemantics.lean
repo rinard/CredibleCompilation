@@ -179,9 +179,9 @@ inductive ArmStep (prog : ArmProg) : ArmState → ArmState → Prop where
     prog[s.pc]? = some (.farrSt arr idxReg valFReg) →
     ArmStep prog s (s.setArrayMem arr (s.regs idxReg) (s.fregs valFReg) |>.nextPC)
 
-  | callExp :
-    prog[s.pc]? = some .callExp →
-    ArmStep prog s (s.setFReg .d0 (floatExpBv (s.fregs .d0)) |>.nextPC)
+  | callExp (fd fn : ArmFReg) :
+    prog[s.pc]? = some (.callExp fd fn) →
+    ArmStep prog s (s.setFReg fd (floatExpBv (s.fregs fn)) |>.nextPC)
 
 /-- Multi-step closure. -/
 inductive ArmSteps (prog : ArmProg) : ArmState → ArmState → Prop where
@@ -704,7 +704,7 @@ def formalGenInstr (vm : VarMap) (pcMap : Nat → Nat) (instr : TAC)
   | .floatExp dst src =>
     match vm.lookup src, vm.lookup dst with
     | some offS, some offD =>
-      [.fldr .d0 offS, .callExp, .fstr .d0 offD]
+      [.fldr .d0 offS, .callExp .d0 .d0, .fstr .d0 offD]
     | _, _ => []
 
 -- ============================================================
@@ -888,7 +888,9 @@ def verifiedGenInstr (layout : VarLayout) (pcMap : Nat → Nat) (instr : TAC)
     | some (.ireg _), _ => none
     | _, some (.ireg _) => none
     | _, _ =>
-      some (vLoadVarFP layout src .d0 ++ [.callExp] ++ vStoreVarFP layout dst .d0)
+      let src_reg := match layout src with | some (.freg r) => r | _ => .d0
+      let dst_reg := match layout dst with | some (.freg r) => r | _ => .d0
+      some (vLoadVarFP layout src src_reg ++ [.callExp dst_reg src_reg] ++ vStoreVarFP layout dst dst_reg)
 
 -- ============================================================
 -- § 9. CodeAt and helper lemmas

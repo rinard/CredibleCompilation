@@ -179,7 +179,7 @@ inductive ArmInstr where
   | farrSt   : ArrayName → ArmReg → ArmFReg → ArmInstr
   /-- `stp x29, x30, [sp, #-16]!; bl _exp; ldp x29, x30, [sp], #16`
       Abstract: `d0 ← floatExpBv(d0)`, preserves everything else. -/
-  | callExp  : ArmInstr
+  | callExp  : ArmFReg → ArmFReg → ArmInstr
   deriving Repr, DecidableEq
 
 /-- An ARM64 program is an array of instructions. -/
