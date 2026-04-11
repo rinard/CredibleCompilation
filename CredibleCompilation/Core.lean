@@ -379,6 +379,25 @@ def Expr.hasArrRead : Expr → Bool
   | .floatExp e    => e.hasArrRead
   | .farrRead _ _  => true
 
+/-- Collect all variable names appearing in an expression (with possible duplicates). -/
+def Expr.freeVars : Expr → List Var
+  | .lit _ | .blit _ | .flit _ => []
+  | .var v          => [v]
+  | .bin _ a b      => a.freeVars ++ b.freeVars
+  | .tobool e       => e.freeVars
+  | .cmpE _ a b     => a.freeVars ++ b.freeVars
+  | .cmpLitE _ a _  => a.freeVars
+  | .notE e         => e.freeVars
+  | .andE a b       => a.freeVars ++ b.freeVars
+  | .orE a b        => a.freeVars ++ b.freeVars
+  | .arrRead _ idx  => idx.freeVars
+  | .fbin _ a b     => a.freeVars ++ b.freeVars
+  | .fcmpE _ a b    => a.freeVars ++ b.freeVars
+  | .intToFloat e   => e.freeVars
+  | .floatToInt e   => e.freeVars
+  | .floatExp e     => e.freeVars
+  | .farrRead _ idx => idx.freeVars
+
 /-- For arrRead-free expressions, evaluation is independent of the array memory. -/
 theorem Expr.eval_noArrRead (e : Expr) (σ : Store) (am₁ am₂ : ArrayMem)
     (h : e.hasArrRead = false) : e.eval σ am₁ = e.eval σ am₂ := by

@@ -284,9 +284,6 @@ private def genInstr (varMap : List (Var × Nat))
       | some m => (BoundsOpt.imLookup m idx).inBounds arrSize
       | none => false
     let isFloatDest := (lookupReg x).any isFloatReg
-    let storeResult := if isFloatDest then
-        ["  fmov d0, x0", smartStoreVarFP varMap x "d0"]
-      else [smartStoreVar varMap x "x0"]
     let boundsCheck := if safe then [] else
       [smartLoadVar varMap idx "x1",
        s!"  cmp x1, #{arrSize}", "  b.hs .Lbounds_err"]
@@ -300,10 +297,19 @@ private def genInstr (varMap : List (Var × Nat))
       | some _ => []
       | none => [smartLoadVar varMap idx "x1"]
     else []
+    -- For float destinations, load directly into float register (skip integer bounce)
+    let (loadInstr, storeResult) := if isFloatDest then
+      match lookupReg x with
+      | some rd =>
+        (s!"  ldr {rd}, [x8, {idxReg}, lsl #3]", ([] : List String))
+      | none =>
+        (s!"  ldr d0, [x8, {idxReg}, lsl #3]", [smartStoreVarFP varMap x "d0"])
+    else
+      (s!"  ldr x0, [x8, {idxReg}, lsl #3]", [smartStoreVar varMap x "x0"])
     boundsCheck ++ loadIdx ++
     s!"  adrp x8, _arr_{_arr}@PAGE" ::
     s!"  add x8, x8, _arr_{_arr}@PAGEOFF" ::
-    s!"  ldr x0, [x8, {idxReg}, lsl #3]" ::
+    loadInstr ::
     storeResult
   | .arrStore _arr idx val _ =>
     let arrSize := arraySize arrayDecls _arr
@@ -311,9 +317,6 @@ private def genInstr (varMap : List (Var × Nat))
       | some m => (BoundsOpt.imLookup m idx).inBounds arrSize
       | none => false
     let isFloatVal := (lookupReg val).any isFloatReg
-    let loadVal := if isFloatVal then
-        [smartLoadVarFP varMap val "d0", "  fmov x2, d0"]
-      else [smartLoadVar varMap val "x2"]
     let boundsCheck := if safe then [] else
       [smartLoadVar varMap idx "x1",
        s!"  cmp x1, #{arrSize}", "  b.hs .Lbounds_err"]
@@ -327,10 +330,19 @@ private def genInstr (varMap : List (Var × Nat))
       | some _ => []
       | none => [smartLoadVar varMap idx "x1"]
     else []
+    -- For float values, store directly from float register (skip integer bounce)
+    let (loadVal, storeInstr) := if isFloatVal then
+      match lookupReg val with
+      | some rv =>
+        (([] : List String), s!"  str {rv}, [x8, {idxReg}, lsl #3]")
+      | none =>
+        ([smartLoadVarFP varMap val "d0"], s!"  str d0, [x8, {idxReg}, lsl #3]")
+    else
+      ([smartLoadVar varMap val "x2"], s!"  str x2, [x8, {idxReg}, lsl #3]")
     boundsCheck ++ loadIdx ++ loadVal ++
     s!"  adrp x8, _arr_{_arr}@PAGE" ::
     s!"  add x8, x8, _arr_{_arr}@PAGEOFF" ::
-    s!"  str x2, [x8, {idxReg}, lsl #3]" :: List.nil
+    storeInstr :: List.nil
   | .fbinop dst op lv rv =>
     let opName := match op with
       | .fadd => "fadd" | .fsub => "fsub" | .fmul => "fmul" | .fdiv => "fdiv"

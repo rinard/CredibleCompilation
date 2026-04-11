@@ -72,26 +72,29 @@ def transformProg (prog : Prog) (origMap : Array Nat) (revMap : Array Nat) : Pro
 
 /-- Build per-instruction certificates.
     Each trans instruction corresponds to exactly one orig instruction step. -/
-def buildInstrCerts (origMap : Array Nat) (trans : Prog) : Array EInstrCert :=
+def buildInstrCerts (origMap : Array Nat) (trans : Prog) (allVars : List Var) : Array EInstrCert :=
+  let idRel : EExprRel := allVars.map fun v => (.var v, .var v)
   let arr := (List.range trans.size).map fun i =>
     let origPC := origMap.getD i 0
     match trans[i]? with
     | some .halt =>
-      { pc_orig := origPC, transitions := ([] : List ETransCorr) }
+      { pc_orig := origPC, rel := idRel, transitions := ([] : List ETransCorr) }
     | some (.const _ _) | some (.copy _ _) | some (.binop _ _ _ _) | some (.boolop _ _)
     | some (.arrLoad _ _ _ _) | some (.arrStore _ _ _ _)
     | some (.fbinop _ _ _ _) | some (.intToFloat _ _) | some (.floatToInt _ _) | some (.floatExp _ _) =>
       let nextOrigPC := origMap.getD (i + 1) 0
-      { pc_orig := origPC, transitions := [{ origLabels := (nextOrigPC :: []) }] }
+      { pc_orig := origPC, rel := idRel,
+        transitions := [{ origLabels := (nextOrigPC :: []), rel := idRel, rel_next := idRel }] }
     | some (.goto l) =>
       let targetOrigPC := origMap.getD l 0
-      { pc_orig := origPC, transitions := [{ origLabels := (targetOrigPC :: []) }] }
+      { pc_orig := origPC, rel := idRel,
+        transitions := [{ origLabels := (targetOrigPC :: []), rel := idRel, rel_next := idRel }] }
     | some (.ifgoto _ l) =>
       let takenOrigPC := origMap.getD l 0
       let fallOrigPC := origMap.getD (i + 1) 0
-      { pc_orig := origPC,
-        transitions := [{ origLabels := (takenOrigPC :: []) },
-                        { origLabels := (fallOrigPC :: []) }] }
+      { pc_orig := origPC, rel := idRel,
+        transitions := [{ origLabels := (takenOrigPC :: []), rel := idRel, rel_next := idRel },
+                        { origLabels := (fallOrigPC :: []), rel := idRel, rel_next := idRel }] }
     | none => default
   arr.toArray
 
@@ -107,7 +110,7 @@ def optimize (prog : Prog) : ECertificate :=
   let origMap := _root_.buildOrigMap reached
   let revMap := _root_.buildRevMap origMap prog.size
   let trans := transformProg prog origMap revMap
-  let instrCerts := buildInstrCerts origMap trans
+  let instrCerts := buildInstrCerts origMap trans (_root_.collectAllVars prog trans)
   let haltCerts := _root_.buildHaltCerts instrCerts trans
   { orig := prog
     trans := trans

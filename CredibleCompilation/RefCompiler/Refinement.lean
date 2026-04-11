@@ -172,13 +172,14 @@ theorem progCompile_halt (prog : Program) (fuel : Nat) (σ' : Store) (am' : Arra
   let labels := collectLabels prog.body prog.decls.length
   have htmpfree := Program.typeCheck_tmpFree prog htc
   have hftmpfree : prog.body.ftmpFree := Program.typeCheck_ftmpFree prog htc
+  have hNoGoto := Program.typeCheck_noGoto prog htc
   have hts := Program.typeCheck_initStore_typedStore prog htc
   have htypedv := Program.typeCheck_typedVars prog htc prog.initStore ArrayMem.init hts fuel
   have hcode := progCompile_body_codeAt prog
   have hinit := Program.compile_initExec prog (Program.typeCheck_noDups prog htc)
   obtain ⟨σ_tac, hexec, hagree⟩ :=
     refCompileStmt_correct prog.body fuel prog.initStore σ' ArrayMem.init am' prog.decls.length 0
-      prog.compile prog.initStore hinterp htmpfree hftmpfree hsafe htypedv (fun _ _ _ => rfl)
+      prog.compile prog.initStore hinterp htmpfree hftmpfree hNoGoto hsafe htypedv (fun _ _ _ => rfl)
       (labels := labels) hcode
   have hhalt_instr : prog.compile[prog.decls.length +
       (refCompileStmt prog.body prog.decls.length 0 labels).1.length]? = some .halt := by
@@ -205,7 +206,7 @@ theorem progCompile_no_halt_unsafe (prog : Program) (fuel : Nat)
   have hinit := Program.compile_initExec prog (Program.typeCheck_noDups prog htc)
   obtain ⟨pc_s, σ_s, am_s, hfrag, herror, _⟩ :=
     refCompileStmt_unsafe prog.body fuel prog.initStore ArrayMem.init prog.decls.length 0
-      prog.compile prog.initStore htmpfree hftmpfree hunsafe htypedv (fun _ _ _ => rfl)
+      prog.compile prog.initStore htmpfree hftmpfree (Program.typeCheck_noGoto prog htc) hunsafe htypedv (fun _ _ _ => rfl)
       (labels := labels) hcode
   exact error_run_no_halt (FragExec.trans' hinit hfrag) herror hhalt
 /-- **Forward error reachability** for `prog.compile`: if `¬safe`, the
@@ -223,7 +224,7 @@ theorem progCompile_reaches_error (prog : Program) (fuel : Nat)
   have hinit := Program.compile_initExec prog (Program.typeCheck_noDups prog htc)
   obtain ⟨pc_s, σ_s, am_s, hfrag, herror, _⟩ :=
     refCompileStmt_unsafe prog.body fuel prog.initStore ArrayMem.init prog.decls.length 0
-      prog.compile prog.initStore htmpfree hftmpfree hunsafe htypedv (fun _ _ _ => rfl)
+      prog.compile prog.initStore htmpfree hftmpfree (Program.typeCheck_noGoto prog htc) hunsafe htypedv (fun _ _ _ => rfl)
       (labels := labels) hcode
   exact ⟨σ_s, am_s, Steps.trans (FragExec.trans' hinit hfrag)
     (Steps.step herror Steps.refl)⟩
@@ -245,7 +246,7 @@ theorem progCompile_no_halt_diverge (prog : Program)
   have hinit := Program.compile_initExec prog (Program.typeCheck_noDups prog htc)
   have hunbounded := refCompileStmt_diverges prog.body prog.initStore ArrayMem.init
     prog.decls.length 0 prog.compile prog.initStore
-    htmpfree hftmpfree hdiv hsafe htypedv (fun _ _ _ => rfl) (labels := labels) hcode
+    htmpfree hftmpfree (Program.typeCheck_noGoto prog htc) hdiv hsafe htypedv (fun _ _ _ => rfl) (labels := labels) hcode
   have hunbounded' : ∀ N, ∃ n, n ≥ N ∧ ∃ pc' σ' am',
       RefStepsN prog.compile n (Cfg.run 0 prog.initStore ArrayMem.init)
         (Cfg.run pc' σ' am') := by
@@ -354,7 +355,7 @@ theorem program_refinement (prog : Program) (htc : prog.typeCheck = true)
       have hinit := Program.compile_initExec prog (Program.typeCheck_noDups prog htc)
       have hunbounded := refCompileStmt_diverges prog.body prog.initStore ArrayMem.init
         prog.decls.length 0 prog.compile prog.initStore
-        htmpfree hftmpfree hdiv hall htypedv (fun _ _ _ => rfl) (labels := labels) hcode
+        htmpfree hftmpfree (Program.typeCheck_noGoto prog htc) hdiv hall htypedv (fun _ _ _ => rfl) (labels := labels) hcode
       have hunbounded' : ∀ N, ∃ n, n ≥ N ∧ ∃ pc' σ' am',
           RefStepsN prog.compile n (Cfg.run 0 prog.initStore ArrayMem.init)
             (Cfg.run pc' σ' am') := by
@@ -395,7 +396,7 @@ theorem program_refinement (prog : Program) (htc : prog.typeCheck = true)
         have hinit := Program.compile_initExec prog (Program.typeCheck_noDups prog htc)
         have hunbounded := refCompileStmt_diverges prog.body prog.initStore ArrayMem.init
           prog.decls.length 0 prog.compile prog.initStore
-          htmpfree hftmpfree hdiv hsafe_all htypedv (fun _ _ _ => rfl) (labels := labels) hcode
+          htmpfree hftmpfree (Program.typeCheck_noGoto prog htc) hdiv hsafe_all htypedv (fun _ _ _ => rfl) (labels := labels) hcode
         have hunbounded' : ∀ N, ∃ n, n ≥ N ∧ ∃ pc' σ' am',
             RefStepsN prog.compile n (Cfg.run 0 prog.initStore ArrayMem.init)
               (Cfg.run pc' σ' am') := by

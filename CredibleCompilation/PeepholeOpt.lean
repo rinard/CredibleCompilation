@@ -96,37 +96,35 @@ def buildPath (start end_ : Nat) : List Nat :=
     The `origLabels` for each transition include intermediate PCs
     of removed no-ops that the original execution passes through. -/
 def buildInstrCerts (prog : Prog) (origMap : Array Nat)
-    (skipArr : Array Nat) (trans : Prog) : Array EInstrCert :=
+    (skipArr : Array Nat) (trans : Prog) (allVars : List Var) : Array EInstrCert :=
+  let idRel : EExprRel := allVars.map fun v => (.var v, .var v)
   ((List.range trans.size).map fun i =>
     let origPC := origMap.getD i 0
     match trans[i]? with
     | some .halt =>
-      { pc_orig := origPC, transitions := ([] : List ETransCorr) }
+      { pc_orig := origPC, rel := idRel, transitions := ([] : List ETransCorr) }
     | some (.const _ _) | some (.copy _ _) | some (.binop _ _ _ _) | some (.boolop _ _)
     | some (.arrLoad _ _ _ _) | some (.arrStore _ _ _ _)
     | some (.fbinop _ _ _ _) | some (.intToFloat _ _) | some (.floatToInt _ _) | some (.floatExp _ _) =>
-      -- Successor is origPC + 1; skip through removed PCs to origMap[i+1]
       let nextOrigPC := origMap.getD (i + 1) 0
-      { pc_orig := origPC,
-        transitions := [{ origLabels := buildPath (origPC + 1) nextOrigPC }] }
+      { pc_orig := origPC, rel := idRel,
+        transitions := [{ origLabels := buildPath (origPC + 1) nextOrigPC, rel := idRel, rel_next := idRel }] }
     | some (.goto _) =>
-      -- Look up the ORIGINAL target (before remapping)
       let origTarget := match prog[origPC]? with
         | some (.goto l) => l
         | _ => origPC + 1
-      -- Follow skip chain from orig target to first kept PC
       let finalOrigTarget := skipArr.getD origTarget origTarget
-      { pc_orig := origPC,
-        transitions := [{ origLabels := buildPath origTarget finalOrigTarget }] }
+      { pc_orig := origPC, rel := idRel,
+        transitions := [{ origLabels := buildPath origTarget finalOrigTarget, rel := idRel, rel_next := idRel }] }
     | some (.ifgoto _ _) =>
       let origTaken := match prog[origPC]? with
         | some (.ifgoto _ l) => l
         | _ => origPC
       let takenFinal := skipArr.getD origTaken origTaken
       let fallFinal := origMap.getD (i + 1) 0
-      { pc_orig := origPC,
-        transitions := [{ origLabels := buildPath origTaken takenFinal },
-                        { origLabels := buildPath (origPC + 1) fallFinal }] }
+      { pc_orig := origPC, rel := idRel,
+        transitions := [{ origLabels := buildPath origTaken takenFinal, rel := idRel, rel_next := idRel },
+                        { origLabels := buildPath (origPC + 1) fallFinal, rel := idRel, rel_next := idRel }] }
     | none => default).toArray
 
 -- ============================================================
@@ -142,7 +140,7 @@ def optimize (prog : Prog) : ECertificate :=
   let revMap := _root_.buildRevMap origMap n
   let skipArr := buildSkipArr removed
   let trans := transformProg prog origMap skipArr revMap
-  let instrCerts := buildInstrCerts prog origMap skipArr trans
+  let instrCerts := buildInstrCerts prog origMap skipArr trans (_root_.collectAllVars prog trans)
   let haltCerts := _root_.buildHaltCerts instrCerts trans
   { orig := prog
     trans := trans

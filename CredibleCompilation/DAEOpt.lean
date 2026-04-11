@@ -232,7 +232,9 @@ partial def computeRels (prog : Prog) (deadPCs : Array Bool)
     (consts : Array (Option ConstPropOpt.ConstMap)) : Array EExprRel :=
   if prog.size == 0 then #[]
   else
-    let init := (Array.replicate prog.size (none : Option EExprRel)).set! 0 (some ([] : EExprRel))
+    let allVars := _root_.collectAllVars prog prog
+    let idRel : EExprRel := allVars.map fun v => (.var v, .var v)
+    let init := (Array.replicate prog.size (none : Option EExprRel)).set! 0 (some idRel)
     let result := relLoop prog deadPCs consts init (0 :: ([] : List Nat))
     result.map fun
       | some rel => rel
@@ -261,9 +263,12 @@ where
         | none => rel  -- shouldn't happen: findDeadPCs already checked
       | none => rel
     else
-      -- Live instruction: if it writes to x, drop any rel entry for x
+      -- Live instruction: if it writes to x, replace non-identity entries with identity
+      -- (both orig and trans execute the same instruction, so x maps to itself)
       match instrDef instr with
-      | some x => rel.filter fun (_, et) => et != .var x
+      | some x =>
+        let rel' := rel.filter fun (_, et) => et != .var x
+        (.var x, .var x) :: rel'
       | none => rel
   relLoop (prog : Prog) (deadPCs : Array Bool)
       (consts : Array (Option ConstPropOpt.ConstMap))

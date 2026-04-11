@@ -1233,6 +1233,7 @@ theorem refCompileStmt_correct (s : Stmt) (fuel : Nat) (σ σ' : Store) (am am' 
     (hinterp : s.interp fuel σ am p.arrayDecls = some (σ', am'))
     (htmpfree : s.tmpFree)
     (hftmpfree : s.ftmpFree)
+    (hNoGoto : s.noGoto)
     (hsafe : s.safe fuel σ am p.arrayDecls)
     (htypedv : s.typedVars fuel σ am p.arrayDecls)
     (hagree : ∀ v, v.isTmp = false → v.isFTmp = false → σ_tac v = σ v)
@@ -1252,21 +1253,8 @@ theorem refCompileStmt_correct (s : Stmt) (fuel : Nat) (σ σ' : Store) (am am' 
     obtain ⟨rfl, rfl⟩ := Prod.mk.inj (Option.some.inj hinterp)
     simp only [refCompileStmt, List.length_nil, Nat.add_zero]
     exact ⟨σ_tac, FragExec.rfl' _ _ _ _, hagree⟩
-  | goto _ =>
-    -- goto returns some (σ, am) but the compiled [.goto target] jumps away,
-    -- so FragExec to offset+1 doesn't hold. Needs non-local control flow model.
-    simp only [Stmt.interp] at hinterp
-    obtain ⟨rfl, rfl⟩ := Prod.mk.inj (Option.some.inj hinterp)
-    exact sorry
-  | ifgoto b _ =>
-    simp only [Stmt.interp] at hinterp
-    split at hinterp
-    · -- b.isSafe = true → interp returns some (σ, am)
-      obtain ⟨rfl, rfl⟩ := Prod.mk.inj (Option.some.inj hinterp)
-      -- When b evaluates to false, ifgoto falls through → provable
-      -- When b evaluates to true, ifgoto jumps → needs sorry
-      exact sorry
-    · simp at hinterp
+  | goto _ => exact absurd hNoGoto (by simp [Stmt.noGoto])
+  | ifgoto b _ => exact absurd hNoGoto (by simp [Stmt.noGoto])
   | assign x e =>
     simp only [Stmt.safe] at hsafe
     simp only [Stmt.typedVars] at htypedv
@@ -1605,6 +1593,8 @@ theorem refCompileStmt_correct (s : Stmt) (fuel : Nat) (σ σ' : Store) (am am' 
       have htf2 : s2.tmpFree := fun v hv => htmpfree v (List.mem_append_right _ hv)
       have hftf1 : s1.ftmpFree := fun v hv => hftmpfree v (List.mem_append_left _ hv)
       have hftf2 : s2.ftmpFree := fun v hv => hftmpfree v (List.mem_append_right _ hv)
+      have hng1 : s1.noGoto := (hNoGoto : s1.noGoto ∧ s2.noGoto).1
+      have hng2 : s2.noGoto := (hNoGoto : s1.noGoto ∧ s2.noGoto).2
       dsimp only [refCompileStmt] at hcode ⊢
       generalize hrc1 : refCompileStmt s1 offset nextTmp labels = rc1 at hcode ⊢
       obtain ⟨code1, tmp1⟩ := rc1
@@ -1612,11 +1602,11 @@ theorem refCompileStmt_correct (s : Stmt) (fuel : Nat) (σ σ' : Store) (am am' 
       obtain ⟨code2, tmp2⟩ := rc2
       simp only [] at hcode ⊢
       obtain ⟨σ_1, hexec_1, hagree_1⟩ :=
-        ih1 fuel σ σ₁ am am₁ offset nextTmp σ_tac h1 htf1 hftf1 hsafe1 htv1 hagree
+        ih1 fuel σ σ₁ am am₁ offset nextTmp σ_tac h1 htf1 hftf1 hng1 hsafe1 htv1 hagree
           (by rw [hrc1]; exact hcode.left)
       rw [hrc1] at hexec_1; simp at hexec_1
       obtain ⟨σ_2, hexec_2, hagree_2⟩ :=
-        ih2 fuel σ₁ σ' am₁ am' (offset + code1.length) tmp1 σ_1 hinterp htf2 hftf2 hsafe2 htv2
+        ih2 fuel σ₁ σ' am₁ am' (offset + code1.length) tmp1 σ_1 hinterp htf2 hftf2 hng2 hsafe2 htv2
           hagree_1 (by rw [hrc2]; exact hcode.right)
       rw [hrc2] at hexec_2; simp at hexec_2
       refine ⟨σ_2, ?_, hagree_2⟩
@@ -1635,6 +1625,8 @@ theorem refCompileStmt_correct (s : Stmt) (fuel : Nat) (σ σ' : Store) (am am' 
       have htf2 : s2.tmpFree := fun v hv => htmpfree v (by simp only [Stmt.allVars]; exact List.mem_append_right _ hv)
       have hftf1 : s1.ftmpFree := fun v hv => hftmpfree v (by simp only [Stmt.allVars]; exact List.mem_append_left _ (List.mem_append_right _ hv))
       have hftf2 : s2.ftmpFree := fun v hv => hftmpfree v (by simp only [Stmt.allVars]; exact List.mem_append_right _ hv)
+      have hng1 : s1.noGoto := (hNoGoto : s1.noGoto ∧ s2.noGoto).1
+      have hng2 : s2.noGoto := (hNoGoto : s1.noGoto ∧ s2.noGoto).2
       dsimp only [refCompileStmt] at hcode ⊢
       generalize hrcb : refCompileBool b offset nextTmp = rcb at hcode ⊢
       obtain ⟨codeBool, be, tmpB⟩ := rcb
@@ -1662,7 +1654,7 @@ theorem refCompileStmt_correct (s : Stmt) (fuel : Nat) (σ σ' : Store) (am am' 
           simp only [List.length_append, List.length_cons, List.length_nil] at this
           rwa [show offset + (codeBool.length + 1) = offset + codeBool.length + 1 from by omega] at this
         obtain ⟨σ_else, hexec_else, hagree_else⟩ :=
-          ih2 fuel σ σ' am am' (offset + codeBool.length + 1) tmpB σ_bool hinterp htf2 hftf2
+          ih2 fuel σ σ' am am' (offset + codeBool.length + 1) tmpB σ_bool hinterp htf2 hftf2 hng2
             hbranch_safe htv_branch hagree_bool hcode_else
         rw [hrce] at hexec_else; simp at hexec_else
         have hgoto_instr : p[offset + codeBool.length + 1 + codeElse.length]? =
@@ -1687,7 +1679,7 @@ theorem refCompileStmt_correct (s : Stmt) (fuel : Nat) (σ σ' : Store) (am am' 
               offset + codeBool.length + 1 + codeElse.length + 1 from by omega] at this
         obtain ⟨σ_then, hexec_then, hagree_then⟩ :=
           ih1 fuel σ σ' am am' (offset + codeBool.length + 1 + codeElse.length + 1) tmpElse σ_bool
-            hinterp htf1 hftf1 hbranch_safe htv_branch hagree_bool hcode_then
+            hinterp htf1 hftf1 hng1 hbranch_safe htv_branch hagree_bool hcode_then
         rw [hrct] at hexec_then; simp at hexec_then
         refine ⟨σ_then, ?_, hagree_then⟩
         have h123 := FragExec.trans' (FragExec.trans' hexec_bool hexec_if) hexec_then
@@ -1709,6 +1701,7 @@ theorem refCompileStmt_correct (s : Stmt) (fuel : Nat) (σ σ' : Store) (am am' 
         have hftf_b := fun v hv => hftmpfree v (List.mem_append_left _ hv)
         have htf_body : body.tmpFree := fun v hv => htmpfree v (List.mem_append_right _ hv)
         have hftf_body : body.ftmpFree := fun v hv => hftmpfree v (List.mem_append_right _ hv)
+        have hng_body : body.noGoto := hNoGoto
         dsimp only [refCompileStmt] at hcode ⊢
         generalize hrcb : refCompileBool b offset nextTmp = rcb at hcode ⊢
         obtain ⟨codeBool, be, tmpB⟩ := rcb
@@ -1752,7 +1745,7 @@ theorem refCompileStmt_correct (s : Stmt) (fuel : Nat) (σ σ' : Store) (am am' 
               simp only [List.length_append, List.length_cons, List.length_nil] at this
               rwa [show offset + (codeBool.length + 1) = offset + codeBool.length + 1 from by omega] at this
             obtain ⟨σ_body, hexec_body, hagree_body⟩ :=
-              ihb fuel' σ σ₁ am am₁ (offset + codeBool.length + 1) tmpB σ_bool h_body htf_body hftf_body
+              ihb fuel' σ σ₁ am am₁ (offset + codeBool.length + 1) tmpB σ_bool h_body htf_body hftf_body hng_body
                 hds_body htv_body hagree_bool hcode_body
             rw [hrcbody] at hexec_body; simp at hexec_body
             have hgoto_instr : p[offset + codeBool.length + 1 + codeBody.length]? = some (.goto offset) := by
@@ -1997,6 +1990,7 @@ theorem refCompile_correct (s : Stmt) (fuel : Nat) (σ σ' : Store)
     (hinterp : s.interp fuel σ ArrayMem.init (refCompile s).arrayDecls = some (σ', ArrayMem.init))
     (htmpfree : s.tmpFree)
     (hftmpfree : s.ftmpFree)
+    (hNoGoto : s.noGoto)
     (hsafe : s.safe fuel σ ArrayMem.init (refCompile s).arrayDecls)
     (htypedv : s.typedVars fuel σ ArrayMem.init (refCompile s).arrayDecls) :
     ∃ σ_tac am_h am_h', haltsWithResult (refCompile s) 0 σ σ_tac am_h am_h' ∧
@@ -2006,7 +2000,7 @@ theorem refCompile_correct (s : Stmt) (fuel : Nat) (σ σ' : Store)
     exact List.getElem?_append_left hi
   obtain ⟨σ_tac, hexec, hagree⟩ :=
     refCompileStmt_correct s fuel σ σ' ArrayMem.init ArrayMem.init 0 0 (refCompile s) σ
-      hinterp htmpfree hftmpfree hsafe htypedv (fun _ _ _ => rfl) (labels := []) hcode
+      hinterp htmpfree hftmpfree hNoGoto hsafe htypedv (fun _ _ _ => rfl) (labels := []) hcode
   simp only [Nat.zero_add] at hexec
   have hhalt : (refCompile s)[(refCompileStmt s 0 0).1.length]? = some .halt := by
     unfold refCompile; simp only [Prog.ofCode, Prog.getElem?_code, List.getElem?_toArray]

@@ -195,7 +195,7 @@ def optimize (prog : Prog) : ECertificate :=
   let (trans, _, _) := _root_.compactProg trans reached
   -- Remap invariants to compacted PCs
   let inv := origMap.map fun pc => inv.getD pc ([] : EInv)
-  let instrCerts := _root_.buildInstrCerts1to1 trans
+  let instrCerts := _root_.buildInstrCerts1to1 trans (_root_.collectAllVars orig trans)
   let haltCerts := _root_.buildHaltCerts instrCerts trans
   { orig := orig
     trans := trans

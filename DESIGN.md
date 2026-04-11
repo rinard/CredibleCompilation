@@ -18,6 +18,8 @@ Record of key design decisions for CredibleCompilation.
 
 7) exp(), sqrt(), ... intrinsics
 
-8) How to handle arrays efficiently. Looks like have a separate load array base and load/store array element instructions, enables array base to be allocated in register and not reconstructed every time. 
+8) How to handle arrays efficiently. Looks like have a separate load array base and load/store array element instructions, enables array base to be allocated in register and not reconstructed every time. arrBase x arr loads address of array into x, arrLoad x i loads i'th element of x, arrStore x i v stores v into i'th element of x. To keep type safety would need to have a new type - array base (effectively an address). Another fix is to have codegen track array bases and not deal with it at TAC level. 
 
-9) How to 
+9) How to handle SIMD. Add SIMD instructions to TAC level code. Axioms that state equivalence of SIMD and scalar computations/loads. 
+
+10) Registers can, in principle, hold values of different types at different locations. So one register might hold bool for some ranges, int for other ranges, and array base for yet other ranges. One approach is to have program point specific typing. Another approach is to have register allocator allocate each register to hold variables of only one type during compilation unit. 

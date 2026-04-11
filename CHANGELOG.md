@@ -4,6 +4,24 @@ Chronological record of what was built and why, to reconstruct the sequence of d
 
 ---
 
+## Refactor eRelToStoreRel to membership-based quantification (2026-04-11)
+
+**Goal:** Change `eRelToStoreRel` from `∀ v, σ_t v = (ssGet (buildSubstMap rel) v).eval σ_o am_o` to `∀ e_o v, (e_o, .var v) ∈ rel → σ_t v = e_o.eval σ_o am_o`. The old definition falsely claims `σ_t v = σ_o v` for unmapped variables, breaking RegAlloc (which renames `a → __x0`).
+
+### Changes
+
+- **Core.lean**: Added `Expr.freeVars` (collect variable names from an expression).
+- **ExecChecker.lean**: Added `relFindOrigVar` (explicit membership-based variable lookup). Changed `checkRelAtStartExec` to accept identity pairs. Changed `BoolExpr.mapVarsRel` to require explicit pairs via `relFindOrigVar`. Changed `checkDivPreservationExec`/`checkBoundsPreservationExec` to use `relFindOrigVar`. Replaced `defaultCheck` in `checkRelConsistency` with `fvCheck` + `amFvCheck` for free-variable coverage. Changed `buildInstrCerts1to1` to accept `allVars` and populate identity pairs. Updated `buildHaltCerts` to inherit `rel` from instrCerts.
+- **SoundnessBridge.lean**: Changed `eRelToStoreRel` definition. Added `substSym_sound_fv`, `eRelToStoreRel_identity_pair`, `eRelToStoreRel_ssGet`, `eRelToStoreRel_of_relFindOrigVar`, `relFindOrigVar_mem`. Rewrote `checkStartCorrespondenceExec_sound`, `checkHaltObservableExec_sound`, `BoolExpr.eval_mapVarsRel`, `branchInfo_of_step_with_rel`, `transRel_sound` (post-state relation, div-safety, bounds, arrStore sections), `checkDivPreservationExec_sound`.
+- **All optimizer files**: Added identity pairs via `collectAllVars` to ConstPropOpt, CSEOpt, LICMOpt, ConstHoistOpt, DCEOpt, PeepholeOpt. Updated DAEOpt to start with identity pairs and preserve them through live writes. Fixed RegAllocOpt's `mapRelsToTrans` to add identity pairs after copy-back instructions.
+- **Tests/OptEffectiveness.lean**: Re-enabled `checkCertificateExec` for RegAlloc test.
+
+### Result
+
+0 sorrys, 0 errors (excluding LivermoreLoops). RegAlloc certificate now validates successfully.
+
+---
+
 ## Remove gotoFree from program_refinement (2026-04-11)
 
 **Goal:** Extend `Stmt.interp` and `refCompileStmt` so that the `gotoFree` hypothesis can be removed from `program_refinement` and all program-level refinement theorems.

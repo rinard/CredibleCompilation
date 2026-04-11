@@ -271,27 +271,29 @@ def relGetOrigExpr (rel : EExprRel) (v : Var) : Expr :=
   | some (e_o, _) => e_o
   | none => .var v
 
+/-- Find the original variable name for a transformed variable in the relation.
+    Returns `some v'` if there is a pair `(.var v', .var v)` in `rel`. -/
+def relFindOrigVar (rel : EExprRel) (v : Var) : Option Var :=
+  match rel.find? (fun p => p.2 == .var v) with
+  | some (.var v', _) => some v'
+  | _ => none
+
 /-- Map variables in a BoolExpr through the expression relation.
-    Only succeeds if every variable maps to a single variable (`.var v`). -/
+    Only succeeds if every variable has an explicit pair in `rel`
+    mapping to a single variable (`.var v`). -/
 def BoolExpr.mapVarsRel (rel : EExprRel) : BoolExpr → Option BoolExpr
   | .lit b => some (.lit b)
-  | .bvar x =>
-    match relGetOrigExpr rel x with
-    | .var x' => some (.bvar x')
-    | _ => none
-  | .cmp op x y =>
-    match relGetOrigExpr rel x, relGetOrigExpr rel y with
-    | .var x', .var y' => some (.cmp op x' y')
-    | _, _ => none
-  | .cmpLit op x n =>
-    match relGetOrigExpr rel x with
-    | .var x' => some (.cmpLit op x' n)
-    | _ => none
+  | .bvar x => (relFindOrigVar rel x).map (.bvar ·)
+  | .cmp op x y => do
+    let x' ← relFindOrigVar rel x
+    let y' ← relFindOrigVar rel y
+    return .cmp op x' y'
+  | .cmpLit op x n => (relFindOrigVar rel x).map (.cmpLit op · n)
   | .not e => e.mapVarsRel rel |>.map .not
-  | .fcmp op x y =>
-    match relGetOrigExpr rel x, relGetOrigExpr rel y with
-    | .var x', .var y' => some (.fcmp op x' y')
-    | _, _ => none
+  | .fcmp op x y => do
+    let x' ← relFindOrigVar rel x
+    let y' ← relFindOrigVar rel y
+    return .fcmp op x' y'
 
 /-- Build a substitution map from pre-relation pairs of the form `(e_o, .var v)`.
     Maps transformed variable `v` to original expression `e_o`. -/
@@ -324,28 +326,36 @@ abbrev ECertificate.observable (cert : ECertificate) : List Var := cert.orig.obs
 -- ============================================================
 
 /-- Build instrCerts for a 1:1 PC mapping (orig PC = trans PC).
-    Used by optimizers that preserve program size (ConstProp, CSE, LICM). -/
-def buildInstrCerts1to1 (trans : Prog) : Array EInstrCert :=
+    Used by optimizers that preserve program size (ConstProp, CSE, LICM).
+    Identity pairs `(.var v, .var v)` are included for all variables in `allVars`
+    so that the membership-based store relation covers all program variables. -/
+def buildInstrCerts1to1 (trans : Prog) (allVars : List Var) : Array EInstrCert :=
+  let idRel : EExprRel := allVars.map fun v => (.var v, .var v)
   let arr := (List.range trans.size).map fun i =>
     match trans[i]? with
-    | some .halt => { pc_orig := i, transitions := ([] : List ETransCorr) }
+    | some .halt => { pc_orig := i, transitions := ([] : List ETransCorr), rel := idRel }
     | some (.const _ _) | some (.copy _ _) | some (.binop _ _ _ _) | some (.boolop _ _)
     | some (.fbinop _ _ _ _) | some (.intToFloat _ _) | some (.floatToInt _ _) | some (.floatExp _ _)
     | some (.arrLoad _ _ _ _) | some (.arrStore _ _ _ _) =>
-      { pc_orig := i, transitions := [{ origLabels := [i + 1] }] }
+      { pc_orig := i, rel := idRel,
+        transitions := [{ origLabels := [i + 1], rel := idRel, rel_next := idRel }] }
     | some (.goto l) =>
-      { pc_orig := i, transitions := [{ origLabels := [l] }] }
+      { pc_orig := i, rel := idRel,
+        transitions := [{ origLabels := [l], rel := idRel, rel_next := idRel }] }
     | some (.ifgoto _ l) =>
-      { pc_orig := i,
-        transitions := [{ origLabels := [l] }, { origLabels := [i + 1] }] }
+      { pc_orig := i, rel := idRel,
+        transitions := [{ origLabels := [l], rel := idRel, rel_next := idRel },
+                        { origLabels := [i + 1], rel := idRel, rel_next := idRel }] }
     | none => default
   arr.toArray
 
-/-- Build haltCerts from instrCerts.  Shared by all optimizers. -/
+/-- Build haltCerts from instrCerts.  Shared by all optimizers.
+    Inherits the `rel` from instrCerts so observable variable checks can use identity pairs. -/
 def buildHaltCerts (instrCerts : Array EInstrCert) (trans : Prog)
     : Array EHaltCert :=
   let arr := (List.range trans.size).map fun i =>
-    { pc_orig := (instrCerts.getD i default).pc_orig : EHaltCert }
+    let ic := instrCerts.getD i default
+    { pc_orig := ic.pc_orig, rel := ic.rel : EHaltCert }
   arr.toArray
 
 /-- Sorted list of kept orig PCs, indexed by trans PC.
@@ -379,10 +389,10 @@ def checkInvariantsAtStartExec (cert : ECertificate) : Bool :=
   (cert.inv_orig.getD 0 ([] : EInv)).isEmpty &&
   (cert.inv_trans.getD 0 ([] : EInv)).isEmpty
 
-/-- **Condition 2c**: Expression relation is empty at label 0
-    (both programs start from the same initial state, no constraints needed). -/
+/-- **Condition 2c**: Expression relation at label 0 consists only of identity pairs
+    (both programs start from the same initial state). -/
 def checkRelAtStartExec (cert : ECertificate) : Bool :=
-  (cert.instrCerts.getD 0 default).rel.isEmpty
+  (cert.instrCerts.getD 0 default).rel.all fun (e_o, e_t) => e_o == e_t
 
 /-- Substitute each variable in an expression with its symbolic post-value. -/
 def Expr.substSym (ss : SymStore) : Expr → Expr
@@ -482,7 +492,7 @@ def checkHaltObservableExec (cert : ECertificate) : Bool :=
     | some .halt =>
       let ic := cert.instrCerts.getD pc default
       cert.observable.all fun v =>
-        ssGet (buildSubstMap ic.rel) v == .var v
+        ic.rel.any fun (e_o, e_t) => e_t == .var v && e_o == .var v
     | _ => true
 
 /-- Compute the next PC from an instruction, using symbolic evaluation for ifgoto. -/
@@ -571,12 +581,21 @@ def checkRelConsistency
     let origVal := e_o.substSym origSS |>.simplify inv_orig
     let transVal := (e_t.substSym transSS).substSym preSubst |>.simplify inv_orig
     origVal == transVal
+  -- Free-variable coverage: for each (_, e_t) in rel_post, all free variables of
+  -- (e_t.substSym transSS) must have a pair in rel_pre.
+  -- Also covers array memory expression variables (i_t, v_t from transSAM).
+  let relHasVar (w : Var) := rel_pre.any fun (_, e_t') => e_t' == .var w
+  let fvCheck := rel_post.all fun (_, e_t) =>
+    (e_t.substSym transSS).freeVars.all fun w => relHasVar w
+  let amFvCheck := transSAM.all fun (_, i_t, v_t) =>
+    i_t.freeVars.all (fun w => relHasVar w) &&
+    v_t.freeVars.all (fun w => relHasVar w)
   let amCheck := origSAM.length == transSAM.length &&
     (origSAM.zip transSAM).all fun ((a_o, i_o, v_o), (a_t, i_t, v_t)) =>
       a_o == a_t &&
       i_o.simplify inv_orig == (i_t.substSym preSubst).simplify inv_orig &&
       v_o.simplify inv_orig == (v_t.substSym preSubst).simplify inv_orig
-  pairCheck && amCheck
+  pairCheck && fvCheck && amFvCheck && amCheck
 
 /-- **Condition 3**: Every transition in the transformed program has a
     corresponding original-program path with consistent variable effects. -/
@@ -650,8 +669,8 @@ def checkDivPreservationExec (cert : ECertificate) : Bool :=
       match cert.orig[ic.pc_orig]? with
       | some (.binop _ op' y' z') =>
         op == op' &&
-        ssGet (buildSubstMap ic.rel) y == .var y' &&
-        ssGet (buildSubstMap ic.rel) z == .var z'
+        relFindOrigVar ic.rel y == some y' &&
+        relFindOrigVar ic.rel z == some z'
       | _ => false
     | _ =>
       -- When the trans instruction is not a binop, verify the mapped orig
@@ -675,14 +694,14 @@ def checkBoundsPreservationExec (cert : ECertificate) : Bool :=
       match cert.orig[ic.pc_orig]? with
       | some (.arrLoad _ arr' idx' _) =>
         arr == arr' &&
-        ssGet (buildSubstMap ic.rel) idx == .var idx'
+        relFindOrigVar ic.rel idx == some idx'
       | _ => false
     | some (.arrStore arr idx _ _) =>
       let ic := cert.instrCerts.getD pc_t default
       match cert.orig[ic.pc_orig]? with
       | some (.arrStore arr' idx' _ _) =>
         arr == arr' &&
-        ssGet (buildSubstMap ic.rel) idx == .var idx'
+        relFindOrigVar ic.rel idx == some idx'
       | _ => false
     | _ => true
 
@@ -785,6 +804,34 @@ theorem AllArrayOpsInt.arrStore_int {p : Prog} {pc : Nat} {arr : ArrayName}
   have hmatch := h pc hlt
   have heq := Option.some.inj ((Prog.getElem?_eq_getElem hlt).symm.trans hinstr)
   simp [heq] at hmatch; exact hmatch
+
+/-- No `floatExp` instructions in a program. -/
+def NoFloatExp (p : Prog) : Prop :=
+  ∀ i (h : i < p.size), match p[i] with
+    | .floatExp _ _ => False
+    | _ => True
+
+/-- Decidable check for `NoFloatExp`. -/
+def checkNoFloatExp (p : Prog) : Bool :=
+  p.code.all fun instr =>
+    match instr with
+    | .floatExp _ _ => false
+    | _ => true
+
+theorem checkNoFloatExp_sound (p : Prog) (h : checkNoFloatExp p = true) :
+    NoFloatExp p := by
+  intro i hi
+  unfold checkNoFloatExp at h
+  have hall := (Array.all_eq_true.mp h) i hi
+  revert hall
+  cases p.code[i] <;> simp
+
+theorem NoFloatExp.elim {p : Prog} {pc : Nat} {x y : Var}
+    (h : NoFloatExp p) (hinstr : p[pc]? = some (.floatExp x y)) : False := by
+  have hlt : pc < p.size := bound_of_getElem? hinstr
+  have hmatch := h pc hlt
+  have heq := Option.some.inj ((Prog.getElem?_eq_getElem hlt).symm.trans hinstr)
+  simp [heq] at hmatch
 
 /-- Check all certificate conditions. Returns `true` iff the certificate is valid. -/
 def checkCertificateExec (cert : ECertificate) : Bool :=

@@ -570,6 +570,7 @@ theorem genInstr_correct (prog : ArmProg) (vm : VarMap) (pcMap : Nat → Nat)
     (hWT : WellTypedProg p.tyCtx p)
     (hTS : TypedStore p.tyCtx σ)
     (hAllInt : AllArrayOpsInt p)
+    (hNoFloatExp : NoFloatExp p)
     (hPC_bound : pc < p.size)
     (cfg' : Cfg) (hStep : p ⊩ Cfg.run pc σ am ⟶ cfg')
     (hVarMap : ∀ v, ∃ off, vm.lookup v = some off)
@@ -1151,7 +1152,45 @@ theorem genInstr_correct (prog : ArmProg) (vm : VarMap) (pcMap : Nat → Nat)
     obtain ⟨offL, hL⟩ := hVarMap y; obtain ⟨offR, hR⟩ := hVarMap z; obtain ⟨offD, hD⟩ := hVarMap x
     have hStackL := hStateRel y offL hL; rw [hy] at hStackL; simp [Value.encode] at hStackL
     have hStackR := hStateRel z offR hR; rw [hz] at hStackR; simp [Value.encode] at hStackR
-    sorry
+    -- Helper for the common proof structure across all fop cases
+    suffices ∀ (fpArmInstr : ArmInstr),
+        formalGenInstr vm pcMap instr haltLabel divLabel =
+          [.fldr .d1 offL, .fldr .d2 offR, fpArmInstr, .fstr .d0 offD] →
+        (∀ s', prog[s'.pc]? = some fpArmInstr →
+          ArmStep prog s' (s'.setFReg .d0 (fop.eval (s'.fregs .d1) (s'.fregs .d2)) |>.nextPC)) →
+        ∃ s', ArmSteps prog s s' ∧ SimRel vm pcMap (.run (pc + 1) (σ[x ↦ .float (fop.eval a b)]) am) s' by
+      cases fop
+      all_goals (
+        apply this
+        · rw [heq]; simp only [formalGenInstr]; rw [hL, hR, hD])
+      · exact fun _ h => .faddR .d0 .d1 .d2 h
+      · exact fun _ h => .fsubR .d0 .d1 .d2 h
+      · exact fun _ h => .fmulR .d0 .d1 .d2 h
+      · exact fun _ h => .fdivR .d0 .d1 .d2 h
+    intro fpArmInstr hformal hFpStep
+    rw [hformal] at hCodeInstr hPcNext
+    have h0 := hCodeInstr.head; have h1 := hCodeInstr.tail.head
+    have h2 := hCodeInstr.tail.tail.head; have h3 := hCodeInstr.tail.tail.tail.head
+    rw [← hPcRel] at h0 h1 h2 h3
+    -- Build the 4-step execution: fldr d1, fldr d2, fpOp, fstr d0
+    refine ⟨_, .step (.fldr .d1 offL h0) (.step (.fldr .d2 offR h1)
+      (.step (hFpStep _ h2) (.single (.fstr .d0 offD h3)))),
+      ?_, ?_, ?_⟩
+    · -- StateRel
+      intro v off hv
+      simp only [ArmState.setStack, ArmState.setFReg, ArmState.nextPC]
+      by_cases hoff : off = offD
+      · subst hoff; simp
+        have := hInjective v x off hv hD; subst this
+        rw [Store.update_self]; simp [Value.encode, hStackL, hStackR]
+      · simp [hoff]
+        have hne : v ≠ x := fun h => hoff (Option.some.inj ((h ▸ hv).symm.trans hD))
+        rw [Store.update_other _ _ _ _ hne]; exact hStateRel v off hv
+    · -- PcRel
+      show s.pc + 1 + 1 + 1 + 1 = pcMap (pc + 1)
+      have := hPcNext _ _ _ rfl; simp at this; rw [this, hPcRel]
+    · -- ArrayMem
+      simp [ArmState.setStack, ArmState.setFReg, ArmState.nextPC, hArrayMem]
   | fbinop_typeError hinstr hne =>
     exact absurd (Step.fbinop_typeError (am := am) hinstr hne) (Step.no_typeError_of_wellTyped hPC_bound hWT hTS)
   | intToFloat hinstr hy =>
@@ -1211,8 +1250,7 @@ theorem genInstr_correct (prog : ArmProg) (vm : VarMap) (pcMap : Nat → Nat)
   | floatToInt_typeError hinstr hne =>
     exact absurd (Step.floatToInt_typeError (am := am) hinstr hne) (Step.no_typeError_of_wellTyped hPC_bound hWT hTS)
   | floatExp hinstr hy =>
-    -- floatExp not yet supported in ARM backend
-    sorry
+    exact absurd hinstr (fun h => hNoFloatExp.elim h)
   | floatExp_typeError hinstr hne =>
     exact absurd (Step.floatExp_typeError (am := am) hinstr hne) (Step.no_typeError_of_wellTyped hPC_bound hWT hTS)
 
@@ -1225,6 +1263,7 @@ theorem backward_simulation (p : Prog) (armProg : ArmProg)
     (hVarMap : ∀ v, ∃ off, vm.lookup v = some off)
     (hScratch : ScratchSafe vm)
     (hAllInt : AllArrayOpsInt p)
+    (hNoFloatExp : NoFloatExp p)
     {pc : Nat} {σ : Store} {am : ArrayMem} {cfg' : Cfg} {s : ArmState}
     (hStep : p ⊩ Cfg.run pc σ am ⟶ cfg')
     (hRel : SimRel vm pcMap (.run pc σ am) s)
@@ -1238,4 +1277,4 @@ theorem backward_simulation (p : Prog) (armProg : ArmProg)
       pcMap pc' = pcMap pc + (formalGenInstr vm pcMap instr haltLabel divLabel).length) :
     ∃ s', ArmSteps armProg s s' ∧ SimRel vm pcMap cfg' s' := by
   exact genInstr_correct armProg vm pcMap p pc σ am s haltLabel divLabel
-    instr hInstr hRel hScratch hInjective hWT hTS hAllInt hPC cfg' hStep hVarMap hCode hWrapped hPcNext
+    instr hInstr hRel hScratch hInjective hWT hTS hAllInt hNoFloatExp hPC cfg' hStep hVarMap hCode hWrapped hPcNext

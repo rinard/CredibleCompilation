@@ -59,6 +59,16 @@ def Stmt.allVars : Stmt → List Var
 def Stmt.tmpFree (s : Stmt) : Prop := ∀ v ∈ s.allVars, v.isTmp = false
 def Stmt.ftmpFree (s : Stmt) : Prop := ∀ v ∈ s.allVars, v.isFTmp = false
 
+/-- A statement contains no goto/ifgoto. -/
+def Stmt.noGoto : Stmt → Prop
+  | .skip | .assign .. | .bassign .. | .arrWrite .. | .barrWrite ..
+  | .fassign .. | .farrWrite .. | .label .. => True
+  | .goto .. => False
+  | .ifgoto .. => False
+  | .seq s₁ s₂ => s₁.noGoto ∧ s₂.noGoto
+  | .ite _ s₁ s₂ => s₁.noGoto ∧ s₂.noGoto
+  | .loop _ body => body.noGoto
+
 
 -- ============================================================
 -- § 2. Expression evaluation congruence
@@ -1004,11 +1014,8 @@ private theorem checkStmt_declared {lookup : Var → Option VarTy}
     · exact checkSExpr_declared hi v hi'
     · exact checkExpr_declared hv v hv'
   | label _ => intro v hv; simp [Stmt.allVars] at hv
-  | goto _ => intro v hv; simp [Stmt.allVars] at hv
-  | ifgoto b _ =>
-    simp [Program.checkStmt] at h
-    intro v hv; simp [Stmt.allVars] at hv
-    exact checkSBool_declared h v hv
+  | goto _ => simp [Program.checkStmt] at h
+  | ifgoto b _ => simp [Program.checkStmt] at h
 
 /-- **Bridge lemma**: A type-checked program's body is tmp-free — no variable
     in the source program uses the compiler-reserved `__t` prefix. -/
@@ -1028,6 +1035,27 @@ theorem Program.typeCheck_ftmpFree (prog : Program) (h : prog.typeCheck = true) 
   intro v hv
   obtain ⟨ty, hlook⟩ := checkStmt_declared hchk v hv
   exact noTmpDecls_not_ftmp hnt hlook
+
+/-- A type-checked statement has no goto/ifgoto. -/
+private theorem checkStmt_noGoto {lookup arrayDecls} {s : Stmt}
+    (h : Program.checkStmt lookup arrayDecls s = true) : s.noGoto := by
+  induction s with
+  | goto _ => unfold Program.checkStmt at h; exact absurd h Bool.false_ne_true
+  | ifgoto _ _ => unfold Program.checkStmt at h; exact absurd h Bool.false_ne_true
+  | seq s1 s2 ih1 ih2 =>
+    unfold Program.checkStmt at h; rw [Bool.and_eq_true] at h; exact ⟨ih1 h.1, ih2 h.2⟩
+  | ite b s1 s2 ih1 ih2 =>
+    unfold Program.checkStmt at h; rw [Bool.and_eq_true] at h
+    rw [Bool.and_eq_true] at h; exact ⟨ih1 h.1.2, ih2 h.2⟩
+  | loop b body ih =>
+    unfold Program.checkStmt at h; rw [Bool.and_eq_true] at h; exact ih h.2
+  | _ => exact trivial
+
+/-- A type-checked program's body has no goto/ifgoto. -/
+theorem Program.typeCheck_noGoto (prog : Program) (h : prog.typeCheck = true) :
+    prog.body.noGoto := by
+  simp [Program.typeCheck, Bool.and_eq_true] at h
+  exact checkStmt_noGoto h.2
 
 -- ============================================================
 -- § 4d. Source-level type preservation
@@ -1253,11 +1281,8 @@ theorem checkStmt_typedVars
     have ⟨htv_v, _, hwf_v⟩ := checkExpr_typedVars (am := am) hcompat hv hts
     exact ⟨⟨htv_i, hwi_i rfl⟩, ⟨htv_v, hwf_v rfl⟩⟩
   | label _ => simp only [Stmt.typedVars]
-  | goto _ => simp only [Stmt.typedVars]
-  | ifgoto b _ =>
-    simp [Program.checkStmt] at hchk
-    simp only [Stmt.typedVars]
-    exact checkSBool_typedVars hcompat hchk hts
+  | goto _ => simp [Program.checkStmt] at hchk
+  | ifgoto b _ => simp [Program.checkStmt] at hchk
 
 /-- **Bridge lemma**: A type-checked program with a well-typed store satisfies typedVars. -/
 theorem Program.typeCheck_typedVars (prog : Program) (h : prog.typeCheck = true)

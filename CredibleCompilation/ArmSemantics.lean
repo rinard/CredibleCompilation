@@ -390,9 +390,7 @@ def formalGenInstr (vm : VarMap) (pcMap : Nat → Nat) (instr : TAC)
     | some offS, some offD =>
       [.fldr .d0 offS, .fcvtzs .x0 .d0, .str .x0 offD]
     | _, _ => []
-  | .floatExp _dst _src =>
-    -- floatExp requires function call (bl) which is not yet modeled
-    sorry
+  | .floatExp _dst _src => []
 
 -- ============================================================
 -- § 9. CodeAt and helper lemmas

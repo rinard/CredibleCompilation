@@ -362,22 +362,26 @@ def mapRelsToTrans (origRels : Array EExprRel) (origPCMap : Array Nat)
     let opc := origPCMap.getD tpc tpc
     origRels.getD opc ([] : EExprRel)).toArray
   -- Second pass: for copy-back sequences, flow the rel forward
+  -- After each `copy dest src`, replace the rename pair (orig, .var src) with
+  -- an identity pair (.var dest, .var dest) since dest now holds orig's value.
   (List.range trans.size).foldl (fun (rels : Array EExprRel) tpc =>
     let curIsCB := isCB trans origPCMap tpc
     let prevIsCB := tpc > 0 && isCB trans origPCMap (tpc - 1)
     if curIsCB && prevIsCB then
-      -- Continuing copy-back sequence: apply previous copy's filter
+      -- Continuing copy-back sequence: apply previous copy's effect
       match trans[tpc - 1]? with
-      | some (.copy _ src) =>
+      | some (.copy dest src) =>
         let prevRel := rels.getD (tpc - 1) ([] : EExprRel)
-        rels.set! tpc (prevRel.filter fun (_, et) => et != Expr.var src)
+        let filtered := prevRel.filter fun (_, et) => et != Expr.var src
+        rels.set! tpc ((.var dest, .var dest) :: filtered)
       | _ => rels
     else if !curIsCB && prevIsCB then
-      -- Halt right after copy-backs: apply final copy's filter
+      -- Halt right after copy-backs: apply final copy's effect
       match trans[tpc - 1]? with
-      | some (.copy _ src) =>
+      | some (.copy dest src) =>
         let prevRel := rels.getD (tpc - 1) ([] : EExprRel)
-        rels.set! tpc (prevRel.filter fun (_, et) => et != Expr.var src)
+        let filtered := prevRel.filter fun (_, et) => et != Expr.var src
+        rels.set! tpc ((.var dest, .var dest) :: filtered)
       | _ => rels
     else
       rels
