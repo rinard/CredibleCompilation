@@ -36,23 +36,25 @@ inductive Cond where
   | eq | ne | lt | le
   deriving Repr, DecidableEq
 
-/-- Condition flags set by `cmp`. We model only what's needed:
-    the result of a signed 64-bit comparison. -/
+/-- Condition flags set by `cmp`. We store both operands so that
+    signed comparison (`slt`/`sle`) is exact for all 64-bit values. -/
 structure Flags where
-  /-- The result of the last `cmp a b` is stored as `a - b`. -/
-  diff : BitVec 64
+  lhs : BitVec 64
+  rhs : BitVec 64
   deriving Repr
 
 /-- Evaluate a condition against the flags. -/
 instance : DecidableEq Flags := fun a b =>
-  if h : a.diff = b.diff then isTrue (by cases a; cases b; simp_all)
-  else isFalse (by intro heq; cases heq; exact h rfl)
+  if h1 : a.lhs = b.lhs then
+    if h2 : a.rhs = b.rhs then isTrue (by cases a; cases b; simp_all)
+    else isFalse (by intro heq; cases heq; exact h2 rfl)
+  else isFalse (by intro heq; cases heq; exact h1 rfl)
 
 def Flags.condHolds (f : Flags) : Cond → Bool
-  | .eq => f.diff == 0
-  | .ne => f.diff != 0
-  | .lt => f.diff.msb
-  | .le => f.diff.msb || f.diff == 0
+  | .eq => f.lhs == f.rhs
+  | .ne => f.lhs != f.rhs
+  | .lt => BitVec.slt f.lhs f.rhs
+  | .le => BitVec.sle f.lhs f.rhs
 
 -- ============================================================
 -- § 3. Machine state
@@ -119,6 +121,8 @@ inductive ArmInstr where
   | sdivR    : ArmReg → ArmReg → ArmReg → ArmInstr
   /-- `cmp Xn, Xm` — compare two registers (sets flags). -/
   | cmp      : ArmReg → ArmReg → ArmInstr
+  /-- `cmp Xn, #imm` — compare register with immediate (sets flags). -/
+  | cmpImm   : ArmReg → BitVec 64 → ArmInstr
   /-- `cset Wd, cond` — set register to 0 or 1 based on flags. -/
   | cset     : ArmReg → Cond → ArmInstr
   /-- `cbz Xn, label` — branch if zero. -/

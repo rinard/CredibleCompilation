@@ -227,71 +227,19 @@ theorem loadImm64_correct (prog : ArmProg) (rd : ArmReg) (n : BitVec 64)
       intro heq; exact absurd heq hr
     · -- arrayMem preserved
       rw [hAM3, hAM2, hAM1]; simp [s0, ArmState.setReg, ArmState.nextPC]
-/-- Helper: Flags.condHolds matches CmpOp.eval for signed integer comparison.
-    Uses BitVec 64 subtraction; correctness depends on the msb faithfully
-    representing the sign of the mathematical difference for values that
-    fit in 64 bits. -/
-private theorem msb_eq_decide_ge (x : BitVec 64) :
-    x.msb = decide (2^63 ≤ x.toNat) := by
-  simp only [BitVec.msb, BitVec.getMsbD]
-  simp only [show 64 - 1 - 0 = 63 from by omega]
-  simp only [show (decide (0 < 64) && x.getLsbD 63) = x.getLsbD 63 from by simp]
-  simp only [BitVec.getLsbD, Nat.testBit]
-  have hsr : x.toNat >>> 63 = x.toNat / 2^63 := Nat.shiftRight_eq_div_pow x.toNat 63
-  rw [hsr]; rcases (by omega : x.toNat / 2^63 = 0 ∨ x.toNat / 2^63 = 1) with h | h <;> simp [h] <;> omega
-
-private theorem beq_sub_zero (a b : BitVec 64) : ((a - b) == (0 : BitVec 64)) = (a == b) := by
-  simp only [BEq.beq, decide_eq_decide]; constructor
-  · intro h; bv_omega
-  · intro h; subst h; simp
-
-private theorem bne_sub_zero (a b : BitVec 64) : ((a - b) != (0 : BitVec 64)) = (a != b) := by
-  have := beq_sub_zero a b; simp only [bne] at *; rw [this]
-
-private theorem BitVec_beq_eq_decide (a b : BitVec 64) : (a == b) = decide (a = b) := rfl
-
-theorem Flags.condHolds_correct (op : CmpOp) (a b : BitVec 64)
-    (ha : 0 ≤ a.toInt) (ha' : a.toInt < 2 ^ 63) (hb : 0 ≤ b.toInt) (hb' : b.toInt < 2 ^ 63) :
-    (Flags.mk (a - b)).condHolds
+/-- Flags.condHolds matches CmpOp.eval — trivially, since both use slt/sle
+    on the stored operands. No range restriction needed. -/
+theorem Flags.condHolds_correct (op : CmpOp) (a b : BitVec 64) :
+    (Flags.mk a b).condHolds
       (match op with | .eq => .eq | .ne => .ne | .lt => .lt | .le => .le)
     = op.eval a b := by
-  have ha_nat : a.toNat < 2^63 := by
-    simp only [BitVec.toInt_eq_toNat_cond] at ha ha'; split at ha <;> split at ha' <;> omega
-  have hb_nat : b.toNat < 2^63 := by
-    simp only [BitVec.toInt_eq_toNat_cond] at hb hb'; split at hb <;> split at hb' <;> omega
-  have ha_eq : a.toInt = a.toNat := by
-    simp only [BitVec.toInt_eq_toNat_cond]; split <;> omega
-  have hb_eq : b.toInt = b.toNat := by
-    simp only [BitVec.toInt_eq_toNat_cond]; split <;> omega
-  cases op <;> simp only [Flags.condHolds, CmpOp.eval]
-  case eq => exact beq_sub_zero a b
-  case ne => exact bne_sub_zero a b
-  case lt =>
-    rw [msb_eq_decide_ge, BitVec.slt, ha_eq, hb_eq, decide_eq_decide]
-    constructor
-    · intro h; simp [BitVec.toNat_sub] at h; omega
-    · intro h; simp [BitVec.toNat_sub]; omega
-  case le =>
-    rw [msb_eq_decide_ge, beq_sub_zero, BitVec_beq_eq_decide,
-        BitVec.sle, ha_eq, hb_eq]
-    cases hab : decide (a = b) with
-    | false =>
-      simp only [Bool.or_false]; rw [decide_eq_decide]
-      have hne : a ≠ b := of_decide_eq_false hab
-      constructor
-      · intro h; simp [BitVec.toNat_sub] at h; omega
-      · intro h
-        have : a.toNat ≠ b.toNat := fun heq => hne (BitVec.eq_of_toNat_eq heq)
-        simp [BitVec.toNat_sub]; omega
-    | true =>
-      have heq := of_decide_eq_true hab; subst heq; simp
-/-- Axiom: floating-point flags from `fcmp` correctly implement `FloatCmpOp.eval`.
-    This bridges the gap between the flag-based ARM cset mechanism and the opaque
-    `FloatCmpOp.eval`.  Since both are opaque (FP semantics are uninterpreted),
-    this axiom asserts that our flag model (`Flags.mk (a - b)`) faithfully
-    represents IEEE 754 comparison for the condition codes we use. -/
+  cases op <;> simp [Flags.condHolds, CmpOp.eval, BEq.beq, bne]
+
+/-- Floating-point flags from `fcmp` correctly implement `FloatCmpOp.eval`.
+    Since FP semantics are opaque (uninterpreted bitvectors), this is an axiom
+    asserting our flag model faithfully represents IEEE 754 comparison. -/
 axiom Flags.condHolds_float_correct (op : FloatCmpOp) (a b : BitVec 64) :
-    (Flags.mk (a - b)).condHolds
+    (Flags.mk a b).condHolds
       (match op with | .feq => .eq | .fne => .ne | .flt => .lt | .fle => .le)
     = FloatCmpOp.eval op a b
 
@@ -342,7 +290,6 @@ private theorem genBoolExpr_cmp_correct (prog : ArmProg) (vm : VarMap)
     (hL : vm.lookup lv = some offL) (hR : vm.lookup rv = some offR)
     (hRel : StateRel vm σ s)
     (hIntL : ∃ n, σ lv = .int n) (hIntR : ∃ n, σ rv = .int n)
-    (hWrapped : WrappedStore σ)
     (hCode : CodeAt prog startPC
       (.ldr .x1 offL :: .ldr .x2 offR :: .cmp .x1 .x2 ::
        .cset .x0 (match op with | .eq => .eq | .ne => .ne | .lt => .lt | .le => .le) :: List.nil))
@@ -357,16 +304,10 @@ private theorem genBoolExpr_cmp_correct (prog : ArmProg) (vm : VarMap)
   have h0 := hCode.head; have h1 := hCode.tail.head
   have h2 := hCode.tail.tail.head; have h3 := hCode.tail.tail.tail.head
   rw [← hPC] at h0 h1 h2 h3
-  -- After ldr x1, ldr x2, cmp, cset
-  -- x1 = stack[offL] = (σ lv).encode = nL (since σ lv = .int nL)
-  -- x2 = stack[offR] = (σ rv).encode = nR
-  -- flags = Flags.mk (x1 - x2) = Flags.mk (nL - nR)
-  -- x0 = if flags.condHolds cond then 1 else 0
   have hStackL := hRel lv offL hL
   have hStackR := hRel rv offR hR
   rw [hIntL] at hStackL; rw [hIntR] at hStackR
   simp [Value.encode] at hStackL hStackR
-  -- Build the final state
   refine ⟨_, .step (.ldr .x1 offL h0) (.step (.ldr .x2 offR h1)
     (.step (.cmpRR .x1 .x2 h2) (.single (.cset .x0 _ h3)))), ?_, ?_, ?_, ?_⟩
   · -- x0 = correct value
@@ -374,17 +315,10 @@ private theorem genBoolExpr_cmp_correct (prog : ArmProg) (vm : VarMap)
           ArmReg.x1_ne_x2, ArmReg.x2_ne_x1]
     rw [hStackL, hStackR, hIntL, hIntR]
     simp [Value.toInt]
-    -- Now need: condHolds (Flags.mk (nL - nR)) cond = op.eval nL nR
-    have ⟨hnnL, hltL⟩ := hWrapped lv nL hIntL
-    have ⟨hnnR, hltR⟩ := hWrapped rv nR hIntR
-    rw [Flags.condHolds_correct op nL nR hnnL hltL hnnR hltR]
-  · -- stack preserved
-    intro v off hv
-    simp [ArmState.setReg, ArmState.nextPC, ArmState.setStack]
-  · -- pc advanced by 4
-    simp [ArmState.setReg, ArmState.nextPC, hPC]
-  · -- arrayMem preserved
-    simp [ArmState.setReg, ArmState.nextPC]
+    rw [Flags.condHolds_correct op nL nR]
+  · intro v off hv; simp [ArmState.setReg, ArmState.nextPC, ArmState.setStack]
+  · simp [ArmState.setReg, ArmState.nextPC, hPC]
+  · simp [ArmState.setReg, ArmState.nextPC]
 /-- `genBoolExpr` correctly evaluates a boolean expression into x0.
     Requires that compared variables are integers (guaranteed by well-typedness). -/
 theorem genBoolExpr_correct (prog : ArmProg) (vm : VarMap)
@@ -395,8 +329,7 @@ theorem genBoolExpr_correct (prog : ArmProg) (vm : VarMap)
     (hPC : s.pc = startPC)
     (hVarMap : ∀ v, ∃ off, vm.lookup v = some off)
     (Γ : TyCtx) (hTS : TypedStore Γ σ)
-    (hWTBE : WellTypedBoolExpr Γ be)
-    (hWrapped : WrappedStore σ) :
+    (hWTBE : WellTypedBoolExpr Γ be) :
     ∃ s', ArmSteps prog s s' ∧
       s'.regs .x0 = (if be.eval σ then (1 : BitVec 64) else 0) ∧
       (∀ v off, vm.lookup v = some off → s'.stack off = s.stack off) ∧
@@ -440,7 +373,7 @@ theorem genBoolExpr_correct (prog : ArmProg) (vm : VarMap)
     obtain ⟨nL, hnL⟩ := Value.int_of_typeOf_int hTyL
     obtain ⟨nR, hnR⟩ := Value.int_of_typeOf_int hTyR
     have := genBoolExpr_cmp_correct prog vm op' lv rv σ s startPC offL offR hL hR hRel
-      ⟨nL, hnL⟩ ⟨nR, hnR⟩ hWrapped hCode hPC
+      ⟨nL, hnL⟩ ⟨nR, hnR⟩ hCode hPC
     simp only [BoolExpr.eval, formalGenBoolExpr, hL, hR] at this ⊢
     exact this
   | fcmp htyL htyR =>
@@ -494,7 +427,7 @@ theorem genBoolExpr_correct (prog : ArmProg) (vm : VarMap)
     -- After cmp: flags = Flags.mk (x1 - x2) = Flags.mk (nV - n)
     -- After cset: x0 = if flags.condHolds cond then 1 else 0
     let cond := match op' with | .eq => Cond.eq | .ne => .ne | .lt => .lt | .le => .le
-    let s3 := { s2 with flags := ⟨s2.regs .x1 - s2.regs .x2⟩, pc := s2.pc + 1 }
+    let s3 := { s2 with flags := Flags.mk (s2.regs .x1) (s2.regs .x2), pc := s2.pc + 1 }
     let s4 := s3.setReg .x0 (if s3.flags.condHolds cond then (1 : BitVec 64) else 0) |>.nextPC
     refine ⟨s4,
       (.step (.ldr .x1 offV hLdr) (hSteps2.trans
@@ -510,8 +443,7 @@ theorem genBoolExpr_correct (prog : ArmProg) (vm : VarMap)
       -- Now the goal has condHolds applied to (s2.regs x1 - s2.regs x2)
       -- Use simp with the value equalities to rewrite inside the match
       simp only [hx1_eq, hx2_eq, BoolExpr.eval, hnV, Value.toInt]
-      have ⟨hnnV, hltV⟩ := hWrapped v nV hnV
-      rw [Flags.condHolds_correct op' nV n hnnV hltV hnn hlt]
+      rw [Flags.condHolds_correct op' nV n]
     · -- stack preserved
       intro w off hv
       simp only [s4, s3, ArmState.setReg, ArmState.nextPC, ArmState.setStack]
@@ -530,7 +462,7 @@ theorem genBoolExpr_correct (prog : ArmProg) (vm : VarMap)
     have hCodeE := hCode.append_left
     have hCodeEor := hCode.append_right
     obtain ⟨s1, hSteps1, hx0, hStack1, hPC1, hAM1⟩ :=
-      genBoolExpr_correct prog vm e σ s startPC hRel hScratch hCodeE hPC hVarMap Γ hTS hbe hWrapped
+      genBoolExpr_correct prog vm e σ s startPC hRel hScratch hCodeE hPC hVarMap Γ hTS hbe
     have hEor := hCodeEor.head; rw [← hPC1] at hEor
     refine ⟨s1.setReg .x0 (s1.regs .x0 ^^^ 1) |>.nextPC,
       hSteps1.trans (.single (.eorImm .x0 .x0 1 hEor)), ?_, ?_, ?_, ?_⟩
@@ -569,13 +501,11 @@ theorem genInstr_correct (prog : ArmProg) (vm : VarMap) (pcMap : Nat → Nat)
     (hInjective : VarMapInjective vm)
     (hWT : WellTypedProg p.tyCtx p)
     (hTS : TypedStore p.tyCtx σ)
-    (hAllInt : AllArrayOpsInt p)
     (hNoFloatExp : NoFloatExp p)
     (hPC_bound : pc < p.size)
     (cfg' : Cfg) (hStep : p ⊩ Cfg.run pc σ am ⟶ cfg')
     (hVarMap : ∀ v, ∃ off, vm.lookup v = some off)
     (hCodeInstr : CodeAt prog (pcMap pc) (formalGenInstr vm pcMap instr haltLabel divLabel))
-    (hWrapped : WrappedStore σ)
     (hPcNext : ∀ pc' σ' am', cfg' = .run pc' σ' am' →
       pcMap pc' = pcMap pc + (formalGenInstr vm pcMap instr haltLabel divLabel).length) :
     ∃ s', ArmSteps prog s s' ∧ SimRel vm pcMap cfg' s' := by
@@ -784,7 +714,6 @@ theorem genInstr_correct (prog : ArmProg) (vm : VarMap) (pcMap : Nat → Nat)
       -- After ldr x2 offR: x2 = stack[offR] = (σ z).encode = b
       -- cbz x2 divLabel: since b ≠ 0, falls through
       -- Then ldr x1, ldr x2, sdiv, str — same as add/sub/mul
-      have ⟨hb_nn, hb_lt⟩ := hWrapped z b hz
       have hb_ne0 : b ≠ 0 := by unfold BinOp.safe at hs; exact hs
       have hb_enc_ne : (Value.int b).encode ≠ (0 : BitVec 64) := by
         simp [Value.encode]; exact hb_ne0
@@ -836,7 +765,6 @@ theorem genInstr_correct (prog : ArmProg) (vm : VarMap) (pcMap : Nat → Nat)
       have h7 := hCodeInstr.tail.tail.tail.tail.tail.tail.tail.head
       rw [← hPcRel] at h0 h1 h2 h3 h4 h5 h6 h7
       -- hs : BinOp.mod.safe a b means b ≠ 0
-      have ⟨hb_nn, hb_lt⟩ := hWrapped z b hz
       have hb_ne0 : b ≠ 0 := by unfold BinOp.safe at hs; exact hs
       have hb_enc_ne : (Value.int b).encode ≠ (0 : BitVec 64) := by
         simp [Value.encode]; exact hb_ne0
@@ -977,7 +905,7 @@ theorem genInstr_correct (prog : ArmProg) (vm : VarMap) (pcMap : Nat → Nat)
       cases hwti with | boolop _ hbe => exact hbe
     obtain ⟨s1, hSteps1, hx0, hStack1, hPC1, hAM1⟩ :=
       genBoolExpr_correct prog vm be σ s (pcMap pc) hStateRel hScratch hCodeBE hPcRel hVarMap
-        p.tyCtx hTS hWTbe hWrapped
+        p.tyCtx hTS hWTbe
     -- Then str x0, [sp, #offD]
     have hStr := hCodeStr.head; rw [← hPC1] at hStr
     refine ⟨s1.setStack offD (s1.regs .x0) |>.nextPC,
@@ -1018,7 +946,7 @@ theorem genInstr_correct (prog : ArmProg) (vm : VarMap) (pcMap : Nat → Nat)
     have hCodeCbnz := hCodeInstr.append_right
     obtain ⟨s1, hSteps1, hx0, hStack1, hPC1, hAM1⟩ :=
       genBoolExpr_correct prog vm _ σ s (pcMap pc) hStateRel hScratch hCodeBE hPcRel hVarMap
-        p.tyCtx hTS hWTbe hWrapped
+        p.tyCtx hTS hWTbe
     have hCbnz := hCodeCbnz.head; rw [← hPC1] at hCbnz
     have hx0_ne : s1.regs .x0 ≠ 0 := by rw [hx0, hcond]; simp
     exact ⟨{ s1 with pc := pcMap _ },
@@ -1038,7 +966,7 @@ theorem genInstr_correct (prog : ArmProg) (vm : VarMap) (pcMap : Nat → Nat)
     have hCodeCbnz := hCodeInstr.append_right
     obtain ⟨s1, hSteps1, hx0, hStack1, hPC1, hAM1⟩ :=
       genBoolExpr_correct prog vm _ σ s (pcMap pc) hStateRel hScratch hCodeBE hPcRel hVarMap
-        p.tyCtx hTS hWTbe hWrapped
+        p.tyCtx hTS hWTbe
     have hCbnz := hCodeCbnz.head; rw [← hPC1] at hCbnz
     have hx0_eq : s1.regs .x0 = 0 := by rw [hx0]; simp [hcond]
     refine ⟨s1.nextPC,
@@ -1054,90 +982,180 @@ theorem genInstr_correct (prog : ArmProg) (vm : VarMap) (pcMap : Nat → Nat)
   | binop_typeError hinstr hne =>
     exact absurd (Step.binop_typeError (am := am) hinstr hne) (Step.no_typeError_of_wellTyped hPC_bound hWT hTS)
   | arrLoad hinstr hidx hbounds =>
-    rename_i idxVal arrNm destV idxV _
-    have htyint := hAllInt.arrLoad_int hinstr; subst htyint
+    rename_i idxVal arrNm destV idxV ty
     obtain ⟨offIdx, hIdx⟩ := hVarMap idxV
     obtain ⟨offX, hX⟩ := hVarMap destV
-    have heq : instr = .arrLoad destV arrNm idxV .int := Option.some.inj (hInstr.symm.trans hinstr)
-    have hformal : formalGenInstr vm pcMap (.arrLoad destV arrNm idxV .int) haltLabel divLabel =
-        [.ldr .x1 offIdx, .arrLd .x0 arrNm .x1, .str .x0 offX] := by
-      show (match vm.lookup idxV, vm.lookup destV with
-        | some offIdx, some offX => _ | _, _ => _) = _
-      rw [hIdx, hX]
-    rw [heq, hformal] at hCodeInstr hPcNext
-    have h0 := hCodeInstr.head
-    have h1 := hCodeInstr.tail.head
-    have h2 := hCodeInstr.tail.tail.head
-    rw [← hPcRel] at h0 h1 h2
-    let s1 := s.setReg .x1 (s.stack offIdx) |>.nextPC
-    let s2 := s1.setReg .x0 (s1.arrayMem arrNm (s1.regs .x1)) |>.nextPC
-    let s3 := s2.setStack offX (s2.regs .x0) |>.nextPC
-    refine ⟨s3, .step (.ldr .x1 offIdx h0) (.step (.arrLd .x0 arrNm .x1 h1) (.single (.str .x0 offX h2))),
-      ⟨?_, ?_, ?_⟩⟩
-    · -- StateRel for σ[destV ↦ .int (am.read arrNm idxVal)]
-      intro w off hv
-      simp only [s3, s2, s1, ArmState.setStack, ArmState.setReg, ArmState.nextPC,
-                  ArmReg.beq_self, ArmReg.x0_ne_x1, ite_true, ite_false, Bool.false_eq_true]
-      by_cases hoff : off = offX
-      · subst hoff; simp
-        have := hInjective w destV off hv hX; subst this
-        rw [Store.update_self]
-        simp [Value.encode, ArrayMem.read]
-        rw [hArrayMem, hStateRel idxV offIdx hIdx, hidx]; simp [Value.encode]
-      · simp [hoff]
-        have hne : w ≠ destV := fun h => hoff (Option.some.inj ((h ▸ hv).symm.trans hX))
-        rw [Store.update_other _ _ _ _ hne]
-        exact hStateRel w off hv
-    · -- PcRel
-      show s.pc + 1 + 1 + 1 = pcMap (pc + 1)
-      have := hPcNext _ _ _ rfl; simp at this
-      rw [this, hPcRel]
-    · -- arrayMem preserved
-      simp [s3, s2, s1, ArmState.setStack, ArmState.setReg, ArmState.nextPC, hArrayMem]
+    have heq : instr = .arrLoad destV arrNm idxV ty := Option.some.inj (hInstr.symm.trans hinstr)
+    by_cases hty : ty = VarTy.float
+    · -- Float array load: ldr x1, farrLd d0, fstr d0
+      subst hty
+      have hformal : formalGenInstr vm pcMap (.arrLoad destV arrNm idxV .float) haltLabel divLabel =
+          [.ldr .x1 offIdx, .farrLd .d0 arrNm .x1, .fstr .d0 offX] := by
+        show (match vm.lookup idxV, vm.lookup destV with
+          | some offIdx, some offX => _ | _, _ => _) = _
+        rw [hIdx, hX]
+      rw [heq, hformal] at hCodeInstr hPcNext
+      have h0 := hCodeInstr.head; have h1 := hCodeInstr.tail.head; have h2 := hCodeInstr.tail.tail.head
+      rw [← hPcRel] at h0 h1 h2
+      let s1 := s.setReg .x1 (s.stack offIdx) |>.nextPC
+      let s2 := s1.setFReg .d0 (s1.arrayMem arrNm (s1.regs .x1)) |>.nextPC
+      let s3 := s2.setStack offX (s2.fregs .d0) |>.nextPC
+      refine ⟨s3, .step (.ldr .x1 offIdx h0) (.step (.farrLd .d0 arrNm .x1 h1) (.single (.fstr .d0 offX h2))),
+        ⟨?_, ?_, ?_⟩⟩
+      · intro w off hv
+        simp only [s3, s2, s1, ArmState.setStack, ArmState.setReg, ArmState.setFReg, ArmState.nextPC]
+        by_cases hoff : off = offX
+        · subst hoff; simp
+          have := hInjective w destV off hv hX; subst this
+          rw [Store.update_self]
+          simp [Value.encode, Value.ofBitVec, ArrayMem.read]
+          rw [hArrayMem, hStateRel idxV offIdx hIdx, hidx]; simp [Value.encode]
+        · simp [hoff]
+          have hne : w ≠ destV := fun h => hoff (Option.some.inj ((h ▸ hv).symm.trans hX))
+          rw [Store.update_other _ _ _ _ hne]; exact hStateRel w off hv
+      · show s.pc + 1 + 1 + 1 = pcMap (pc + 1)
+        have := hPcNext _ _ _ rfl; simp at this; rw [this, hPcRel]
+      · simp [s3, s2, s1, ArmState.setStack, ArmState.setReg, ArmState.setFReg, ArmState.nextPC, hArrayMem]
+    · -- Remaining cases: int or bool
+      cases ty with
+      | int =>
+        -- Int array load: ldr x1, arrLd x0, str x0
+        have hformal : formalGenInstr vm pcMap (.arrLoad destV arrNm idxV .int) haltLabel divLabel =
+            [.ldr .x1 offIdx, .arrLd .x0 arrNm .x1, .str .x0 offX] := by
+          show (match vm.lookup idxV, vm.lookup destV with
+            | some offIdx, some offX => _ | _, _ => _) = _
+          rw [hIdx, hX]
+        rw [heq, hformal] at hCodeInstr hPcNext
+        have h0 := hCodeInstr.head; have h1 := hCodeInstr.tail.head; have h2 := hCodeInstr.tail.tail.head
+        rw [← hPcRel] at h0 h1 h2
+        let s1 := s.setReg .x1 (s.stack offIdx) |>.nextPC
+        let s2 := s1.setReg .x0 (s1.arrayMem arrNm (s1.regs .x1)) |>.nextPC
+        let s3 := s2.setStack offX (s2.regs .x0) |>.nextPC
+        refine ⟨s3, .step (.ldr .x1 offIdx h0) (.step (.arrLd .x0 arrNm .x1 h1) (.single (.str .x0 offX h2))),
+          ⟨?_, ?_, ?_⟩⟩
+        · intro w off hv
+          simp only [s3, s2, s1, ArmState.setStack, ArmState.setReg, ArmState.nextPC,
+                      ArmReg.beq_self, ArmReg.x0_ne_x1, ite_true, ite_false, Bool.false_eq_true]
+          by_cases hoff : off = offX
+          · subst hoff; simp
+            have := hInjective w destV off hv hX; subst this
+            rw [Store.update_self]
+            simp [Value.encode, Value.ofBitVec, ArrayMem.read]
+            rw [hArrayMem, hStateRel idxV offIdx hIdx, hidx]; simp [Value.encode]
+          · simp [hoff]
+            have hne : w ≠ destV := fun h => hoff (Option.some.inj ((h ▸ hv).symm.trans hX))
+            rw [Store.update_other _ _ _ _ hne]; exact hStateRel w off hv
+        · show s.pc + 1 + 1 + 1 = pcMap (pc + 1)
+          have := hPcNext _ _ _ rfl; simp at this; rw [this, hPcRel]
+        · simp [s3, s2, s1, ArmState.setStack, ArmState.setReg, ArmState.nextPC, hArrayMem]
+      | bool =>
+        -- Bool array load: ldr x1, arrLd x0, cmpImm x0 0, cset x0 ne, str x0
+        have hformal : formalGenInstr vm pcMap (.arrLoad destV arrNm idxV .bool) haltLabel divLabel =
+            [.ldr .x1 offIdx, .arrLd .x0 arrNm .x1, .cmpImm .x0 0, .cset .x0 .ne, .str .x0 offX] := by
+          show (match vm.lookup idxV, vm.lookup destV with
+            | some offIdx, some offX => _ | _, _ => _) = _
+          rw [hIdx, hX]
+        rw [heq, hformal] at hCodeInstr hPcNext
+        have h0 := hCodeInstr.head; have h1 := hCodeInstr.tail.head
+        have h2 := hCodeInstr.tail.tail.head; have h3 := hCodeInstr.tail.tail.tail.head
+        have h4 := hCodeInstr.tail.tail.tail.tail.head
+        rw [← hPcRel] at h0 h1 h2 h3 h4
+        let s1 := s.setReg .x1 (s.stack offIdx) |>.nextPC
+        let s2 := s1.setReg .x0 (s1.arrayMem arrNm (s1.regs .x1)) |>.nextPC
+        let s3 := { s2 with flags := Flags.mk (s2.regs .x0) 0, pc := s2.pc + 1 }
+        let s4 := s3.setReg .x0 (if s3.flags.condHolds .ne then (1 : BitVec 64) else 0) |>.nextPC
+        let s5 := s4.setStack offX (s4.regs .x0) |>.nextPC
+        refine ⟨s5, .step (.ldr .x1 offIdx h0) (.step (.arrLd .x0 arrNm .x1 h1)
+          (.step (.cmpRI .x0 0 h2) (.step (.cset .x0 .ne h3) (.single (.str .x0 offX h4))))),
+          ⟨?_, ?_, ?_⟩⟩
+        · intro w off hv
+          simp only [s5, s4, s3, s2, s1, ArmState.setStack, ArmState.setReg, ArmState.nextPC]
+          by_cases hoff : off = offX
+          · subst hoff; simp
+            have := hInjective w destV off hv hX; subst this
+            rw [Store.update_self]
+            simp [Value.encode, Value.ofBitVec, ArrayMem.read, Flags.condHolds, BEq.beq, bne]
+            rw [hArrayMem, hStateRel idxV offIdx hIdx, hidx]; simp [Value.encode]
+          · simp [hoff]
+            have hne : w ≠ destV := fun h => hoff (Option.some.inj ((h ▸ hv).symm.trans hX))
+            rw [Store.update_other _ _ _ _ hne]; exact hStateRel w off hv
+        · show s.pc + 1 + 1 + 1 + 1 + 1 = pcMap (pc + 1)
+          have := hPcNext _ _ _ rfl; simp at this; rw [this, hPcRel]
+        · simp [s5, s4, s3, s2, s1, ArmState.setStack, ArmState.setReg, ArmState.nextPC, hArrayMem]
+      | float => exact absurd rfl hty
   | arrStore hinstr hidx hval hbounds =>
-    rename_i _ idxVal arrNm idxV valV
-    have htyint := hAllInt.arrStore_int hinstr; subst htyint
+    rename_i ty idxVal arrNm idxV valV
     obtain ⟨offIdx, hIdx⟩ := hVarMap idxV
     obtain ⟨offVal, hVal⟩ := hVarMap valV
-    have heq : instr = .arrStore arrNm idxV valV .int := Option.some.inj (hInstr.symm.trans hinstr)
-    have hformal : formalGenInstr vm pcMap (.arrStore arrNm idxV valV .int) haltLabel divLabel =
-        [.ldr .x1 offIdx, .ldr .x2 offVal, .arrSt arrNm .x1 .x2] := by
-      show (match vm.lookup idxV, vm.lookup valV with
-        | some offIdx, some offVal => _ | _, _ => _) = _
-      rw [hIdx, hVal]
-    rw [heq, hformal] at hCodeInstr hPcNext
-    have h0 := hCodeInstr.head
-    have h1 := hCodeInstr.tail.head
-    have h2 := hCodeInstr.tail.tail.head
-    rw [← hPcRel] at h0 h1 h2
-    let s1 := s.setReg .x1 (s.stack offIdx) |>.nextPC
-    let s2 := s1.setReg .x2 (s1.stack offVal) |>.nextPC
-    let s3 := s2.setArrayMem arrNm (s2.regs .x1) (s2.regs .x2) |>.nextPC
-    refine ⟨s3, .step (.ldr .x1 offIdx h0) (.step (.ldr .x2 offVal h1) (.single (.arrSt arrNm .x1 .x2 h2))),
-      ⟨?_, ?_, ?_⟩⟩
-    · -- StateRel: σ unchanged
-      intro w off hv
-      simp only [s3, s2, s1, ArmState.setArrayMem, ArmState.setReg, ArmState.nextPC,
-                  ArmState.setStack]
-      exact hStateRel w off hv
-    · -- PcRel
-      show s.pc + 1 + 1 + 1 = pcMap (pc + 1)
-      have := hPcNext _ _ _ rfl; simp at this
-      rw [this, hPcRel]
-    · -- arrayMem: need s3.arrayMem = am.write arrNm idxVal (σ valV).toBits
-      simp only [s3, s2, s1, ArmState.setArrayMem, ArmState.setReg, ArmState.nextPC]
-      funext x i
-      simp only [ArrayMem.write, ArmState.setArrayMem]
-      simp only [ArmReg.beq_self, ite_true, ArmReg.x1_ne_x2, Bool.false_eq_true, ite_false]
-      have hx1eq : (s.stack offIdx) = idxVal := by
-        rw [hStateRel idxV offIdx hIdx, hidx]; simp [Value.encode]
-      have hx2eq : s.stack offVal = (σ valV).toBits := by
-        rw [hStateRel valV offVal hVal]
-        cases hv' : σ valV with
-        | int n => simp [Value.encode, Value.toBits]
-        | bool bb => rw [hv'] at hval; simp [Value.typeOf] at hval
-        | float f => simp [Value.encode, Value.toBits]
-      rw [hx1eq, hx2eq, hArrayMem]
+    have heq : instr = .arrStore arrNm idxV valV ty := Option.some.inj (hInstr.symm.trans hinstr)
+    by_cases hty : ty = VarTy.float
+    · -- Float array store: ldr x1, fldr d0, farrSt
+      subst hty
+      have hformal : formalGenInstr vm pcMap (.arrStore arrNm idxV valV .float) haltLabel divLabel =
+          [.ldr .x1 offIdx, .fldr .d0 offVal, .farrSt arrNm .x1 .d0] := by
+        show (match vm.lookup idxV, vm.lookup valV with
+          | some offIdx, some offVal => _ | _, _ => _) = _
+        rw [hIdx, hVal]; simp
+      rw [heq, hformal] at hCodeInstr hPcNext
+      have h0 := hCodeInstr.head; have h1 := hCodeInstr.tail.head; have h2 := hCodeInstr.tail.tail.head
+      rw [← hPcRel] at h0 h1 h2
+      let s1 := s.setReg .x1 (s.stack offIdx) |>.nextPC
+      let s2 := s1.setFReg .d0 (s1.stack offVal) |>.nextPC
+      let s3 := s2.setArrayMem arrNm (s2.regs .x1) (s2.fregs .d0) |>.nextPC
+      refine ⟨s3, .step (.ldr .x1 offIdx h0) (.step (.fldr .d0 offVal h1) (.single (.farrSt arrNm .x1 .d0 h2))),
+        ⟨?_, ?_, ?_⟩⟩
+      · intro w off hv
+        simp only [s3, s2, s1, ArmState.setArrayMem, ArmState.setReg, ArmState.setFReg,
+                    ArmState.nextPC, ArmState.setStack]
+        exact hStateRel w off hv
+      · show s.pc + 1 + 1 + 1 = pcMap (pc + 1)
+        have := hPcNext _ _ _ rfl; simp at this; rw [this, hPcRel]
+      · simp only [s3, s2, s1, ArmState.setArrayMem, ArmState.setReg, ArmState.setFReg, ArmState.nextPC]
+        funext x i
+        simp only [ArrayMem.write, ArmState.setArrayMem, ArmState.setFReg, ArmState.setReg, ArmState.nextPC,
+                    ArmReg.beq_self, ite_true, show (ArmFReg.d0 == ArmFReg.d0) = true from rfl]
+        have hx1eq : (s.stack offIdx) = idxVal := by
+          rw [hStateRel idxV offIdx hIdx, hidx]; simp [Value.encode]
+        have hd0eq : s.stack offVal = (σ valV).toBits := by
+          rw [hStateRel valV offVal hVal]
+          cases hv' : σ valV with
+          | int n => rw [hv'] at hval; simp [Value.typeOf] at hval
+          | bool bb => rw [hv'] at hval; simp [Value.typeOf] at hval
+          | float f => simp [Value.encode, Value.toBits]
+        rw [hx1eq, hd0eq, hArrayMem]
+    · -- Int/bool array store: ldr x1, ldr x2, arrSt
+      have hnotfloat : (ty == VarTy.float) = false := by cases ty <;> simp_all
+      have hformal : formalGenInstr vm pcMap (.arrStore arrNm idxV valV ty) haltLabel divLabel =
+          [.ldr .x1 offIdx, .ldr .x2 offVal, .arrSt arrNm .x1 .x2] := by
+        show (match vm.lookup idxV, vm.lookup valV with
+          | some offIdx, some offVal => _ | _, _ => _) = _
+        rw [hIdx, hVal]; simp [hnotfloat]
+      rw [heq, hformal] at hCodeInstr hPcNext
+      have h0 := hCodeInstr.head; have h1 := hCodeInstr.tail.head; have h2 := hCodeInstr.tail.tail.head
+      rw [← hPcRel] at h0 h1 h2
+      let s1 := s.setReg .x1 (s.stack offIdx) |>.nextPC
+      let s2 := s1.setReg .x2 (s1.stack offVal) |>.nextPC
+      let s3 := s2.setArrayMem arrNm (s2.regs .x1) (s2.regs .x2) |>.nextPC
+      refine ⟨s3, .step (.ldr .x1 offIdx h0) (.step (.ldr .x2 offVal h1) (.single (.arrSt arrNm .x1 .x2 h2))),
+        ⟨?_, ?_, ?_⟩⟩
+      · intro w off hv
+        simp only [s3, s2, s1, ArmState.setArrayMem, ArmState.setReg, ArmState.nextPC, ArmState.setStack]
+        exact hStateRel w off hv
+      · show s.pc + 1 + 1 + 1 = pcMap (pc + 1)
+        have := hPcNext _ _ _ rfl; simp at this; rw [this, hPcRel]
+      · simp only [s3, s2, s1, ArmState.setArrayMem, ArmState.setReg, ArmState.nextPC]
+        funext x i
+        simp only [ArrayMem.write, ArmState.setArrayMem, ArmReg.beq_self, ite_true,
+                    ArmReg.x1_ne_x2, Bool.false_eq_true, ite_false]
+        have hx1eq : (s.stack offIdx) = idxVal := by
+          rw [hStateRel idxV offIdx hIdx, hidx]; simp [Value.encode]
+        have hx2eq : s.stack offVal = (σ valV).toBits := by
+          rw [hStateRel valV offVal hVal]
+          cases hv' : σ valV with
+          | int n => simp [Value.encode, Value.toBits]
+          | bool bb => simp [Value.encode, Value.toBits]
+          | float f => exfalso; rw [hv'] at hval; simp [Value.typeOf] at hval; exact hty hval.symm
+        rw [hx1eq, hx2eq, hArrayMem]
   | arrLoad_boundsError hinstr hidx hbounds =>
     exact ⟨s, .refl, trivial⟩
   | arrStore_boundsError hinstr hidx hval hbounds =>
@@ -1262,7 +1280,6 @@ theorem backward_simulation (p : Prog) (armProg : ArmProg)
     (hInjective : VarMapInjective vm)
     (hVarMap : ∀ v, ∃ off, vm.lookup v = some off)
     (hScratch : ScratchSafe vm)
-    (hAllInt : AllArrayOpsInt p)
     (hNoFloatExp : NoFloatExp p)
     {pc : Nat} {σ : Store} {am : ArrayMem} {cfg' : Cfg} {s : ArmState}
     (hStep : p ⊩ Cfg.run pc σ am ⟶ cfg')
@@ -1272,9 +1289,8 @@ theorem backward_simulation (p : Prog) (armProg : ArmProg)
     (haltLabel divLabel : Nat)
     (instr : TAC) (hInstr : p[pc]? = some instr)
     (hCode : CodeAt armProg (pcMap pc) (formalGenInstr vm pcMap instr haltLabel divLabel))
-    (hWrapped : WrappedStore σ)
     (hPcNext : ∀ pc' σ' am', cfg' = .run pc' σ' am' →
       pcMap pc' = pcMap pc + (formalGenInstr vm pcMap instr haltLabel divLabel).length) :
     ∃ s', ArmSteps armProg s s' ∧ SimRel vm pcMap cfg' s' := by
   exact genInstr_correct armProg vm pcMap p pc σ am s haltLabel divLabel
-    instr hInstr hRel hScratch hInjective hWT hTS hAllInt hNoFloatExp hPC cfg' hStep hVarMap hCode hWrapped hPcNext
+    instr hInstr hRel hScratch hInjective hWT hTS hNoFloatExp hPC cfg' hStep hVarMap hCode hPcNext

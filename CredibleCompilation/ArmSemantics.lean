@@ -63,7 +63,11 @@ inductive ArmStep (prog : ArmProg) : ArmState → ArmState → Prop where
 
   | cmpRR (rn rm : ArmReg) :
     prog[s.pc]? = some (.cmp rn rm) →
-    ArmStep prog s ({ s with flags := ⟨s.regs rn - s.regs rm⟩, pc := s.pc + 1 })
+    ArmStep prog s ({ s with flags := Flags.mk (s.regs rn) (s.regs rm), pc := s.pc + 1 })
+
+  | cmpRI (rn : ArmReg) (imm : BitVec 64) :
+    prog[s.pc]? = some (.cmpImm rn imm) →
+    ArmStep prog s ({ s with flags := Flags.mk (s.regs rn) imm, pc := s.pc + 1 })
 
   | cset (rd : ArmReg) (c : Cond) :
     prog[s.pc]? = some (.cset rd c) →
@@ -149,7 +153,7 @@ inductive ArmStep (prog : ArmProg) : ArmState → ArmState → Prop where
 
   | fcmpRR (fn fm : ArmFReg) :
     prog[s.pc]? = some (.fcmpR fn fm) →
-    ArmStep prog s ({ s with flags := ⟨s.fregs fn - s.fregs fm⟩, pc := s.pc + 1 })
+    ArmStep prog s ({ s with flags := Flags.mk (s.fregs fn) (s.fregs fm), pc := s.pc + 1 })
 
   | scvtf (fd : ArmFReg) (rn : ArmReg) :
     prog[s.pc]? = some (.scvtf fd rn) →
@@ -236,11 +240,6 @@ def StateRel (vm : VarMap) (σ : Store) (arm : ArmState) : Prop :=
 def ScratchSafe (vm : VarMap) : Prop :=
   ∀ v off, vm.lookup v = some off → off ≠ 0
 
-/-- Every integer value in the store has its signed interpretation in [0, 2^63).
-    This invariant ensures the simplified Flags model (using only msb for lt)
-    correctly implements signed comparison without overflow. -/
-def WrappedStore (σ : Store) : Prop :=
-  ∀ v (n : BitVec 64), σ v = .int n → 0 ≤ n.toInt ∧ n.toInt < (2 ^ 63 : Int)
 
 /-- If a BitVec 64 is nonzero as a BitVec, it is nonzero. (Trivial but useful for readability.) -/
 theorem BitVec_ne_zero {b : BitVec 64} (hb : b ≠ 0) : b ≠ 0 := hb
@@ -360,15 +359,21 @@ def formalGenInstr (vm : VarMap) (pcMap : Nat → Nat) (instr : TAC)
   | .ifgoto be l =>
     formalGenBoolExpr vm be ++ [.cbnz .x0 (pcMap l)]
   | .halt => [.b haltLabel]
-  | .arrLoad x arr idx _ =>
+  | .arrLoad x arr idx ty =>
     match vm.lookup idx, vm.lookup x with
     | some offIdx, some offX =>
-      [.ldr .x1 offIdx, .arrLd .x0 arr .x1, .str .x0 offX]
+      match ty with
+      | .float => [.ldr .x1 offIdx, .farrLd .d0 arr .x1, .fstr .d0 offX]
+      | .bool  => [.ldr .x1 offIdx, .arrLd .x0 arr .x1, .cmpImm .x0 0, .cset .x0 .ne, .str .x0 offX]
+      | .int   => [.ldr .x1 offIdx, .arrLd .x0 arr .x1, .str .x0 offX]
     | _, _ => []
-  | .arrStore arr idx val _ =>
+  | .arrStore arr idx val ty =>
     match vm.lookup idx, vm.lookup val with
     | some offIdx, some offVal =>
-      [.ldr .x1 offIdx, .ldr .x2 offVal, .arrSt arr .x1 .x2]
+      if ty == .float then
+        [.ldr .x1 offIdx, .fldr .d0 offVal, .farrSt arr .x1 .d0]
+      else
+        [.ldr .x1 offIdx, .ldr .x2 offVal, .arrSt arr .x1 .x2]
     | _, _ => []
   | .fbinop dst fop lv rv =>
     let fpInstr := match fop with
