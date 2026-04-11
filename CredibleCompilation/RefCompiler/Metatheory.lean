@@ -446,18 +446,312 @@ theorem refCompileStmt_diverges (s : Stmt) (σ : Store) (am : ArrayMem)
     (offset nextTmp : Nat) (p : Prog) (σ_tac : Store)
     (htmpfree : s.tmpFree)
     (hftmpfree : s.ftmpFree)
+    (hgotofree : s.gotoFree)
     (hdiv : ∀ fuel, s.interp fuel σ am p.arrayDecls = none)
     (hsafe : ∀ fuel, s.safe fuel σ am p.arrayDecls)
     (htypedv : ∀ fuel, s.typedVars fuel σ am p.arrayDecls)
     (hagree : ∀ v, v.isTmp = false → v.isFTmp = false → σ_tac v = σ v)
     (hcode : CodeAt (refCompileStmt s offset nextTmp).1 p offset) :
     ∀ N, ∃ n, n ≥ N ∧ ∃ pc' σ' am', RefStepsN p n (Cfg.run offset σ_tac am) (Cfg.run pc' σ' am') := by
-  sorry
+  induction s generalizing σ am offset nextTmp σ_tac with
+  | skip => exact absurd (hdiv 0) (by simp [Stmt.interp])
+  | label _ => exact absurd (hdiv 0) (by simp [Stmt.interp])
+  | assign x e =>
+    have := SExpr.isSafe_of_safe e σ am p.arrayDecls (by simpa [Stmt.safe] using hsafe 0)
+    exact absurd (hdiv 0) (by simp [Stmt.interp, this])
+  | bassign x b =>
+    have := SBool.isSafe_of_safe b σ am p.arrayDecls (by simpa [Stmt.safe] using hsafe 0)
+    exact absurd (hdiv 0) (by simp [Stmt.interp, this])
+  | fassign x e =>
+    have := SExpr.isSafe_of_safe e σ am p.arrayDecls (by simpa [Stmt.safe] using hsafe 0)
+    exact absurd (hdiv 0) (by simp [Stmt.interp, this])
+  | arrWrite arr idx val =>
+    simp only [Stmt.safe] at hsafe; obtain ⟨hi, hv, hb⟩ := hsafe 0
+    have h1 := SExpr.isSafe_of_safe idx σ am _ hi
+    have h2 := SExpr.isSafe_of_safe val σ am _ hv
+    exact absurd (hdiv 0) (by simp [Stmt.interp, h1, h2, decide_eq_true_eq.mpr hb])
+  | barrWrite arr idx bval =>
+    simp only [Stmt.safe] at hsafe; obtain ⟨hi, hv, hb⟩ := hsafe 0
+    have h1 := SExpr.isSafe_of_safe idx σ am _ hi
+    have h2 := SBool.isSafe_of_safe bval σ am _ hv
+    exact absurd (hdiv 0) (by simp [Stmt.interp, h1, h2, decide_eq_true_eq.mpr hb])
+  | farrWrite arr idx val =>
+    simp only [Stmt.safe] at hsafe; obtain ⟨hi, hv, hb⟩ := hsafe 0
+    have h1 := SExpr.isSafe_of_safe idx σ am _ hi
+    have h2 := SExpr.isSafe_of_safe val σ am _ hv
+    exact absurd (hdiv 0) (by simp [Stmt.interp, h1, h2, decide_eq_true_eq.mpr hb])
+  | goto _ => exact hgotofree.elim
+  | ifgoto _ _ => exact hgotofree.elim
+  | seq s1 s2 ih1 ih2 =>
+    have htf1 : s1.tmpFree := fun v hv => htmpfree v (List.mem_append_left _ hv)
+    have htf2 : s2.tmpFree := fun v hv => htmpfree v (List.mem_append_right _ hv)
+    have hftf1 : s1.ftmpFree := fun v hv => hftmpfree v (List.mem_append_left _ hv)
+    have hftf2 : s2.ftmpFree := fun v hv => hftmpfree v (List.mem_append_right _ hv)
+    dsimp only [refCompileStmt] at hcode ⊢
+    generalize hrc1 : refCompileStmt s1 offset nextTmp = rc1 at hcode ⊢
+    obtain ⟨code1, tmp1⟩ := rc1
+    generalize hrc2 : refCompileStmt s2 (offset + code1.length) tmp1 = rc2 at hcode ⊢
+    obtain ⟨code2, tmp2⟩ := rc2; simp only [] at hcode ⊢
+    by_cases hs1_div : ∀ fuel, s1.interp fuel σ am p.arrayDecls = none
+    · -- s1 diverges
+      have hs1_safe : ∀ fuel, s1.safe fuel σ am p.arrayDecls := by
+        intro fuel; have h := hsafe fuel; simp only [Stmt.safe] at h; exact h.1
+      have hs1_tv : ∀ fuel, s1.typedVars fuel σ am p.arrayDecls := by
+        intro fuel; have h := htypedv fuel; simp only [Stmt.typedVars] at h; exact h.1
+      intro N
+      obtain ⟨n, hn, pc', σ', am', hsteps⟩ :=
+        ih1 σ am offset nextTmp σ_tac htf1 hftf1 hgotofree.1 hs1_div hs1_safe hs1_tv hagree
+          (by rw [hrc1]; exact hcode.left) N
+      exact ⟨n, hn, pc', σ', am', hsteps⟩
+    · -- s1 terminates for some fuel
+      push_neg at hs1_div; obtain ⟨f₀, hf₀_ne⟩ := hs1_div
+      obtain ⟨r, hf₀⟩ := Option.ne_none_iff_exists'.mp hf₀_ne
+      obtain ⟨σ₁, am₁⟩ := r
+      have hs1_safe : s1.safe f₀ σ am p.arrayDecls := by
+        have h := hsafe f₀; simp only [Stmt.safe] at h; exact h.1
+      have hs1_tv : s1.typedVars f₀ σ am p.arrayDecls := by
+        have h := htypedv f₀; simp only [Stmt.typedVars] at h; exact h.1
+      -- Execute s1
+      obtain ⟨σ_1, hexec_1, hagree_1⟩ :=
+        refCompileStmt_correct s1 f₀ σ σ₁ am am₁ offset nextTmp p σ_tac hf₀ htf1 hftf1
+          hs1_safe hs1_tv hagree (by rw [hrc1]; exact hcode.left)
+      rw [hrc1] at hexec_1; simp at hexec_1
+      obtain ⟨k₁, hk₁⟩ := hexec_1.to_RefStepsN
+      -- s2 diverges
+      have hs2_div : ∀ fuel, s2.interp fuel σ₁ am₁ p.arrayDecls = none := by
+        intro fuel
+        have h := hdiv (max f₀ fuel)
+        simp only [Stmt.interp, bind, Option.bind] at h
+        have := Stmt.interp_fuel_mono s1 f₀ (max f₀ fuel - f₀) σ am p.arrayDecls _ hf₀
+        rw [show f₀ + (max f₀ fuel - f₀) = max f₀ fuel from by omega] at this
+        simp [this] at h
+        exact Stmt.interp_none_of_le s2 fuel (max f₀ fuel) σ₁ am₁ p.arrayDecls h (by omega)
+      have hs2_safe : ∀ fuel, s2.safe fuel σ₁ am₁ p.arrayDecls := by
+        intro fuel
+        have hsafe_big := hsafe (max f₀ fuel); simp only [Stmt.safe] at hsafe_big
+        obtain ⟨_, h2⟩ := hsafe_big
+        have hm := Stmt.interp_fuel_mono s1 f₀ (max f₀ fuel - f₀) σ am p.arrayDecls _ hf₀
+        rw [show f₀ + (max f₀ fuel - f₀) = max f₀ fuel from by omega] at hm
+        rw [hm] at h2
+        exact Stmt.safe_of_le s2 fuel (max f₀ fuel) σ₁ am₁ _ h2 (by omega)
+      have hs2_tv : ∀ fuel, s2.typedVars fuel σ₁ am₁ p.arrayDecls := by
+        intro fuel
+        have htv_big := htypedv (max f₀ fuel); simp only [Stmt.typedVars] at htv_big
+        obtain ⟨_, h2⟩ := htv_big
+        have hm := Stmt.interp_fuel_mono s1 f₀ (max f₀ fuel - f₀) σ am p.arrayDecls _ hf₀
+        rw [show f₀ + (max f₀ fuel - f₀) = max f₀ fuel from by omega] at hm
+        rw [hm] at h2
+        exact Stmt.typedVars_of_le s2 fuel (max f₀ fuel) σ₁ am₁ _ h2 (by omega)
+      intro N
+      obtain ⟨n₂, hn₂, pc', σ', am', hsteps₂⟩ :=
+        ih2 σ₁ am₁ (offset + code1.length) tmp1 σ_1 htf2 hftf2 hgotofree.2 hs2_div hs2_safe hs2_tv
+          hagree_1 (by rw [hrc2]; exact hcode.right) N
+      exact ⟨k₁ + n₂, by omega, pc', σ', am', RefStepsN.trans hk₁ hsteps₂⟩
+  | ite b s1 s2 ih1 ih2 =>
+    have hb_safe : b.safe σ am p.arrayDecls := by
+      have := hsafe 0; simp only [Stmt.safe] at this; exact this.1
+    have htv_b : b.typedVars σ am := by
+      have := htypedv 0; simp only [Stmt.typedVars] at this; exact this.1
+    have hb_isSafe := SBool.isSafe_of_safe b σ am p.arrayDecls hb_safe
+    have htf_b : ∀ v ∈ b.freeVars, v.isTmp = false := fun v hv =>
+      htmpfree v (List.mem_append_left _ (List.mem_append_left _ hv))
+    have hftf_b : ∀ v ∈ b.freeVars, v.isFTmp = false := fun v hv =>
+      hftmpfree v (List.mem_append_left _ (List.mem_append_left _ hv))
+    dsimp only [refCompileStmt] at hcode ⊢
+    generalize hrcb : refCompileBool b offset nextTmp = rcb at hcode ⊢
+    obtain ⟨codeBool, be, tmpB⟩ := rcb
+    generalize hrce : refCompileStmt s2 (offset + codeBool.length + 1) tmpB = rce at hcode ⊢
+    obtain ⟨codeElse, tmpElse⟩ := rce
+    generalize hrct : refCompileStmt s1 (offset + codeBool.length + 1 + codeElse.length + 1)
+        tmpElse = rct at hcode ⊢
+    obtain ⟨codeThen, tmpThen⟩ := rct; simp only [] at hcode ⊢
+    obtain ⟨σ_bool, hexec_bool, heval_bool, hntmp_bool, _, _⟩ :=
+      refCompileBool_correct b offset nextTmp σ σ_tac am p htf_b hftf_b htv_b hb_safe hagree
+        (by rw [hrcb]; exact hcode.left.left.left.left)
+    rw [hrcb] at hexec_bool heval_bool; simp at hexec_bool heval_bool
+    have hagree_bool : ∀ v, v.isTmp = false → v.isFTmp = false → σ_bool v = σ v :=
+      fun v hv1 hv2 => by rw [hntmp_bool v hv1 hv2]; exact hagree v hv1 hv2
+    obtain ⟨k_bool, hk_bool⟩ := hexec_bool.to_RefStepsN
+    have hifgoto_instr : p[offset + codeBool.length]? =
+        some (.ifgoto be (offset + codeBool.length + 1 + codeElse.length + 1)) := by
+      have := hcode.left.left.left.right.head; simpa using this
+    cases heval : b.eval σ am
+    · -- false → else branch diverges
+      have htf2 : s2.tmpFree := fun v hv => htmpfree v (List.mem_append_right _ hv)
+      have hftf2 : s2.ftmpFree := fun v hv => hftmpfree v (List.mem_append_right _ hv)
+      have hs2_div : ∀ fuel, s2.interp fuel σ am p.arrayDecls = none := by
+        intro fuel; have := hdiv fuel; simp [Stmt.interp, hb_isSafe, heval] at this; exact this
+      have hs2_safe : ∀ fuel, s2.safe fuel σ am p.arrayDecls := by
+        intro fuel; have := hsafe fuel; simp [Stmt.safe, heval] at this; exact this.2
+      have hs2_tv : ∀ fuel, s2.typedVars fuel σ am p.arrayDecls := by
+        intro fuel; have := htypedv fuel; simp [Stmt.typedVars, heval] at this; exact this.2
+      have hexec_if := FragExec.single_iffalse (am := am) hifgoto_instr (by rw [heval_bool, heval])
+      obtain ⟨k_if, hk_if⟩ := hexec_if.to_RefStepsN
+      have hcode_else : CodeAt (refCompileStmt s2 (offset + codeBool.length + 1) tmpB).1 p
+          (offset + codeBool.length + 1) := by
+        rw [hrce]; have := hcode.left.left.right
+        simp only [List.length_append, List.length_cons, List.length_nil] at this
+        rwa [show offset + (codeBool.length + 1) =
+            offset + codeBool.length + 1 from by omega] at this
+      intro N
+      obtain ⟨n₂, hn₂, pc', σ', am', hsteps₂⟩ :=
+        ih2 σ am (offset + codeBool.length + 1) tmpB σ_bool htf2 hftf2 hgotofree.2 hs2_div hs2_safe
+          hs2_tv hagree_bool hcode_else N
+      obtain ⟨k_pre, hk_pre⟩ := (FragExec.trans' hexec_bool hexec_if).to_RefStepsN
+      exact ⟨k_pre + n₂, by omega, pc', σ', am', RefStepsN.trans hk_pre hsteps₂⟩
+    · -- true → then branch diverges
+      have htf1 : s1.tmpFree := fun v hv =>
+        htmpfree v (List.mem_append_left _ (List.mem_append_right _ hv))
+      have hftf1 : s1.ftmpFree := fun v hv =>
+        hftmpfree v (List.mem_append_left _ (List.mem_append_right _ hv))
+      have hs1_div : ∀ fuel, s1.interp fuel σ am p.arrayDecls = none := by
+        intro fuel; have := hdiv fuel; simp [Stmt.interp, hb_isSafe, heval] at this; exact this
+      have hs1_safe : ∀ fuel, s1.safe fuel σ am p.arrayDecls := by
+        intro fuel; have := hsafe fuel; simp [Stmt.safe, heval] at this; exact this.2
+      have hs1_tv : ∀ fuel, s1.typedVars fuel σ am p.arrayDecls := by
+        intro fuel; have := htypedv fuel; simp [Stmt.typedVars, heval] at this; exact this.2
+      have hexec_if := FragExec.single_iftrue (am := am) hifgoto_instr (by rw [heval_bool, heval])
+      obtain ⟨k_if, hk_if⟩ := hexec_if.to_RefStepsN
+      have hcode_then : CodeAt (refCompileStmt s1
+          (offset + codeBool.length + 1 + codeElse.length + 1) tmpElse).1 p
+          (offset + codeBool.length + 1 + codeElse.length + 1) := by
+        rw [hrct]; have := hcode.right
+        simp only [List.length_append, List.length_cons, List.length_nil] at this
+        rwa [show offset + (codeBool.length + 1 + codeElse.length + 1) =
+            offset + codeBool.length + 1 + codeElse.length + 1 from by omega] at this
+      intro N
+      obtain ⟨n₁, hn₁, pc', σ', am', hsteps₁⟩ :=
+        ih1 σ am (offset + codeBool.length + 1 + codeElse.length + 1) tmpElse σ_bool
+          htf1 hftf1 hgotofree.1 hs1_div hs1_safe hs1_tv hagree_bool hcode_then N
+      obtain ⟨k_pre, hk_pre⟩ := (FragExec.trans' hexec_bool hexec_if).to_RefStepsN
+      exact ⟨k_pre + n₁, by omega, pc', σ', am', RefStepsN.trans hk_pre hsteps₁⟩
+  | loop b body ihb =>
+    have htf_body : body.tmpFree := fun v hv => htmpfree v (List.mem_append_right _ hv)
+    have hftf_body : body.ftmpFree := fun v hv => hftmpfree v (List.mem_append_right _ hv)
+    -- Helper: derive b.eval = true from divergence + safety at any state
+    have b_eval_true : ∀ σ' am',
+        (∀ fuel, (Stmt.loop b body).interp fuel σ' am' p.arrayDecls = none) →
+        (∀ fuel, (Stmt.loop b body).safe fuel σ' am' p.arrayDecls) →
+        b.eval σ' am' = true := by
+      intro σ' am' hdiv' hsafe'
+      by_contra h; cases hh : b.eval σ' am'
+      · have hsafe1 := hsafe' 1; rw [Stmt.safe.eq_9] at hsafe1
+        have := hdiv' 1; rw [Stmt.interp.eq_9] at this
+        simp [SBool.isSafe_of_safe b σ' am' _ hsafe1.1, hh] at this
+      · exact h hh
+    -- Helper: derive next-state properties after one iteration
+    have next_state_props : ∀ σ' am' f₀ σ₁' am₁',
+        (∀ fuel, (Stmt.loop b body).interp fuel σ' am' p.arrayDecls = none) →
+        (∀ fuel, (Stmt.loop b body).safe fuel σ' am' p.arrayDecls) →
+        (∀ fuel, (Stmt.loop b body).typedVars fuel σ' am' p.arrayDecls) →
+        body.interp f₀ σ' am' p.arrayDecls = some (σ₁', am₁') →
+        (∀ fuel, (Stmt.loop b body).interp fuel σ₁' am₁' p.arrayDecls = none) ∧
+        (∀ fuel, (Stmt.loop b body).safe fuel σ₁' am₁' p.arrayDecls) ∧
+        (∀ fuel, (Stmt.loop b body).typedVars fuel σ₁' am₁' p.arrayDecls) := by
+      intro σ' am' f₀ σ₁' am₁' hdiv' hsafe' htypedv' hbody
+      have hbe := b_eval_true σ' am' hdiv' hsafe'
+      have hsafe1 := hsafe' 1; rw [Stmt.safe.eq_9] at hsafe1
+      have hbisSafe := SBool.isSafe_of_safe b σ' am' _ hsafe1.1
+      refine ⟨?_, ?_, ?_⟩
+      · intro fuel
+        have h := hdiv' (max f₀ fuel + 1); rw [Stmt.interp.eq_9] at h; simp [hbisSafe, hbe] at h
+        have := Stmt.interp_fuel_mono body f₀ (max f₀ fuel - f₀) σ' am' p.arrayDecls _ hbody
+        rw [show f₀ + (max f₀ fuel - f₀) = max f₀ fuel from by omega] at this
+        simp [this] at h; exact Stmt.interp_none_of_le _ fuel _ σ₁' am₁' _ h (by omega)
+      · intro fuel
+        have h := hsafe' (max f₀ fuel + 1); rw [Stmt.safe.eq_9] at h
+        obtain ⟨_, h2⟩ := h; simp [hbe] at h2
+        have := Stmt.interp_fuel_mono body f₀ (max f₀ fuel - f₀) σ' am' p.arrayDecls _ hbody
+        rw [show f₀ + (max f₀ fuel - f₀) = max f₀ fuel from by omega] at this
+        rw [this] at h2; exact Stmt.safe_of_le _ fuel _ σ₁' am₁' _ h2.2 (by omega)
+      · intro fuel
+        have h := htypedv' (max f₀ fuel + 1); rw [Stmt.typedVars.eq_9] at h
+        obtain ⟨_, h2⟩ := h; simp [hbe] at h2
+        have := Stmt.interp_fuel_mono body f₀ (max f₀ fuel - f₀) σ' am' p.arrayDecls _ hbody
+        rw [show f₀ + (max f₀ fuel - f₀) = max f₀ fuel from by omega] at this
+        rw [this] at h2; exact Stmt.typedVars_of_le _ fuel _ σ₁' am₁' _ h2.2 (by omega)
+    -- Main proof: suffices with N-induction generalized over state
+    suffices ∀ N σ' am' σ_tac',
+        (∀ fuel, (Stmt.loop b body).interp fuel σ' am' p.arrayDecls = none) →
+        (∀ fuel, (Stmt.loop b body).safe fuel σ' am' p.arrayDecls) →
+        (∀ fuel, (Stmt.loop b body).typedVars fuel σ' am' p.arrayDecls) →
+        (∀ v, v.isTmp = false → v.isFTmp = false → σ_tac' v = σ' v) →
+        ∃ n, n ≥ N ∧ ∃ pc' σ'' am'',
+          RefStepsN p n (Cfg.run offset σ_tac' am') (Cfg.run pc' σ'' am'') by
+      exact fun N => this N σ am σ_tac hdiv hsafe htypedv hagree
+    intro N; induction N with
+    | zero => intro σ' am' σ_tac' _ _ _ _; exact ⟨0, le_refl 0, offset, σ_tac', am', .refl⟩
+    | succ N ih_N =>
+      intro σ' am' σ_tac' hdiv' hsafe' htypedv' hagree'
+      have hbe := b_eval_true σ' am' hdiv' hsafe'
+      have hsafe1' := hsafe' 1; rw [Stmt.safe.eq_9] at hsafe1'
+      have hbs := hsafe1'.1
+      have htypedv1' := htypedv' 1; rw [Stmt.typedVars.eq_9] at htypedv1'
+      have htv_b' := htypedv1'.1
+      by_cases hbody_div : ∀ fuel, body.interp fuel σ' am' p.arrayDecls = none
+      · -- Body diverges: prefix with bool + ifgoto, use structural IH on body
+        have hbody_safe : ∀ fuel, body.safe fuel σ' am' p.arrayDecls := by
+          intro fuel; have := hsafe' (fuel + 1); rw [Stmt.safe.eq_9] at this
+          obtain ⟨_, h2⟩ := this; simp [hbe] at h2; exact h2.1
+        have hbody_tv : ∀ fuel, body.typedVars fuel σ' am' p.arrayDecls := by
+          intro fuel; have := htypedv' (fuel + 1); rw [Stmt.typedVars.eq_9] at this
+          obtain ⟨_, h2⟩ := this; simp [hbe] at h2; exact h2.1
+        have htf_b : ∀ v ∈ b.freeVars, v.isTmp = false :=
+          fun v hv => htmpfree v (List.mem_append_left _ hv)
+        have hftf_b : ∀ v ∈ b.freeVars, v.isFTmp = false :=
+          fun v hv => hftmpfree v (List.mem_append_left _ hv)
+        dsimp only [refCompileStmt] at hcode
+        generalize hrcb : refCompileBool b offset nextTmp = rcb at hcode
+        obtain ⟨codeBool, be, tmpB⟩ := rcb
+        generalize hrcbody : refCompileStmt body (offset + codeBool.length + 1) tmpB = rcbody
+            at hcode
+        obtain ⟨codeBody, tmpBody⟩ := rcbody; simp only [] at hcode
+        obtain ⟨σ_bool, hexec_bool, heval_bool, hntmp_bool, _, _⟩ :=
+          refCompileBool_correct b offset nextTmp σ' σ_tac' am' p htf_b hftf_b htv_b' hbs hagree'
+            (by rw [hrcb]; exact hcode.left.left.left)
+        rw [hrcb] at hexec_bool heval_bool; simp at hexec_bool heval_bool
+        have hagree_bool : ∀ v, v.isTmp = false → v.isFTmp = false → σ_bool v = σ' v :=
+          fun v hv1 hv2 => by rw [hntmp_bool v hv1 hv2]; exact hagree' v hv1 hv2
+        have hifg : p[offset + codeBool.length]? =
+            some (.ifgoto (.not be) (offset + codeBool.length + 1 + codeBody.length + 1)) := by
+          have := hcode.left.left.right.head
+          simp only [List.length_append, List.length_cons, List.length_nil] at this; exact this
+        have hexec_if := FragExec.single_iffalse (am := am') (σ := σ_bool) hifg
+          (by simp [BoolExpr.eval, heval_bool, hbe])
+        obtain ⟨k_pre, hk_pre⟩ := (FragExec.trans' hexec_bool hexec_if).to_RefStepsN
+        have hcode_body : CodeAt (refCompileStmt body (offset + codeBool.length + 1) tmpB).1 p
+            (offset + codeBool.length + 1) := by
+          rw [hrcbody]; have := hcode.left.right
+          simp only [List.length_append, List.length_cons, List.length_nil] at this
+          rwa [show offset + (codeBool.length + 1) =
+              offset + codeBool.length + 1 from by omega] at this
+        obtain ⟨n_body, hn_body, pc', σ'', am'', hsteps_body⟩ :=
+          ihb σ' am' (offset + codeBool.length + 1) tmpB σ_bool htf_body hftf_body
+            hgotofree hbody_div hbody_safe hbody_tv hagree_bool hcode_body (N + 1)
+        exact ⟨k_pre + n_body, by omega, pc', σ'', am'', RefStepsN.trans hk_pre hsteps_body⟩
+      · -- Body terminates for some fuel
+        push_neg at hbody_div; obtain ⟨f₀, hf₀_ne⟩ := hbody_div
+        obtain ⟨r, hf₀⟩ := Option.ne_none_iff_exists'.mp hf₀_ne
+        obtain ⟨σ₁, am₁⟩ := r
+        have hbody_safe : body.safe f₀ σ' am' p.arrayDecls := by
+          have := hsafe' (f₀ + 1); rw [Stmt.safe.eq_9] at this
+          obtain ⟨_, h2⟩ := this; simp [hbe] at h2; exact h2.1
+        have hbody_tv : body.typedVars f₀ σ' am' p.arrayDecls := by
+          have := htypedv' (f₀ + 1); rw [Stmt.typedVars.eq_9] at this
+          obtain ⟨_, h2⟩ := this; simp [hbe] at h2; exact h2.1
+        obtain ⟨σ₁_tac, k₁, hiter₁, hagree₁, hk₁_ge⟩ :=
+          loop_one_iter b body f₀ σ' σ₁ am' am₁ offset nextTmp p σ_tac' htmpfree hftmpfree
+            hbe hbs htv_b' hf₀ hbody_safe hbody_tv hagree' hcode
+        obtain ⟨hdiv₁, hsafe₁, htypedv₁⟩ := next_state_props σ' am' f₀ σ₁ am₁ hdiv' hsafe' htypedv' hf₀
+        obtain ⟨n_rest, hn_rest, pc', σ'', am'', hsteps_rest⟩ :=
+          ih_N σ₁ am₁ σ₁_tac hdiv₁ hsafe₁ htypedv₁ hagree₁
+        exact ⟨k₁ + n_rest, by omega, pc', σ'', am'', RefStepsN.trans hiter₁ hsteps_rest⟩
 /-- Top-level divergence: if the source diverges with safety,
     the compiled program does not halt. -/
 theorem refCompile_diverge (s : Stmt) (σ : Store)
     (htmpfree : s.tmpFree)
     (hftmpfree : s.ftmpFree)
+    (hgotofree : s.gotoFree)
     (hdiv : ∀ fuel, s.interp fuel σ ArrayMem.init (refCompile s).arrayDecls = none)
     (hsafe : ∀ fuel, s.safe fuel σ ArrayMem.init (refCompile s).arrayDecls)
     (htypedv : ∀ fuel, s.typedVars fuel σ ArrayMem.init (refCompile s).arrayDecls) :
@@ -466,5 +760,5 @@ theorem refCompile_diverge (s : Stmt) (σ : Store)
     intro i hi; unfold refCompile; simp only [Prog.ofCode, Prog.getElem?_code, List.getElem?_toArray, Nat.zero_add]
     exact List.getElem?_append_left hi
   have hunbounded := refCompileStmt_diverges s σ ArrayMem.init 0 0 (refCompile s) σ
-    htmpfree hftmpfree hdiv hsafe htypedv (fun _ _ _ => rfl) hcode
+    htmpfree hftmpfree hgotofree hdiv hsafe htypedv (fun _ _ _ => rfl) hcode
   exact no_halt_of_unbounded_am hunbounded

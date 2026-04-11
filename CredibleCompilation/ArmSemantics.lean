@@ -308,9 +308,12 @@ def formalGenBoolExpr (vm : VarMap) (be : BoolExpr) : List ArmInstr :=
     | none => []
   | .not e =>
     formalGenBoolExpr vm e ++ [.eorImm .x0 .x0 (1 : BitVec 64)]
-  | .fcmp _fop _lv _rv =>
-    -- Float comparison not yet supported in ARM backend
-    sorry
+  | .fcmp fop lv rv =>
+    let cond := match fop with | .feq => Cond.eq | .fne => .ne | .flt => .lt | .fle => .le
+    match vm.lookup lv, vm.lookup rv with
+    | some offL, some offR =>
+      [.fldr .d1 offL, .fldr .d2 offR, .fcmpR .d1 .d2, .cset .x0 cond]
+    | _, _ => []
 
 /-- Generate formal ARM64 instructions for a TAC instruction.
     Mirrors `genInstr` in CodeGen.lean (without the label string).
@@ -367,17 +370,28 @@ def formalGenInstr (vm : VarMap) (pcMap : Nat → Nat) (instr : TAC)
     | some offIdx, some offVal =>
       [.ldr .x1 offIdx, .ldr .x2 offVal, .arrSt arr .x1 .x2]
     | _, _ => []
-  | .fbinop _dst _fop _lv _rv =>
-    -- Float binary ops not yet supported in ARM backend
-    sorry
-  | .intToFloat _dst _src =>
-    -- intToFloat not yet supported in ARM backend
-    sorry
-  | .floatToInt _dst _src =>
-    -- floatToInt not yet supported in ARM backend
-    sorry
+  | .fbinop dst fop lv rv =>
+    let fpInstr := match fop with
+      | .fadd => ArmInstr.faddR .d0 .d1 .d2
+      | .fsub => .fsubR .d0 .d1 .d2
+      | .fmul => .fmulR .d0 .d1 .d2
+      | .fdiv => .fdivR .d0 .d1 .d2
+    match vm.lookup lv, vm.lookup rv, vm.lookup dst with
+    | some offL, some offR, some offD =>
+      [.fldr .d1 offL, .fldr .d2 offR, fpInstr, .fstr .d0 offD]
+    | _, _, _ => []
+  | .intToFloat dst src =>
+    match vm.lookup src, vm.lookup dst with
+    | some offS, some offD =>
+      [.ldr .x0 offS, .scvtf .d0 .x0, .fstr .d0 offD]
+    | _, _ => []
+  | .floatToInt dst src =>
+    match vm.lookup src, vm.lookup dst with
+    | some offS, some offD =>
+      [.fldr .d0 offS, .fcvtzs .x0 .d0, .str .x0 offD]
+    | _, _ => []
   | .floatExp _dst _src =>
-    -- floatExp not yet supported in ARM backend
+    -- floatExp requires function call (bl) which is not yet modeled
     sorry
 
 -- ============================================================

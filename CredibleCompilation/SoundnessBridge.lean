@@ -1924,6 +1924,16 @@ private theorem samCoherent_nil_am_eq {σ : Store} {am am' : ArrayMem}
     (h : SamCoherent [] σ am am') : am' = am := by
   cases h; rfl
 
+/-- If SamCoherent relates a singleton SAM, the result is a single write. -/
+private theorem samCoherent_singleton {σ : Store} {am am' : ArrayMem}
+    {arr : ArrayName} {idx_e val_e : Expr}
+    (h : SamCoherent [(arr, idx_e, val_e)] σ am am') :
+    ∃ bv, val_e.eval σ am = .int bv ∧
+      am' = am.write arr (idx_e.eval σ am).toInt bv := by
+  cases h
+  next h_eval h_coh h_am =>
+    exact ⟨_, h_eval, (samCoherent_nil_am_eq h_coh) ▸ h_am⟩
+
 /-- Extract index/value types from an arrStore step that produces Cfg.run. -/
 private theorem arrStore_step_values {p : Prog} {pc pc' : Nat} {σ σ' : Store} {am am' : ArrayMem}
     {arr : ArrayName} {idx val : Var}
@@ -2046,7 +2056,15 @@ private theorem transRel_sound (dc : ECertificate)
         have hb_eq : b_o = b_t := Value.int.inj ((hzb).symm.trans (hσt_z ▸ hzb_t))
         subst ha_eq; subst hb_eq
         simp only [BinOp.safe]; rw [beq_iff_eq.mp hop_eq] at hsafe_t; exact hsafe_t
-      | _ => intro hstep hpc_check; simp [BinOp.safe]; sorry
+      | _ =>
+        intro hstep hpc_check
+        -- The strengthened checker rejects non-binop trans with div/mod orig
+        rw [hinstr] at hpc_check
+        have hgetD : dc.instrCerts.getD pc_t default = dic := by
+          simp [Array.getD, dif_pos (bound_of_getElem? hdic)]
+          exact (Array.getElem?_eq_some_iff.mp hdic).2
+        rw [hgetD] at hpc_check; rw [horig] at hpc_check
+        simp at hpc_check
   -- Derive arguments for execPath_sound
   set inv_o := dc.inv_orig.getD dic.pc_orig ([] : EInv) with hinv_o_def
   have hrepr_nil : ∀ v, (ssGet ([] : SymStore) v).eval σ_o am_t = σ_o v :=
@@ -2137,7 +2155,79 @@ private theorem transRel_sound (dc : ECertificate)
   · -- Post-state store relation: eRelToStoreRel dtc.rel_next σ_o' am_o' σ_t' am_t'
     sorry
   · -- Array memory equality: am_t' = am_o'
-    sorry
+    obtain ⟨hlen_eq, ham_pairs⟩ := checkRelConsistency_amCheck dc.orig dic.pc_orig
+      dtc.origLabels instr (dc.inv_orig.getD dic.pc_orig ([] : EInv)) dtc.rel dtc.rel_next hrelcheck
+    by_cases harrst : ∃ arr idx val ty, instr = .arrStore arr idx val ty
+    · -- arrStore: both sides write the same array at the same index with the same value
+      obtain ⟨arr_t, idx_t, val_t, ty_t, rfl⟩ := harrst
+      obtain ⟨iv_t, hidx_t, ham_t'_eq, hσ_eq⟩ := arrStore_step_values hinstr hstep
+      -- transSAM = [(arr_t, .var idx_t, .var val_t)], origSAM has length 1
+      simp only [execSymbolic] at hlen_eq ham_pairs
+      -- Extract the single origSAM entry
+      obtain ⟨⟨arr_o, idx_o, val_o⟩, horigSAM_eq⟩ : ∃ e,
+          (execPath dc.orig ([] : SymStore) ([] : SymArrayMem) dic.pc_orig dtc.origLabels).2 = [e] := by
+        match hsam : (execPath dc.orig ([] : SymStore) ([] : SymArrayMem) dic.pc_orig dtc.origLabels).2 with
+        | [e] => exact ⟨e, rfl⟩
+        | [] => rw [hsam] at hlen_eq; simp at hlen_eq
+        | _ :: _ :: _ => rw [hsam] at hlen_eq; simp at hlen_eq
+      rw [horigSAM_eq] at hsamCoh_final ham_pairs
+      -- Decompose SamCoherent singleton into a single write
+      obtain ⟨bv, hval_eval, ham_o'_eq⟩ := samCoherent_singleton hsamCoh_final
+      rw [ham_t'_eq, ham_o'_eq]
+      -- Extract matching conditions from ham_pairs
+      simp only [List.zip, List.zipWith, List.all, Bool.and_eq_true, Bool.true_and,
+        Bool.and_self] at ham_pairs
+      obtain ⟨⟨⟨harr_eq, hidx_match⟩, hval_match⟩, _⟩ := ham_pairs
+      -- arr_o = arr_t
+      have harr := beq_iff_eq.mp harr_eq
+      rw [harr]; congr 1
+      · -- Index: idx_o.eval σ_o am_t = .int iv_t, so .toInt matches iv_t
+        have h_idx_simp := beq_iff_eq.mp hidx_match
+        have hlhs := Expr.simplify_sound inv_o idx_o σ_o am_t hinv_o
+        have hrhs := Expr.simplify_sound inv_o
+          ((ssGet ([] : SymStore) idx_t).substSym (buildSubstMap dtc.rel)) σ_o am_t hinv_o
+        rw [h_idx_simp] at hlhs
+        have heq_eval : idx_o.eval σ_o am_t =
+            ((ssGet ([] : SymStore) idx_t).substSym (buildSubstMap dtc.rel)).eval σ_o am_t :=
+          hlhs.symm.trans hrhs
+        -- Relate substSym eval to σ_t via hcons
+        have hsubst_eq : ((ssGet ([] : SymStore) idx_t).substSym (buildSubstMap dtc.rel)).eval σ_o am_t =
+            σ_t idx_t := by
+          change (ssGet (buildSubstMap dtc.rel) idx_t).eval σ_o am_t = σ_t idx_t
+          exact (hcons idx_t).symm
+        rw [heq_eval, hsubst_eq, hidx_t]; rfl
+      · -- Value: val_o.eval σ_o am_t = .int bv, and (σ_t val_t).toBits matches bv
+        have h_val_simp := beq_iff_eq.mp hval_match
+        have hlhs := Expr.simplify_sound inv_o val_o σ_o am_t hinv_o
+        have hrhs := Expr.simplify_sound inv_o
+          ((ssGet ([] : SymStore) val_t).substSym (buildSubstMap dtc.rel)) σ_o am_t hinv_o
+        rw [h_val_simp] at hlhs
+        have heq_eval : val_o.eval σ_o am_t =
+            ((ssGet ([] : SymStore) val_t).substSym (buildSubstMap dtc.rel)).eval σ_o am_t :=
+          hlhs.symm.trans hrhs
+        have hsubst_eq : ((ssGet ([] : SymStore) val_t).substSym (buildSubstMap dtc.rel)).eval σ_o am_t =
+            σ_t val_t := by
+          change (ssGet (buildSubstMap dtc.rel) val_t).eval σ_o am_t = σ_t val_t
+          exact (hcons val_t).symm
+        have hσ_val : σ_t val_t = .int bv := by rw [← hsubst_eq, ← heq_eval]; exact hval_eval
+        rw [hσ_val]; rfl
+    · -- non-arrStore: am unchanged on both sides
+      push_neg at harrst
+      have ham_t'_eq : am_t' = am_t := step_am_preserved hstep
+        (fun arr idx val ty h => harrst arr idx val ty (by rw [hinstr] at h; exact Option.some.inj h))
+      have htransSAM_nil : (execSymbolic ([] : SymStore) ([] : SymArrayMem) instr).2 = [] := by
+        cases instr with
+        | arrStore => exact absurd rfl (harrst _ _ _ _)
+        | const x v => cases v <;> rfl
+        | _ => rfl
+      have horigSAM_nil : (execPath dc.orig ([] : SymStore) ([] : SymArrayMem) dic.pc_orig dtc.origLabels).2 = [] := by
+        have hlen0 : (execPath dc.orig ([] : SymStore) ([] : SymArrayMem) dic.pc_orig dtc.origLabels).2.length = 0 := by
+          rw [hlen_eq, htransSAM_nil]; rfl
+        match h : (execPath dc.orig ([] : SymStore) ([] : SymArrayMem) dic.pc_orig dtc.origLabels).2 with
+        | [] => rfl
+        | _ :: _ => rw [h] at hlen0; simp at hlen0
+      rw [horigSAM_nil] at hsamCoh_final
+      rw [ham_t'_eq, samCoherent_nil_am_eq hsamCoh_final]
 
 /-- Extract Bool information from checkAllTransitionsExec for a specific step. -/
 private theorem extractTransCheck (dc : ECertificate)

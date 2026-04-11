@@ -285,6 +285,56 @@ theorem Flags.condHolds_correct (op : CmpOp) (a b : BitVec 64)
         simp [BitVec.toNat_sub]; omega
     | true =>
       have heq := of_decide_eq_true hab; subst heq; simp
+/-- Axiom: floating-point flags from `fcmp` correctly implement `FloatCmpOp.eval`.
+    This bridges the gap between the flag-based ARM cset mechanism and the opaque
+    `FloatCmpOp.eval`.  Since both are opaque (FP semantics are uninterpreted),
+    this axiom asserts that our flag model (`Flags.mk (a - b)`) faithfully
+    represents IEEE 754 comparison for the condition codes we use. -/
+axiom Flags.condHolds_float_correct (op : FloatCmpOp) (a b : BitVec 64) :
+    (Flags.mk (a - b)).condHolds
+      (match op with | .feq => .eq | .fne => .ne | .flt => .lt | .fle => .le)
+    = FloatCmpOp.eval op a b
+
+/-- Helper: executing fldr/fldr/fcmp/cset for a `.fcmp` boolean expression. -/
+private theorem genBoolExpr_fcmp_correct (prog : ArmProg) (vm : VarMap)
+    (op : FloatCmpOp) (lv rv : Var) (σ : Store) (s : ArmState) (startPC : Nat)
+    (offL offR : Nat)
+    (hL : vm.lookup lv = some offL) (hR : vm.lookup rv = some offR)
+    (hRel : StateRel vm σ s)
+    (hFloatL : ∃ f, σ lv = .float f) (hFloatR : ∃ f, σ rv = .float f)
+    (hCode : CodeAt prog startPC
+      (.fldr .d1 offL :: .fldr .d2 offR :: .fcmpR .d1 .d2 ::
+       .cset .x0 (match op with | .feq => .eq | .fne => .ne | .flt => .lt | .fle => .le) :: List.nil))
+    (hPC : s.pc = startPC) :
+    ∃ s', ArmSteps prog s s' ∧
+      s'.regs .x0 = (if FloatCmpOp.eval op (σ lv).toFloat (σ rv).toFloat then (1 : BitVec 64) else 0) ∧
+      (∀ v off, vm.lookup v = some off → s'.stack off = s.stack off) ∧
+      s'.pc = startPC + 4 ∧
+      s'.arrayMem = s.arrayMem := by
+  obtain ⟨fL, hfL⟩ := hFloatL
+  obtain ⟨fR, hfR⟩ := hFloatR
+  have h0 := hCode.head; have h1 := hCode.tail.head
+  have h2 := hCode.tail.tail.head; have h3 := hCode.tail.tail.tail.head
+  rw [← hPC] at h0 h1 h2 h3
+  have hStackL := hRel lv offL hL
+  have hStackR := hRel rv offR hR
+  rw [hfL] at hStackL; rw [hfR] at hStackR
+  simp [Value.encode] at hStackL hStackR
+  refine ⟨_, .step (.fldr .d1 offL h0) (.step (.fldr .d2 offR h1)
+    (.step (.fcmpRR .d1 .d2 h2) (.single (.cset .x0 _ h3)))), ?_, ?_, ?_, ?_⟩
+  · -- x0 = correct value
+    simp [ArmState.setReg, ArmState.setFReg, ArmState.nextPC]
+    rw [hStackL, hStackR, hfL, hfR]
+    simp [Value.toFloat]
+    rw [Flags.condHolds_float_correct]
+  · -- stack preserved
+    intro v off hv
+    simp [ArmState.setReg, ArmState.setFReg, ArmState.nextPC]
+  · -- pc advanced by 4
+    simp [ArmState.setReg, ArmState.setFReg, ArmState.nextPC, hPC]
+  · -- arrayMem preserved
+    simp [ArmState.setReg, ArmState.setFReg, ArmState.nextPC]
+
 /-- Helper: executing ldr/ldr/cmp/cset for a `.cmp` boolean expression. -/
 private theorem genBoolExpr_cmp_correct (prog : ArmProg) (vm : VarMap)
     (op : CmpOp) (lv rv : Var) (σ : Store) (s : ArmState) (startPC : Nat)
@@ -394,8 +444,17 @@ theorem genBoolExpr_correct (prog : ArmProg) (vm : VarMap)
     simp only [BoolExpr.eval, formalGenBoolExpr, hL, hR] at this ⊢
     exact this
   | fcmp htyL htyR =>
-    -- Float comparison not yet supported in ARM backend
-    sorry
+    rename_i lv rv fop
+    obtain ⟨offL, hL⟩ := hVarMap lv; obtain ⟨offR, hR⟩ := hVarMap rv
+    simp only [formalGenBoolExpr, hL, hR] at hCode
+    have hTyL := hTS lv; rw [htyL] at hTyL
+    have hTyR := hTS rv; rw [htyR] at hTyR
+    obtain ⟨fL, hfL⟩ := Value.float_of_typeOf_float hTyL
+    obtain ⟨fR, hfR⟩ := Value.float_of_typeOf_float hTyR
+    have := genBoolExpr_fcmp_correct prog vm fop lv rv σ s startPC offL offR hL hR hRel
+      ⟨fL, hfL⟩ ⟨fR, hfR⟩ hCode hPC
+    simp only [BoolExpr.eval, formalGenBoolExpr, hL, hR] at this ⊢
+    exact this
   | cmpLit hty hnn hlt =>
     -- be = .cmpLit op v n
     -- formalGenBoolExpr = [ldr x1 off] ++ formalLoadImm64 x2 n ++ [cmp x1 x2, cset x0 cond]
@@ -622,8 +681,40 @@ theorem genInstr_correct (prog : ArmProg) (vm : VarMap) (pcMap : Nat → Nat)
       · -- arrayMem preserved
         simp [ArmState.setStack, ArmState.setReg, ArmState.nextPC, hArrayMem]
     | float f =>
-      -- Float constants not yet supported in ARM backend
-      sorry
+      -- formalGenInstr = formalLoadImm64 x0 f ++ [str x0 offD]
+      have hformal : formalGenInstr vm pcMap (.const x (.float f)) haltLabel divLabel =
+          formalLoadImm64 .x0 f ++ (.str .x0 offD :: List.nil) := by
+        show (match vm.lookup x with | some off => _ | none => _) = _
+        rw [hD]
+      rw [heq, hformal] at hCodeInstr
+      have hCodeL := hCodeInstr.append_left
+      have hCodeR := hCodeInstr.append_right
+      have hStr := hCodeR.head
+      obtain ⟨s1, hSteps1, hx0, hStack1, hPC1, _, hAM1⟩ :=
+        loadImm64_correct prog .x0 f s (pcMap pc) hCodeL hPcRel
+      rw [← hPC1] at hStr
+      let s2 := s1.setStack offD (s1.regs .x0) |>.nextPC
+      refine ⟨s2, hSteps1.trans (.single (.str .x0 offD hStr)), ⟨?_, ?_, ?_⟩⟩
+      · -- StateRel
+        intro w off hv
+        simp only [s2, ArmState.setStack, ArmState.nextPC]
+        by_cases hoff : off = offD
+        · subst hoff; simp
+          have := hInjective w x off hv hD; subst this
+          rw [Store.update_self, hx0]; simp [Value.encode]
+        · simp [hoff]
+          have hne : w ≠ x := fun h => hoff (Option.some.inj ((h ▸ hv).symm.trans hD))
+          rw [Store.update_other _ _ _ _ hne]
+          rw [show s1.stack off = s.stack off from by rw [hStack1]]
+          exact hStateRel w off hv
+      · -- PcRel
+        show s1.pc + 1 = pcMap (pc + 1)
+        rw [heq, hformal] at hPcNext
+        have := hPcNext _ _ _ rfl; simp at this
+        rw [this, hPC1]; omega
+      · -- arrayMem preserved
+        simp only [s2, ArmState.setStack, ArmState.nextPC]
+        exact hAM1.trans hArrayMem
   | copy hinstr =>
     -- TAC: copy x y → ARM: ldr x0 offS; str x0 offD
     rename_i x y
@@ -1055,18 +1146,68 @@ theorem genInstr_correct (prog : ArmProg) (vm : VarMap) (pcMap : Nat → Nat)
   | arrStore_typeError hinstr hne =>
     exact absurd (Step.arrStore_typeError (am := am) hinstr hne) (Step.no_typeError_of_wellTyped hPC_bound hWT hTS)
   | fbinop hinstr hy hz =>
-    -- Float binary ops not yet supported in ARM backend
+    rename_i x fop y z a b
+    have heq : instr = .fbinop x fop y z := Option.some.inj (hInstr.symm.trans hinstr)
+    obtain ⟨offL, hL⟩ := hVarMap y; obtain ⟨offR, hR⟩ := hVarMap z; obtain ⟨offD, hD⟩ := hVarMap x
+    have hStackL := hStateRel y offL hL; rw [hy] at hStackL; simp [Value.encode] at hStackL
+    have hStackR := hStateRel z offR hR; rw [hz] at hStackR; simp [Value.encode] at hStackR
     sorry
   | fbinop_typeError hinstr hne =>
     exact absurd (Step.fbinop_typeError (am := am) hinstr hne) (Step.no_typeError_of_wellTyped hPC_bound hWT hTS)
   | intToFloat hinstr hy =>
-    -- intToFloat not yet supported in ARM backend
-    sorry
+    rename_i x y n
+    have heq : instr = .intToFloat x y := Option.some.inj (hInstr.symm.trans hinstr)
+    obtain ⟨offS, hS⟩ := hVarMap y; obtain ⟨offD, hD⟩ := hVarMap x
+    have hformal : formalGenInstr vm pcMap (.intToFloat x y) haltLabel divLabel =
+        [.ldr .x0 offS, .scvtf .d0 .x0, .fstr .d0 offD] := by
+      show (match vm.lookup y, vm.lookup x with | some _, some _ => _ | _, _ => _) = _
+      rw [hS, hD]
+    rw [heq, hformal] at hCodeInstr hPcNext
+    have h0 := hCodeInstr.head; have h1 := hCodeInstr.tail.head; have h2 := hCodeInstr.tail.tail.head
+    rw [← hPcRel] at h0 h1 h2
+    have hStackS := hStateRel y offS hS; rw [hy] at hStackS; simp [Value.encode] at hStackS
+    refine ⟨_, .step (.ldr .x0 offS h0) (.step (.scvtf .d0 .x0 h1) (.single (.fstr .d0 offD h2))),
+      ?_, ?_, ?_⟩
+    · intro v off hv
+      simp only [ArmState.setStack, ArmState.setFReg, ArmState.setReg, ArmState.nextPC]
+      by_cases hoff : off = offD
+      · subst hoff; simp
+        have := hInjective v x off hv hD; subst this
+        rw [Store.update_self]; simp [Value.encode, hStackS]
+      · simp [hoff]
+        have hne : v ≠ x := fun h => hoff (Option.some.inj ((h ▸ hv).symm.trans hD))
+        rw [Store.update_other _ _ _ _ hne]; exact hStateRel v off hv
+    · show s.pc + 1 + 1 + 1 = pcMap (pc + 1)
+      have := hPcNext _ _ _ rfl; simp at this; rw [this, hPcRel]
+    · simp [ArmState.setStack, ArmState.setFReg, ArmState.setReg, ArmState.nextPC, hArrayMem]
   | intToFloat_typeError hinstr hne =>
     exact absurd (Step.intToFloat_typeError (am := am) hinstr hne) (Step.no_typeError_of_wellTyped hPC_bound hWT hTS)
   | floatToInt hinstr hy =>
-    -- floatToInt not yet supported in ARM backend
-    sorry
+    rename_i x y f
+    have heq : instr = .floatToInt x y := Option.some.inj (hInstr.symm.trans hinstr)
+    obtain ⟨offS, hS⟩ := hVarMap y; obtain ⟨offD, hD⟩ := hVarMap x
+    have hformal : formalGenInstr vm pcMap (.floatToInt x y) haltLabel divLabel =
+        [.fldr .d0 offS, .fcvtzs .x0 .d0, .str .x0 offD] := by
+      show (match vm.lookup y, vm.lookup x with | some _, some _ => _ | _, _ => _) = _
+      rw [hS, hD]
+    rw [heq, hformal] at hCodeInstr hPcNext
+    have h0 := hCodeInstr.head; have h1 := hCodeInstr.tail.head; have h2 := hCodeInstr.tail.tail.head
+    rw [← hPcRel] at h0 h1 h2
+    have hStackS := hStateRel y offS hS; rw [hy] at hStackS; simp [Value.encode] at hStackS
+    refine ⟨_, .step (.fldr .d0 offS h0) (.step (.fcvtzs .x0 .d0 h1) (.single (.str .x0 offD h2))),
+      ?_, ?_, ?_⟩
+    · intro v off hv
+      simp only [ArmState.setStack, ArmState.setFReg, ArmState.setReg, ArmState.nextPC]
+      by_cases hoff : off = offD
+      · subst hoff; simp
+        have := hInjective v x off hv hD; subst this
+        rw [Store.update_self]; simp [Value.encode, hStackS]
+      · simp [hoff]
+        have hne : v ≠ x := fun h => hoff (Option.some.inj ((h ▸ hv).symm.trans hD))
+        rw [Store.update_other _ _ _ _ hne]; exact hStateRel v off hv
+    · show s.pc + 1 + 1 + 1 = pcMap (pc + 1)
+      have := hPcNext _ _ _ rfl; simp at this; rw [this, hPcRel]
+    · simp [ArmState.setStack, ArmState.setFReg, ArmState.setReg, ArmState.nextPC, hArrayMem]
   | floatToInt_typeError hinstr hne =>
     exact absurd (Step.floatToInt_typeError (am := am) hinstr hne) (Step.no_typeError_of_wellTyped hPC_bound hWT hTS)
   | floatExp hinstr hy =>

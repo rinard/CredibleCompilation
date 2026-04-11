@@ -1195,6 +1195,36 @@ theorem refCompileBool_correct (sb : SBool) (offset nextTmp : Nat) (σ σ_tac : 
       rw [hfprev_b k (by omega), hfprev_a k hk]
 
 -- ============================================================
+-- § 10a. safe → isSafe bridges (local copies, needed before Metatheory import)
+-- ============================================================
+
+private theorem isSafe_of_safe_expr (e : SExpr) (σ : Store) (am : ArrayMem) (decls)
+    (h : e.safe σ am decls) : e.isSafe σ am decls = true := by
+  induction e with
+  | lit _ => simp [SExpr.isSafe]
+  | var _ => simp [SExpr.isSafe]
+  | bin op a b iha ihb => cases op <;> simp_all [SExpr.safe, SExpr.isSafe, decide_eq_true_eq]
+  | arrRead arr idx ih => simp [SExpr.safe] at h; simp [SExpr.isSafe, ih h.1, decide_eq_true_eq, h.2]
+  | flit _ => simp [SExpr.isSafe]
+  | fbin _ a b iha ihb => simp [SExpr.safe] at h; simp [SExpr.isSafe, iha h.1, ihb h.2]
+  | intToFloat e ih => simp [SExpr.safe] at h; simp [SExpr.isSafe, ih h]
+  | floatToInt e ih => simp [SExpr.safe] at h; simp [SExpr.isSafe, ih h]
+  | floatExp e ih => simp [SExpr.safe] at h; simp [SExpr.isSafe, ih h]
+  | farrRead arr idx ih => simp [SExpr.safe] at h; simp [SExpr.isSafe, ih h.1, decide_eq_true_eq, h.2]
+
+private theorem isSafe_of_safe_bool (sb : SBool) (σ : Store) (am : ArrayMem) (decls)
+    (h : sb.safe σ am decls) : sb.isSafe σ am decls = true := by
+  induction sb with
+  | lit _ => simp [SBool.isSafe]
+  | bvar _ => simp [SBool.isSafe]
+  | cmp _ a b => simp [SBool.safe] at h; simp [SBool.isSafe, isSafe_of_safe_expr a σ am decls h.1, isSafe_of_safe_expr b σ am decls h.2]
+  | not e ih => simp [SBool.safe] at h; simp [SBool.isSafe, ih h]
+  | and a b iha ihb => simp [SBool.safe] at h; simp only [SBool.isSafe, iha h.1, Bool.true_and]; split <;> simp_all
+  | or a b iha ihb => simp [SBool.safe] at h; simp only [SBool.isSafe, iha h.1, Bool.true_and]; split <;> simp_all
+  | barrRead arr idx => simp [SBool.safe] at h; simp [SBool.isSafe, isSafe_of_safe_expr idx σ am decls h.1, decide_eq_true_eq, h.2]
+  | fcmp _ a b => simp [SBool.safe] at h; simp [SBool.isSafe, isSafe_of_safe_expr a σ am decls h.1, isSafe_of_safe_expr b σ am decls h.2]
+
+-- ============================================================
 -- § 11. Statement compilation correctness
 -- ============================================================
 
@@ -1210,7 +1240,740 @@ theorem refCompileStmt_correct (s : Stmt) (fuel : Nat) (σ σ' : Store) (am am' 
     ∃ σ_tac', FragExec p offset σ_tac
         (offset + (refCompileStmt s offset nextTmp).1.length) σ_tac' am am' ∧
       (∀ v, v.isTmp = false → v.isFTmp = false → σ_tac' v = σ' v) := by
-  sorry
+  induction s generalizing fuel σ σ' am am' offset nextTmp σ_tac with
+  | skip =>
+    simp only [Stmt.interp] at hinterp
+    obtain ⟨rfl, rfl⟩ := Prod.mk.inj (Option.some.inj hinterp)
+    simp only [refCompileStmt, List.length_nil, Nat.add_zero]
+    exact ⟨σ_tac, FragExec.rfl' _ _ _ _, hagree⟩
+  | label _ =>
+    simp only [Stmt.interp] at hinterp
+    obtain ⟨rfl, rfl⟩ := Prod.mk.inj (Option.some.inj hinterp)
+    simp only [refCompileStmt, List.length_nil, Nat.add_zero]
+    exact ⟨σ_tac, FragExec.rfl' _ _ _ _, hagree⟩
+  | goto _ => simp [Stmt.interp] at hinterp
+  | ifgoto _ _ => simp [Stmt.interp] at hinterp
+  | assign x e =>
+    simp only [Stmt.safe] at hsafe
+    simp only [Stmt.typedVars] at htypedv
+    obtain ⟨htv_e, hwrap_e⟩ := htypedv
+    have htf_e : ∀ v ∈ e.freeVars, v.isTmp = false :=
+      fun v hv => htmpfree v (by simp only [Stmt.allVars]; exact List.mem_cons_of_mem x hv)
+    have hftf_e : ∀ v ∈ e.freeVars, v.isFTmp = false :=
+      fun v hv => hftmpfree v (by simp only [Stmt.allVars]; exact List.mem_cons_of_mem x hv)
+    have hisSafe := isSafe_of_safe_expr e σ am p.arrayDecls hsafe
+    simp only [Stmt.interp, hisSafe] at hinterp; simp at hinterp
+    obtain ⟨rfl, rfl⟩ := hinterp
+    cases e with
+    | lit n =>
+      dsimp only [refCompileStmt] at hcode ⊢
+      refine ⟨σ_tac[x ↦ .int (BitVec.ofInt 64 n)],
+              FragExec.single_const (am := am) hcode.head, ?_⟩
+      intro v hv1 hv2; by_cases hvx : v = x
+      · subst hvx; rw [Store.update_self, Store.update_self]; simp [SExpr.eval]
+      · rw [Store.update_other _ x v _ hvx, Store.update_other _ x v _ hvx]; exact hagree v hv1 hv2
+    | var y =>
+      dsimp only [refCompileStmt] at hcode ⊢
+      simp only [SExpr.wrapEval] at hwrap_e
+      refine ⟨σ_tac[x ↦ σ_tac y], FragExec.single_copy (am := am) hcode.head, ?_⟩
+      intro v hv1 hv2; by_cases hvx : v = x
+      · subst hvx; rw [Store.update_self, Store.update_self]
+        rw [hagree y (htf_e y (by simp [SExpr.freeVars])) (hftf_e y (by simp [SExpr.freeVars]))]
+        exact hwrap_e
+      · rw [Store.update_other _ x v _ hvx, Store.update_other _ x v _ hvx]; exact hagree v hv1 hv2
+    | bin op a b =>
+      obtain ⟨hwrap_a, hwrap_b, htv_a, htv_b⟩ :=
+        show a.wrapEval σ am = .int (a.eval σ am) ∧ b.wrapEval σ am = .int (b.eval σ am) ∧
+             a.typedVars σ am ∧ b.typedVars σ am from htv_e
+      have htf_a := fun v hv => htf_e v (List.mem_append_left _ hv)
+      have htf_b := fun v hv => htf_e v (List.mem_append_right _ hv)
+      have hftf_a := fun v hv => hftf_e v (List.mem_append_left _ hv)
+      have hftf_b := fun v hv => hftf_e v (List.mem_append_right _ hv)
+      dsimp only [refCompileStmt] at hcode ⊢
+      generalize hra : refCompileExpr a offset nextTmp = ra at hcode ⊢
+      obtain ⟨codeA, va, tmp1⟩ := ra
+      generalize hrb : refCompileExpr b (offset + codeA.length) tmp1 = rb at hcode ⊢
+      obtain ⟨codeB, vb, tmp2⟩ := rb
+      simp only [] at hcode ⊢
+      obtain ⟨σ_a, hexec_a, hval_a, hntmp_a, hprev_a, hfprev_a⟩ :=
+        refCompileExpr_correct a offset nextTmp σ σ_tac am p htf_a hftf_a htv_a
+          (SExpr.safe_bin_left hsafe) hagree (by rw [hra]; exact hcode.left.left)
+      rw [hra] at hexec_a hval_a; simp at hexec_a hval_a
+      have hagree_a : ∀ v, v.isTmp = false → v.isFTmp = false → σ_a v = σ v := by
+        intro v hv1 hv2; rw [hntmp_a v hv1 hv2]; exact hagree v hv1 hv2
+      obtain ⟨σ_b, hexec_b, hval_b, hntmp_b, hprev_b, hfprev_b⟩ :=
+        refCompileExpr_correct b (offset + codeA.length) tmp1 σ σ_a am p htf_b hftf_b htv_b
+          (SExpr.safe_bin_right hsafe) hagree_a (by rw [hrb]; exact hcode.left.right)
+      rw [hrb] at hexec_b hval_b; simp at hexec_b hval_b
+      have hva_b : σ_b va = σ_a va := by
+        rcases refCompileExpr_result_bound a offset nextTmp htf_a with h | ⟨k, _, hlt, heq⟩
+        · rw [hra] at h; simp at h
+          rcases refCompileExpr_result_ftmp_bound a offset nextTmp hftf_a with h2 | ⟨j, _, hlt2, heq2⟩
+          · rw [hra] at h2; simp at h2; exact hntmp_b va h h2
+          · rw [hra] at hlt2 heq2; simp at hlt2 heq2; rw [heq2, hfprev_b j (by omega)]
+        · rw [hra] at hlt heq; simp at hlt heq; rw [heq, hprev_b k (by omega)]
+      have hva : σ_b va = .int (a.eval σ am) := by rw [hva_b, hval_a, hwrap_a]
+      have hvb : σ_b vb = .int (b.eval σ am) := by rw [hval_b, hwrap_b]
+      have hbinop_instr : p[offset + codeA.length + codeB.length]? = some (.binop x op va vb) := by
+        have := hcode.right.head; simp only [List.length_append] at this
+        rwa [show offset + (codeA.length + codeB.length) =
+            offset + codeA.length + codeB.length from by omega] at this
+      have hexec_binop := FragExec.single_binop (am := am) hbinop_instr hva hvb (SExpr.safe_bin_safe hsafe)
+      refine ⟨σ_b[x ↦ .int (op.eval (a.eval σ am) (b.eval σ am))], ?_, ?_⟩
+      · have h123 := FragExec.trans' (FragExec.trans' hexec_a hexec_b) hexec_binop
+        have hlen : offset + (codeA ++ codeB ++ [TAC.binop x op va vb]).length =
+            offset + codeA.length + codeB.length + 1 := by
+          simp only [List.length_append, List.length_cons, List.length_nil]; omega
+        rw [hlen]; exact h123
+      · intro v hv1 hv2; by_cases hvx : v = x
+        · subst hvx; rw [Store.update_self, Store.update_self]; simp [SExpr.eval]
+        · rw [Store.update_other _ x v _ hvx, Store.update_other _ x v _ hvx,
+              hntmp_b v hv1 hv2, hntmp_a v hv1 hv2]; exact hagree v hv1 hv2
+    | arrRead arr idx =>
+      obtain ⟨hwrap_idx, htv_idx⟩ :=
+        show idx.wrapEval σ am = .int (idx.eval σ am) ∧ idx.typedVars σ am from htv_e
+      dsimp only [refCompileStmt] at hcode ⊢
+      generalize hri : refCompileExpr idx offset nextTmp = ri at hcode ⊢
+      obtain ⟨codeIdx, vIdx, tmp1⟩ := ri
+      simp only [] at hcode ⊢
+      obtain ⟨σ_idx, hexec_idx, hval_idx, hntmp_idx, _, _⟩ :=
+        refCompileExpr_correct idx offset nextTmp σ σ_tac am p htf_e hftf_e htv_idx
+          (by simp [SExpr.safe] at hsafe; exact hsafe.1) hagree (by rw [hri]; exact hcode.left)
+      rw [hri] at hexec_idx hval_idx; simp at hexec_idx hval_idx
+      have hval_idx_int : σ_idx vIdx = .int (idx.eval σ am) := by rw [hval_idx, hwrap_idx]
+      have hbounds : (idx.eval σ am) < p.arraySizeBv arr := by
+        simp only [SExpr.safe] at hsafe; exact hsafe.2
+      have harrLoad_instr : p[offset + codeIdx.length]? = some (.arrLoad (tmpName tmp1) arr vIdx .int) := by
+        have := hcode.right.head; simpa using this
+      have harrLoad := FragExec.single_arrLoad (am := am) harrLoad_instr hval_idx_int hbounds
+      set σ_load := σ_idx[tmpName tmp1 ↦ .int (am.read arr (idx.eval σ am))] with hσ_load_def
+      have hcopy_instr : p[offset + codeIdx.length + 1]? = some (.copy x (tmpName tmp1)) := by
+        have h2 := hcode.right 1 (by simp)
+        simpa using h2
+      have hexec_copy := FragExec.single_copy (am := am) hcopy_instr (σ := σ_load)
+      have hcopy_val : σ_load (tmpName tmp1) = .int (am.read arr (idx.eval σ am)) := by
+        rw [hσ_load_def]; exact Store.update_self _ _ _
+      refine ⟨σ_load[x ↦ σ_load (tmpName tmp1)], ?_, ?_⟩
+      · have h123 := FragExec.trans' (FragExec.trans' hexec_idx harrLoad) hexec_copy
+        have hlen : offset + (codeIdx ++ [TAC.arrLoad (tmpName tmp1) arr vIdx VarTy.int,
+            TAC.copy x (tmpName tmp1)]).length =
+            offset + codeIdx.length + 1 + 1 := by
+          simp only [List.length_append, List.length_cons, List.length_nil]; omega
+        rw [hlen]; exact h123
+      · rw [hcopy_val]
+        intro v hv1 hv2; by_cases hvx : v = x
+        · subst hvx; rw [Store.update_self, Store.update_self]; simp [SExpr.eval]
+        · rw [Store.update_other _ x v _ hvx]; rw [hσ_load_def]
+          rw [Store.update_other _ (tmpName tmp1) v _
+              (fun h => by rw [h] at hv1; simp [tmpName_isTmp] at hv1)]
+          rw [Store.update_other _ x v _ hvx]; rw [hntmp_idx v hv1 hv2]; exact hagree v hv1 hv2
+    | floatToInt e' =>
+      dsimp only [refCompileStmt] at hcode ⊢
+      generalize hre : refCompileExpr (.floatToInt e') offset nextTmp = re at hcode ⊢
+      obtain ⟨codeE, ve, tmp1⟩ := re
+      simp only [] at hcode ⊢
+      obtain ⟨σ_e, hexec_e, hval_e, hntmp_e, _, _⟩ :=
+        refCompileExpr_correct (.floatToInt e') offset nextTmp σ σ_tac am p htf_e hftf_e htv_e
+          hsafe hagree (by rw [hre]; exact hcode.left)
+      rw [hre] at hexec_e hval_e; simp at hexec_e hval_e
+      have hexec_copy := FragExec.single_copy (am := am) hcode.right.head (σ := σ_e)
+      refine ⟨σ_e[x ↦ σ_e ve], ?_, ?_⟩
+      · have h12 := FragExec.trans' hexec_e hexec_copy
+        have hlen : offset + (codeE ++ [TAC.copy x ve]).length =
+            offset + codeE.length + 1 := by
+          simp only [List.length_append, List.length_cons, List.length_nil]; omega
+        rw [hlen]; exact h12
+      · intro v hv1 hv2; by_cases hvx : v = x
+        · subst hvx; rw [Store.update_self, Store.update_self, hval_e, hwrap_e]
+        · rw [Store.update_other _ x v _ hvx, Store.update_other _ x v _ hvx,
+              hntmp_e v hv1 hv2]; exact hagree v hv1 hv2
+    -- Contradictory cases for assign (wrapEval gives .int but these are float-typed)
+    | flit _ => exact absurd hwrap_e (by simp [SExpr.wrapEval, SExpr.eval])
+    | fbin _ _ _ => exact absurd hwrap_e (by simp [SExpr.wrapEval, SExpr.eval])
+    | intToFloat _ => exact absurd hwrap_e (by simp [SExpr.wrapEval, SExpr.eval])
+    | floatExp _ => exact absurd hwrap_e (by simp [SExpr.wrapEval, SExpr.eval])
+    | farrRead _ _ => exact absurd hwrap_e (by simp [SExpr.wrapEval, SExpr.eval])
+  | bassign x b =>
+    simp only [Stmt.safe] at hsafe
+    simp only [Stmt.typedVars] at htypedv
+    have hisSafe := isSafe_of_safe_bool b σ am p.arrayDecls hsafe
+    simp only [Stmt.interp, hisSafe] at hinterp; simp at hinterp
+    obtain ⟨rfl, rfl⟩ := hinterp
+    have htf_b : ∀ v ∈ b.freeVars, v.isTmp = false :=
+      fun v hv => htmpfree v (by simp only [Stmt.allVars]; exact List.mem_cons_of_mem x hv)
+    have hftf_b : ∀ v ∈ b.freeVars, v.isFTmp = false :=
+      fun v hv => hftmpfree v (by simp only [Stmt.allVars]; exact List.mem_cons_of_mem x hv)
+    dsimp only [refCompileStmt] at hcode ⊢
+    generalize hrc : refCompileBool b offset nextTmp = rc at hcode ⊢
+    obtain ⟨code, be, tmp'⟩ := rc
+    simp only [] at hcode ⊢
+    obtain ⟨σ_bool, hexec_bool, heval_bool, hntmp_bool, _, _⟩ :=
+      refCompileBool_correct b offset nextTmp σ σ_tac am p htf_b hftf_b htypedv hsafe hagree
+        (by rw [hrc]; exact hcode.left)
+    rw [hrc] at hexec_bool heval_bool; simp at hexec_bool heval_bool
+    have hexec_boolop : FragExec p (offset + code.length) σ_bool (offset + code.length + 1)
+        (σ_bool[x ↦ .bool (b.eval σ am)]) am am := by
+      have := Steps.single (Step.boolop (am := am) hcode.right.head (σ := σ_bool))
+      rwa [heval_bool] at this
+    refine ⟨σ_bool[x ↦ .bool (b.eval σ am)], ?_, ?_⟩
+    · have h12 := FragExec.trans' hexec_bool hexec_boolop
+      have hlen : offset + (code ++ [TAC.boolop x be]).length =
+          offset + code.length + 1 := by
+        simp only [List.length_append, List.length_cons, List.length_nil]; omega
+      rw [hlen]; exact h12
+    · intro v hv1 hv2; by_cases hvx : v = x
+      · subst hvx; rw [Store.update_self, Store.update_self]
+      · rw [Store.update_other _ x v _ hvx, Store.update_other _ x v _ hvx,
+            hntmp_bool v hv1 hv2]; exact hagree v hv1 hv2
+  | arrWrite arr idx val =>
+    simp only [Stmt.safe] at hsafe
+    obtain ⟨hsafe_idx, hsafe_val, hbounds⟩ := hsafe
+    simp only [Stmt.typedVars] at htypedv
+    obtain ⟨⟨htv_idx, hwrap_idx⟩, htv_val, hwrap_val⟩ := htypedv
+    have htf_idx := fun v hv => htmpfree v (by simp only [Stmt.allVars]; exact List.mem_append_left _ hv)
+    have htf_val := fun v hv => htmpfree v (by simp only [Stmt.allVars]; exact List.mem_append_right _ hv)
+    have hftf_idx := fun v hv => hftmpfree v (by simp only [Stmt.allVars]; exact List.mem_append_left _ hv)
+    have hftf_val := fun v hv => hftmpfree v (by simp only [Stmt.allVars]; exact List.mem_append_right _ hv)
+    simp only [Stmt.interp, isSafe_of_safe_expr idx σ am p.arrayDecls hsafe_idx,
+               isSafe_of_safe_expr val σ am p.arrayDecls hsafe_val,
+               decide_eq_true_eq.mpr hbounds, Bool.and_self, Bool.true_and] at hinterp
+    simp at hinterp; obtain ⟨rfl, rfl⟩ := hinterp
+    dsimp only [refCompileStmt] at hcode ⊢
+    generalize hri : refCompileExpr idx offset nextTmp = ri at hcode ⊢
+    obtain ⟨codeIdx, vIdx, tmp1⟩ := ri
+    generalize hrv : refCompileExpr val (offset + codeIdx.length) tmp1 = rv at hcode ⊢
+    obtain ⟨codeVal, vVal, tmp2⟩ := rv
+    simp only [] at hcode ⊢
+    obtain ⟨σ_idx, hexec_idx, hval_idx, hntmp_idx, hprev_idx, hfprev_idx⟩ :=
+      refCompileExpr_correct idx offset nextTmp σ σ_tac am p htf_idx hftf_idx htv_idx
+        hsafe_idx hagree (by rw [hri]; exact hcode.left.left)
+    rw [hri] at hexec_idx hval_idx; simp at hexec_idx hval_idx
+    have hagree_idx : ∀ v, v.isTmp = false → v.isFTmp = false → σ_idx v = σ v := by
+      intro v hv1 hv2; rw [hntmp_idx v hv1 hv2]; exact hagree v hv1 hv2
+    obtain ⟨σ_val, hexec_val, hval_val, hntmp_val, hprev_val, hfprev_val⟩ :=
+      refCompileExpr_correct val (offset + codeIdx.length) tmp1 σ σ_idx am p htf_val hftf_val htv_val
+        hsafe_val hagree_idx (by rw [hrv]; exact hcode.left.right)
+    rw [hrv] at hexec_val hval_val; simp at hexec_val hval_val
+    have hvIdx_val : σ_val vIdx = σ_idx vIdx := by
+      rcases refCompileExpr_result_bound idx offset nextTmp htf_idx with h | ⟨k, _, hlt, heq⟩
+      · rw [hri] at h; simp at h
+        rcases refCompileExpr_result_ftmp_bound idx offset nextTmp hftf_idx with h2 | ⟨j, _, hlt2, heq2⟩
+        · rw [hri] at h2; simp at h2; exact hntmp_val vIdx h h2
+        · rw [hri] at hlt2 heq2; simp at hlt2 heq2; rw [heq2, hfprev_val j (by omega)]
+      · rw [hri] at hlt heq; simp at hlt heq; rw [heq, hprev_val k (by omega)]
+    have hidx_int : σ_val vIdx = .int (idx.eval σ am) := by rw [hvIdx_val, hval_idx, hwrap_idx]
+    have hval_int : σ_val vVal = .int (val.eval σ am) := by rw [hval_val, hwrap_val]
+    have hstore_instr : p[offset + codeIdx.length + codeVal.length]? =
+        some (.arrStore arr vIdx vVal .int) := by
+      have := hcode.right.head; simp only [List.length_append] at this
+      rwa [show offset + (codeIdx.length + codeVal.length) =
+          offset + codeIdx.length + codeVal.length from by omega] at this
+    have hexec_store := FragExec.single_arrStore (am := am) hstore_instr hidx_int hval_int hbounds
+    refine ⟨σ_val, ?_, ?_⟩
+    · have h123 := FragExec.trans' (FragExec.trans' hexec_idx hexec_val) hexec_store
+      have hlen : offset + (codeIdx ++ codeVal ++ [TAC.arrStore arr vIdx vVal VarTy.int]).length =
+          offset + codeIdx.length + codeVal.length + 1 := by
+        simp only [List.length_append, List.length_cons, List.length_nil]; omega
+      rw [hlen]; exact h123
+    · intro v hv1 hv2; rw [hntmp_val v hv1 hv2, hntmp_idx v hv1 hv2]; exact hagree v hv1 hv2
+  | barrWrite arr idx bval =>
+    simp only [Stmt.safe] at hsafe
+    obtain ⟨hsafe_idx, hsafe_bval, hbounds⟩ := hsafe
+    simp only [Stmt.typedVars] at htypedv
+    obtain ⟨⟨htv_idx, hwrap_idx⟩, htv_bval⟩ := htypedv
+    have htf_idx := fun v hv => htmpfree v (by simp only [Stmt.allVars]; exact List.mem_append_left _ hv)
+    have htf_bval := fun v hv => htmpfree v (by simp only [Stmt.allVars]; exact List.mem_append_right _ hv)
+    have hftf_idx := fun v hv => hftmpfree v (by simp only [Stmt.allVars]; exact List.mem_append_left _ hv)
+    have hftf_bval := fun v hv => hftmpfree v (by simp only [Stmt.allVars]; exact List.mem_append_right _ hv)
+    simp only [Stmt.interp] at hinterp
+    split at hinterp <;> [skip; simp at hinterp]
+    simp at hinterp; obtain ⟨rfl, rfl⟩ := hinterp
+    dsimp only [refCompileStmt] at hcode ⊢
+    generalize hri : refCompileExpr idx offset nextTmp = ri at hcode ⊢
+    obtain ⟨codeIdx, vIdx, tmp1⟩ := ri
+    generalize hrcb : refCompileBool bval (offset + codeIdx.length) tmp1 = rcb at hcode ⊢
+    obtain ⟨codeBool, be, tmp2⟩ := rcb
+    simp only [] at hcode ⊢
+    -- Execute idx
+    obtain ⟨σ_idx, hexec_idx, hval_idx, hntmp_idx, hprev_idx, hfprev_idx⟩ :=
+      refCompileExpr_correct idx offset nextTmp σ σ_tac am p htf_idx hftf_idx htv_idx
+        hsafe_idx hagree (by rw [hri]; exact hcode.left.left.left)
+    rw [hri] at hexec_idx hval_idx; simp at hexec_idx hval_idx
+    have hagree_idx : ∀ v, v.isTmp = false → v.isFTmp = false → σ_idx v = σ v := by
+      intro v hv1 hv2; rw [hntmp_idx v hv1 hv2]; exact hagree v hv1 hv2
+    -- Execute bval
+    obtain ⟨σ_bool, hexec_bool, heval_bool, hntmp_bool, hprev_bool, hfprev_bool⟩ :=
+      refCompileBool_correct bval (offset + codeIdx.length) tmp1 σ σ_idx am p htf_bval hftf_bval
+        htv_bval hsafe_bval hagree_idx (by rw [hrcb]; exact hcode.left.left.right)
+    rw [hrcb] at hexec_bool heval_bool; simp at hexec_bool heval_bool
+    have hagree_bool : ∀ v, v.isTmp = false → v.isFTmp = false → σ_bool v = σ v := by
+      intro v hv1 hv2; rw [hntmp_bool v hv1 hv2]; exact hagree_idx v hv1 hv2
+    -- vIdx preserved through bool execution
+    have hvIdx_bool : σ_bool vIdx = σ_idx vIdx := by
+      rcases refCompileExpr_result_bound idx offset nextTmp htf_idx with h | ⟨k, _, hlt, heq⟩
+      · rw [hri] at h; simp at h
+        rcases refCompileExpr_result_ftmp_bound idx offset nextTmp hftf_idx with h2 | ⟨j, _, hlt2, heq2⟩
+        · rw [hri] at h2; simp at h2; exact hntmp_bool vIdx h h2
+        · rw [hri] at hlt2 heq2; simp at hlt2 heq2; rw [heq2]; exact hfprev_bool j (by omega)
+      · rw [hri] at hlt heq; simp at hlt heq; rw [heq]; exact hprev_bool k (by omega)
+    have hvIdx_int : σ_bool vIdx = .int (idx.eval σ am) := by rw [hvIdx_bool, hval_idx, hwrap_idx]
+    -- Code positions
+    set afterCB := offset + codeIdx.length + codeBool.length with afterCB_def
+    set tInt := tmpName tmp2
+    -- Extract instructions from hcode using direct indexing
+    have hconv := hcode.left.right  -- CodeAt convCode p afterCB (offset adjusted)
+    -- The convCode is [ifgoto, const0, goto, const1] which is a flat 4-element list at afterCB
+    -- But first we need to adjust the offset from (offset + (codeIdx ++ codeBool).length) to afterCB
+    have hconv_adj : CodeAt [TAC.ifgoto be (afterCB + 3), TAC.const tInt (.int 0),
+        TAC.goto (afterCB + 3 + 1), TAC.const tInt (.int 1)] p afterCB := by
+      have := hcode.left.right
+      simp only [List.length_append] at this; rwa [show offset + (codeIdx.length + codeBool.length) = afterCB from by omega] at this
+    have h_ifg : p[afterCB]? = some (.ifgoto be (afterCB + 3)) := hconv_adj.head
+    have h_const0 : p[afterCB + 1]? = some (.const tInt (.int 0)) := by
+      have := hconv_adj 1 (by simp); simpa using this
+    have h_goto_end : p[afterCB + 2]? = some (.goto (afterCB + 4)) := by
+      have := hconv_adj 2 (by simp); simpa [show afterCB + 3 + 1 = afterCB + 4 from by omega] using this
+    have h_const1 : p[afterCB + 3]? = some (.const tInt (.int 1)) := by
+      have := hconv_adj 3 (by simp); simpa using this
+    have h_arrStore : p[afterCB + 4]? = some (.arrStore arr vIdx tInt .int) := by
+      have := hcode.right.head
+      simp only [List.length_append, List.length_cons, List.length_nil] at this
+      rwa [show offset + (codeIdx.length + codeBool.length + 4) = afterCB + 4 from by omega] at this
+    -- Helper: tInt update doesn't affect vIdx
+    have hvIdx_update (val : Value) : (σ_bool[tInt ↦ val]) vIdx = σ_bool vIdx := by
+      rcases refCompileExpr_result_bound idx offset nextTmp htf_idx with h | ⟨k, hge, hlt, heq⟩
+      · rw [hri] at h; simp at h; exact Store.update_isTmp_ne (tmpName_isTmp tmp2) h
+      · rw [hri] at hlt heq; simp at hlt heq
+        have hge_b := refCompileBool_nextTmp_ge bval (offset + codeIdx.length) tmp1
+        rw [hrcb] at hge_b; simp at hge_b
+        rw [heq]; exact Store.update_tmpName_ne (by omega)
+    -- Case split on bool value
+    cases hbval : bval.eval σ am
+    · -- false → ifgoto falls through, const 0, goto endL, arrStore
+      have hexec_ifg := FragExec.single_iffalse (am := am) h_ifg (by rw [heval_bool, hbval])
+      have hexec_c0 := FragExec.single_const (am := am) h_const0 (σ := σ_bool)
+      have hexec_goto := FragExec.single_goto (am := am) h_goto_end (σ := σ_bool[tInt ↦ .int 0])
+      have htInt0 : (σ_bool[tInt ↦ .int (0 : BitVec 64)]) tInt = .int (0 : BitVec 64) := Store.update_self _ _ _
+      have hexec_store := FragExec.single_arrStore (am := am) h_arrStore
+        (by rw [hvIdx_update, hvIdx_int]) htInt0 hbounds
+      refine ⟨σ_bool[tInt ↦ .int (0 : BitVec 64)], ?_, ?_⟩
+      · have h := FragExec.trans' (FragExec.trans' (FragExec.trans'
+            (FragExec.trans' (FragExec.trans' hexec_idx hexec_bool)
+            hexec_ifg) hexec_c0) hexec_goto) hexec_store
+        simp only [afterCB_def, List.length_append, List.length_cons, List.length_nil] at h ⊢
+        convert h using 1; omega
+      · intro v hv1 hv2
+        rw [Store.update_isTmp_ne (tmpName_isTmp tmp2) hv1,
+            hntmp_bool v hv1 hv2, hntmp_idx v hv1 hv2]; exact hagree v hv1 hv2
+    · -- true → ifgoto jumps to trueL, const 1, arrStore
+      have hexec_ifg := FragExec.single_iftrue (am := am) h_ifg (by rw [heval_bool, hbval])
+      have hexec_c1 := FragExec.single_const (am := am) h_const1 (σ := σ_bool)
+      have htInt1 : (σ_bool[tInt ↦ .int (1 : BitVec 64)]) tInt = .int (1 : BitVec 64) := Store.update_self _ _ _
+      have hexec_store := FragExec.single_arrStore (am := am) h_arrStore
+        (by rw [hvIdx_update, hvIdx_int]) htInt1 hbounds
+      refine ⟨σ_bool[tInt ↦ .int (1 : BitVec 64)], ?_, ?_⟩
+      · have h := FragExec.trans' (FragExec.trans' (FragExec.trans'
+            (FragExec.trans' hexec_idx hexec_bool) hexec_ifg) hexec_c1) hexec_store
+        simp only [afterCB_def, List.length_append, List.length_cons, List.length_nil] at h ⊢
+        convert h using 1; omega
+      · intro v hv1 hv2
+        rw [Store.update_isTmp_ne (tmpName_isTmp tmp2) hv1,
+            hntmp_bool v hv1 hv2, hntmp_idx v hv1 hv2]; exact hagree v hv1 hv2
+  | seq s1 s2 ih1 ih2 =>
+    simp only [Stmt.interp, bind, Option.bind] at hinterp
+    cases h1 : s1.interp fuel σ am p.arrayDecls with
+    | none => simp [h1] at hinterp
+    | some p1 =>
+      obtain ⟨σ₁, am₁⟩ := p1; simp [h1] at hinterp
+      simp only [Stmt.safe] at hsafe; obtain ⟨hsafe1, hsafe2⟩ := hsafe; rw [h1] at hsafe2
+      simp only [Stmt.typedVars] at htypedv; obtain ⟨htv1, htv2⟩ := htypedv; rw [h1] at htv2
+      have htf1 : s1.tmpFree := fun v hv => htmpfree v (List.mem_append_left _ hv)
+      have htf2 : s2.tmpFree := fun v hv => htmpfree v (List.mem_append_right _ hv)
+      have hftf1 : s1.ftmpFree := fun v hv => hftmpfree v (List.mem_append_left _ hv)
+      have hftf2 : s2.ftmpFree := fun v hv => hftmpfree v (List.mem_append_right _ hv)
+      dsimp only [refCompileStmt] at hcode ⊢
+      generalize hrc1 : refCompileStmt s1 offset nextTmp = rc1 at hcode ⊢
+      obtain ⟨code1, tmp1⟩ := rc1
+      generalize hrc2 : refCompileStmt s2 (offset + code1.length) tmp1 = rc2 at hcode ⊢
+      obtain ⟨code2, tmp2⟩ := rc2
+      simp only [] at hcode ⊢
+      obtain ⟨σ_1, hexec_1, hagree_1⟩ :=
+        ih1 fuel σ σ₁ am am₁ offset nextTmp σ_tac h1 htf1 hftf1 hsafe1 htv1 hagree
+          (by rw [hrc1]; exact hcode.left)
+      rw [hrc1] at hexec_1; simp at hexec_1
+      obtain ⟨σ_2, hexec_2, hagree_2⟩ :=
+        ih2 fuel σ₁ σ' am₁ am' (offset + code1.length) tmp1 σ_1 hinterp htf2 hftf2 hsafe2 htv2
+          hagree_1 (by rw [hrc2]; exact hcode.right)
+      rw [hrc2] at hexec_2; simp at hexec_2
+      refine ⟨σ_2, ?_, hagree_2⟩
+      have h12 := FragExec.trans' hexec_1 hexec_2
+      simp only [List.length_append] at h12 ⊢
+      rwa [Nat.add_assoc] at h12
+  | ite b s1 s2 ih1 ih2 =>
+    simp only [Stmt.interp] at hinterp
+    split at hinterp
+    · rename_i hbs
+      simp only [Stmt.safe] at hsafe; obtain ⟨hbsafe, hbranch_safe⟩ := hsafe
+      simp only [Stmt.typedVars] at htypedv; obtain ⟨htv_b, htv_branch⟩ := htypedv
+      have htf_b := fun v hv => htmpfree v (by simp only [Stmt.allVars]; exact List.mem_append_left _ (List.mem_append_left _ hv))
+      have hftf_b := fun v hv => hftmpfree v (by simp only [Stmt.allVars]; exact List.mem_append_left _ (List.mem_append_left _ hv))
+      have htf1 : s1.tmpFree := fun v hv => htmpfree v (by simp only [Stmt.allVars]; exact List.mem_append_left _ (List.mem_append_right _ hv))
+      have htf2 : s2.tmpFree := fun v hv => htmpfree v (by simp only [Stmt.allVars]; exact List.mem_append_right _ hv)
+      have hftf1 : s1.ftmpFree := fun v hv => hftmpfree v (by simp only [Stmt.allVars]; exact List.mem_append_left _ (List.mem_append_right _ hv))
+      have hftf2 : s2.ftmpFree := fun v hv => hftmpfree v (by simp only [Stmt.allVars]; exact List.mem_append_right _ hv)
+      dsimp only [refCompileStmt] at hcode ⊢
+      generalize hrcb : refCompileBool b offset nextTmp = rcb at hcode ⊢
+      obtain ⟨codeBool, be, tmpB⟩ := rcb
+      generalize hrce : refCompileStmt s2 (offset + codeBool.length + 1) tmpB = rce at hcode ⊢
+      obtain ⟨codeElse, tmpElse⟩ := rce
+      generalize hrct : refCompileStmt s1 (offset + codeBool.length + 1 + codeElse.length + 1) tmpElse = rct at hcode ⊢
+      obtain ⟨codeThen, tmpThen⟩ := rct
+      simp only [] at hcode ⊢
+      obtain ⟨σ_bool, hexec_bool, heval_bool, hntmp_bool, _, _⟩ :=
+        refCompileBool_correct b offset nextTmp σ σ_tac am p htf_b hftf_b htv_b
+          hbsafe hagree
+          (by rw [hrcb]; exact hcode.left.left.left.left)
+      rw [hrcb] at hexec_bool heval_bool; simp at hexec_bool heval_bool
+      have hagree_bool : ∀ v, v.isTmp = false → v.isFTmp = false → σ_bool v = σ v := by
+        intro v hv1 hv2; rw [hntmp_bool v hv1 hv2]; exact hagree v hv1 hv2
+      have hifgoto_instr : p[offset + codeBool.length]? = some (.ifgoto be (offset + codeBool.length + 1 + codeElse.length + 1)) := by
+        have := hcode.left.left.left.right.head; simpa using this
+      cases heval : b.eval σ am
+      · -- false → else branch: fall through to codeElse, then goto endLabel
+        simp [heval] at hinterp hbranch_safe htv_branch
+        have hexec_if := FragExec.single_iffalse (am := am) hifgoto_instr (by rw [heval_bool, heval])
+        have hcode_else : CodeAt (refCompileStmt s2 (offset + codeBool.length + 1) tmpB).1 p
+            (offset + codeBool.length + 1) := by
+          rw [hrce]; have := hcode.left.left.right
+          simp only [List.length_append, List.length_cons, List.length_nil] at this
+          rwa [show offset + (codeBool.length + 1) = offset + codeBool.length + 1 from by omega] at this
+        obtain ⟨σ_else, hexec_else, hagree_else⟩ :=
+          ih2 fuel σ σ' am am' (offset + codeBool.length + 1) tmpB σ_bool hinterp htf2 hftf2
+            hbranch_safe htv_branch hagree_bool hcode_else
+        rw [hrce] at hexec_else; simp at hexec_else
+        have hgoto_instr : p[offset + codeBool.length + 1 + codeElse.length]? =
+            some (.goto (offset + codeBool.length + 1 + codeElse.length + 1 + codeThen.length)) := by
+          have := hcode.left.right.head
+          simp only [List.length_append, List.length_cons, List.length_nil] at this
+          rwa [show offset + (codeBool.length + 1 + codeElse.length) =
+              offset + codeBool.length + 1 + codeElse.length from by omega] at this
+        have hexec_goto := FragExec.single_goto (am := am') hgoto_instr (σ := σ_else)
+        refine ⟨σ_else, ?_, hagree_else⟩
+        have h1234 := FragExec.trans' (FragExec.trans' (FragExec.trans' hexec_bool hexec_if) hexec_else) hexec_goto
+        simp only [List.length_append, List.length_cons, List.length_nil] at h1234 ⊢
+        convert h1234 using 1; omega
+      · -- true → then branch: jump to codeThen
+        simp [heval] at hinterp hbranch_safe htv_branch
+        have hexec_if := FragExec.single_iftrue (am := am) hifgoto_instr (by rw [heval_bool, heval])
+        have hcode_then : CodeAt (refCompileStmt s1 (offset + codeBool.length + 1 + codeElse.length + 1) tmpElse).1 p
+            (offset + codeBool.length + 1 + codeElse.length + 1) := by
+          rw [hrct]; have := hcode.right
+          simp only [List.length_append, List.length_cons, List.length_nil] at this
+          rwa [show offset + (codeBool.length + 1 + codeElse.length + 1) =
+              offset + codeBool.length + 1 + codeElse.length + 1 from by omega] at this
+        obtain ⟨σ_then, hexec_then, hagree_then⟩ :=
+          ih1 fuel σ σ' am am' (offset + codeBool.length + 1 + codeElse.length + 1) tmpElse σ_bool
+            hinterp htf1 hftf1 hbranch_safe htv_branch hagree_bool hcode_then
+        rw [hrct] at hexec_then; simp at hexec_then
+        refine ⟨σ_then, ?_, hagree_then⟩
+        have h123 := FragExec.trans' (FragExec.trans' hexec_bool hexec_if) hexec_then
+        simp only [List.length_append, List.length_cons, List.length_nil] at h123 ⊢
+        convert h123 using 1; omega
+    · simp at hinterp
+  | loop b body ihb =>
+    induction fuel generalizing σ am σ' am' σ_tac with
+    | zero => simp [Stmt.interp] at hinterp
+    | succ fuel' ih_fuel =>
+      rw [Stmt.interp.eq_9] at hinterp
+      rw [Stmt.safe.eq_9] at hsafe
+      rw [Stmt.typedVars.eq_9] at htypedv
+      split at hinterp
+      · rename_i hbs
+        obtain ⟨hbsafe, hbranch⟩ := hsafe
+        obtain ⟨htv_bsafe, htv_branch⟩ := htypedv
+        have htf_b := fun v hv => htmpfree v (List.mem_append_left _ hv)
+        have hftf_b := fun v hv => hftmpfree v (List.mem_append_left _ hv)
+        have htf_body : body.tmpFree := fun v hv => htmpfree v (List.mem_append_right _ hv)
+        have hftf_body : body.ftmpFree := fun v hv => hftmpfree v (List.mem_append_right _ hv)
+        dsimp only [refCompileStmt] at hcode ⊢
+        generalize hrcb : refCompileBool b offset nextTmp = rcb at hcode ⊢
+        obtain ⟨codeBool, be, tmpB⟩ := rcb
+        generalize hrcbody : refCompileStmt body (offset + codeBool.length + 1) tmpB = rcbody at hcode ⊢
+        obtain ⟨codeBody, tmpBody⟩ := rcbody
+        simp only [] at hcode ⊢
+        have hcode_bool : CodeAt (refCompileBool b offset nextTmp).1 p offset := by
+          rw [hrcb]; exact hcode.left.left.left
+        obtain ⟨σ_bool, hexec_bool, heval_bool, hntmp_bool, _, _⟩ :=
+          refCompileBool_correct b offset nextTmp σ σ_tac am p htf_b hftf_b htv_bsafe hbsafe hagree hcode_bool
+        rw [hrcb] at hexec_bool heval_bool; simp at hexec_bool heval_bool
+        have hagree_bool : ∀ v, v.isTmp = false → v.isFTmp = false → σ_bool v = σ v := by
+          intro v hv1 hv2; rw [hntmp_bool v hv1 hv2]; exact hagree v hv1 hv2
+        have hifgoto_instr : p[offset + codeBool.length]? =
+            some (.ifgoto (.not be) (offset + codeBool.length + 1 + codeBody.length + 1)) := by
+          have := hcode.left.left.right.head
+          simp only [List.length_append, List.length_cons, List.length_nil] at this; exact this
+        cases heval : b.eval σ am
+        · -- false: loop exits
+          simp [heval] at hinterp
+          obtain ⟨rfl, rfl⟩ := hinterp
+          have hexec_if := FragExec.single_iftrue (am := am) hifgoto_instr
+            (by simp only [BoolExpr.eval]; rw [heval_bool, heval]; decide)
+          refine ⟨σ_bool, ?_, hagree_bool⟩
+          have h12 := FragExec.trans' hexec_bool hexec_if
+          simp only [List.length_append, List.length_cons, List.length_nil] at h12 ⊢
+          convert h12 using 1; omega
+        · -- true: execute body then recurse
+          simp [heval] at hinterp hbranch htv_branch
+          cases h_body : body.interp fuel' σ am p.arrayDecls with
+          | none => simp [h_body] at hinterp
+          | some p1 =>
+            obtain ⟨σ₁, am₁⟩ := p1; simp [h_body] at hinterp hbranch htv_branch
+            obtain ⟨hds_body, hsafe_rest⟩ := hbranch
+            obtain ⟨htv_body, htv_rest⟩ := htv_branch
+            have hexec_if := FragExec.single_iffalse (am := am) hifgoto_instr
+              (by simp only [BoolExpr.eval]; rw [heval_bool, heval]; decide)
+            have hcode_body : CodeAt (refCompileStmt body (offset + codeBool.length + 1) tmpB).1 p
+                (offset + codeBool.length + 1) := by
+              rw [hrcbody]; have := hcode.left.right
+              simp only [List.length_append, List.length_cons, List.length_nil] at this
+              rwa [show offset + (codeBool.length + 1) = offset + codeBool.length + 1 from by omega] at this
+            obtain ⟨σ_body, hexec_body, hagree_body⟩ :=
+              ihb fuel' σ σ₁ am am₁ (offset + codeBool.length + 1) tmpB σ_bool h_body htf_body hftf_body
+                hds_body htv_body hagree_bool hcode_body
+            rw [hrcbody] at hexec_body; simp at hexec_body
+            have hgoto_instr : p[offset + codeBool.length + 1 + codeBody.length]? = some (.goto offset) := by
+              have := hcode.right.head
+              simp only [List.length_append, List.length_cons, List.length_nil] at this
+              rwa [show offset + (codeBool.length + 1 + codeBody.length) =
+                  offset + codeBool.length + 1 + codeBody.length from by omega] at this
+            have hexec_goto := FragExec.single_goto (am := am₁) hgoto_instr (σ := σ_body)
+            -- Compose: bool + ifgoto + body + goto → back to offset
+            have hexec_iter := FragExec.trans' (FragExec.trans' (FragExec.trans' hexec_bool hexec_if) hexec_body) hexec_goto
+            -- Recurse on remaining loop iterations
+            obtain ⟨σ_final, hexec_rest, hagree_final⟩ :=
+              ih_fuel σ₁ σ' am₁ am' σ_body hinterp hsafe_rest htv_rest hagree_body
+            refine ⟨σ_final, ?_, hagree_final⟩
+            have h_total := FragExec.trans' hexec_iter hexec_rest
+            simp only [List.length_append, List.length_cons, List.length_nil] at h_total ⊢
+            convert h_total using 2
+            simp only [refCompileStmt, hrcb, hrcbody, List.length_append, List.length_cons, List.length_nil]
+      · simp at hinterp
+  | fassign x e =>
+    simp only [Stmt.safe] at hsafe
+    simp only [Stmt.typedVars] at htypedv
+    obtain ⟨htv_e, hwrap_e⟩ := htypedv
+    have htf_e : ∀ v ∈ e.freeVars, v.isTmp = false :=
+      fun v hv => htmpfree v (by simp only [Stmt.allVars]; exact List.mem_cons_of_mem x hv)
+    have hftf_e : ∀ v ∈ e.freeVars, v.isFTmp = false :=
+      fun v hv => hftmpfree v (by simp only [Stmt.allVars]; exact List.mem_cons_of_mem x hv)
+    have hisSafe := isSafe_of_safe_expr e σ am p.arrayDecls hsafe
+    simp only [Stmt.interp, hisSafe] at hinterp; simp at hinterp
+    obtain ⟨rfl, rfl⟩ := hinterp
+    cases e with
+    | flit f =>
+      dsimp only [refCompileStmt] at hcode ⊢
+      refine ⟨σ_tac[x ↦ .float (floatToBits f)],
+              FragExec.single_const (am := am) hcode.head, ?_⟩
+      intro v hv1 hv2; by_cases hvx : v = x
+      · subst hvx; rw [Store.update_self, Store.update_self]; simp [SExpr.eval]
+      · rw [Store.update_other _ x v _ hvx, Store.update_other _ x v _ hvx]; exact hagree v hv1 hv2
+    | var y =>
+      dsimp only [refCompileStmt] at hcode ⊢
+      simp only [SExpr.wrapEval] at hwrap_e
+      refine ⟨σ_tac[x ↦ σ_tac y], FragExec.single_copy (am := am) hcode.head, ?_⟩
+      intro v hv1 hv2; by_cases hvx : v = x
+      · subst hvx; rw [Store.update_self, Store.update_self]
+        rw [hagree y (htf_e y (by simp [SExpr.freeVars])) (hftf_e y (by simp [SExpr.freeVars]))]
+        exact hwrap_e
+      · rw [Store.update_other _ x v _ hvx, Store.update_other _ x v _ hvx]; exact hagree v hv1 hv2
+    | fbin fop a b =>
+      obtain ⟨hwrap_a, hwrap_b, htv_a, htv_b⟩ :=
+        show a.wrapEval σ am = .float (a.eval σ am) ∧ b.wrapEval σ am = .float (b.eval σ am) ∧
+             a.typedVars σ am ∧ b.typedVars σ am from htv_e
+      have htf_a := fun v hv => htf_e v (List.mem_append_left _ hv)
+      have htf_b := fun v hv => htf_e v (List.mem_append_right _ hv)
+      have hftf_a := fun v hv => hftf_e v (List.mem_append_left _ hv)
+      have hftf_b := fun v hv => hftf_e v (List.mem_append_right _ hv)
+      dsimp only [refCompileStmt] at hcode ⊢
+      generalize hra : refCompileExpr a offset nextTmp = ra at hcode ⊢
+      obtain ⟨codeA, va, tmp1⟩ := ra
+      generalize hrb : refCompileExpr b (offset + codeA.length) tmp1 = rb at hcode ⊢
+      obtain ⟨codeB, vb, tmp2⟩ := rb
+      simp only [] at hcode ⊢
+      obtain ⟨σ_a, hexec_a, hval_a, hntmp_a, hprev_a, hfprev_a⟩ :=
+        refCompileExpr_correct a offset nextTmp σ σ_tac am p htf_a hftf_a htv_a
+          (SExpr.safe_fbin_left hsafe) hagree (by rw [hra]; exact hcode.left.left)
+      rw [hra] at hexec_a hval_a; simp at hexec_a hval_a
+      have hagree_a : ∀ v, v.isTmp = false → v.isFTmp = false → σ_a v = σ v := by
+        intro v hv1 hv2; rw [hntmp_a v hv1 hv2]; exact hagree v hv1 hv2
+      obtain ⟨σ_b, hexec_b, hval_b, hntmp_b, hprev_b, hfprev_b⟩ :=
+        refCompileExpr_correct b (offset + codeA.length) tmp1 σ σ_a am p htf_b hftf_b htv_b
+          (SExpr.safe_fbin_right hsafe) hagree_a (by rw [hrb]; exact hcode.left.right)
+      rw [hrb] at hexec_b hval_b; simp at hexec_b hval_b
+      have hva_b : σ_b va = σ_a va := by
+        rcases refCompileExpr_result_bound a offset nextTmp htf_a with h | ⟨k, _, hlt, heq⟩
+        · rw [hra] at h; simp at h
+          rcases refCompileExpr_result_ftmp_bound a offset nextTmp hftf_a with h2 | ⟨j, _, hlt2, heq2⟩
+          · rw [hra] at h2; simp at h2; exact hntmp_b va h h2
+          · rw [hra] at hlt2 heq2; simp at hlt2 heq2; rw [heq2, hfprev_b j (by omega)]
+        · rw [hra] at hlt heq; simp at hlt heq; rw [heq, hprev_b k (by omega)]
+      have hva : σ_b va = .float (a.eval σ am) := by rw [hva_b, hval_a, hwrap_a]
+      have hvb : σ_b vb = .float (b.eval σ am) := by rw [hval_b, hwrap_b]
+      have hfbinop_instr : p[offset + codeA.length + codeB.length]? = some (.fbinop x fop va vb) := by
+        have := hcode.right.head; simp only [List.length_append] at this
+        rwa [show offset + (codeA.length + codeB.length) =
+            offset + codeA.length + codeB.length from by omega] at this
+      have hexec_fbinop := FragExec.single_fbinop (am := am) hfbinop_instr hva hvb
+      refine ⟨σ_b[x ↦ .float (fop.eval (a.eval σ am) (b.eval σ am))], ?_, ?_⟩
+      · have h123 := FragExec.trans' (FragExec.trans' hexec_a hexec_b) hexec_fbinop
+        have hlen : offset + (codeA ++ codeB ++ [TAC.fbinop x fop va vb]).length =
+            offset + codeA.length + codeB.length + 1 := by
+          simp only [List.length_append, List.length_cons, List.length_nil]; omega
+        rw [hlen]; exact h123
+      · intro v hv1 hv2; by_cases hvx : v = x
+        · subst hvx; rw [Store.update_self, Store.update_self]; simp [SExpr.eval]
+        · rw [Store.update_other _ x v _ hvx, Store.update_other _ x v _ hvx,
+              hntmp_b v hv1 hv2, hntmp_a v hv1 hv2]; exact hagree v hv1 hv2
+    | intToFloat e' =>
+      obtain ⟨hwrap_inner, htv_inner⟩ :=
+        show e'.wrapEval σ am = .int (e'.eval σ am) ∧ e'.typedVars σ am from htv_e
+      dsimp only [refCompileStmt] at hcode ⊢
+      generalize hre : refCompileExpr e' offset nextTmp = re at hcode ⊢
+      obtain ⟨codeE, ve, tmp1⟩ := re
+      simp only [] at hcode ⊢
+      obtain ⟨σ_e, hexec_e, hval_e, hntmp_e, _, _⟩ :=
+        refCompileExpr_correct e' offset nextTmp σ σ_tac am p htf_e hftf_e htv_inner
+          (by simp [SExpr.safe] at hsafe; exact hsafe) hagree (by rw [hre]; exact hcode.left)
+      rw [hre] at hexec_e hval_e; simp at hexec_e hval_e
+      have hval_int : σ_e ve = .int (e'.eval σ am) := by rw [hval_e, hwrap_inner]
+      have hexec_op := FragExec.single_intToFloat (am := am) hcode.right.head hval_int
+      refine ⟨σ_e[x ↦ .float (intToFloatBv (e'.eval σ am))], ?_, ?_⟩
+      · have h12 := FragExec.trans' hexec_e hexec_op
+        have hlen : offset + (codeE ++ [TAC.intToFloat x ve]).length =
+            offset + codeE.length + 1 := by
+          simp only [List.length_append, List.length_cons, List.length_nil]; omega
+        rw [hlen]; exact h12
+      · intro v hv1 hv2; by_cases hvx : v = x
+        · subst hvx; rw [Store.update_self, Store.update_self]; simp [SExpr.eval]
+        · rw [Store.update_other _ x v _ hvx, Store.update_other _ x v _ hvx,
+              hntmp_e v hv1 hv2]; exact hagree v hv1 hv2
+    | floatExp e' =>
+      obtain ⟨hwrap_inner, htv_inner⟩ :=
+        show e'.wrapEval σ am = .float (e'.eval σ am) ∧ e'.typedVars σ am from htv_e
+      dsimp only [refCompileStmt] at hcode ⊢
+      generalize hre : refCompileExpr e' offset nextTmp = re at hcode ⊢
+      obtain ⟨codeE, ve, tmp1⟩ := re
+      simp only [] at hcode ⊢
+      obtain ⟨σ_e, hexec_e, hval_e, hntmp_e, _, _⟩ :=
+        refCompileExpr_correct e' offset nextTmp σ σ_tac am p htf_e hftf_e htv_inner
+          (by simp [SExpr.safe] at hsafe; exact hsafe) hagree (by rw [hre]; exact hcode.left)
+      rw [hre] at hexec_e hval_e; simp at hexec_e hval_e
+      have hval_float : σ_e ve = .float (e'.eval σ am) := by rw [hval_e, hwrap_inner]
+      have hexec_op := FragExec.single_floatExp (am := am) hcode.right.head hval_float
+      refine ⟨σ_e[x ↦ .float (floatExpBv (e'.eval σ am))], ?_, ?_⟩
+      · have h12 := FragExec.trans' hexec_e hexec_op
+        have hlen : offset + (codeE ++ [TAC.floatExp x ve]).length =
+            offset + codeE.length + 1 := by
+          simp only [List.length_append, List.length_cons, List.length_nil]; omega
+        rw [hlen]; exact h12
+      · intro v hv1 hv2; by_cases hvx : v = x
+        · subst hvx; rw [Store.update_self, Store.update_self]; simp [SExpr.eval]
+        · rw [Store.update_other _ x v _ hvx, Store.update_other _ x v _ hvx,
+              hntmp_e v hv1 hv2]; exact hagree v hv1 hv2
+    | farrRead arr' idx =>
+      obtain ⟨hwrap_idx, htv_idx⟩ :=
+        show idx.wrapEval σ am = .int (idx.eval σ am) ∧ idx.typedVars σ am from htv_e
+      dsimp only [refCompileStmt] at hcode ⊢
+      generalize hri : refCompileExpr idx offset nextTmp = ri at hcode ⊢
+      obtain ⟨codeIdx, vIdx, tmp1⟩ := ri
+      simp only [] at hcode ⊢
+      obtain ⟨σ_idx, hexec_idx, hval_idx, hntmp_idx, _, _⟩ :=
+        refCompileExpr_correct idx offset nextTmp σ σ_tac am p htf_e hftf_e htv_idx
+          (by simp [SExpr.safe] at hsafe; exact hsafe.1) hagree (by rw [hri]; exact hcode.left)
+      rw [hri] at hexec_idx hval_idx; simp at hexec_idx hval_idx
+      have hval_idx_int : σ_idx vIdx = .int (idx.eval σ am) := by rw [hval_idx, hwrap_idx]
+      have hbounds : (idx.eval σ am) < p.arraySizeBv arr' := by
+        simp only [SExpr.safe] at hsafe; exact hsafe.2
+      have harrLoad_instr : p[offset + codeIdx.length]? = some (.arrLoad (ftmpName tmp1) arr' vIdx .float) := by
+        have := hcode.right.head; simpa using this
+      have harrLoad := FragExec.single_arrLoad_float (am := am) harrLoad_instr hval_idx_int hbounds
+      set σ_load := σ_idx[ftmpName tmp1 ↦ .float (am.read arr' (idx.eval σ am))] with hσ_load_def
+      have hcopy_instr : p[offset + codeIdx.length + 1]? = some (.copy x (ftmpName tmp1)) := by
+        have h2 := hcode.right 1 (by simp)
+        simpa using h2
+      have hexec_copy := FragExec.single_copy (am := am) hcopy_instr (σ := σ_load)
+      have hcopy_val : σ_load (ftmpName tmp1) = .float (am.read arr' (idx.eval σ am)) := by
+        rw [hσ_load_def]; exact Store.update_self _ _ _
+      refine ⟨σ_load[x ↦ σ_load (ftmpName tmp1)], ?_, ?_⟩
+      · have h123 := FragExec.trans' (FragExec.trans' hexec_idx harrLoad) hexec_copy
+        have hlen : offset + (codeIdx ++ [TAC.arrLoad (ftmpName tmp1) arr' vIdx VarTy.float,
+            TAC.copy x (ftmpName tmp1)]).length =
+            offset + codeIdx.length + 1 + 1 := by
+          simp only [List.length_append, List.length_cons, List.length_nil]; omega
+        rw [hlen]; exact h123
+      · rw [hcopy_val]
+        intro v hv1 hv2; by_cases hvx : v = x
+        · subst hvx; rw [Store.update_self, Store.update_self]; simp [SExpr.eval]
+        · rw [Store.update_other _ x v _ hvx]; rw [hσ_load_def]
+          rw [Store.update_other _ (ftmpName tmp1) v _
+              (fun h => by rw [h] at hv2; simp [ftmpName_isFTmp] at hv2)]
+          rw [Store.update_other _ x v _ hvx]; rw [hntmp_idx v hv1 hv2]; exact hagree v hv1 hv2
+    -- Contradictory cases for fassign (wrapEval gives .float but these are int-typed)
+    | lit _ => exact absurd hwrap_e (by simp [SExpr.wrapEval, SExpr.eval])
+    | bin _ _ _ => exact absurd hwrap_e (by simp [SExpr.wrapEval, SExpr.eval])
+    | arrRead _ _ => exact absurd hwrap_e (by simp [SExpr.wrapEval, SExpr.eval])
+    | floatToInt _ => exact absurd hwrap_e (by simp [SExpr.wrapEval, SExpr.eval])
+  | farrWrite arr idx val =>
+    simp only [Stmt.safe] at hsafe
+    obtain ⟨hsafe_idx, hsafe_val, hbounds⟩ := hsafe
+    simp only [Stmt.typedVars] at htypedv
+    obtain ⟨⟨htv_idx, hwrap_idx⟩, htv_val, hwrap_val⟩ := htypedv
+    have htf_idx := fun v hv => htmpfree v (by simp only [Stmt.allVars]; exact List.mem_append_left _ hv)
+    have htf_val := fun v hv => htmpfree v (by simp only [Stmt.allVars]; exact List.mem_append_right _ hv)
+    have hftf_idx := fun v hv => hftmpfree v (by simp only [Stmt.allVars]; exact List.mem_append_left _ hv)
+    have hftf_val := fun v hv => hftmpfree v (by simp only [Stmt.allVars]; exact List.mem_append_right _ hv)
+    simp only [Stmt.interp, isSafe_of_safe_expr idx σ am p.arrayDecls hsafe_idx,
+               isSafe_of_safe_expr val σ am p.arrayDecls hsafe_val,
+               decide_eq_true_eq.mpr hbounds, Bool.and_self, Bool.true_and] at hinterp
+    simp at hinterp; obtain ⟨rfl, rfl⟩ := hinterp
+    dsimp only [refCompileStmt] at hcode ⊢
+    generalize hri : refCompileExpr idx offset nextTmp = ri at hcode ⊢
+    obtain ⟨codeIdx, vIdx, tmp1⟩ := ri
+    generalize hrv : refCompileExpr val (offset + codeIdx.length) tmp1 = rv at hcode ⊢
+    obtain ⟨codeVal, vVal, tmp2⟩ := rv
+    simp only [] at hcode ⊢
+    obtain ⟨σ_idx, hexec_idx, hval_idx, hntmp_idx, hprev_idx, hfprev_idx⟩ :=
+      refCompileExpr_correct idx offset nextTmp σ σ_tac am p htf_idx hftf_idx htv_idx
+        hsafe_idx hagree (by rw [hri]; exact hcode.left.left)
+    rw [hri] at hexec_idx hval_idx; simp at hexec_idx hval_idx
+    have hagree_idx : ∀ v, v.isTmp = false → v.isFTmp = false → σ_idx v = σ v := by
+      intro v hv1 hv2; rw [hntmp_idx v hv1 hv2]; exact hagree v hv1 hv2
+    obtain ⟨σ_val, hexec_val, hval_val, hntmp_val, hprev_val, hfprev_val⟩ :=
+      refCompileExpr_correct val (offset + codeIdx.length) tmp1 σ σ_idx am p htf_val hftf_val htv_val
+        hsafe_val hagree_idx (by rw [hrv]; exact hcode.left.right)
+    rw [hrv] at hexec_val hval_val; simp at hexec_val hval_val
+    have hvIdx_val : σ_val vIdx = σ_idx vIdx := by
+      rcases refCompileExpr_result_bound idx offset nextTmp htf_idx with h | ⟨k, _, hlt, heq⟩
+      · rw [hri] at h; simp at h
+        rcases refCompileExpr_result_ftmp_bound idx offset nextTmp hftf_idx with h2 | ⟨j, _, hlt2, heq2⟩
+        · rw [hri] at h2; simp at h2; exact hntmp_val vIdx h h2
+        · rw [hri] at hlt2 heq2; simp at hlt2 heq2; rw [heq2, hfprev_val j (by omega)]
+      · rw [hri] at hlt heq; simp at hlt heq; rw [heq, hprev_val k (by omega)]
+    have hidx_int : σ_val vIdx = .int (idx.eval σ am) := by rw [hvIdx_val, hval_idx, hwrap_idx]
+    have hval_float : σ_val vVal = .float (val.eval σ am) := by rw [hval_val, hwrap_val]
+    have hstore_instr : p[offset + codeIdx.length + codeVal.length]? =
+        some (.arrStore arr vIdx vVal .float) := by
+      have := hcode.right.head; simp only [List.length_append] at this
+      rwa [show offset + (codeIdx.length + codeVal.length) =
+          offset + codeIdx.length + codeVal.length from by omega] at this
+    have hexec_store := FragExec.single_arrStore_float (am := am) hstore_instr hidx_int hval_float hbounds
+    refine ⟨σ_val, ?_, ?_⟩
+    · have h123 := FragExec.trans' (FragExec.trans' hexec_idx hexec_val) hexec_store
+      have hlen : offset + (codeIdx ++ codeVal ++ [TAC.arrStore arr vIdx vVal VarTy.float]).length =
+          offset + codeIdx.length + codeVal.length + 1 := by
+        simp only [List.length_append, List.length_cons, List.length_nil]; omega
+      rw [hlen]; exact h123
+    · intro v hv1 hv2; rw [hntmp_val v hv1 hv2, hntmp_idx v hv1 hv2]; exact hagree v hv1 hv2
 
 -- ============================================================
 -- § 12. Top-level correctness theorem

@@ -653,7 +653,13 @@ def checkDivPreservationExec (cert : ECertificate) : Bool :=
         ssGet (buildSubstMap ic.rel) y == .var y' &&
         ssGet (buildSubstMap ic.rel) z == .var z'
       | _ => false
-    | _ => true
+    | _ =>
+      -- When the trans instruction is not a binop, verify the mapped orig
+      -- instruction is not div/mod (otherwise we cannot transfer div-safety).
+      let ic := cert.instrCerts.getD pc_t default
+      match cert.orig[ic.pc_orig]? with
+      | some (.binop _ .div _ _) | some (.binop _ .mod _ _) => false
+      | _ => true
 
 /-- **Condition 10 (error preservation for array bounds)**: for every
     `arrLoad`/`arrStore` in the transformed program, the original at the

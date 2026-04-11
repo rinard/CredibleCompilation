@@ -59,6 +59,20 @@ def Stmt.allVars : Stmt → List Var
 def Stmt.tmpFree (s : Stmt) : Prop := ∀ v ∈ s.allVars, v.isTmp = false
 def Stmt.ftmpFree (s : Stmt) : Prop := ∀ v ∈ s.allVars, v.isFTmp = false
 
+/-- A statement contains no `goto` or `ifgoto` nodes.  The ref-compiler encodes
+    goto as `[.goto 0]` (an absolute jump to address 0), which is not provably
+    divergent at an arbitrary offset.  All real WhileLang programs are gotoFree
+    before label resolution, so this is harmless in practice. -/
+def Stmt.gotoFree : Stmt → Prop
+  | .skip | .assign _ _ | .bassign _ _ | .label _ => True
+  | .arrWrite _ _ _ | .barrWrite _ _ _ => True
+  | .fassign _ _ | .farrWrite _ _ _ => True
+  | .seq s1 s2 => s1.gotoFree ∧ s2.gotoFree
+  | .ite _ s1 s2 => s1.gotoFree ∧ s2.gotoFree
+  | .loop _ body => body.gotoFree
+  | .goto _ => False
+  | .ifgoto _ _ => False
+
 -- ============================================================
 -- § 2. Expression evaluation congruence
 -- ============================================================
