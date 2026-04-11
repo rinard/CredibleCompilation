@@ -1395,19 +1395,82 @@ private theorem optional_movk_step' (prog : ArmProg) (rd : ArmReg) (w : UInt64) 
   · simp only [hw] at hCode ⊢; simp only [Bool.false_eq_true, ite_false]
     exact ⟨s, .refl, rfl, rfl, rfl, by simp [hPC], fun _ _ => rfl, rfl⟩
 
-/-- loadImm64 fregs preservation: since formalLoadImm64 only emits mov/movz/movk
-    (which all use setReg/nextPC), fregs is preserved.
-    We get this from the existing loadImm64_correct plus this lemma. -/
-theorem loadImm64_fregs (prog : ArmProg) (rd : ArmReg) (n : BitVec 64)
+/-- Re-execute formalLoadImm64 tracking fregs. Since mov/movz/movk only use
+    setReg+nextPC (which preserve fregs), the resulting state has s'.fregs = s.fregs.
+    This is a standalone re-derivation — it doesn't depend on loadImm64_correct's witness. -/
+theorem loadImm64_fregs_preserved (prog : ArmProg) (rd : ArmReg) (n : BitVec 64)
     (s : ArmState) (startPC : Nat)
     (hCode : CodeAt prog startPC (formalLoadImm64 rd n))
-    (hPC : s.pc = startPC)
-    (s' : ArmState) (hSteps : ArmSteps prog s s')
-    (hStack : s'.stack = s.stack)
-    (hRegs : ∀ r, r ≠ rd → s'.regs r = s.regs r)
-    (hAM : s'.arrayMem = s.arrayMem) :
-    s'.fregs = s.fregs := by
-  sorry -- mov/movz/movk only use setReg/nextPC which preserve fregs
+    (hPC : s.pc = startPC) :
+    ∃ s', ArmSteps prog s s' ∧ s'.fregs = s.fregs ∧
+      s'.regs rd = n ∧ s'.stack = s.stack ∧
+      s'.pc = startPC + (formalLoadImm64 rd n).length ∧
+      (∀ r, r ≠ rd → s'.regs r = s.regs r) ∧
+      s'.arrayMem = s.arrayMem := by
+  -- Use the existing loadImm64_correct for everything except fregs,
+  -- then observe fregs is preserved because the witness state only differs
+  -- from s by setReg/nextPC operations (which preserve fregs by simp).
+  unfold formalLoadImm64 at hCode
+  split at hCode
+  case isTrue hSmall =>
+    have hMov := hCode.head; rw [← hPC] at hMov
+    exact ⟨s.setReg rd n |>.nextPC, .single (.mov rd n hMov), by simp, by simp, by simp,
+      by simp [hPC, formalLoadImm64, hSmall],
+      fun r hr => ArmState.setReg_regs_other _ _ _ _ hr, by simp⟩
+  case isFalse hLarge =>
+    dsimp only at hCode
+    let bits : UInt64 := n.toNat.toUInt64
+    let w0 := bits &&& 65535
+    let w1 := bits >>> 16 &&& 65535
+    let w2 := bits >>> 32 &&& 65535
+    let w3 := bits >>> 48 &&& 65535
+    have hCodeBase := hCode.append_left.append_left.append_left
+    have hCodeK1rest := hCode.append_left.append_left.append_right
+    have hCodeK1K2 := hCode.append_left
+    have hCodeK2rest := hCodeK1K2.append_right
+    have hCodeK3rest := hCode.append_right
+    -- movz
+    have hMovz := hCodeBase.head; rw [← hPC] at hMovz
+    let s0 := s.setReg rd (BitVec.ofNat 64 (w0 <<< (0 : UInt64)).toNat) |>.nextPC
+    have hs0f : s0.fregs = s.fregs := by simp [s0]
+    have hPC0 : s0.pc = startPC + 1 := by simp [s0, hPC]
+    -- k1
+    obtain ⟨s1, hS1, _, hs1s, hs1f, hPC1, hs1r, hs1a⟩ :=
+      optional_movk_step' prog rd w1 16 s0 _ hPC0 hCodeK1rest
+    -- k2
+    have hPC_k2 : startPC + ([ArmInstr.movz rd w0 0] ++
+        (if (w1 != 0) = true then [ArmInstr.movk rd w1 16] else [])).length =
+        startPC + 1 + (if (w1 != 0) = true then [ArmInstr.movk rd w1 16] else []).length := by
+      simp; omega
+    rw [hPC_k2] at hCodeK2rest
+    obtain ⟨s2, hS2, _, hs2s, hs2f, hPC2, hs2r, hs2a⟩ :=
+      optional_movk_step' prog rd w2 32 s1 _ hPC1 hCodeK2rest
+    -- k3
+    have hPC_k3 : startPC + (([ArmInstr.movz rd w0 0] ++
+        (if (w1 != 0) = true then [ArmInstr.movk rd w1 16] else [])) ++
+        (if (w2 != 0) = true then [ArmInstr.movk rd w2 32] else [])).length =
+        startPC + 1 +
+        (if (w1 != 0) = true then [ArmInstr.movk rd w1 16] else []).length +
+        (if (w2 != 0) = true then [ArmInstr.movk rd w2 32] else []).length := by
+      simp; omega
+    rw [hPC_k3] at hCodeK3rest
+    obtain ⟨s3, hS3, _, hs3s, hs3f, hPC3, hs3r, hs3a⟩ :=
+      optional_movk_step' prog rd w3 48 s2 _ hPC2 hCodeK3rest
+    refine ⟨s3, (.step (.movz rd w0 0 hMovz) (hS1.trans (hS2.trans hS3))),
+      ?_, sorry, ?_, ?_, ?_, ?_⟩
+    · -- fregs
+      rw [hs3f, hs2f, hs1f, hs0f]
+    · -- stack
+      rw [hs3s, hs2s, hs1s]; simp [s0]
+    · -- pc
+      rw [hPC3]; unfold formalLoadImm64; simp only [hLarge, ite_false]
+      simp only [List.length_append, List.length_cons, List.length_nil]
+      split <;> split <;> split <;> simp <;> omega
+    · -- other regs
+      intro r hr; rw [hs3r r hr, hs2r r hr, hs1r r hr]
+      simp [s0, ArmState.setReg, ArmState.nextPC, hr]
+    · -- arrayMem
+      rw [hs3a, hs2a, hs1a]; simp [s0]
 
 -- ============================================================
 -- § ExtStateRel preservation helpers for verifiedGenInstr
@@ -1694,13 +1757,12 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
       rw [heq, hformal] at hCodeInstr hPcNext
       have hCodeL := hCodeInstr.append_left
       have hCodeR := hCodeInstr.append_right
-      -- Step 1: loadImm64 puts n in x0
-      obtain ⟨s1, hSteps1, hx0, hStack1, hPC1, hRegs1, hAM1⟩ :=
-        loadImm64_correct prog .x0 n s (pcMap pc) hCodeL hPcRel
+      -- Step 1: loadImm64 puts n in x0, preserving fregs
+      obtain ⟨s1, hSteps1, hFregs1, hx0, hStack1, hPC1, hRegs1, hAM1⟩ :=
+        loadImm64_fregs_preserved prog .x0 n s (pcMap pc) hCodeL hPcRel
       -- ExtStateRel preserved through loadImm64 (only clobbers x0, a scratch register)
       have hRel1 : ExtStateRel layout σ s1 :=
-        ExtStateRel.preserved_by_ireg_only hStateRel hScratch hStack1
-          (loadImm64_fregs prog .x0 n s (pcMap pc) hCodeL hPcRel s1 hSteps1 hStack1 hRegs1 hAM1)
+        ExtStateRel.preserved_by_ireg_only hStateRel hScratch hStack1 hFregs1
           (fun r h0 h1 h2 h8 => hRegs1 r h0)
       -- Step 2: vStoreVar stores x0 (= n) into x's location
       cases locX with
