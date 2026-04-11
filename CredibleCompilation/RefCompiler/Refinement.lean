@@ -64,6 +64,46 @@ theorem compileStmt_eq_refCompileStmt (s : Stmt) (o t : Nat) :
   | goto lbl => simp [compileStmt, refCompileStmt]
   | ifgoto b lbl =>
     simp [compileStmt, refCompileStmt, compileBool_eq_refCompileBool]
+/-- `compileStmt` output length and nextTmp are independent of the label map.
+    Labels only affect jump target values inside generated instructions. -/
+theorem compileStmt_shape_labels (s : Stmt) (o t : Nat) (labels labels' : List (String × Nat)) :
+    (compileStmt s o t labels).1.length = (compileStmt s o t labels').1.length ∧
+    (compileStmt s o t labels).2 = (compileStmt s o t labels').2 := by
+  induction s generalizing o t labels labels' with
+  | skip | label _ => exact ⟨rfl, rfl⟩
+  | assign x e => cases e <;> exact ⟨rfl, rfl⟩
+  | bassign _ _ | arrWrite _ _ _ | barrWrite _ _ _ => exact ⟨rfl, rfl⟩
+  | fassign x e => cases e <;> exact ⟨rfl, rfl⟩
+  | farrWrite _ _ _ => exact ⟨rfl, rfl⟩
+  | goto _ => simp [compileStmt]
+  | ifgoto _ _ => constructor <;> simp [compileStmt]
+  | seq s1 s2 ih1 ih2 =>
+    have ⟨h1l, h1t⟩ := ih1 o t labels labels'
+    have h2 := ih2 (o + (compileStmt s1 o t labels).1.length)
+      (compileStmt s1 o t labels).2 labels labels'
+    rw [h1l, h1t] at h2
+    dsimp only [compileStmt]
+    simp only [List.length_append, h1l, h2.1, h1t, h2.2, and_self]
+  | ite b s1 s2 ih1 ih2 =>
+    have ⟨h2l, h2t⟩ := ih2 (o + (compileBool b o t).1.length + 1)
+      (compileBool b o t).2.2 labels labels'
+    have h1 := ih1
+      (o + (compileBool b o t).1.length + 1 +
+        (compileStmt s2 (o + (compileBool b o t).1.length + 1) (compileBool b o t).2.2 labels).1.length + 1)
+      (compileStmt s2 (o + (compileBool b o t).1.length + 1) (compileBool b o t).2.2 labels).2
+      labels labels'
+    rw [h2l, h2t] at h1
+    dsimp only [compileStmt]
+    simp only [List.length_append, List.length_cons, List.length_nil, h2l, h2t, h1.1, h1.2, and_self]
+  | loop b body ih =>
+    have ⟨hl, ht⟩ := ih (o + (compileBool b o t).1.length + 1) (compileBool b o t).2.2 labels labels'
+    dsimp only [compileStmt]
+    simp only [List.length_append, List.length_cons, List.length_nil, hl, ht, and_self]
+
+theorem compileStmt_length_labels (s : Stmt) (o t : Nat) (labels : List (String × Nat)) :
+    (compileStmt s o t labels).1.length = (compileStmt s o t).1.length :=
+  (compileStmt_shape_labels s o t labels {}).1
+
 -- ============================================================
 -- § 16. Refinement for Program.compile (with init code)
 -- ============================================================
@@ -112,18 +152,41 @@ private theorem inf_exec_to_StepsN {p : Prog} {f : Nat → Cfg}
 -- § 14. Refinement for Program.compile (with init code)
 -- ============================================================
 
-/-- The body code from `compileStmt` (= `refCompileStmt`) is embedded in `prog.compile`
-    starting at offset `prog.decls.length`. -/
-private theorem progCompile_body_codeAt (prog : Program) :
+/-- For goto-free statements, `compileStmt` output is independent of labels. -/
+theorem compileStmt_gotoFree_labels (s : Stmt) (o t : Nat)
+    (labels labels' : List (String × Nat)) (hgf : s.gotoFree) :
+    compileStmt s o t labels = compileStmt s o t labels' := by
+  induction s generalizing o t labels labels' with
+  | skip | assign _ _ | bassign _ _ | label _ => rfl
+  | arrWrite _ _ _ | barrWrite _ _ _ => rfl
+  | fassign _ _ | farrWrite _ _ _ => rfl
+  | goto _ => exact hgf.elim
+  | ifgoto _ _ => exact hgf.elim
+  | seq s1 s2 ih1 ih2 =>
+    simp only [compileStmt]
+    rw [ih1 o t labels labels' hgf.1]
+    rw [ih2 _ _ labels labels' hgf.2]
+  | ite b s1 s2 ih1 ih2 =>
+    simp only [compileStmt]
+    rw [ih2 _ _ labels labels' hgf.2]
+    rw [ih1 _ _ labels labels' hgf.1]
+  | loop b body ih =>
+    simp only [compileStmt]
+    rw [ih _ _ labels labels' hgf]
+
+/-- The body code from `refCompileStmt` is embedded in `prog.compile`. -/
+private theorem progCompile_body_codeAt (prog : Program)
+    (hgf : prog.body.gotoFree) :
     CodeAt (refCompileStmt prog.body prog.decls.length 0).1
       prog.compile prog.decls.length := by
   rw [← compileStmt_eq_refCompileStmt]
-  intro i hi
-  exact Program.compile_body_getElem prog i hi
+  rw [compileStmt_gotoFree_labels _ _ _ _ (collectLabels prog.body prog.decls.length) hgf]
+  intro i hi; exact Program.compile_body_getElem prog i hi
 /-- **Forward halt** for `prog.compile`: if the source terminates safely,
     `prog.compile` halts with a matching store. -/
 theorem progCompile_halt (prog : Program) (fuel : Nat) (σ' : Store) (am' : ArrayMem)
     (htc : prog.typeCheck = true)
+    (hgf : prog.body.gotoFree)
     (hinterp : prog.body.interp fuel prog.initStore ArrayMem.init prog.arrayDecls = some (σ', am'))
     (hsafe : prog.body.safe fuel prog.initStore ArrayMem.init prog.arrayDecls) :
     ∃ σ_tac am_h, haltsWithResult prog.compile 0 prog.initStore σ_tac ArrayMem.init am_h ∧
@@ -132,14 +195,16 @@ theorem progCompile_halt (prog : Program) (fuel : Nat) (σ' : Store) (am' : Arra
   have hftmpfree : prog.body.ftmpFree := Program.typeCheck_ftmpFree prog htc
   have hts := Program.typeCheck_initStore_typedStore prog htc
   have htypedv := Program.typeCheck_typedVars prog htc prog.initStore ArrayMem.init hts fuel
-  have hcode := progCompile_body_codeAt prog
+  have hcode := progCompile_body_codeAt prog hgf
   have hinit := Program.compile_initExec prog (Program.typeCheck_noDups prog htc)
   obtain ⟨σ_tac, hexec, hagree⟩ :=
     refCompileStmt_correct prog.body fuel prog.initStore σ' ArrayMem.init am' prog.decls.length 0
       prog.compile prog.initStore hinterp htmpfree hftmpfree hsafe htypedv (fun _ _ _ => rfl) hcode
   have hhalt_instr : prog.compile[prog.decls.length +
       (refCompileStmt prog.body prog.decls.length 0).1.length]? = some .halt := by
-    rw [← compileStmt_eq_refCompileStmt]; exact Program.compile_halt_getElem prog
+    rw [← compileStmt_eq_refCompileStmt]
+    rw [compileStmt_gotoFree_labels _ _ _ _ _ hgf]
+    exact Program.compile_halt_getElem prog
   have hfull : FragExec prog.compile 0 prog.initStore
       (prog.decls.length + (refCompileStmt prog.body prog.decls.length 0).1.length)
       σ_tac ArrayMem.init am' :=
@@ -149,6 +214,7 @@ theorem progCompile_halt (prog : Program) (fuel : Nat) (σ' : Store) (am' : Arra
     cannot halt (it reaches an error). -/
 theorem progCompile_no_halt_unsafe (prog : Program) (fuel : Nat)
     (htc : prog.typeCheck = true)
+    (hgf : prog.body.gotoFree)
     (hunsafe : ¬ prog.body.safe fuel prog.initStore ArrayMem.init prog.arrayDecls) :
     ¬ ∃ σ_tac am_h, haltsWithResult prog.compile 0 prog.initStore σ_tac ArrayMem.init am_h := by
   intro ⟨σ_tac, am_h, hhalt⟩
@@ -156,7 +222,7 @@ theorem progCompile_no_halt_unsafe (prog : Program) (fuel : Nat)
   have hftmpfree : prog.body.ftmpFree := Program.typeCheck_ftmpFree prog htc
   have hts := Program.typeCheck_initStore_typedStore prog htc
   have htypedv := Program.typeCheck_typedVars prog htc prog.initStore ArrayMem.init hts fuel
-  have hcode := progCompile_body_codeAt prog
+  have hcode := progCompile_body_codeAt prog hgf
   have hinit := Program.compile_initExec prog (Program.typeCheck_noDups prog htc)
   obtain ⟨pc_s, σ_s, am_s, hfrag, herror, _⟩ :=
     refCompileStmt_unsafe prog.body fuel prog.initStore ArrayMem.init prog.decls.length 0
@@ -166,13 +232,14 @@ theorem progCompile_no_halt_unsafe (prog : Program) (fuel : Nat)
     compiled program reaches an error state. -/
 theorem progCompile_reaches_error (prog : Program) (fuel : Nat)
     (htc : prog.typeCheck = true)
+    (hgf : prog.body.gotoFree)
     (hunsafe : ¬ prog.body.safe fuel prog.initStore ArrayMem.init prog.arrayDecls) :
     ∃ σ_e am_e, prog.compile ⊩ Cfg.run 0 prog.initStore ArrayMem.init ⟶* Cfg.error σ_e am_e := by
   have htmpfree := Program.typeCheck_tmpFree prog htc
   have hftmpfree : prog.body.ftmpFree := Program.typeCheck_ftmpFree prog htc
   have hts := Program.typeCheck_initStore_typedStore prog htc
   have htypedv := Program.typeCheck_typedVars prog htc prog.initStore ArrayMem.init hts fuel
-  have hcode := progCompile_body_codeAt prog
+  have hcode := progCompile_body_codeAt prog hgf
   have hinit := Program.compile_initExec prog (Program.typeCheck_noDups prog htc)
   obtain ⟨pc_s, σ_s, am_s, hfrag, herror, _⟩ :=
     refCompileStmt_unsafe prog.body fuel prog.initStore ArrayMem.init prog.decls.length 0
@@ -193,7 +260,7 @@ theorem progCompile_no_halt_diverge (prog : Program)
   have hts := Program.typeCheck_initStore_typedStore prog htc
   have htypedv : ∀ fuel, prog.body.typedVars fuel prog.initStore ArrayMem.init prog.arrayDecls :=
     fun fuel => Program.typeCheck_typedVars prog htc prog.initStore ArrayMem.init hts fuel
-  have hcode := progCompile_body_codeAt prog
+  have hcode := progCompile_body_codeAt prog hgotofree
   have hinit := Program.compile_initExec prog (Program.typeCheck_noDups prog htc)
   have hunbounded := refCompileStmt_diverges prog.body prog.initStore ArrayMem.init
     prog.decls.length 0 prog.compile prog.initStore
@@ -216,7 +283,7 @@ private theorem progCompile_no_halt_diverge_unsafe (prog : Program)
   · exact progCompile_no_halt_diverge prog htc hgotofree hdiv hsafe
   · push_neg at hsafe
     obtain ⟨fuel, hunsafe⟩ := hsafe
-    exact progCompile_no_halt_unsafe prog fuel htc hunsafe
+    exact progCompile_no_halt_unsafe prog fuel htc hgotofree hunsafe
 -- ============================================================
 -- § 15. Backward refinement
 -- ============================================================
@@ -283,12 +350,12 @@ theorem program_refinement (prog : Program) (htc : prog.typeCheck = true)
       by_cases hsafe : prog.body.safe fuel prog.initStore ArrayMem.init prog.arrayDecls
       · -- Source terminates safely → forward halt → determinism gives store match
         obtain ⟨σ_fwd, am_fwd, hhalt_fwd, hagree⟩ :=
-          progCompile_halt prog fuel σ' am' htc hinterp hsafe
+          progCompile_halt prog fuel σ' am' htc hgotofree hinterp hsafe
         have heq := haltsWithResult_unique hhalt hhalt_fwd
         subst heq
         exact ⟨fuel, σ', am', hinterp, hagree⟩
       · -- not safe → compiled cannot halt → contradiction
-        exact absurd ⟨σ_tac, am_h, hhalt⟩ (progCompile_no_halt_unsafe prog fuel htc hsafe)
+        exact absurd ⟨σ_tac, am_h, hhalt⟩ (progCompile_no_halt_unsafe prog fuel htc hgotofree hsafe)
   | errors σ_e =>
     simp only [program_behavior_init] at hbeh
     obtain ⟨am_e, herr⟩ := hbeh
@@ -302,7 +369,7 @@ theorem program_refinement (prog : Program) (htc : prog.typeCheck = true)
       have hts := Program.typeCheck_initStore_typedStore prog htc
       have htypedv : ∀ fuel, prog.body.typedVars fuel prog.initStore ArrayMem.init prog.arrayDecls :=
         fun fuel => Program.typeCheck_typedVars prog htc prog.initStore ArrayMem.init hts fuel
-      have hcode := progCompile_body_codeAt prog
+      have hcode := progCompile_body_codeAt prog hgotofree
       have hinit := Program.compile_initExec prog (Program.typeCheck_noDups prog htc)
       have hunbounded := refCompileStmt_diverges prog.body prog.initStore ArrayMem.init
         prog.decls.length 0 prog.compile prog.initStore
@@ -325,7 +392,7 @@ theorem program_refinement (prog : Program) (htc : prog.typeCheck = true)
       obtain ⟨r, hinterp⟩ := Option.some_of_ne_none hfuel
       obtain ⟨σ', am'⟩ := r
       obtain ⟨σ_fwd, am_fwd, hhalt_fwd, _⟩ :=
-        progCompile_halt prog fuel σ' am' htc hinterp (hall fuel)
+        progCompile_halt prog fuel σ' am' htc hgotofree hinterp (hall fuel)
       have halt_terminal : ∀ d, ¬ Step prog.compile (Cfg.halt σ_fwd am_fwd) d :=
         fun _ h => Step.no_step_from_halt h
       have err_terminal : ∀ d, ¬ Step prog.compile (Cfg.error σ_e am_e) d :=
@@ -342,7 +409,7 @@ theorem program_refinement (prog : Program) (htc : prog.typeCheck = true)
         have hts := Program.typeCheck_initStore_typedStore prog htc
         have htypedv : ∀ fuel, prog.body.typedVars fuel prog.initStore ArrayMem.init prog.arrayDecls :=
           fun fuel => Program.typeCheck_typedVars prog htc prog.initStore ArrayMem.init hts fuel
-        have hcode := progCompile_body_codeAt prog
+        have hcode := progCompile_body_codeAt prog hgotofree
         have hinit := Program.compile_initExec prog (Program.typeCheck_noDups prog htc)
         have hunbounded := refCompileStmt_diverges prog.body prog.initStore ArrayMem.init
           prog.decls.length 0 prog.compile prog.initStore
@@ -362,7 +429,7 @@ theorem program_refinement (prog : Program) (htc : prog.typeCheck = true)
       · -- not all safe → error reachable → typeError contradicts error
         push_neg at hsafe_all
         obtain ⟨fuel, hunsafe⟩ := hsafe_all
-        obtain ⟨σ_e, am_e, herr⟩ := progCompile_reaches_error prog fuel htc hunsafe
+        obtain ⟨σ_e, am_e, herr⟩ := progCompile_reaches_error prog fuel htc hgotofree hunsafe
         have err_terminal : ∀ d, ¬ Step prog.compile (Cfg.error σ_e am_e) d :=
           fun _ h => Step.no_step_from_error h
         have te_terminal : ∀ d, ¬ Step prog.compile (Cfg.typeError σ_te am_te) d :=
@@ -375,13 +442,13 @@ theorem program_refinement (prog : Program) (htc : prog.typeCheck = true)
       obtain ⟨σ', am'⟩ := r
       by_cases hsafe : prog.body.safe fuel prog.initStore ArrayMem.init prog.arrayDecls
       · obtain ⟨σ_fwd, am_fwd, hhalt_fwd, _⟩ :=
-          progCompile_halt prog fuel σ' am' htc hinterp hsafe
+          progCompile_halt prog fuel σ' am' htc hgotofree hinterp hsafe
         have halt_terminal : ∀ d, ¬ Step prog.compile (Cfg.halt σ_fwd am_fwd) d :=
           fun _ h => Step.no_step_from_halt h
         have te_terminal : ∀ d, ¬ Step prog.compile (Cfg.typeError σ_te am_te) d :=
           fun _ h => Step.no_step_from_typeError h
         exact Cfg.noConfusion (Steps.stuck_det hhalt_fwd hte halt_terminal te_terminal)
-      · obtain ⟨σ_e, am_e, herr⟩ := progCompile_reaches_error prog fuel htc hsafe
+      · obtain ⟨σ_e, am_e, herr⟩ := progCompile_reaches_error prog fuel htc hgotofree hsafe
         have err_terminal : ∀ d, ¬ Step prog.compile (Cfg.error σ_e am_e) d :=
           fun _ h => Step.no_step_from_error h
         have te_terminal : ∀ d, ¬ Step prog.compile (Cfg.typeError σ_te am_te) d :=
@@ -400,7 +467,7 @@ theorem program_refinement (prog : Program) (htc : prog.typeCheck = true)
     by_cases hsafe : prog.body.safe fuel prog.initStore ArrayMem.init prog.arrayDecls
     · -- safe → forward halt → contradicts infinite exec
       obtain ⟨σ_fwd, am_fwd, hhalt_fwd, _⟩ :=
-        progCompile_halt prog fuel σ' am' htc hinterp hsafe
+        progCompile_halt prog fuel σ' am' htc hgotofree hinterp hsafe
       obtain ⟨k, hk⟩ := hhalt_fwd.to_RefStepsN
       have hstepsN := inf_exec_to_StepsN hinf (k + 1)
       rw [hf0] at hstepsN
@@ -409,7 +476,7 @@ theorem program_refinement (prog : Program) (htc : prog.typeCheck = true)
       have hmk : (k + 1) - k = ((k + 1) - k - 1) + 1 := by omega
       exact RefStepsN.no_step_halt (hmk ▸ hsuffix)
     · -- not safe → forward error → contradicts infinite exec
-      obtain ⟨σ_e, am_e, herr⟩ := progCompile_reaches_error prog fuel htc hsafe
+      obtain ⟨σ_e, am_e, herr⟩ := progCompile_reaches_error prog fuel htc hgotofree hsafe
       obtain ⟨k, hk⟩ := herr.to_RefStepsN
       have hstepsN := inf_exec_to_StepsN hinf (k + 1)
       rw [hf0] at hstepsN
