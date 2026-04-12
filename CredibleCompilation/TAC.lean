@@ -45,6 +45,22 @@ inductive TAC where
   | floatExp   : Var → Var → TAC                          -- x := exp(y) (float)
   deriving Repr, DecidableEq
 
+/-- Variables referenced by a TAC instruction (destination + operands). -/
+def TAC.vars : TAC → List Var
+  | .const x _          => [x]
+  | .copy x y           => [x, y]
+  | .binop x _ y z      => [x, y, z]
+  | .boolop x be        => x :: be.vars
+  | .arrLoad x _ idx _  => [x, idx]
+  | .arrStore _ idx v _  => [idx, v]
+  | .fbinop x _ y z     => [x, y, z]
+  | .intToFloat x y     => [x, y]
+  | .floatToInt x y     => [x, y]
+  | .floatExp x y       => [x, y]
+  | .goto _             => []
+  | .ifgoto be _        => be.vars
+  | .halt               => []
+
 /-- A scalar instruction is one that does not touch ArrayMem. -/
 def TAC.isScalar : TAC → Bool
   | .const .. | .copy .. | .binop .. | .boolop .. | .goto .. | .ifgoto .. | .halt => true

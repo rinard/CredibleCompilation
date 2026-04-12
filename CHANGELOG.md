@@ -4,6 +4,27 @@ Chronological record of what was built and why, to reconstruct the sequence of d
 
 ---
 
+## Close verifiedGenerateAsm_spec sorry, refactor WellTypedLayout completeness (2026-04-12)
+
+**Goal:** Prove `verifiedGenerateAsm_spec`: a successful `verifiedGenerateAsm p = .ok r` satisfies `GenAsmSpec p r` (well-typedness, layout consistency, bodyPerPC size/content, pcMap prefix-sum, layout completeness for instruction variables).
+
+**Problem:** `WellTypedLayout` had a third conjunct `∀ v, layout v ≠ none` (completeness for ALL strings), which is unprovable for finite-entry layouts (`VarLayout` backed by `List.lookup`). This was added in a prior session to eliminate `none`-layout cases but made `verifiedGenerateAsm_spec` unprovable as stated.
+
+**Changes:**
+- **ArmSemantics.lean**: Removed `∀ v, layout v ≠ none` from `WellTypedLayout` (now two conjuncts: non-float not in freg, float not in ireg). Removed `WellTypedLayout.complete`. Updated `float_not_ireg` to use `h.2`.
+- **ArmCorrectness.lean**: Added `hMapped : ∀ v, v ∈ be.vars → layout v ≠ none` parameter to `verifiedGenBoolExpr_correct`. Added `hMapped : ∀ v, v ∈ instr.vars → layout v ≠ none` to `verifiedGenInstr_correct` and `ext_backward_simulation`. Replaced ~22 `hWTL.complete x` calls with `hMapped x (by simp [heq, TAC.vars])` or equivalent membership proofs. For boolop/ifgoto cases, derived bool-expr-level completeness from instruction-level completeness.
+- **TAC.lean**: Added public `TAC.vars` (equivalent to private `instrVars` in CodeGen).
+- **CodeGen.lean**: Added `layoutComplete` field to `GenAsmSpec`. Updated `step_simulation` to pass `spec.layoutComplete pc hPC` to `ext_backward_simulation`. Proved `verifiedGenerateAsm_spec` via:
+  - `checkWellTypedLayout_wellTyped`: soundness of layout type-consistency check
+  - `checkWellTypedLayout_instrMapped`: soundness of layout completeness check for instrVars
+  - `body_foldl_spec`: foldl invariant (size = code.size, each entry from verifiedGenInstr)
+  - `instrLength_eq_length`: pcMap-independence of instruction list length (case split on all TAC constructors)
+  - `instrVars_eq_vars`: definitional equality of private `instrVars` and public `TAC.vars`
+
+**Sorry status:** 0 sorrys in CodeGen.lean. 2 pre-existing sorrys remain in ArmCorrectness.lean (arrLoad/arrStore simulation, lines 3036/3038).
+
+---
+
 ## Whole-program refinement theorem for verifiedGenerateAsm (2026-04-12)
 
 **Goal:** Lift the per-instruction `ext_backward_simulation` to a multi-step simulation over `verifiedGenerateAsm`.

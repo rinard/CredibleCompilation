@@ -328,8 +328,7 @@ theorem ExtScratchSafe.not_d2 (h : ExtScratchSafe layout) (v : Var) : layout v �
     and float variables are not in integer registers. -/
 def WellTypedLayout (Γ : TyCtx) (layout : VarLayout) : Prop :=
   (∀ v r, Γ v ≠ .float → layout v ≠ some (.freg r)) ∧
-  (∀ v r, Γ v = .float → layout v ≠ some (.ireg r)) ∧
-  (∀ v, layout v ≠ none)
+  (∀ v r, Γ v = .float → layout v ≠ some (.ireg r))
 
 theorem WellTypedLayout.int_not_freg (h : WellTypedLayout Γ layout) (hty : Γ v = .int) :
     ∀ r, layout v ≠ some (.freg r) := fun r => h.1 v r (by rw [hty]; decide)
@@ -338,10 +337,7 @@ theorem WellTypedLayout.bool_not_freg (h : WellTypedLayout Γ layout) (hty : Γ 
     ∀ r, layout v ≠ some (.freg r) := fun r => h.1 v r (by rw [hty]; decide)
 
 theorem WellTypedLayout.float_not_ireg (h : WellTypedLayout Γ layout) (hty : Γ v = .float) :
-    ∀ r, layout v ≠ some (.ireg r) := fun r => h.2.1 v r hty
-
-theorem WellTypedLayout.complete (h : WellTypedLayout Γ layout) (v : Var) :
-    layout v ≠ none := h.2.2 v
+    ∀ r, layout v ≠ some (.ireg r) := fun r => h.2 v r hty
 
 /-- Check no variable maps to a scratch register. -/
 def VarLayout.scratchSafe (layout : VarLayout) : Bool :=
