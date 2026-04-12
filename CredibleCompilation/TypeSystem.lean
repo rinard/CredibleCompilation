@@ -22,28 +22,32 @@ inductive WellTypedBoolExpr (Γ : TyCtx) : BoolExpr → Prop where
   | not    : WellTypedBoolExpr Γ b → WellTypedBoolExpr Γ (.not b)
   | fcmp   : Γ x = .float → Γ y = .float → WellTypedBoolExpr Γ (.fcmp op x y)
 
-/-- Well-typedness for a single TAC instruction. -/
-inductive WellTypedInstr (Γ : TyCtx) : TAC → Prop where
-  | const  : v.typeOf = Γ x → WellTypedInstr Γ (.const x v)
-  | copy   : Γ x = Γ y → WellTypedInstr Γ (.copy x y)
+/-- Well-typedness for a single TAC instruction.
+    Array instructions additionally require the element type to match the
+    declared `arrayElemTy`. -/
+inductive WellTypedInstr (Γ : TyCtx) (decls : List (ArrayName × Nat × VarTy)) : TAC → Prop where
+  | const  : v.typeOf = Γ x → WellTypedInstr Γ decls (.const x v)
+  | copy   : Γ x = Γ y → WellTypedInstr Γ decls (.copy x y)
   | binop  : Γ x = .int → Γ y = .int → Γ z = .int →
-      WellTypedInstr Γ (.binop x op y z)
+      WellTypedInstr Γ decls (.binop x op y z)
   | boolop : Γ x = .bool → WellTypedBoolExpr Γ be →
-      WellTypedInstr Γ (.boolop x be)
-  | goto   : WellTypedInstr Γ (.goto l)
-  | ifgoto : WellTypedBoolExpr Γ b → WellTypedInstr Γ (.ifgoto b l)
-  | halt   : WellTypedInstr Γ .halt
-  | arrLoad  : Γ x = ty → Γ idx = .int → WellTypedInstr Γ (.arrLoad x arr idx ty)
-  | arrStore : Γ idx = .int → Γ val = ty → WellTypedInstr Γ (.arrStore arr idx val ty)
+      WellTypedInstr Γ decls (.boolop x be)
+  | goto   : WellTypedInstr Γ decls (.goto l)
+  | ifgoto : WellTypedBoolExpr Γ b → WellTypedInstr Γ decls (.ifgoto b l)
+  | halt   : WellTypedInstr Γ decls .halt
+  | arrLoad  : Γ x = ty → Γ idx = .int → ty = arrayElemTy decls arr →
+      WellTypedInstr Γ decls (.arrLoad x arr idx ty)
+  | arrStore : Γ idx = .int → Γ val = ty → ty = arrayElemTy decls arr →
+      WellTypedInstr Γ decls (.arrStore arr idx val ty)
   | fbinop : Γ x = .float → Γ y = .float → Γ z = .float →
-      WellTypedInstr Γ (.fbinop x fop y z)
-  | intToFloat : Γ x = .float → Γ y = .int → WellTypedInstr Γ (.intToFloat x y)
-  | floatToInt : Γ x = .int → Γ y = .float → WellTypedInstr Γ (.floatToInt x y)
-  | floatExp  : Γ x = .float → Γ y = .float → WellTypedInstr Γ (.floatExp x y)
+      WellTypedInstr Γ decls (.fbinop x fop y z)
+  | intToFloat : Γ x = .float → Γ y = .int → WellTypedInstr Γ decls (.intToFloat x y)
+  | floatToInt : Γ x = .int → Γ y = .float → WellTypedInstr Γ decls (.floatToInt x y)
+  | floatExp  : Γ x = .float → Γ y = .float → WellTypedInstr Γ decls (.floatExp x y)
 
 /-- A program is well-typed if every instruction is well-typed. -/
 def WellTypedProg (Γ : TyCtx) (p : Prog) : Prop :=
-  ∀ i, (h : i < p.size) → WellTypedInstr Γ p[i]
+  ∀ i, (h : i < p.size) → WellTypedInstr Γ p.arrayDecls p[i]
 
 -- ============================================================
 -- § 9. Progress and successor lemmas
@@ -83,14 +87,14 @@ theorem Step.progress (p : Prog) (pc : Nat) (σ : Store) (am : ArrayMem) (Γ : T
   | .halt          => exact ⟨_, .halt (hp ▸ hinstr)⟩
   | .arrLoad x arr idx ty =>
     rw [hp] at hwti; cases hwti with
-    | arrLoad _ hidx =>
+    | arrLoad _ hidx _ =>
       obtain ⟨iv, hiv⟩ := Value.int_of_typeOf_int (by rw [hts idx]; exact hidx)
       by_cases hb : iv < p.arraySizeBv arr
       · exact ⟨_, .arrLoad (hp ▸ hinstr) hiv hb⟩
       · exact ⟨_, .arrLoad_boundsError (hp ▸ hinstr) hiv hb⟩
   | .arrStore arr idx val ty =>
     rw [hp] at hwti; cases hwti with
-    | arrStore hidx hval =>
+    | arrStore hidx hval _ =>
       obtain ⟨iv, hiv⟩ := Value.int_of_typeOf_int (by rw [hts idx]; exact hidx)
       have hty : (σ val).typeOf = ty := by rw [hts val]; exact hval
       by_cases hb : iv < p.arraySizeBv arr
@@ -139,13 +143,13 @@ theorem Step.no_typeError_of_wellTyped {p : Prog} {pc : Nat} {σ τ : Store} {am
     have := instr_eq_of_lookup hpc hinstr
     rw [this] at hwti
     cases hwti with
-    | arrLoad _ hidx => exact hne (by rw [hts]; exact hidx)
+    | arrLoad _ hidx _ => exact hne (by rw [hts]; exact hidx)
   | arrStore_typeError hinstr hne =>
     have hwti := hwtp pc hpc
     have := instr_eq_of_lookup hpc hinstr
     rw [this] at hwti
     cases hwti with
-    | arrStore hidx hval =>
+    | arrStore hidx hval _ =>
       cases hne with
       | inl hl => exact hl (by rw [hts]; exact hidx)
       | inr hr => exact hr (by rw [hts]; exact hval)
@@ -256,7 +260,7 @@ def checkWellTypedBoolExpr (Γ : TyCtx) : BoolExpr → Bool
   | .not e        => checkWellTypedBoolExpr Γ e
   | .fcmp _ x y   => decide (Γ x = .float) && decide (Γ y = .float)
 
-def checkWellTypedInstr (Γ : TyCtx) : TAC → Bool
+def checkWellTypedInstr (Γ : TyCtx) (decls : List (ArrayName × Nat × VarTy)) : TAC → Bool
   | .const x v     => decide (v.typeOf = Γ x)
   | .copy x y      => decide (Γ x = Γ y)
   | .binop x _ y z => decide (Γ x = .int) && decide (Γ y = .int) && decide (Γ z = .int)
@@ -264,8 +268,8 @@ def checkWellTypedInstr (Γ : TyCtx) : TAC → Bool
   | .goto _        => true
   | .ifgoto b _    => checkWellTypedBoolExpr Γ b
   | .halt          => true
-  | .arrLoad x _ idx ty  => decide (Γ x = ty) && decide (Γ idx = .int)
-  | .arrStore _ idx val ty => decide (Γ idx = .int) && decide (Γ val = ty)
+  | .arrLoad x arr idx ty  => decide (Γ x = ty) && decide (Γ idx = .int) && decide (ty = arrayElemTy decls arr)
+  | .arrStore arr idx val ty => decide (Γ idx = .int) && decide (Γ val = ty) && decide (ty = arrayElemTy decls arr)
   | .fbinop x _ y z => decide (Γ x = .float) && decide (Γ y = .float) && decide (Γ z = .float)
   | .intToFloat x y => decide (Γ x = .float) && decide (Γ y = .int)
   | .floatToInt x y => decide (Γ x = .int) && decide (Γ y = .float)
@@ -290,8 +294,8 @@ theorem checkWellTypedBoolExpr_sound {Γ : TyCtx} {b : BoolExpr}
     simp [checkWellTypedBoolExpr, Bool.and_eq_true, decide_eq_true_eq] at h
     exact .fcmp h.1 h.2
 
-theorem checkWellTypedInstr_sound {Γ : TyCtx} {instr : TAC}
-    (h : checkWellTypedInstr Γ instr = true) : WellTypedInstr Γ instr := by
+theorem checkWellTypedInstr_sound {Γ : TyCtx} {decls : List (ArrayName × Nat × VarTy)} {instr : TAC}
+    (h : checkWellTypedInstr Γ decls instr = true) : WellTypedInstr Γ decls instr := by
   cases instr with
   | const x v =>
     simp only [checkWellTypedInstr, decide_eq_true_eq] at h
@@ -311,10 +315,10 @@ theorem checkWellTypedInstr_sound {Γ : TyCtx} {instr : TAC}
   | halt => exact .halt
   | arrLoad x arr idx ty =>
     simp [checkWellTypedInstr, Bool.and_eq_true, decide_eq_true_eq] at h
-    exact .arrLoad h.1 h.2
+    exact .arrLoad h.1.1 h.1.2 h.2
   | arrStore arr idx val ty =>
     simp [checkWellTypedInstr, Bool.and_eq_true, decide_eq_true_eq] at h
-    exact .arrStore h.1 h.2
+    exact .arrStore h.1.1 h.1.2 h.2
   | fbinop x fop y z =>
     simp [checkWellTypedInstr, Bool.and_eq_true, decide_eq_true_eq] at h
     exact .fbinop h.1.1 h.1.2 h.2
@@ -332,7 +336,7 @@ theorem checkWellTypedInstr_sound {Γ : TyCtx} {instr : TAC}
 def checkWellTypedProg (Γ : TyCtx) (p : Prog) : Bool :=
   (List.range p.size).all fun i =>
     match p[i]? with
-    | some instr => checkWellTypedInstr Γ instr
+    | some instr => checkWellTypedInstr Γ p.arrayDecls instr
     | none => true
 
 theorem checkWellTypedProg_sound {Γ : TyCtx} {p : Prog}
@@ -384,7 +388,7 @@ theorem type_preservation {Γ : TyCtx} {p : Prog} {pc pc' : Nat} {σ σ' : Store
     have := instr_eq_of_lookup hpc h
     rw [this] at hwti
     match hwti with
-    | .arrLoad hx _ => exact TypedStore.update_typed hts (by simp [Value.typeOf_ofBitVec]; exact hx.symm)
+    | .arrLoad hx _ _ => exact TypedStore.update_typed hts (by simp [Value.typeOf_ofBitVec]; exact hx.symm)
   | arrStore _ _ _ _ => exact hts
   | fbinop h _ _ =>
     have := instr_eq_of_lookup hpc h

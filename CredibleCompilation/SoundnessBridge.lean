@@ -1202,6 +1202,7 @@ private theorem execPath_sound_gen (orig : Prog) (ss : SymStore) (sam : SymArray
     (hrepr : ∀ v, (ssGet ss v).eval σ₀ am₀ = σ v)
     (hinv : EInv.toProp inv σ₀ am₀)
     (hsamCoh : SamCoherent sam σ₀ am₀ am)
+    (hsamTyped : ∀ a i v, (a, i, v) ∈ sam → (v.eval σ₀ am₀).typeOf = arrayElemTy orig.arrayDecls a)
     (hInvNoArrRead : inv.all (fun (_, e) => !e.hasArrRead) = true)
     (hpath : checkOrigPath orig ss sam inv pc labels pc' branchInfo = true)
     (hbranch : ∀ cond taken, branchInfo = some (cond, taken) →
@@ -1238,11 +1239,12 @@ private theorem execPath_sound_gen (orig : Prog) (ss : SymStore) (sam : SymArray
       -- Extract computeNextPC result
       generalize hnext_opt : computeNextPC instr pc ss inv = opt_next at hnext_eq
       -- Construct the step + symbolic tracking (hrepr'/hinv at am₀, hsamCoh₁ for new am₁)
-      have ⟨σ₁, am₁, hstep_orig, hrepr', hinv₁, hsamCoh₁⟩ : ∃ σ₁ am₁,
+      have ⟨σ₁, am₁, hstep_orig, hrepr', hinv₁, hsamCoh₁, hsamTyped₁⟩ : ∃ σ₁ am₁,
           Step orig (Cfg.run pc σ am) (Cfg.run nextPC σ₁ am₁) ∧
           (∀ v, (ssGet (execSymbolic ss sam instr).1 v).eval σ₀ am₀ = σ₁ v) ∧
           EInv.toProp inv σ₀ am₀ ∧
-          SamCoherent (execSymbolic ss sam instr).2 σ₀ am₀ am₁ := by
+          SamCoherent (execSymbolic ss sam instr).2 σ₀ am₀ am₁ ∧
+          (∀ a i v, (a, i, v) ∈ (execSymbolic ss sam instr).2 → (v.eval σ₀ am₀).typeOf = arrayElemTy orig.arrayDecls a) := by
         cases opt_next with
         | some nextPC' =>
           have hpc_eq : nextPC = nextPC' := (beq_iff_eq.mp hnext_eq).symm
@@ -1259,21 +1261,21 @@ private theorem execPath_sound_gen (orig : Prog) (ss : SymStore) (sam : SymArray
                 by_cases hvd : v = x
                 · rw [hvd, ssGet_ssSet_same]; simp [Expr.eval, Store.update_self]
                 · rw [ssGet_ssSet_other _ _ _ _ hvd, hrepr]
-                  exact (Store.update_other σ x v _ hvd).symm), hinv, hsamCoh⟩
+                  exact (Store.update_other σ x v _ hvd).symm), hinv, hsamCoh, hsamTyped⟩
             | bool b =>
               exact ⟨σ[x ↦ .bool b], am, hs, (fun v => by
                 simp only [execSymbolic]
                 by_cases hvd : v = x
                 · rw [hvd, ssGet_ssSet_same]; simp [Expr.eval, Store.update_self]
                 · rw [ssGet_ssSet_other _ _ _ _ hvd, hrepr]
-                  exact (Store.update_other σ x v _ hvd).symm), hinv, hsamCoh⟩
+                  exact (Store.update_other σ x v _ hvd).symm), hinv, hsamCoh, hsamTyped⟩
             | float f =>
               exact ⟨σ[x ↦ .float f], am, hs, (fun v => by
                 simp only [execSymbolic]
                 by_cases hvd : v = x
                 · rw [hvd, ssGet_ssSet_same]; simp [Expr.eval, Store.update_self]
                 · rw [ssGet_ssSet_other _ _ _ _ hvd, hrepr]
-                  exact (Store.update_other σ x v _ hvd).symm), hinv, hsamCoh⟩
+                  exact (Store.update_other σ x v _ hvd).symm), hinv, hsamCoh, hsamTyped⟩
           | copy x y =>
             simp [computeNextPC] at hnext_opt
             rw [hnext_opt.symm]
@@ -1283,7 +1285,7 @@ private theorem execPath_sound_gen (orig : Prog) (ss : SymStore) (sam : SymArray
               by_cases hvd : v = x
               · rw [hvd, ssGet_ssSet_same, hrepr]; exact (Store.update_self σ x (σ y)).symm
               · rw [ssGet_ssSet_other _ _ _ _ hvd, hrepr]
-                exact (Store.update_other σ x v _ hvd).symm), hinv, hsamCoh⟩
+                exact (Store.update_other σ x v _ hvd).symm), hinv, hsamCoh, hsamTyped⟩
           | binop x op y z =>
             simp [computeNextPC] at hnext_opt
             rw [hnext_opt.symm]
@@ -1313,7 +1315,7 @@ private theorem execPath_sound_gen (orig : Prog) (ss : SymStore) (sam : SymArray
                   rw [hrepr z, hzb]; rfl
                 rw [ha, hb]
               · rw [ssGet_ssSet_other _ _ _ _ hvd, hrepr]
-                exact (Store.update_other σ x v _ hvd).symm), hinv, hsamCoh⟩
+                exact (Store.update_other σ x v _ hvd).symm), hinv, hsamCoh, hsamTyped⟩
           | boolop x be =>
             simp [computeNextPC] at hnext_opt
             rw [hnext_opt.symm]
@@ -1324,12 +1326,12 @@ private theorem execPath_sound_gen (orig : Prog) (ss : SymStore) (sam : SymArray
               · rw [hvd, ssGet_ssSet_same]; simp only [Store.update_self]
                 exact BoolExpr.toSymExpr_sound be ss σ₀ σ am₀ hrepr
               · rw [ssGet_ssSet_other _ _ _ _ hvd, hrepr]
-                exact (Store.update_other σ x v _ hvd).symm), hinv, hsamCoh⟩
+                exact (Store.update_other σ x v _ hvd).symm), hinv, hsamCoh, hsamTyped⟩
           | goto l =>
             simp [computeNextPC] at hnext_opt
             rw [hnext_opt.symm]
             have hs : Step orig (.run pc σ am) (.run l σ am) := Step.goto horig_opt
-            exact ⟨σ, am, hs, (fun v => by simp only [execSymbolic]; exact hrepr v), hinv, hsamCoh⟩
+            exact ⟨σ, am, hs, (fun v => by simp only [execSymbolic]; exact hrepr v), hinv, hsamCoh, hsamTyped⟩
           | ifgoto b l =>
             have hexec_id : (execSymbolic ss sam (.ifgoto b l)).1 = ss := rfl
             simp only [computeNextPC] at hnext_opt
@@ -1341,13 +1343,13 @@ private theorem execPath_sound_gen (orig : Prog) (ss : SymStore) (sam : SymArray
                 have hpc_eq : nextPC = l := hnext_opt.symm
                 rw [hpc_eq]
                 have heval := BoolExpr.symEval_sound b ss inv σ₀ σ am₀ hrepr hinv true hsym
-                exact ⟨σ, am, Step.iftrue horig_opt heval, hexec_id ▸ hrepr, hinv, hsamCoh⟩
+                exact ⟨σ, am, Step.iftrue horig_opt heval, hexec_id ▸ hrepr, hinv, hsamCoh, hsamTyped⟩
               | false =>
                 simp at hnext_opt
                 have hpc_eq : nextPC = pc + 1 := hnext_opt.symm
                 rw [hpc_eq]
                 have heval := BoolExpr.symEval_sound b ss inv σ₀ σ am₀ hrepr hinv false hsym
-                exact ⟨σ, am, Step.iffall horig_opt heval, hexec_id ▸ hrepr, hinv, hsamCoh⟩
+                exact ⟨σ, am, Step.iffall horig_opt heval, hexec_id ▸ hrepr, hinv, hsamCoh, hsamTyped⟩
           | halt =>
             simp [computeNextPC] at hnext_opt
           | arrLoad x arr idx ty =>
@@ -1359,7 +1361,7 @@ private theorem execPath_sound_gen (orig : Prog) (ss : SymStore) (sam : SymArray
               Option.some.inj ((Array.getElem?_eq_getElem hpc_lt).symm.trans horig_opt)
             rw [hinstr_eq] at hwti
             obtain ⟨idxVal, hidxVal⟩ : ∃ idxVal : BitVec 64, σ idx = .int idxVal := by
-              cases hwti with | arrLoad _ hidx =>
+              cases hwti with | arrLoad _ hidx _ =>
               exact Value.int_of_typeOf_int (by rw [hts idx]; exact hidx)
             have hbnd : idxVal < orig.arraySizeBv arr :=
               hOrigBounds (List.cons_ne_nil _ _) arr idx idxVal ty (Or.inl ⟨x, horig_opt⟩) hidxVal
@@ -1371,16 +1373,18 @@ private theorem execPath_sound_gen (orig : Prog) (ss : SymStore) (sam : SymArray
               by_cases hvx : v = x
               · rw [hvx, ssGet_ssSet_same]
                 simp only [Store.update_self]
+                have hety : ty = arrayElemTy orig.arrayDecls arr := by
+                  cases hwti with | arrLoad _ _ h => exact h
                 have hsc := samGet_sound sam σ₀ am₀ am hsamCoh arr (ssGet ss idx) ty
                   (checkInstrAliasOk_arrLoad_noalias ss sam inv x arr idx σ₀ am₀ hinv halias_check)
-                  (fun _ _ _ _ _ _ => by sorry)
+                  (fun a i v hmem harr _ => by rw [hsamTyped a i v hmem, harr, hety])
                 rw [hsc]
                 congr 1
                 have hidx_eq := hrepr idx; rw [hidxVal] at hidx_eq
                 rw [hidx_eq]; rfl
               · rw [ssGet_ssSet_other _ _ _ _ hvx]
                 have hupd := Store.update_other σ x v (Value.ofBitVec ty (am.read arr idxVal)) hvx
-                rw [hupd]; exact hrepr v), hinv, hsamCoh⟩
+                rw [hupd]; exact hrepr v), hinv, hsamCoh, hsamTyped⟩
           | arrStore arr idx val ty =>
             simp [computeNextPC] at hnext_opt
             rw [hnext_opt.symm]
@@ -1390,11 +1394,13 @@ private theorem execPath_sound_gen (orig : Prog) (ss : SymStore) (sam : SymArray
               Option.some.inj ((Array.getElem?_eq_getElem hpc_lt).symm.trans horig_opt)
             rw [hinstr_eq] at hwti
             obtain ⟨idxVal, hidxVal⟩ : ∃ idxVal : BitVec 64, σ idx = .int idxVal := by
-              cases hwti with | arrStore hidx _ =>
+              cases hwti with | arrStore hidx _ _ =>
               exact Value.int_of_typeOf_int (by rw [hts idx]; exact hidx)
             have hty : (σ val).typeOf = ty := by
-              cases hwti with | arrStore _ hval =>
+              cases hwti with | arrStore _ hval _ =>
               rw [hts val]; exact hval
+            have hety : ty = arrayElemTy orig.arrayDecls arr := by
+              cases hwti with | arrStore _ _ h => exact h
             have hbnd : idxVal < orig.arraySizeBv arr :=
               hOrigBounds (List.cons_ne_nil _ _) arr idx idxVal ty (Or.inr ⟨val, horig_opt⟩) hidxVal
             have hs : Step orig (.run pc σ am) (.run (pc + 1) σ (am.write arr idxVal (σ val).toBits)) :=
@@ -1407,7 +1413,12 @@ private theorem execPath_sound_gen (orig : Prog) (ss : SymStore) (sam : SymArray
                 (by rw [hrepr val])
                 (by congr 1
                     have hidx_eq := hrepr idx; rw [hidxVal] at hidx_eq
-                    rw [hidx_eq]; rfl)⟩
+                    rw [hidx_eq]; rfl),
+              fun a i v hmem => by
+                simp [execSymbolic, List.mem_cons] at hmem
+                rcases hmem with ⟨rfl, rfl, rfl⟩ | htl
+                · rw [hrepr val, hty, hety]
+                · exact hsamTyped a i v htl⟩
           | fbinop x fop y z =>
             simp [computeNextPC] at hnext_opt
             rw [hnext_opt.symm]
@@ -1435,7 +1446,7 @@ private theorem execPath_sound_gen (orig : Prog) (ss : SymStore) (sam : SymArray
                   rw [hrepr z, hfb]; rfl
                 rw [ha, hb]
               · rw [ssGet_ssSet_other _ _ _ _ hvd, hrepr]
-                exact (Store.update_other σ x v _ hvd).symm), hinv, hsamCoh⟩
+                exact (Store.update_other σ x v _ hvd).symm), hinv, hsamCoh, hsamTyped⟩
           | intToFloat x y =>
             simp [computeNextPC] at hnext_opt
             rw [hnext_opt.symm]
@@ -1458,7 +1469,7 @@ private theorem execPath_sound_gen (orig : Prog) (ss : SymStore) (sam : SymArray
                   rw [hrepr y, hn]; rfl
                 rw [hsrc]
               · rw [ssGet_ssSet_other _ _ _ _ hvd, hrepr]
-                exact (Store.update_other σ x v _ hvd).symm), hinv, hsamCoh⟩
+                exact (Store.update_other σ x v _ hvd).symm), hinv, hsamCoh, hsamTyped⟩
           | floatToInt x y =>
             simp [computeNextPC] at hnext_opt
             rw [hnext_opt.symm]
@@ -1481,7 +1492,7 @@ private theorem execPath_sound_gen (orig : Prog) (ss : SymStore) (sam : SymArray
                   rw [hrepr y, hf]; rfl
                 rw [hsrc]
               · rw [ssGet_ssSet_other _ _ _ _ hvd, hrepr]
-                exact (Store.update_other σ x v _ hvd).symm), hinv, hsamCoh⟩
+                exact (Store.update_other σ x v _ hvd).symm), hinv, hsamCoh, hsamTyped⟩
           | floatExp x y =>
             simp [computeNextPC] at hnext_opt
             rw [hnext_opt.symm]
@@ -1504,7 +1515,7 @@ private theorem execPath_sound_gen (orig : Prog) (ss : SymStore) (sam : SymArray
                   rw [hrepr y, hf]; rfl
                 rw [hsrc]
               · rw [ssGet_ssSet_other _ _ _ _ hvd, hrepr]
-                exact (Store.update_other σ x v _ hvd).symm), hinv, hsamCoh⟩
+                exact (Store.update_other σ x v _ hvd).symm), hinv, hsamCoh, hsamTyped⟩
         | none =>
           -- computeNextPC returned none; use branchInfo fallback
           cases hbi : branchInfo with
@@ -1524,7 +1535,7 @@ private theorem execPath_sound_gen (orig : Prog) (ss : SymStore) (sam : SymArray
                 have hpc_eq := beq_iff_eq.mp hpc_eq; subst hpc_eq
                 have heval : b.eval σ = true := by
                   rw [hbeq]; exact hbranch origCond true (hbi ▸ rfl)
-                exact ⟨σ, am, Step.iftrue horig_opt heval, hexec_id ▸ hrepr, hinv, hsamCoh⟩
+                exact ⟨σ, am, Step.iftrue horig_opt heval, hexec_id ▸ hrepr, hinv, hsamCoh, hsamTyped⟩
               | false =>
                 have hfb : (b == origCond && nextPC == pc + 1) = true := by
                   revert hnext_eq; rw [hbi]; simp
@@ -1533,7 +1544,7 @@ private theorem execPath_sound_gen (orig : Prog) (ss : SymStore) (sam : SymArray
                 have hpc_eq := beq_iff_eq.mp hpc_eq; subst hpc_eq
                 have heval : b.eval σ = false := by
                   rw [hbeq]; exact hbranch origCond false (hbi ▸ rfl)
-                exact ⟨σ, am, Step.iffall horig_opt heval, hexec_id ▸ hrepr, hinv, hsamCoh⟩
+                exact ⟨σ, am, Step.iffall horig_opt heval, hexec_id ▸ hrepr, hinv, hsamCoh, hsamTyped⟩
             | _ =>
               exfalso; revert hnext_eq; rw [hbi]; cases taken <;> simp
       -- Recursive step (branchInfo = none for rest)
@@ -1597,7 +1608,7 @@ private theorem execPath_sound_gen (orig : Prog) (ss : SymStore) (sam : SymArray
           exact hRestNoDivMod l (hdr ▸ List.mem_cons_of_mem _ hmem)
       obtain ⟨σ', am', hsteps_rest, hrepr_final, hsamCoh'⟩ :=
         ih (execSymbolic ss sam instr).1 (execSymbolic ss sam instr).2 σ₁ nextPC none am₁ hts₁ hrepr'
-          hsamCoh₁ hpath_inner (fun _ _ h => by simp at h) hOrigBounds₁ hRestScalar₁
+          hsamCoh₁ hsamTyped₁ hpath_inner (fun _ _ h => by simp at h) hOrigBounds₁ hRestScalar₁
           hDivSafe₁ hRestNoDivMod₁
       have hexec_sam : (execPath orig ss sam pc (nextPC :: rest)).2 =
           (execPath orig (execSymbolic ss sam instr).1 (execSymbolic ss sam instr).2 nextPC rest).2 := by
@@ -1632,8 +1643,8 @@ private theorem execPath_sound (orig : Prog) (inv : EInv) (σ : Store)
           (∀ v, (ssGet (execPath orig ([] : SymStore) ([] : SymArrayMem) pc labels).1 v).eval σ am = σ' v) ∧
           SamCoherent (execPath orig ([] : SymStore) ([] : SymArrayMem) pc labels).2 σ am am' :=
   execPath_sound_gen orig ([] : SymStore) ([] : SymArrayMem) inv σ σ pc labels pc' branchInfo am am
-    Γ hwtp hts hrepr hinv (samCoherent_nil σ am) hInvNoArrRead hpath hbranch hOrigBounds hRestScalar
-    hDivSafe hRestNoDivMod
+    Γ hwtp hts hrepr hinv (samCoherent_nil σ am) (fun _ _ _ h => by simp at h)
+    hInvNoArrRead hpath hbranch hOrigBounds hRestScalar hDivSafe hRestNoDivMod
 
 /-- If the store relation holds (∀ x, σ_t x = (ssGet ss x).eval σ_o), then evaluating
     `e` at `σ_t` equals evaluating `e.substSym ss` at `σ_o`. Follows from `substSym_sound`. -/
@@ -2884,7 +2895,7 @@ theorem checkDivPreservationExec_sound (dc : ECertificate)
           Option.some.inj ((Array.getElem?_eq_getElem hpc_lt).symm.trans horig)
         rw [hinstr_eq] at hwti
         have ⟨_hidx_ty, hval_ty⟩ : dc.tyCtx idx' = .int ∧ dc.tyCtx val' = ty' := by
-          cases hwti with | arrStore h1 h2 => exact ⟨h1, h2⟩
+          cases hwti with | arrStore h1 h2 _ => exact ⟨h1, h2⟩
         have hty' : (σ_o val').typeOf = ty' := by rw [htyped val']; exact hval_ty
         exact ⟨σ_o, am_o, Steps.single (Step.arrStore_boundsError horig hidx' hty' hbnd_fail')⟩
       | _ => simp at hpc
