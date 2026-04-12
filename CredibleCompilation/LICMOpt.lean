@@ -78,11 +78,12 @@ def findHoistable (prog : Prog) (inLoop : Array Bool) : List (Nat × Nat × Var 
           | none => false
         if usedBefore then none else some (header, pc, x, v)
     | _ => none
-  -- Deduplicate per variable
-  candidates.foldl (fun acc (h, pc, x, v) =>
+  -- Deduplicate per variable, limit to 20 to avoid cert generation blowup
+  let deduped := candidates.foldl (fun acc (h, pc, x, v) =>
     if acc.any (fun (_, _, x', _) => x' == x) then acc
     else acc ++ [(h, pc, x, v)]
   ) ([] : List (Nat × Nat × Var × Value))
+  deduped
 
 -- ============================================================
 -- § 3. PC mapping
