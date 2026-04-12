@@ -4,67 +4,11 @@ set_option linter.unusedSimpArgs false
 set_option maxHeartbeats 1600000
 
 /-!
-# Reference Compiler: Refinement
+# Compiler Correctness: Refinement
 
-Bridge between compileStmt and refCompileStmt, and full program-level
-backward refinement theorem.
+Program-level refinement theorems connecting the While-to-TAC compiler
+(defined in WhileLang.lean) to source semantics.
 -/
-
--- ============================================================
--- § 12. Bridge: compileStmt = refCompileStmt
--- ============================================================
-
-theorem compileExpr_eq_refCompileExpr (e : SExpr) (o t : Nat) :
-    compileExpr e o t = refCompileExpr e o t := by
-  induction e generalizing o t with
-  | lit _ => rfl
-  | var _ => rfl
-  | bin op a b iha ihb =>
-    simp only [compileExpr, refCompileExpr, iha, ihb]
-  | arrRead _ _ ih => simp only [compileExpr, refCompileExpr, ih]
-  | flit _ => rfl
-  | fbin op a b iha ihb => simp only [compileExpr, refCompileExpr, iha, ihb]
-  | intToFloat e ih => simp only [compileExpr, refCompileExpr, ih]
-  | floatToInt e ih => simp only [compileExpr, refCompileExpr, ih]
-  | floatExp e ih => simp only [compileExpr, refCompileExpr, ih]
-  | farrRead arr idx ih => simp only [compileExpr, refCompileExpr, ih]
-theorem compileBool_eq_refCompileBool (b : SBool) (o t : Nat) :
-    compileBool b o t = refCompileBool b o t := by
-  induction b generalizing o t with
-  | lit _ => rfl
-  | bvar _ => rfl
-  | cmp op a b => simp only [compileBool, refCompileBool, compileExpr_eq_refCompileExpr]
-  | fcmp _ _ _ => simp only [compileBool, refCompileBool, compileExpr_eq_refCompileExpr]
-  | not e ih => simp only [compileBool, refCompileBool, ih]
-  | and a b iha ihb => simp only [compileBool, refCompileBool, iha, ihb]
-  | or a b iha ihb => simp only [compileBool, refCompileBool, iha, ihb]
-  | barrRead arr idx => simp only [compileBool, refCompileBool, compileExpr_eq_refCompileExpr]
-theorem compileStmt_eq_refCompileStmt (s : Stmt) (o t : Nat)
-    (labels : List (String × Nat) := []) :
-    compileStmt s o t labels = refCompileStmt s o t labels := by
-  induction s generalizing o t with
-  | skip | label _ => rfl
-  | assign x e =>
-    cases e <;> simp only [compileStmt, refCompileStmt, compileExpr_eq_refCompileExpr]
-  | bassign x b =>
-    simp only [compileStmt, refCompileStmt, compileBool_eq_refCompileBool]
-  | arrWrite arr idx val =>
-    simp only [compileStmt, refCompileStmt, compileExpr_eq_refCompileExpr]
-  | barrWrite arr idx bval =>
-    simp only [compileStmt, refCompileStmt, compileExpr_eq_refCompileExpr, compileBool_eq_refCompileBool]
-  | seq s1 s2 ih1 ih2 =>
-    simp only [compileStmt, refCompileStmt, ih1, ih2]
-  | ite b s1 s2 ih1 ih2 =>
-    simp only [compileStmt, refCompileStmt, compileBool_eq_refCompileBool, ih1, ih2]
-  | loop b body ih =>
-    simp only [compileStmt, refCompileStmt, compileBool_eq_refCompileBool, ih]
-  | fassign x e =>
-    cases e <;> simp only [compileStmt, refCompileStmt, compileExpr_eq_refCompileExpr]
-  | farrWrite arr idx val =>
-    simp only [compileStmt, refCompileStmt, compileExpr_eq_refCompileExpr]
-  | goto lbl => simp [compileStmt, refCompileStmt]
-  | ifgoto b lbl =>
-    simp [compileStmt, refCompileStmt, compileBool_eq_refCompileBool]
 /-- `compileStmt` output length and nextTmp are independent of the label map.
     Labels only affect jump target values inside generated instructions. -/
 theorem compileStmt_shape_labels (s : Stmt) (o t : Nat) (labels labels' : List (String × Nat)) :
@@ -154,12 +98,11 @@ private theorem inf_exec_to_StepsN {p : Prog} {f : Nat → Cfg}
 -- ============================================================
 
 
-/-- The body code from `refCompileStmt` is embedded in `prog.compile`. -/
+/-- The body code from `compileStmt` is embedded in `prog.compile`. -/
 private theorem progCompile_body_codeAt (prog : Program) :
-    RC.CodeAt (refCompileStmt prog.body prog.decls.length 0
+    RC.CodeAt (compileStmt prog.body prog.decls.length 0
       (collectLabels prog.body prog.decls.length)).1
       prog.compile prog.decls.length := by
-  rw [← compileStmt_eq_refCompileStmt (labels := collectLabels prog.body prog.decls.length)]
   intro i hi; exact Program.compile_body_getElem prog i hi
 /-- **Forward halt** for `prog.compile`: if the source terminates safely,
     `prog.compile` halts with a matching store. -/
@@ -178,15 +121,14 @@ theorem progCompile_halt (prog : Program) (fuel : Nat) (σ' : Store) (am' : Arra
   have hcode := progCompile_body_codeAt prog
   have hinit := Program.compile_initExec prog (Program.typeCheck_noDups prog htc)
   obtain ⟨σ_tac, hexec, hagree⟩ :=
-    refCompileStmt_correct prog.body fuel prog.initStore σ' ArrayMem.init am' prog.decls.length 0
+    compileStmt_correct prog.body fuel prog.initStore σ' ArrayMem.init am' prog.decls.length 0
       prog.compile prog.initStore hinterp htmpfree hftmpfree hNoGoto hsafe htypedv (fun _ _ _ => rfl)
       (labels := labels) hcode
   have hhalt_instr : prog.compile[prog.decls.length +
-      (refCompileStmt prog.body prog.decls.length 0 labels).1.length]? = some .halt := by
-    rw [← compileStmt_eq_refCompileStmt (labels := labels)]
+      (compileStmt prog.body prog.decls.length 0 labels).1.length]? = some .halt := by
     exact Program.compile_halt_getElem prog
   have hfull : FragExec prog.compile 0 prog.initStore
-      (prog.decls.length + (refCompileStmt prog.body prog.decls.length 0 labels).1.length)
+      (prog.decls.length + (compileStmt prog.body prog.decls.length 0 labels).1.length)
       σ_tac ArrayMem.init am' :=
     FragExec.trans' hinit hexec
   exact ⟨σ_tac, am', FragExec.toHalt hfull hhalt_instr, hagree⟩
@@ -205,7 +147,7 @@ theorem progCompile_no_halt_unsafe (prog : Program) (fuel : Nat)
   have hcode := progCompile_body_codeAt prog
   have hinit := Program.compile_initExec prog (Program.typeCheck_noDups prog htc)
   obtain ⟨pc_s, σ_s, am_s, hfrag, herror, _⟩ :=
-    refCompileStmt_unsafe prog.body fuel prog.initStore ArrayMem.init prog.decls.length 0
+    compileStmt_unsafe prog.body fuel prog.initStore ArrayMem.init prog.decls.length 0
       prog.compile prog.initStore htmpfree hftmpfree (Program.typeCheck_noGoto prog htc) hunsafe htypedv (fun _ _ _ => rfl)
       (labels := labels) hcode
   exact error_run_no_halt (FragExec.trans' hinit hfrag) herror hhalt
@@ -223,7 +165,7 @@ theorem progCompile_reaches_error (prog : Program) (fuel : Nat)
   have hcode := progCompile_body_codeAt prog
   have hinit := Program.compile_initExec prog (Program.typeCheck_noDups prog htc)
   obtain ⟨pc_s, σ_s, am_s, hfrag, herror, _⟩ :=
-    refCompileStmt_unsafe prog.body fuel prog.initStore ArrayMem.init prog.decls.length 0
+    compileStmt_unsafe prog.body fuel prog.initStore ArrayMem.init prog.decls.length 0
       prog.compile prog.initStore htmpfree hftmpfree (Program.typeCheck_noGoto prog htc) hunsafe htypedv (fun _ _ _ => rfl)
       (labels := labels) hcode
   exact ⟨σ_s, am_s, Steps.trans (FragExec.trans' hinit hfrag)
@@ -244,7 +186,7 @@ theorem progCompile_no_halt_diverge (prog : Program)
     fun fuel => Program.typeCheck_typedVars prog htc prog.initStore ArrayMem.init hts fuel
   have hcode := progCompile_body_codeAt prog
   have hinit := Program.compile_initExec prog (Program.typeCheck_noDups prog htc)
-  have hunbounded := refCompileStmt_diverges prog.body prog.initStore ArrayMem.init
+  have hunbounded := compileStmt_diverges prog.body prog.initStore ArrayMem.init
     prog.decls.length 0 prog.compile prog.initStore
     htmpfree hftmpfree (Program.typeCheck_noGoto prog htc) hdiv hsafe htypedv (fun _ _ _ => rfl) (labels := labels) hcode
   have hunbounded' : ∀ N, ∃ n, n ≥ N ∧ ∃ pc' σ' am',
@@ -353,7 +295,7 @@ theorem program_refinement (prog : Program) (htc : prog.typeCheck = true)
       let labels := collectLabels prog.body prog.decls.length
       have hcode := progCompile_body_codeAt prog
       have hinit := Program.compile_initExec prog (Program.typeCheck_noDups prog htc)
-      have hunbounded := refCompileStmt_diverges prog.body prog.initStore ArrayMem.init
+      have hunbounded := compileStmt_diverges prog.body prog.initStore ArrayMem.init
         prog.decls.length 0 prog.compile prog.initStore
         htmpfree hftmpfree (Program.typeCheck_noGoto prog htc) hdiv hall htypedv (fun _ _ _ => rfl) (labels := labels) hcode
       have hunbounded' : ∀ N, ∃ n, n ≥ N ∧ ∃ pc' σ' am',
@@ -394,7 +336,7 @@ theorem program_refinement (prog : Program) (htc : prog.typeCheck = true)
         let labels := collectLabels prog.body prog.decls.length
         have hcode := progCompile_body_codeAt prog
         have hinit := Program.compile_initExec prog (Program.typeCheck_noDups prog htc)
-        have hunbounded := refCompileStmt_diverges prog.body prog.initStore ArrayMem.init
+        have hunbounded := compileStmt_diverges prog.body prog.initStore ArrayMem.init
           prog.decls.length 0 prog.compile prog.initStore
           htmpfree hftmpfree (Program.typeCheck_noGoto prog htc) hdiv hsafe_all htypedv (fun _ _ _ => rfl) (labels := labels) hcode
         have hunbounded' : ∀ N, ∃ n, n ≥ N ∧ ∃ pc' σ' am',

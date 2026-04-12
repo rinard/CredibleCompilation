@@ -6,10 +6,11 @@ set_option linter.unusedSimpArgs false
 set_option maxHeartbeats 800000
 
 /-!
-# Reference Compiler: Definitions and Helpers
+# Compiler Correctness: Definitions and Helpers
 
-Temporary variable helpers, compiler definitions, code embedding,
-single-step execution helpers, and store update lemmas.
+Temporary variable helpers, code embedding, single-step execution
+helpers, and store update lemmas. Compiler definitions (compileExpr,
+compileBool, compileStmt) are in WhileLang.lean.
 -/
 
 -- ============================================================
@@ -191,196 +192,12 @@ def Stmt.intSafe (fuel : Nat) (σ : Store) (am : ArrayMem) (decls : List (ArrayN
   | .goto _ => True
   | .ifgoto b _ => ∀ v ∈ b.exprFreeVars, ∃ n, σ v = .int n
 
--- ============================================================
--- § 2. Reference compiler definitions
--- ============================================================
+-- § 2. Compiler definitions are in WhileLang.lean (compileExpr, compileBool, compileStmt).
+-- This module provides proofs and infrastructure about them.
 
-def refCompileExpr (e : SExpr) (offset nextTmp : Nat) : List TAC × Var × Nat :=
-  match e with
-  | .lit n =>
-    let t := tmpName nextTmp
-    ([.const t (.int (BitVec.ofInt 64 n))], t, nextTmp + 1)
-  | .var x => ([], x, nextTmp)
-  | .bin op a b =>
-    let (codeA, va, tmp1) := refCompileExpr a offset nextTmp
-    let (codeB, vb, tmp2) := refCompileExpr b (offset + codeA.length) tmp1
-    let t := tmpName tmp2
-    (codeA ++ codeB ++ [.binop t op va vb], t, tmp2 + 1)
-  | .arrRead arr idx =>
-    let (codeIdx, vIdx, tmp1) := refCompileExpr idx offset nextTmp
-    let t := tmpName tmp1
-    (codeIdx ++ [.arrLoad t arr vIdx .int], t, tmp1 + 1)
-  | .flit f =>
-    let t := ftmpName nextTmp
-    ([.const t (.float (floatToBits f))], t, nextTmp + 1)
-  | .fbin op a b =>
-    let (codeA, va, tmp1) := refCompileExpr a offset nextTmp
-    let (codeB, vb, tmp2) := refCompileExpr b (offset + codeA.length) tmp1
-    let t := ftmpName tmp2
-    (codeA ++ codeB ++ [.fbinop t op va vb], t, tmp2 + 1)
-  | .intToFloat e =>
-    let (codeE, ve, tmp1) := refCompileExpr e offset nextTmp
-    let t := ftmpName tmp1
-    (codeE ++ [.intToFloat t ve], t, tmp1 + 1)
-  | .floatToInt e =>
-    let (codeE, ve, tmp1) := refCompileExpr e offset nextTmp
-    let t := tmpName tmp1
-    (codeE ++ [.floatToInt t ve], t, tmp1 + 1)
-  | .floatExp e =>
-    let (codeE, ve, tmp1) := refCompileExpr e offset nextTmp
-    let t := ftmpName tmp1
-    (codeE ++ [.floatExp t ve], t, tmp1 + 1)
-  | .farrRead arr idx =>
-    let (codeIdx, vIdx, tmp1) := refCompileExpr idx offset nextTmp
-    let t := ftmpName tmp1
-    (codeIdx ++ [.arrLoad t arr vIdx .float], t, tmp1 + 1)
-
-def refCompileBool (b : SBool) (offset nextTmp : Nat) : List TAC × BoolExpr × Nat :=
-  match b with
-  | .lit b => ([], .lit b, nextTmp)
-  | .bvar x => ([], .bvar x, nextTmp)
-  | .cmp op a b =>
-    let (codeA, va, tmp1) := refCompileExpr a offset nextTmp
-    let (codeB, vb, tmp2) := refCompileExpr b (offset + codeA.length) tmp1
-    (codeA ++ codeB, .cmp op va vb, tmp2)
-  | .not e =>
-    let (code, be, tmp') := refCompileBool e offset nextTmp
-    (code, .not be, tmp')
-  | .and a b =>
-    -- Flatten a && b: if !a goto false; if !b goto false; tR := 1; goto end; false: tR := 0
-    let (codeA, ba, tmp1) := refCompileBool a offset nextTmp
-    let tR := tmpName tmp1
-    let (codeB, bb, tmp2) := refCompileBool b (offset + codeA.length + 1) (tmp1 + 1)
-    let afterCodeB := offset + codeA.length + 1 + codeB.length
-    let falseL := afterCodeB + 3
-    let endL := falseL + 1
-    let code := codeA ++
-      [TAC.ifgoto (.not ba) falseL] ++
-      codeB ++
-      [TAC.ifgoto (.not bb) falseL,
-       TAC.const tR (.int 1),
-       TAC.goto endL,
-       TAC.const tR (.int 0)]
-    (code, .cmpLit .ne tR 0, tmp2)
-  | .or a b =>
-    -- Flatten a || b: if a goto true; if b goto true; tR := 0; goto end; true: tR := 1
-    let (codeA, ba, tmp1) := refCompileBool a offset nextTmp
-    let tR := tmpName tmp1
-    let (codeB, bb, tmp2) := refCompileBool b (offset + codeA.length + 1) (tmp1 + 1)
-    let afterCodeB := offset + codeA.length + 1 + codeB.length
-    let trueL := afterCodeB + 3
-    let endL := trueL + 1
-    let code := codeA ++
-      [TAC.ifgoto ba trueL] ++
-      codeB ++
-      [TAC.ifgoto bb trueL,
-       TAC.const tR (.int 0),
-       TAC.goto endL,
-       TAC.const tR (.int 1)]
-    (code, .cmpLit .ne tR 0, tmp2)
-  | .barrRead arr idx =>
-    let (codeIdx, vIdx, tmp1) := refCompileExpr idx offset nextTmp
-    let t := tmpName tmp1
-    (codeIdx ++ [.arrLoad t arr vIdx .int], .cmpLit .ne t 0, tmp1 + 1)
-  | .fcmp op a b =>
-    let (codeA, va, tmp1) := refCompileExpr a offset nextTmp
-    let (codeB, vb, tmp2) := refCompileExpr b (offset + codeA.length) tmp1
-    (codeA ++ codeB, .fcmp op va vb, tmp2)
-
-def refCompileStmt (s : Stmt) (offset nextTmp : Nat)
-    (labels : List (String × Nat) := []) : List TAC × Nat :=
-  match s with
-  | .skip => ([], nextTmp)
-  | .assign x e =>
-    match e with
-    | .lit n => ([.const x (.int (BitVec.ofInt 64 n))], nextTmp)
-    | .var y => ([.copy x y], nextTmp)
-    | .bin op a b =>
-      let (codeA, va, tmp1) := refCompileExpr a offset nextTmp
-      let (codeB, vb, tmp2) := refCompileExpr b (offset + codeA.length) tmp1
-      (codeA ++ codeB ++ [.binop x op va vb], tmp2)
-    | .arrRead arr idx =>
-      let (codeIdx, vIdx, tmp1) := refCompileExpr idx offset nextTmp
-      let t := tmpName tmp1
-      (codeIdx ++ [.arrLoad t arr vIdx .int, .copy x t], tmp1 + 1)
-    | _ =>
-      let (codeE, ve, tmp1) := refCompileExpr e offset nextTmp
-      (codeE ++ [.copy x ve], tmp1)
-  | .bassign x b =>
-    let (code, be, tmp') := refCompileBool b offset nextTmp
-    (code ++ [.boolop x be], tmp')
-  | .arrWrite arr idx val =>
-    let (codeIdx, vIdx, tmp1) := refCompileExpr idx offset nextTmp
-    let (codeVal, vVal, tmp2) := refCompileExpr val (offset + codeIdx.length) tmp1
-    (codeIdx ++ codeVal ++ [.arrStore arr vIdx vVal .int], tmp2)
-  | .barrWrite arr idx bval =>
-    let (codeIdx, vIdx, tmp1) := refCompileExpr idx offset nextTmp
-    let (codeBool, be, tmp2) := refCompileBool bval (offset + codeIdx.length) tmp1
-    let tInt := tmpName tmp2
-    let afterCodeBool := offset + codeIdx.length + codeBool.length
-    let trueL := afterCodeBool + 3
-    let endL := trueL + 1
-    let convCode : List TAC :=
-      [TAC.ifgoto be trueL,
-       TAC.const tInt (.int (0 : BitVec 64)),
-       TAC.goto endL,
-       TAC.const tInt (.int (1 : BitVec 64))]
-    (codeIdx ++ codeBool ++ convCode ++ [.arrStore arr vIdx tInt .int], tmp2 + 1)
-  | .seq s1 s2 =>
-    let (code1, tmp1) := refCompileStmt s1 offset nextTmp labels
-    let (code2, tmp2) := refCompileStmt s2 (offset + code1.length) tmp1 labels
-    (code1 ++ code2, tmp2)
-  | .ite b s1 s2 =>
-    let (codeBool, be, tmpB) := refCompileBool b offset nextTmp
-    let elseStart := offset + codeBool.length + 1
-    let (codeElse, tmpElse) := refCompileStmt s2 elseStart tmpB labels
-    let thenStart := elseStart + codeElse.length + 1
-    let (codeThen, tmpThen) := refCompileStmt s1 thenStart tmpElse labels
-    let endLabel := thenStart + codeThen.length
-    (codeBool ++ [.ifgoto be thenStart] ++ codeElse ++ [.goto endLabel] ++ codeThen, tmpThen)
-  | .loop b body =>
-    let condLabel := offset
-    let (codeBool, be, tmpB) := refCompileBool b offset nextTmp
-    let bodyStart := offset + codeBool.length + 1
-    let (codeBody, tmpBody) := refCompileStmt body bodyStart tmpB labels
-    let exitLabel := bodyStart + codeBody.length + 1
-    (codeBool ++ [.ifgoto (.not be) exitLabel] ++ codeBody ++ [.goto condLabel], tmpBody)
-  | .fassign x e =>
-    match e with
-    | .flit f => ([.const x (.float (floatToBits f))], nextTmp)
-    | .var y => ([.copy x y], nextTmp)
-    | .fbin op a b =>
-      let (codeA, va, tmp1) := refCompileExpr a offset nextTmp
-      let (codeB, vb, tmp2) := refCompileExpr b (offset + codeA.length) tmp1
-      (codeA ++ codeB ++ [.fbinop x op va vb], tmp2)
-    | .intToFloat e =>
-      let (codeE, ve, tmp1) := refCompileExpr e offset nextTmp
-      (codeE ++ [.intToFloat x ve], tmp1)
-    | .floatExp e =>
-      let (codeE, ve, tmp1) := refCompileExpr e offset nextTmp
-      (codeE ++ [.floatExp x ve], tmp1)
-    | .farrRead arr idx =>
-      let (codeIdx, vIdx, tmp1) := refCompileExpr idx offset nextTmp
-      let t := ftmpName tmp1
-      (codeIdx ++ [.arrLoad t arr vIdx .float, .copy x t], tmp1 + 1)
-    | _ =>
-      let (codeE, ve, tmp1) := refCompileExpr e offset nextTmp
-      (codeE ++ [.copy x ve], tmp1)
-  | .farrWrite arr idx val =>
-    let (codeIdx, vIdx, tmp1) := refCompileExpr idx offset nextTmp
-    let (codeVal, vVal, tmp2) := refCompileExpr val (offset + codeIdx.length) tmp1
-    (codeIdx ++ codeVal ++ [.arrStore arr vIdx vVal .float], tmp2)
-  | .label _ => ([], nextTmp)
-  | .goto lbl =>
-    let target := (labels.lookup lbl).getD 0
-    ([.goto target], nextTmp)
-  | .ifgoto b lbl =>
-    let (codeB, be, tmpB) := refCompileBool b offset nextTmp
-    let target := (labels.lookup lbl).getD 0
-    (codeB ++ [.ifgoto be target], tmpB)
-
-def refCompile (s : Stmt) : Prog :=
-  let (code, _) := refCompileStmt s 0 0
+/-- Compile a bare statement to a TAC program (convenience wrapper). -/
+def compileStmtToProg (s : Stmt) : Prog :=
+  let (code, _) := compileStmt s 0 0
   .ofCode (code ++ [TAC.halt]).toArray
 
 -- ============================================================
