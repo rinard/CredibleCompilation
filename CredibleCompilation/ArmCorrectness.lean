@@ -506,8 +506,8 @@ theorem genInstr_correct (prog : ArmProg) (vm : VarMap) (pcMap : Nat → Nat)
     (cfg' : Cfg) (hStep : p ⊩ Cfg.run pc σ am ⟶ cfg')
     (hVarMap : ∀ v, ∃ off, vm.lookup v = some off)
     (hCodeInstr : CodeAt prog (pcMap pc) (formalGenInstr vm pcMap instr haltLabel divLabel))
-    (hPcNext : ∀ pc' σ' am', cfg' = .run pc' σ' am' →
-      pcMap pc' = pcMap pc + (formalGenInstr vm pcMap instr haltLabel divLabel).length) :
+    (hPcNext : ∀ σ' am', cfg' = .run (pc + 1) σ' am' →
+      pcMap (pc + 1) = pcMap pc + (formalGenInstr vm pcMap instr haltLabel divLabel).length) :
     ∃ s', ArmSteps prog s s' ∧ SimRel vm pcMap cfg' s' := by
   obtain ⟨hStateRel, hPcRel, hArrayMem⟩ := hRel
   cases hStep with
@@ -577,7 +577,7 @@ theorem genInstr_correct (prog : ArmProg) (vm : VarMap) (pcMap : Nat → Nat)
       · -- PcRel
         show s1.pc + 1 = pcMap (pc + 1)
         rw [heq, hformal] at hPcNext
-        have := hPcNext _ _ _ rfl; simp at this
+        have := hPcNext _ _ rfl; simp at this
         rw [this, hPC1]; omega
       · -- arrayMem preserved
         simp only [s2, ArmState.setStack, ArmState.nextPC]
@@ -607,7 +607,7 @@ theorem genInstr_correct (prog : ArmProg) (vm : VarMap) (pcMap : Nat → Nat)
       · -- PcRel
         show s.pc + 1 + 1 = pcMap (pc + 1)
         rw [heq, hformal] at hPcNext
-        have := hPcNext _ _ _ rfl; simp at this
+        have := hPcNext _ _ rfl; simp at this
         rw [this, hPcRel]
       · -- arrayMem preserved
         simp [ArmState.setStack, ArmState.setReg, ArmState.nextPC, hArrayMem]
@@ -641,7 +641,7 @@ theorem genInstr_correct (prog : ArmProg) (vm : VarMap) (pcMap : Nat → Nat)
       · -- PcRel
         show s1.pc + 1 = pcMap (pc + 1)
         rw [heq, hformal] at hPcNext
-        have := hPcNext _ _ _ rfl; simp at this
+        have := hPcNext _ _ rfl; simp at this
         rw [this, hPC1]; omega
       · -- arrayMem preserved
         simp only [s2, ArmState.setStack, ArmState.nextPC]
@@ -681,7 +681,7 @@ theorem genInstr_correct (prog : ArmProg) (vm : VarMap) (pcMap : Nat → Nat)
     · -- PcRel
       show s.pc + 1 + 1 = pcMap (pc + 1)
       rw [heq, hformal] at hPcNext
-      have := hPcNext _ _ _ rfl; simp at this
+      have := hPcNext _ _ rfl; simp at this
       rw [this, hPcRel]
     · -- arrayMem preserved
       simp [ArmState.setStack, ArmState.setReg, ArmState.nextPC, hArrayMem]
@@ -742,7 +742,7 @@ theorem genInstr_correct (prog : ArmProg) (vm : VarMap) (pcMap : Nat → Nat)
              rw [Store.update_other _ _ _ _ hne]; exact hStateRel v off hv,
         by simp only [ArmState.setStack, ArmState.setReg, ArmState.nextPC]
            show s.pc + 6 = pcMap (pc + 1)
-           have := hPcNext _ _ _ rfl; simp at this; rw [this, hPcRel],
+           have := hPcNext _ _ rfl; simp at this; rw [this, hPcRel],
         by simp [ArmState.setStack, ArmState.setReg, ArmState.nextPC, hArrayMem]⟩
     | mod =>
       -- formalGenInstr for mod = [ldr x2 offR, cbz x2 divLabel, ldr x1 offL, ldr x2 offR,
@@ -796,7 +796,7 @@ theorem genInstr_correct (prog : ArmProg) (vm : VarMap) (pcMap : Nat → Nat)
              rw [Store.update_other _ _ _ _ hne]; exact hStateRel v off hv,
         by simp only [ArmState.setStack, ArmState.setReg, ArmState.nextPC]
            show s.pc + 8 = pcMap (pc + 1)
-           have := hPcNext _ _ _ rfl; simp at this; rw [this, hPcRel],
+           have := hPcNext _ _ rfl; simp at this; rw [this, hPcRel],
         by simp [ArmState.setStack, ArmState.setReg, ArmState.nextPC, hArrayMem]⟩
     | add =>
       -- formalGenInstr for add = [ldr x1 offL, ldr x2 offR, addR x0 x1 x2, str x0 offD]
@@ -825,7 +825,7 @@ theorem genInstr_correct (prog : ArmProg) (vm : VarMap) (pcMap : Nat → Nat)
              rw [Store.update_other _ _ _ _ hne]; exact hStateRel v off hv,
         by simp only [ArmState.setStack, ArmState.setReg, ArmState.nextPC]
            show s.pc + 4 = pcMap (pc + 1)
-           have := hPcNext _ _ _ rfl; simp at this; rw [this, hPcRel],
+           have := hPcNext _ _ rfl; simp at this; rw [this, hPcRel],
         by simp [ArmState.setStack, ArmState.setReg, ArmState.nextPC, hArrayMem]⟩
     | sub =>
       have hformal : formalGenInstr vm pcMap (.binop x .sub y z) haltLabel divLabel =
@@ -853,7 +853,7 @@ theorem genInstr_correct (prog : ArmProg) (vm : VarMap) (pcMap : Nat → Nat)
              rw [Store.update_other _ _ _ _ hne]; exact hStateRel v off hv,
         by simp only [ArmState.setStack, ArmState.setReg, ArmState.nextPC]
            show s.pc + 4 = pcMap (pc + 1)
-           have := hPcNext _ _ _ rfl; simp at this; rw [this, hPcRel],
+           have := hPcNext _ _ rfl; simp at this; rw [this, hPcRel],
         by simp [ArmState.setStack, ArmState.setReg, ArmState.nextPC, hArrayMem]⟩
     | mul =>
       have hformal : formalGenInstr vm pcMap (.binop x .mul y z) haltLabel divLabel =
@@ -881,7 +881,7 @@ theorem genInstr_correct (prog : ArmProg) (vm : VarMap) (pcMap : Nat → Nat)
              rw [Store.update_other _ _ _ _ hne]; exact hStateRel v off hv,
         by simp only [ArmState.setStack, ArmState.setReg, ArmState.nextPC]
            show s.pc + 4 = pcMap (pc + 1)
-           have := hPcNext _ _ _ rfl; simp at this; rw [this, hPcRel],
+           have := hPcNext _ _ rfl; simp at this; rw [this, hPcRel],
         by simp [ArmState.setStack, ArmState.setReg, ArmState.nextPC, hArrayMem]⟩
   | boolop hinstr =>
     -- TAC: x := bexpr → ARM: genBoolExpr ++ [str x0 offD]
@@ -925,7 +925,7 @@ theorem genInstr_correct (prog : ArmProg) (vm : VarMap) (pcMap : Nat → Nat)
     · -- PcRel
       simp only [ArmState.setStack, ArmState.nextPC]
       show s1.pc + 1 = pcMap (pc + 1)
-      have := hPcNext _ _ _ rfl
+      have := hPcNext _ _ rfl
       simp [List.length_append] at this
       rw [this, hPC1]; omega
     · -- arrayMem preserved
@@ -973,7 +973,7 @@ theorem genInstr_correct (prog : ArmProg) (vm : VarMap) (pcMap : Nat → Nat)
       hSteps1.trans (.single (.cbnz_fall .x0 _ hCbnz hx0_eq)),
       ⟨fun v off hv => (hStack1 v off hv).trans (hStateRel v off hv), ?_, ?_⟩⟩
     · show s1.pc + 1 = pcMap (pc + 1)
-      have := hPcNext _ _ _ rfl
+      have := hPcNext _ _ rfl
       simp [List.length_append] at this
       rw [this, hPC1]; omega
     · simp only [ArmState.nextPC]; exact hAM1.trans hArrayMem
@@ -1014,7 +1014,7 @@ theorem genInstr_correct (prog : ArmProg) (vm : VarMap) (pcMap : Nat → Nat)
           have hne : w ≠ destV := fun h => hoff (Option.some.inj ((h ▸ hv).symm.trans hX))
           rw [Store.update_other _ _ _ _ hne]; exact hStateRel w off hv
       · show s.pc + 1 + 1 + 1 = pcMap (pc + 1)
-        have := hPcNext _ _ _ rfl; simp at this; rw [this, hPcRel]
+        have := hPcNext _ _ rfl; simp at this; rw [this, hPcRel]
       · simp [s3, s2, s1, ArmState.setStack, ArmState.setReg, ArmState.setFReg, ArmState.nextPC, hArrayMem]
     · -- Remaining cases: int or bool
       cases ty with
@@ -1046,7 +1046,7 @@ theorem genInstr_correct (prog : ArmProg) (vm : VarMap) (pcMap : Nat → Nat)
             have hne : w ≠ destV := fun h => hoff (Option.some.inj ((h ▸ hv).symm.trans hX))
             rw [Store.update_other _ _ _ _ hne]; exact hStateRel w off hv
         · show s.pc + 1 + 1 + 1 = pcMap (pc + 1)
-          have := hPcNext _ _ _ rfl; simp at this; rw [this, hPcRel]
+          have := hPcNext _ _ rfl; simp at this; rw [this, hPcRel]
         · simp [s3, s2, s1, ArmState.setStack, ArmState.setReg, ArmState.nextPC, hArrayMem]
       | bool =>
         -- Bool array load: ldr x1, arrLd x0, cmpImm x0 0, cset x0 ne, str x0
@@ -1080,7 +1080,7 @@ theorem genInstr_correct (prog : ArmProg) (vm : VarMap) (pcMap : Nat → Nat)
             have hne : w ≠ destV := fun h => hoff (Option.some.inj ((h ▸ hv).symm.trans hX))
             rw [Store.update_other _ _ _ _ hne]; exact hStateRel w off hv
         · show s.pc + 1 + 1 + 1 + 1 + 1 = pcMap (pc + 1)
-          have := hPcNext _ _ _ rfl; simp at this; rw [this, hPcRel]
+          have := hPcNext _ _ rfl; simp at this; rw [this, hPcRel]
         · simp [s5, s4, s3, s2, s1, ArmState.setStack, ArmState.setReg, ArmState.nextPC, hArrayMem]
       | float => exact absurd rfl hty
   | arrStore hinstr hidx hval hbounds =>
@@ -1109,7 +1109,7 @@ theorem genInstr_correct (prog : ArmProg) (vm : VarMap) (pcMap : Nat → Nat)
                     ArmState.nextPC, ArmState.setStack]
         exact hStateRel w off hv
       · show s.pc + 1 + 1 + 1 = pcMap (pc + 1)
-        have := hPcNext _ _ _ rfl; simp at this; rw [this, hPcRel]
+        have := hPcNext _ _ rfl; simp at this; rw [this, hPcRel]
       · simp only [s3, s2, s1, ArmState.setArrayMem, ArmState.setReg, ArmState.setFReg, ArmState.nextPC]
         funext x i
         simp only [ArrayMem.write, ArmState.setArrayMem, ArmState.setFReg, ArmState.setReg, ArmState.nextPC,
@@ -1142,7 +1142,7 @@ theorem genInstr_correct (prog : ArmProg) (vm : VarMap) (pcMap : Nat → Nat)
         simp only [s3, s2, s1, ArmState.setArrayMem, ArmState.setReg, ArmState.nextPC, ArmState.setStack]
         exact hStateRel w off hv
       · show s.pc + 1 + 1 + 1 = pcMap (pc + 1)
-        have := hPcNext _ _ _ rfl; simp at this; rw [this, hPcRel]
+        have := hPcNext _ _ rfl; simp at this; rw [this, hPcRel]
       · simp only [s3, s2, s1, ArmState.setArrayMem, ArmState.setReg, ArmState.nextPC]
         funext x i
         simp only [ArrayMem.write, ArmState.setArrayMem, ArmReg.beq_self, ite_true,
@@ -1206,7 +1206,7 @@ theorem genInstr_correct (prog : ArmProg) (vm : VarMap) (pcMap : Nat → Nat)
         rw [Store.update_other _ _ _ _ hne]; exact hStateRel v off hv
     · -- PcRel
       show s.pc + 1 + 1 + 1 + 1 = pcMap (pc + 1)
-      have := hPcNext _ _ _ rfl; simp at this; rw [this, hPcRel]
+      have := hPcNext _ _ rfl; simp at this; rw [this, hPcRel]
     · -- ArrayMem
       simp [ArmState.setStack, ArmState.setFReg, ArmState.nextPC, hArrayMem]
   | fbinop_typeError hinstr hne =>
@@ -1235,7 +1235,7 @@ theorem genInstr_correct (prog : ArmProg) (vm : VarMap) (pcMap : Nat → Nat)
         have hne : v ≠ x := fun h => hoff (Option.some.inj ((h ▸ hv).symm.trans hD))
         rw [Store.update_other _ _ _ _ hne]; exact hStateRel v off hv
     · show s.pc + 1 + 1 + 1 = pcMap (pc + 1)
-      have := hPcNext _ _ _ rfl; simp at this; rw [this, hPcRel]
+      have := hPcNext _ _ rfl; simp at this; rw [this, hPcRel]
     · simp [ArmState.setStack, ArmState.setFReg, ArmState.setReg, ArmState.nextPC, hArrayMem]
   | intToFloat_typeError hinstr hne =>
     exact absurd (Step.intToFloat_typeError (am := am) hinstr hne) (Step.no_typeError_of_wellTyped hPC_bound hWT hTS)
@@ -1263,7 +1263,7 @@ theorem genInstr_correct (prog : ArmProg) (vm : VarMap) (pcMap : Nat → Nat)
         have hne : v ≠ x := fun h => hoff (Option.some.inj ((h ▸ hv).symm.trans hD))
         rw [Store.update_other _ _ _ _ hne]; exact hStateRel v off hv
     · show s.pc + 1 + 1 + 1 = pcMap (pc + 1)
-      have := hPcNext _ _ _ rfl; simp at this; rw [this, hPcRel]
+      have := hPcNext _ _ rfl; simp at this; rw [this, hPcRel]
     · simp [ArmState.setStack, ArmState.setFReg, ArmState.setReg, ArmState.nextPC, hArrayMem]
   | floatToInt_typeError hinstr hne =>
     exact absurd (Step.floatToInt_typeError (am := am) hinstr hne) (Step.no_typeError_of_wellTyped hPC_bound hWT hTS)
@@ -1291,7 +1291,7 @@ theorem genInstr_correct (prog : ArmProg) (vm : VarMap) (pcMap : Nat → Nat)
         have hne : v ≠ x := fun h => hoff (Option.some.inj ((h ▸ hv).symm.trans hD))
         rw [Store.update_other _ _ _ _ hne]; exact hStateRel v off hv
     · show s.pc + 1 + 1 + 1 = pcMap (pc + 1)
-      have := hPcNext _ _ _ rfl; simp at this; rw [this, hPcRel]
+      have := hPcNext _ _ rfl; simp at this; rw [this, hPcRel]
     · simp [ArmState.setStack, ArmState.setFReg, ArmState.nextPC, hArrayMem]
   | floatExp_typeError hinstr hne =>
     exact absurd (Step.floatExp_typeError (am := am) hinstr hne) (Step.no_typeError_of_wellTyped hPC_bound hWT hTS)
@@ -1313,8 +1313,8 @@ theorem backward_simulation (p : Prog) (armProg : ArmProg)
     (haltLabel divLabel : Nat)
     (instr : TAC) (hInstr : p[pc]? = some instr)
     (hCode : CodeAt armProg (pcMap pc) (formalGenInstr vm pcMap instr haltLabel divLabel))
-    (hPcNext : ∀ pc' σ' am', cfg' = .run pc' σ' am' →
-      pcMap pc' = pcMap pc + (formalGenInstr vm pcMap instr haltLabel divLabel).length) :
+    (hPcNext : ∀ σ' am', cfg' = .run (pc + 1) σ' am' →
+      pcMap (pc + 1) = pcMap pc + (formalGenInstr vm pcMap instr haltLabel divLabel).length) :
     ∃ s', ArmSteps armProg s s' ∧ SimRel vm pcMap cfg' s' := by
   exact genInstr_correct armProg vm pcMap p pc σ am s haltLabel divLabel
     instr hInstr hRel hScratch hInjective hWT hTS hPC cfg' hStep hVarMap hCode hPcNext
@@ -2104,8 +2104,8 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
     (hWTL : WellTypedLayout p.tyCtx layout)
     (cfg' : Cfg) (hStep : p ⊩ Cfg.run pc σ am ⟶ cfg')
     (hCodeInstr : CodeAt prog (pcMap pc) instrs)
-    (hPcNext : ∀ pc' σ' am', cfg' = .run pc' σ' am' →
-      pcMap pc' = pcMap pc + instrs.length) :
+    (hPcNext : ∀ σ' am', cfg' = .run (pc + 1) σ' am' →
+      pcMap (pc + 1) = pcMap pc + instrs.length) :
     ∃ s', ArmSteps prog s s' ∧ ExtSimRel layout pcMap cfg' s' := by
   -- Derive scratchSafe and injective from hSome (the if-guard passed)
   have hSS : layout.scratchSafe = true := by
@@ -2181,7 +2181,7 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
           hSteps1.trans (.single (.str .x0 off hStr)),
           ⟨by rw [hx0]; exact (ExtStateRel.update_stack hRel1 hInjective hLocX).nextPC,
            by show s1.pc + 1 = pcMap (pc + 1)
-              have := hPcNext _ _ _ rfl; rw [hStore] at this; simp at this
+              have := hPcNext _ _ rfl; rw [hStore] at this; simp at this
               rw [this, hPC1]; omega,
            by simp [hAM1, hArrayMem]⟩⟩
       | some (.ireg r) =>
@@ -2206,7 +2206,7 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
           hSteps1.trans (.single (.movR r .x0 hMovR)),
           ⟨by rw [hx0]; exact (ExtStateRel.update_ireg hRel1 hInjective hLocX).nextPC,
            by show s1.pc + 1 = pcMap (pc + 1)
-              have := hPcNext _ _ _ rfl; rw [hStore] at this; simp at this
+              have := hPcNext _ _ rfl; rw [hStore] at this; simp at this
               rw [this, hPC1]; omega,
            by simp [hAM1, hArrayMem]⟩⟩
       | some (.freg _) => simp [verifiedGenInstr, hSS, hII, hLocX] at hSome
@@ -2243,7 +2243,7 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
           hSteps1.trans (ArmSteps.single (.str .x0 off hStr)),
           ⟨by rw [hx0]; exact (ExtStateRel.update_stack hRel1 hInjective hLocX).nextPC,
            by show s1.pc + 1 = pcMap (pc + 1)
-              have := hPcNext _ _ _ rfl; rw [hStore] at this; simp at this
+              have := hPcNext _ _ rfl; rw [hStore] at this; simp at this
               rw [this, hPC1],
            by simp [hAM1, hArrayMem]⟩⟩
       | some (.ireg r) =>
@@ -2280,7 +2280,7 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
           hSteps1.trans (ArmSteps.single (.movR r .x0 hMovR)),
           ⟨by rw [hx0]; exact (ExtStateRel.update_ireg hRel1 hInjective hLocX).nextPC,
            by show s1.pc + 1 = pcMap (pc + 1)
-              have := hPcNext _ _ _ rfl; rw [hStore] at this; simp at this
+              have := hPcNext _ _ rfl; rw [hStore] at this; simp at this
               rw [this, hPC1],
            by simp [hAM1, hArrayMem]⟩⟩
       | some (.freg _) => simp [verifiedGenInstr, hSS, hII, hLocX] at hSome
@@ -2322,7 +2322,7 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
           ⟨by rw [hD0]; exact (ExtStateRel.update_stack hRel2 hInjective hLocX).nextPC,
            by constructor
               · show s2.pc + 1 = pcMap (pc + 1)
-                have := hPcNext _ _ _ rfl; rw [hStore] at this; simp at this
+                have := hPcNext _ _ rfl; rw [hStore] at this; simp at this
                 rw [this, hPC2]; omega
               · simp [hAM2, hAM1, hArrayMem]⟩⟩
       | some (.freg r) =>
@@ -2354,7 +2354,7 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
           (ExtStateRel.update_freg hRel1 hInjective hLocX).nextPC
         refine ⟨s2, hSteps1.trans hSteps2, ⟨hRel2, ?_, ?_⟩⟩
         · show s2.pc = pcMap (pc + 1)
-          have := hPcNext _ _ _ rfl
+          have := hPcNext _ _ rfl
           simp at this
           rw [hPC2]; omega
         · simp [hAM2, hAM1, hArrayMem]
@@ -2400,7 +2400,7 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
           rw [this]
           exact (ExtStateRel.update_stack hStateRel hInjective hLX).nextPC
         · -- pc
-          have := hPcNext _ _ _ rfl; simp at this
+          have := hPcNext _ _ rfl; simp at this
           simp only [ArmState.nextPC, ArmState.setStack]
           rw [hPcRel, ← this]; rfl
         · -- arrayMem
@@ -2417,7 +2417,7 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
             have : (σ[y ↦ σ y]) w = σ w := by
               simp only [Store.update]; split <;> simp_all
             rw [this]; exact hStateRel w loc hw
-          · have := hPcNext _ _ _ rfl; simp at this; rw [hPcRel]; exact this.symm
+          · have := hPcNext _ _ rfl; simp at this; rw [hPcRel]; exact this.symm
           · exact hArrayMem
         · -- r' ≠ r → code = [fmovRR r' r], move src freg r into dst freg r'
           have hne : (r' == r) = false := by simp [hrr]
@@ -2428,7 +2428,7 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
             .single (.fmovRR r' r hFmov), ⟨?_, ?_, ?_⟩⟩
           · rw [hYVal]
             exact (ExtStateRel.update_freg hStateRel hInjective hLX).nextPC
-          · have := hPcNext _ _ _ rfl; simp at this
+          · have := hPcNext _ _ rfl; simp at this
             simp only [ArmState.nextPC, ArmState.setFReg]
             rw [hPcRel, ← this]; rfl
           · simp [ArmState.nextPC, ArmState.setFReg, hArrayMem]
@@ -2440,7 +2440,7 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
         · intro w loc hw
           have hne : w ≠ x := fun h => by rw [h] at hw; simp [hLX] at hw
           rw [Store.update_other _ _ _ _ hne]; exact hStateRel w loc hw
-        · have := hPcNext _ _ _ rfl; simp at this; rw [hPcRel]; exact this.symm
+        · have := hPcNext _ _ rfl; simp at this; rw [hPcRel]; exact this.symm
         · exact hArrayMem
     · -- Int copy path: y not in freg
       have hNotFregY : ∀ r, layout y ≠ some (.freg r) := fun r h => hYFreg ⟨r, h⟩
@@ -2471,7 +2471,7 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
             hRel1 hInjective hScratch hPC1 hX0_1 hCodeR hNotFregX
         refine ⟨s2, hSteps1.trans hSteps2, ⟨hRel2, ?_, ?_⟩⟩
         · show s2.pc = pcMap (pc + 1)
-          have := hPcNext _ _ _ rfl; simp at this
+          have := hPcNext _ _ rfl; simp at this
           rw [this, hPC2]; omega
         · simp [hAM2, hAM1, hArrayMem]
   | binop hinstr hy hz hs =>
@@ -2609,7 +2609,7 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
             exact (ExtStateRel.update_ireg hRel_cbz hInjective hDst).nextPC
           refine ⟨s3, ((hSteps1.trans hSteps2).trans hStepsCbz).trans hStepsSdiv, ⟨hRel4, ?_, ?_⟩⟩
           · show s3.pc = pcMap (pc + 1)
-            have := hPcNext _ _ _ rfl; simp [hStore] at this; omega
+            have := hPcNext _ _ rfl; simp [hStore] at this; omega
           · simp [hAM3, hAM2, hAM1, hArrayMem]
         · have hDR : dst_reg = .x0 := by
             change (match layout x with | some (.ireg r) => r | _ => .x0) = .x0
@@ -2631,7 +2631,7 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
               hRel3 hInjective hScratch hPC3 hVal3 hCodeStore hNotFregX
           refine ⟨s4, ((hSteps1.trans hSteps2).trans hStepsCbz).trans (hStepsSdiv.trans hSteps4), ⟨hRel4, ?_, ?_⟩⟩
           · show s4.pc = pcMap (pc + 1)
-            have := hPcNext _ _ _ rfl; rw [show dst_reg = ArmReg.x0 from hDR] at this; simp at this; omega
+            have := hPcNext _ _ rfl; rw [show dst_reg = ArmReg.x0 from hDR] at this; simp at this; omega
           · simp [hAM4, hAM3, hAM2, hAM1, hArrayMem]
       | mod =>
         -- instrs = vLoadVar lv lv_reg ++ vLoadVar rv rv_reg ++ [cbz rv_reg divLabel] ++
@@ -2826,7 +2826,7 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
             exact (ExtStateRel.update_ireg hRelQB hInjective hDst).nextPC
           refine ⟨s5, ((hSteps1.trans hSteps2).trans hStepsAll), ⟨hRel5, ?_, ?_⟩⟩
           · show s5.pc = pcMap (pc + 1)
-            have := hPcNext _ _ _ rfl; simp [hStore] at this; omega
+            have := hPcNext _ _ rfl; simp [hStore] at this; omega
           · simp [hAM5, hAM2, hAM1, hArrayMem]
         · have hDR : dst_reg = .x0 := by
             change (match layout x with | some (.ireg r) => r | _ => .x0) = .x0
@@ -2855,7 +2855,7 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
               hRel5 hInjective hScratch hPC5 hVal5 hCodeStore hNotFregX
           refine ⟨s6, ((hSteps1.trans hSteps2).trans hStepsAll).trans hSteps6, ⟨hRel6, ?_, ?_⟩⟩
           · show s6.pc = pcMap (pc + 1)
-            have := hPcNext _ _ _ rfl; rw [show dst_reg = ArmReg.x0 from hDR] at this; simp at this; omega
+            have := hPcNext _ _ rfl; rw [show dst_reg = ArmReg.x0 from hDR] at this; simp at this; omega
           · simp [hAM6, hAM5, hAM2, hAM1, hArrayMem]
     -- Prove the common case for add/sub/mul
     intro armOp hInstrs hArmStep
@@ -2927,7 +2927,7 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
         exact (ExtStateRel.update_ireg hRel2 hInjective hDst).nextPC
       refine ⟨_, (hSteps1.trans hSteps2).trans hSteps3, ⟨hRel4, ?_, ?_⟩⟩
       · show (s2.setReg dst_reg (op.eval a b)).nextPC.pc = pcMap (pc + 1)
-        have := hPcNext _ _ _ rfl; simp [hStore] at this
+        have := hPcNext _ _ rfl; simp [hStore] at this
         show s2.pc + 1 = _; omega
       · simp [hAM2, hAM1, hArrayMem]
     · -- dst on stack/none: dst_reg = x0, use vStoreVar_exec
@@ -2951,7 +2951,7 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
           hRel3 hInjective hScratch hPC3 hVal3 hCodeStore hNotFregX
       refine ⟨s4, (hSteps1.trans hSteps2).trans (hSteps3.trans hSteps4), ⟨hRel4, ?_, ?_⟩⟩
       · show s4.pc = pcMap (pc + 1)
-        have := hPcNext _ _ _ rfl; rw [show dst_reg = ArmReg.x0 from hDR] at this; simp at this; omega
+        have := hPcNext _ _ rfl; rw [show dst_reg = ArmReg.x0 from hDR] at this; simp at this; omega
       · simp [hAM4, hAM2, hAM1, hArrayMem]
   | boolop hinstr =>
     rename_i x be
@@ -2982,7 +2982,7 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
         hRel1 hInjective hScratch hPC1 hX0_val hCodeStore hNotFregX
     refine ⟨s2, hSteps1.trans hSteps2, ⟨hRel2, ?_, ?_⟩⟩
     · show s2.pc = pcMap (pc + 1)
-      have := hPcNext _ _ _ rfl; simp at this; rw [hPC2]; omega
+      have := hPcNext _ _ rfl; simp at this; rw [hPC2]; omega
     · simp [hAM2, hAM1, hArrayMem]
   | iftrue hinstr hcond =>
     rename_i l_var be_var
@@ -3029,7 +3029,7 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
       hSteps1.trans (.single (.cbnz_fall .x0 _ hCbnz hx0_eq)),
       ⟨hRel1, ?_, ?_⟩⟩
     · show s1.nextPC.pc = pcMap (pc + 1)
-      have := hPcNext _ _ _ rfl; simp at this
+      have := hPcNext _ _ rfl; simp at this
       simp [ArmState.nextPC, hPC1]; omega
     · simp only [ArmState.nextPC]; exact hAM1.trans hArrayMem
   | arrLoad hinstr hidx hbounds =>
@@ -3145,7 +3145,7 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
         exact (ExtStateRel.update_freg hRel2 hInjective hDst).nextPC
       refine ⟨s3, (hSteps1.trans hSteps2).trans hSteps3, ⟨hRel4, ?_, ?_⟩⟩
       · show s3.pc = pcMap (pc + 1)
-        have := hPcNext _ _ _ rfl; simp [hStore] at this; omega
+        have := hPcNext _ _ rfl; simp [hStore] at this; omega
       · simp [hAM3, hAM2, hAM1, hArrayMem]
     · -- dst not in freg: dst_reg = .d0, use vStoreVarFP_exec
       have hDR : dst_reg = .d0 := by
@@ -3168,7 +3168,7 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
           (fun r h => absurd ⟨r, h⟩ hXFR)
       refine ⟨s4, (hSteps1.trans hSteps2).trans (hSteps3.trans hSteps4), ⟨hRel4, ?_, ?_⟩⟩
       · show s4.pc = pcMap (pc + 1)
-        have := hPcNext _ _ _ rfl; rw [show dst_reg = ArmFReg.d0 from hDR] at this; simp at this
+        have := hPcNext _ _ rfl; rw [show dst_reg = ArmFReg.d0 from hDR] at this; simp at this
         omega
       · simp [hAM4, hAM3, hAM2, hAM1, hArrayMem]
   | intToFloat hinstr hy =>
@@ -3212,7 +3212,7 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
         (ExtStateRel.update_freg hRel1 hInjective hLX).nextPC
       refine ⟨s2, hSteps1.trans hSteps2, ⟨hRel2, ?_, ?_⟩⟩
       · show s2.pc = pcMap (pc + 1)
-        have := hPcNext _ _ _ rfl; simp at this; rw [hPC2]; omega
+        have := hPcNext _ _ rfl; simp at this; rw [hPC2]; omega
       · simp [hAM2, hAM1, hArrayMem]
     | some (.ireg r) => exact absurd hLX (hNotIregX r)
     | none =>
@@ -3255,7 +3255,7 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
           (fun r h => by simp [hLX] at h)
       refine ⟨s3, hSteps1.trans (hSteps2.trans hSteps3), ⟨hRel3, ?_, ?_⟩⟩
       · show s3.pc = pcMap (pc + 1)
-        have := hPcNext _ _ _ rfl; simp at this
+        have := hPcNext _ _ rfl; simp at this
         omega
       · simp [hAM3, hAM2, hAM1, hArrayMem]
   | floatToInt hinstr hy =>
@@ -3299,7 +3299,7 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
           (pcMap pc + 1) hRel1 hInjective hScratch hPC1 hX0 hCodeR hNotFregX
       refine ⟨s2, hSteps1.trans hSteps2, ⟨hRel2, ?_, ?_⟩⟩
       · show s2.pc = pcMap (pc + 1)
-        have := hPcNext _ _ _ rfl; simp at this; omega
+        have := hPcNext _ _ rfl; simp at this; omega
       · simp [hAM2, hAM1, hArrayMem]
     | some (.ireg r) => exact absurd hLY (hNotIregY r)
     | none =>
@@ -3342,7 +3342,7 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
           hNotFregX
       refine ⟨s3, hSteps1.trans (hSteps2.trans hSteps3), ⟨hRel3, ?_, ?_⟩⟩
       · show s3.pc = pcMap (pc + 1)
-        have := hPcNext _ _ _ rfl; simp at this
+        have := hPcNext _ _ rfl; simp at this
         omega
       · simp [hAM3, hAM2, hAM1, hArrayMem]
   | floatExp hinstr hy =>
@@ -3400,7 +3400,7 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
         exact (ExtStateRel.update_freg hRel1 hInjective hDst).nextPC
       refine ⟨s2, hSteps1.trans hSteps2, ⟨hRel3, ?_, ?_⟩⟩
       · show s2.pc = pcMap (pc + 1)
-        have := hPcNext _ _ _ rfl; simp [hStore] at this; omega
+        have := hPcNext _ _ rfl; simp [hStore] at this; omega
       · simp [hAM2, hAM1, hArrayMem]
     · -- dst not in freg: dst_reg = .d0, use vStoreVarFP_exec
       have hDR : dst_reg = .d0 := by
@@ -3427,7 +3427,7 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
           (fun r h => absurd ⟨r, h⟩ hXFR)
       refine ⟨s3, hSteps1.trans (hSteps2.trans hSteps3), ⟨hRel3, ?_, ?_⟩⟩
       · show s3.pc = pcMap (pc + 1)
-        have := hPcNext _ _ _ rfl; rw [show dst_reg = ArmFReg.d0 from hDR] at this; simp at this
+        have := hPcNext _ _ rfl; rw [show dst_reg = ArmFReg.d0 from hDR] at this; simp at this
         omega
       · simp [hAM3, hAM2, hAM1, hArrayMem]
 
@@ -3448,8 +3448,8 @@ theorem ext_backward_simulation (p : Prog) (armProg : ArmProg)
     (instrs : List ArmInstr)
     (hSome : verifiedGenInstr layout pcMap instr haltLabel divLabel boundsLabel arrayDecls boundsSafe = some instrs)
     (hCode : CodeAt armProg (pcMap pc) instrs)
-    (hPcNext : ∀ pc' σ' am', cfg' = .run pc' σ' am' →
-      pcMap pc' = pcMap pc + instrs.length) :
+    (hPcNext : ∀ σ' am', cfg' = .run (pc + 1) σ' am' →
+      pcMap (pc + 1) = pcMap pc + instrs.length) :
     ∃ s', ArmSteps armProg s s' ∧ ExtSimRel layout pcMap cfg' s' :=
   verifiedGenInstr_correct armProg layout pcMap p pc σ am s haltLabel divLabel boundsLabel
     arrayDecls boundsSafe instr hInstr hRel instrs hSome hPC hWT hTS hWTL cfg' hStep hCode hPcNext

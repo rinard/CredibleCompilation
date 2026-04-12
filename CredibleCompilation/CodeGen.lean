@@ -11,6 +11,8 @@ import CredibleCompilation.RegAllocOpt
 import CredibleCompilation.ExecChecker
 import CredibleCompilation.BoundsOpt
 import CredibleCompilation.ArmSemantics
+import CredibleCompilation.ArmCorrectness
+import CredibleCompilation.PropChecker
 
 /-!
 # ARM64 Code Generator for TAC Programs
@@ -499,6 +501,470 @@ def verifiedGenerateAsm (p : Prog) : Except String VerifiedAsmResult := do
       boundsS := boundsS
       tacPcOf := tacPcOf
     }
+
+-- ============================================================
+-- § 5a. Whole-program refinement
+-- ============================================================
+
+/-!
+## Whole-program refinement
+
+Lifts the per-instruction `ext_backward_simulation` from ArmCorrectness.lean
+to a multi-step simulation over `verifiedGenerateAsm`.
+
+**Theorem statement.** If `verifiedGenerateAsm p = .ok r`, then any TAC
+execution `p ⊩ Cfg.run pc σ am ⟶* cfg'` starting from an ARM state satisfying
+`ExtSimRel` is simulated by `ArmSteps` preserving `ExtSimRel`.
+
+**Known sorrys that propagate:**
+- 2 sorrys from `verifiedGenInstr_correct` (arrLoad, arrStore)
+- `verifiedGenerateAsm_spec` (extraction of invariants from `hGen`)
+- `buildPcMap` prefix-sum lemmas (routine but tedious foldl reasoning)
+- `codeAt_of_bodyFlat` (list-join indexing)
+- `hPcNext` obligation for goto/ifgoto-taken (the per-instruction proof
+  doesn't use it, but the theorem statement requires it; removing the
+  unused hypothesis from `ext_backward_simulation` is a safe refactor)
+-/
+
+/-- The flat ARM body: all per-PC instruction lists concatenated. -/
+def VerifiedAsmResult.bodyFlat (r : VerifiedAsmResult) : ArmProg :=
+  (r.bodyPerPC.toList.flatMap id).toArray
+
+/-- Properties extracted from a successful `verifiedGenerateAsm` call.
+    These are the invariants that the main code-generation function establishes
+    via its runtime checks (type check, layout check, branch target check). -/
+structure GenAsmSpec (p : Prog) (r : VerifiedAsmResult) : Prop where
+  /-- The program is well-typed under its own TyCtx. -/
+  wellTypedProg : WellTypedProg p.tyCtx p
+  /-- The layout respects types: float vars in fregs, non-float in iregs/stack. -/
+  wellTypedLayout : WellTypedLayout p.tyCtx r.layout
+  /-- bodyPerPC has one entry per TAC instruction. -/
+  bodySize : r.bodyPerPC.size = p.size
+  /-- Each bodyPerPC entry was produced by verifiedGenInstr. -/
+  instrGen : ∀ pc, (hpc : pc < p.size) →
+    ∃ safe : Bool,
+      verifiedGenInstr r.layout r.pcMap p[pc]
+        r.haltS r.divS r.boundsS p.arrayDecls safe =
+      some (r.bodyPerPC[pc]'(bodySize ▸ hpc))
+  /-- pcMap is the prefix sum of bodyPerPC lengths. -/
+  pcMapLengths : ∃ lengths : Array Nat,
+    lengths.size = r.bodyPerPC.size ∧
+    r.pcMap = buildPcMap lengths ∧
+    ∀ (i : Nat) (hL : i < lengths.size) (hB : i < r.bodyPerPC.size),
+      lengths[i] = (r.bodyPerPC[i]).length
+
+/-- A successful `verifiedGenerateAsm` call satisfies `GenAsmSpec`. -/
+theorem verifiedGenerateAsm_spec {p : Prog} {r : VerifiedAsmResult}
+    (hGen : verifiedGenerateAsm p = .ok r) : GenAsmSpec p r := by
+  -- Extraction from verifiedGenerateAsm internals:
+  -- hGen unfolds through the type check, layout check, branch check,
+  -- two-pass codegen, and .ok constructor. Each field of GenAsmSpec
+  -- follows from the corresponding runtime guard.
+  sorry
+
+-- ──────────────────────────────────────────────────────────────
+-- buildPcMap prefix-sum lemmas
+-- ──────────────────────────────────────────────────────────────
+
+/-- The offsets array built by `buildPcMap`'s foldl. -/
+private def buildOffsets (lengths : Array Nat) : Array Nat :=
+  lengths.foldl (init := #[0]) fun acc len => acc.push (acc.back! + len)
+
+/-- Core invariant: `buildOffsets` via list foldl produces a prefix-sum array
+    of size `lengths.size + 1` where `offsets[0] = 0` and
+    `offsets[i+1] = offsets[i] + lengths[i]`. We characterize it by a recursive
+    function and then prove `buildPcMap` properties from that. -/
+private def prefixSumList : List Nat → Nat → List Nat
+  | [], acc => [acc]
+  | l :: rest, acc => acc :: prefixSumList rest (acc + l)
+
+private theorem prefixSumList_length : ∀ (ls : List Nat) (acc : Nat),
+    (prefixSumList ls acc).length = ls.length + 1 := by
+  intro ls; induction ls with
+  | nil => intro acc; simp [prefixSumList]
+  | cons l rest ih => intro acc; simp [prefixSumList, ih]
+
+private theorem prefixSumList_head : ∀ (ls : List Nat) (acc : Nat),
+    (prefixSumList ls acc)[0]'(by simp [prefixSumList_length]) = acc := by
+  intro ls; induction ls with
+  | nil => intro acc; simp [prefixSumList]
+  | cons l rest _ => intro acc; simp [prefixSumList]
+
+private theorem prefixSumList_succ (ls : List Nat) (acc : Nat) (i : Nat)
+    (hi : i < ls.length) :
+    (prefixSumList ls acc)[i + 1]'(by rw [prefixSumList_length]; omega) =
+    (prefixSumList ls acc)[i]'(by rw [prefixSumList_length]; omega) +
+    ls[i]'hi := by
+  induction ls generalizing acc i with
+  | nil => simp at hi
+  | cons l rest ih =>
+    simp only [prefixSumList]
+    cases i with
+    | zero =>
+      simp [List.getElem_cons_zero, prefixSumList_head]
+    | succ n =>
+      simp only [List.getElem_cons_succ]
+      exact ih (acc + l) n (by simp at hi; omega)
+
+/-- The foldl in `buildPcMap` preserves early indices: `push` only appends. -/
+private theorem foldl_push_getD_zero :
+    ∀ (ls : List Nat) (init : Array Nat) (hsz : 0 < init.size),
+    init[0]'hsz = 0 →
+    (ls.foldl (fun acc len => acc.push (acc.back! + len)) init).getD 0 0 = 0 := by
+  intro ls; induction ls with
+  | nil =>
+    intro init hsz h0; simp only [List.foldl]
+    unfold Array.getD; split
+    · exact h0
+    · omega
+  | cons l rest ih =>
+    intro init hsz h0; simp only [List.foldl]
+    have hsz' : 0 < (init.push (init.back! + l)).size := by simp [Array.size_push]
+    apply ih _ hsz'
+    simp [Array.getElem_push, hsz, h0]
+
+/-- `buildPcMap` starts at 0 for the first TAC PC. -/
+private theorem buildPcMap_zero (lengths : Array Nat) :
+    buildPcMap lengths 0 = 0 := by
+  show (lengths.foldl (init := #[0]) fun acc len =>
+    acc.push (acc.back! + len)).getD 0 0 = 0
+  rw [← Array.foldl_toList]
+  exact foldl_push_getD_zero lengths.toList #[0] (by simp) (by simp)
+
+/-- Generalized bridge: foldl-with-push on an array `(pfx ++ [acc]).toArray`
+    produces `pfx ++ prefixSumList ls acc`. -/
+private theorem foldl_push_toList :
+    ∀ (ls : List Nat) (pfx : List Nat) (acc : Nat),
+    (ls.foldl (fun a len => a.push (a.back! + len))
+      ((pfx ++ [acc]).toArray)).toList =
+    pfx ++ prefixSumList ls acc := by
+  intro ls; induction ls with
+  | nil => intro pfx acc; simp [prefixSumList, List.foldl]
+  | cons l rest ih =>
+    intro pfx acc; simp only [List.foldl, prefixSumList]
+    have h1 : (pfx ++ [acc]).toArray.back! = acc := by
+      simp
+    have h2 : (pfx ++ [acc]).toArray.push (acc + l) =
+        ((pfx ++ [acc]) ++ [acc + l]).toArray := by simp
+    rw [h1, h2, ih (pfx ++ [acc]) (acc + l)]
+    simp
+
+/-- The offsets array built by buildPcMap's foldl equals prefixSumList. -/
+private theorem buildPcMap_offsets_eq (lengths : Array Nat) :
+    (lengths.foldl (init := #[0]) fun acc len =>
+      acc.push (acc.back! + len)).toList = prefixSumList lengths.toList 0 := by
+  rw [← Array.foldl_toList]
+  exact foldl_push_toList lengths.toList ([] : List Nat) 0
+
+/-- `buildPcMap` gives prefix sums:
+    `pcMap (pc + 1) = pcMap pc + lengths[pc]`. -/
+private theorem buildPcMap_succ (lengths : Array Nat) (pc : Nat)
+    (hpc : pc < lengths.size) :
+    buildPcMap lengths (pc + 1) =
+    buildPcMap lengths pc + lengths[pc] := by
+  show (lengths.foldl (init := #[0]) fun acc len =>
+    acc.push (acc.back! + len)).getD (pc + 1) 0 =
+    (lengths.foldl (init := #[0]) fun acc len =>
+    acc.push (acc.back! + len)).getD pc 0 + lengths[pc]
+  let offsets := lengths.foldl (init := #[0]) fun acc len =>
+    acc.push (acc.back! + len)
+  have hEq := buildPcMap_offsets_eq lengths
+  -- offsets.size
+  have hSz : offsets.size = lengths.size + 1 := by
+    have : offsets.toList.length = (prefixSumList lengths.toList 0).length :=
+      congrArg List.length hEq
+    simp [prefixSumList_length] at this; exact this
+  -- Both indices in bounds
+  have h1 : pc + 1 < offsets.size := by omega
+  have h0 : pc < offsets.size := by omega
+  -- Unfold getD, both in-bounds
+  show (if _ : pc + 1 < offsets.size then offsets[pc + 1] else 0) =
+       (if _ : pc < offsets.size then offsets[pc] else 0) + lengths[pc]
+  simp only [h1, h0, dite_true]
+  -- Connect offsets[i] to prefixSumList via toList
+  have hIdx : ∀ (i : Nat) (hi : i < offsets.size),
+      offsets[i] = (prefixSumList lengths.toList 0)[i]'(by
+        rw [prefixSumList_length]; simp; omega) := by
+    intro i hi
+    have : offsets.toList[i]? = (prefixSumList lengths.toList 0)[i]? := by rw [hEq]
+    rw [Array.getElem?_toList] at this
+    rw [Array.getElem?_eq_getElem hi,
+        List.getElem?_eq_getElem (by rw [prefixSumList_length]; simp; omega)] at this
+    exact Option.some.inj this
+  rw [hIdx _ h1, hIdx _ h0]
+  have : lengths.toList[pc] = lengths[pc] := by simp
+  rw [← this]
+  exact prefixSumList_succ lengths.toList 0 pc (by simp; exact hpc)
+
+-- ──────────────────────────────────────────────────────────────
+-- CodeAt from the flat body
+-- ──────────────────────────────────────────────────────────────
+
+/-- Indexing into a flattened list of lists at a segment boundary:
+    element `j` of segment `k` is at position `(sum of lengths of segments 0..k-1) + j`
+    in the flat list. -/
+private theorem flatMap_segment_getElem (lss : List (List α)) (k j : Nat)
+    (hk : k < lss.length) (hj : j < lss[k].length) :
+    let offset := (lss.take k).flatMap id |>.length
+    ((lss.flatMap id)[offset + j]?) = some (lss[k][j]) := by
+  induction lss generalizing k with
+  | nil => simp at hk
+  | cons hd tl ih =>
+    simp only [List.flatMap_cons, id]
+    cases k with
+    | zero =>
+      simp only [List.take_zero, List.flatMap_nil, List.length_nil, Nat.zero_add,
+                  List.getElem_cons_zero] at hj ⊢
+      rw [List.getElem?_append_left hj, List.getElem?_eq_getElem hj]
+    | succ n =>
+      have hk' : n < tl.length := by simp at hk; omega
+      simp only [List.take_succ_cons, List.flatMap_cons, id, List.length_append,
+                  List.getElem_cons_succ] at hj ⊢
+      rw [List.getElem?_append_right (by omega)]
+      conv => lhs; rw [show hd.length + ((tl.take n).flatMap id).length + j - hd.length =
+             ((tl.take n).flatMap id).length + j from by omega]
+      exact ih n hk' hj
+
+/-- `buildPcMap lengths pc` equals the total length of the first `pc` segments. -/
+private theorem buildPcMap_eq_take_length (bodyPerPC : Array (List ArmInstr))
+    (lengths : Array Nat)
+    (hSz : lengths.size = bodyPerPC.size)
+    (hLen : ∀ (i : Nat) (hL : i < lengths.size) (hB : i < bodyPerPC.size),
+      lengths[i] = (bodyPerPC[i]).length)
+    (pc : Nat) (hpc : pc ≤ bodyPerPC.size) :
+    buildPcMap lengths pc =
+    ((bodyPerPC.toList.take pc).flatMap id).length := by
+  induction pc with
+  | zero =>
+    rw [buildPcMap_zero]
+    simp
+  | succ n ih =>
+    have hn : n < lengths.size := by omega
+    rw [buildPcMap_succ lengths n hn]
+    have ih' := ih (by omega)
+    rw [ih']
+    -- take (n+1) = take n ++ [bodyPerPC.toList[n]]
+    rw [List.take_add_one]
+    rw [List.getElem?_eq_getElem (by simp; omega)]
+    simp only [Option.toList_some, List.flatMap_append, List.flatMap_singleton, id,
+               List.length_append]
+    congr 1
+    rw [hLen n hn (by omega)]
+    simp
+
+/-- Each per-PC instruction block is embedded in the flat body at the
+    offset given by `pcMap`. -/
+private theorem codeAt_of_bodyFlat (bodyPerPC : Array (List ArmInstr))
+    (lengths : Array Nat)
+    (hSz : lengths.size = bodyPerPC.size)
+    (hLen : ∀ (i : Nat) (hL : i < lengths.size) (hB : i < bodyPerPC.size),
+      lengths[i] = (bodyPerPC[i]).length)
+    (pc : Nat) (hpc : pc < bodyPerPC.size) :
+    CodeAt (bodyPerPC.toList.flatMap id).toArray
+      (buildPcMap lengths pc) bodyPerPC[pc] := by
+  intro i hi
+  -- Convert Array getElem? to List getElem?
+  rw [List.getElem?_toArray]
+  -- Rewrite buildPcMap as take-length
+  rw [buildPcMap_eq_take_length bodyPerPC lengths hSz hLen pc (by omega)]
+  -- Use flatMap_segment_getElem on bodyPerPC.toList
+  have hpc' : pc < bodyPerPC.toList.length := by simp; exact hpc
+  have hj : i < bodyPerPC.toList[pc].length := by simp; exact hi
+  exact flatMap_segment_getElem bodyPerPC.toList pc i hpc' hj
+
+-- ──────────────────────────────────────────────────────────────
+-- Per-step simulation (wraps ext_backward_simulation)
+-- ──────────────────────────────────────────────────────────────
+
+/-- One-step simulation: if we can take a TAC step from a running
+    configuration, there exist ARM steps preserving `ExtSimRel`.
+
+    This wraps `ext_backward_simulation` by discharging `CodeAt` and
+    `hPcNext` from the `GenAsmSpec` invariants. -/
+private theorem step_simulation {p : Prog} {r : VerifiedAsmResult}
+    (spec : GenAsmSpec p r)
+    {pc : Nat} {σ : Store} {am : ArrayMem} {cfg' : Cfg} {s : ArmState}
+    (hStep : p ⊩ Cfg.run pc σ am ⟶ cfg')
+    (hRel : ExtSimRel r.layout r.pcMap (.run pc σ am) s)
+    (hPC : pc < p.size)
+    (hTS : TypedStore p.tyCtx σ) :
+    ∃ s', ArmSteps r.bodyFlat s s' ∧
+          ExtSimRel r.layout r.pcMap cfg' s' := by
+  -- Extract per-PC instruction data from spec
+  obtain ⟨safe, hSome⟩ := spec.instrGen pc hPC
+  obtain ⟨lengths, hLenSz, hPcMapEq, hLenEq⟩ := spec.pcMapLengths
+  -- Obtain CodeAt from flat body
+  have hBodySz : pc < r.bodyPerPC.size := spec.bodySize ▸ hPC
+  have hCodeAt : CodeAt r.bodyFlat (r.pcMap pc)
+      (r.bodyPerPC[pc]'hBodySz) := by
+    show CodeAt (r.bodyPerPC.toList.flatMap id).toArray _ _
+    rw [hPcMapEq]
+    exact codeAt_of_bodyFlat r.bodyPerPC lengths hLenSz hLenEq pc hBodySz
+  -- Lookup the instruction
+  have hInstr : p[pc]? = some p[pc] := by
+    simp [Prog.getElem?_eq_getElem hPC]
+  -- Build hPcNext: for sequential successor pc+1, pcMap (pc+1) = pcMap pc + instrs.length
+  have hPcNext : ∀ σ' am', cfg' = .run (pc + 1) σ' am' →
+      r.pcMap (pc + 1) = r.pcMap pc +
+        (r.bodyPerPC[pc]'hBodySz).length := by
+    intro σ' am' _
+    have hpc_len : pc < lengths.size := hLenSz ▸ hBodySz
+    simp only [hPcMapEq]
+    rw [buildPcMap_succ lengths pc hpc_len]
+    congr 1
+    exact hLenEq pc hpc_len hBodySz
+  exact ext_backward_simulation p r.bodyFlat r.layout r.pcMap
+    r.haltS r.divS r.boundsS p.arrayDecls safe
+    hStep hRel hPC spec.wellTypedProg hTS spec.wellTypedLayout
+    p[pc] hInstr
+    (r.bodyPerPC[pc]'hBodySz) hSome
+    hCodeAt hPcNext
+
+-- ──────────────────────────────────────────────────────────────
+-- Multi-step simulation (main theorem)
+-- ──────────────────────────────────────────────────────────────
+
+/-- Extract `pc < p.size` from any TAC step out of a running configuration.
+    Every `Step` constructor requires `p[pc]? = some _`. -/
+private theorem Step.pc_lt_of_step {p : Prog} {pc : Nat} {σ : Store}
+    {am : ArrayMem} {cfg' : Cfg}
+    (hStep : p ⊩ Cfg.run pc σ am ⟶ cfg') : pc < p.size := by
+  if h : pc < p.size then exact h
+  else have := Prog.getElem?_none h; cases hStep <;> simp_all
+
+/-- Classify a single step result: either the successor is `.run` with
+    `TypedStore` preserved, or it is terminal (no further steps). -/
+private theorem step_run_or_terminal {p : Prog} {pc : Nat} {σ : Store}
+    {am : ArrayMem} {c : Cfg}
+    (hwtp : WellTypedProg p.tyCtx p) (hts : TypedStore p.tyCtx σ)
+    (hpc : pc < p.size) (hstep : p ⊩ Cfg.run pc σ am ⟶ c) :
+    (∃ pc' σ' am', c = .run pc' σ' am' ∧ TypedStore p.tyCtx σ') ∨
+    (∀ c', ¬ (p ⊩ c ⟶ c')) := by
+  cases hstep with
+  | const h =>
+    exact .inl ⟨_, _, _, rfl, type_preservation hwtp hts hpc
+      (show Step p (.run pc σ am) _ from .const h)⟩
+  | copy h =>
+    exact .inl ⟨_, _, _, rfl, type_preservation hwtp hts hpc
+      (show Step p (.run pc σ am) _ from .copy h)⟩
+  | binop h h1 h2 h3 =>
+    exact .inl ⟨_, _, _, rfl, type_preservation hwtp hts hpc
+      (show Step p (.run pc σ am) _ from .binop h h1 h2 h3)⟩
+  | boolop h =>
+    exact .inl ⟨_, _, _, rfl, type_preservation hwtp hts hpc
+      (show Step p (.run pc σ am) _ from .boolop h)⟩
+  | goto _ => exact .inl ⟨_, _, _, rfl, hts⟩
+  | iftrue _ _ => exact .inl ⟨_, _, _, rfl, hts⟩
+  | iffall _ _ => exact .inl ⟨_, _, _, rfl, hts⟩
+  | arrLoad h h1 h2 =>
+    exact .inl ⟨_, _, _, rfl, type_preservation hwtp hts hpc
+      (show Step p (.run pc σ am) _ from .arrLoad h h1 h2)⟩
+  | arrStore h h1 h2 h3 =>
+    exact .inl ⟨_, _, _, rfl, type_preservation hwtp hts hpc
+      (show Step p (.run pc σ am) _ from .arrStore h h1 h2 h3)⟩
+  | fbinop h h1 h2 =>
+    exact .inl ⟨_, _, _, rfl, type_preservation hwtp hts hpc
+      (show Step p (.run pc σ am) _ from .fbinop h h1 h2)⟩
+  | intToFloat h h1 =>
+    exact .inl ⟨_, _, _, rfl, type_preservation hwtp hts hpc
+      (show Step p (.run pc σ am) _ from .intToFloat h h1)⟩
+  | floatToInt h h1 =>
+    exact .inl ⟨_, _, _, rfl, type_preservation hwtp hts hpc
+      (show Step p (.run pc σ am) _ from .floatToInt h h1)⟩
+  | floatExp h h1 =>
+    exact .inl ⟨_, _, _, rfl, type_preservation hwtp hts hpc
+      (show Step p (.run pc σ am) _ from .floatExp h h1)⟩
+  | halt _ => exact .inr fun _ h => Step.no_step_from_halt h
+  | error _ _ _ _ => exact .inr fun _ h => Step.no_step_from_error h
+  | binop_typeError _ _ => exact .inr fun _ h => Step.no_step_from_typeError h
+  | arrLoad_boundsError _ _ _ => exact .inr fun _ h => Step.no_step_from_error h
+  | arrStore_boundsError _ _ _ _ => exact .inr fun _ h => Step.no_step_from_error h
+  | arrLoad_typeError _ _ => exact .inr fun _ h => Step.no_step_from_typeError h
+  | arrStore_typeError _ _ => exact .inr fun _ h => Step.no_step_from_typeError h
+  | fbinop_typeError _ _ => exact .inr fun _ h => Step.no_step_from_typeError h
+  | intToFloat_typeError _ _ => exact .inr fun _ h => Step.no_step_from_typeError h
+  | floatToInt_typeError _ _ => exact .inr fun _ h => Step.no_step_from_typeError h
+  | floatExp_typeError _ _ => exact .inr fun _ h => Step.no_step_from_typeError h
+
+/-- Whole-program backward simulation for `verifiedGenerateAsm`.
+
+    If the verified code generator succeeds on program `p`, then any
+    multi-step TAC execution starting from a configuration whose ARM
+    counterpart satisfies `ExtSimRel` is simulated by `ArmSteps`
+    preserving `ExtSimRel`.
+
+    The proof proceeds by induction on the TAC `Steps` derivation,
+    applying `step_simulation` (which wraps `ext_backward_simulation`)
+    at each step, using `step_run_or_terminal` to classify the
+    intermediate config, and `type_preservation` for `TypedStore`.
+
+    **Propagated sorrys:** 2 from `verifiedGenInstr_correct` (arrLoad,
+    arrStore); 1 from `verifiedGenerateAsm_spec` (extraction). -/
+theorem whole_program_refinement {p : Prog} {r : VerifiedAsmResult}
+    (hGen : verifiedGenerateAsm p = .ok r)
+    {pc : Nat} {σ : Store} {am : ArrayMem}
+    (s : ArmState)
+    (hRel : ExtSimRel r.layout r.pcMap (.run pc σ am) s)
+    (hTS : TypedStore p.tyCtx σ)
+    (cfg' : Cfg) (hSteps : p ⊩ Cfg.run pc σ am ⟶* cfg') :
+    ∃ s', ArmSteps r.bodyFlat s s' ∧
+          ExtSimRel r.layout r.pcMap cfg' s' := by
+  have spec := verifiedGenerateAsm_spec hGen
+  -- Generalize the start config for induction (pattern from type_preservation_steps)
+  suffices ∀ c c_end, Steps p c c_end →
+      ∀ pc σ am s,
+        c = Cfg.run pc σ am →
+        ExtSimRel r.layout r.pcMap (.run pc σ am) s →
+        TypedStore p.tyCtx σ →
+        ∃ s', ArmSteps r.bodyFlat s s' ∧
+              ExtSimRel r.layout r.pcMap c_end s' from
+    this _ _ hSteps pc σ am s rfl hRel hTS
+  intro c c_end hSteps
+  induction hSteps with
+  | refl =>
+    intro pc σ am s hc hRel _; subst hc; exact ⟨s, .refl, hRel⟩
+  | step hStep rest ih =>
+    intro pc σ am s hc hRel hTS_cur; subst hc
+    have hPC := Step.pc_lt_of_step hStep
+    obtain ⟨s_mid, hArm1, hRel_mid⟩ :=
+      step_simulation spec hStep hRel hPC hTS_cur
+    -- Classify the one-step successor
+    rcases step_run_or_terminal spec.wellTypedProg hTS_cur hPC hStep with
+      ⟨pc', σ', am', hEq, hTS'⟩ | hTerminal
+    · -- Successor is .run: subst and apply IH
+      subst hEq
+      obtain ⟨s', hArm2, hRel'⟩ := ih _ _ _ s_mid rfl hRel_mid hTS'
+      exact ⟨s', hArm1.trans hArm2, hRel'⟩
+    · -- Successor is terminal: rest must be refl
+      cases rest with
+      | refl => exact ⟨s_mid, hArm1, hRel_mid⟩
+      | step h _ => exact absurd h (hTerminal _)
+
+/-- Corollary: initial ExtSimRel establishment.
+    For a zero-initialized store, if the layout maps every variable and
+    the ARM state's registers/stack/fregs are all zero at PC = pcMap 0,
+    then `ExtSimRel` holds at the initial configuration. -/
+theorem initial_extSimRel (layout : VarLayout) (pcMap : Nat → Nat)
+    (σ₀ : Store) (am₀ : ArrayMem) (s₀ : ArmState)
+    (hZeroStore : ∀ v, σ₀ v = .int 0)
+    (hPC : s₀.pc = pcMap 0)
+    (hRegs : ∀ r, s₀.regs r = 0)
+    (hFregs : ∀ r, s₀.fregs r = 0)
+    (hStack : ∀ off, s₀.stack off = 0)
+    (hAM : s₀.arrayMem = am₀) :
+    ExtSimRel layout pcMap (.run 0 σ₀ am₀) s₀ := by
+  refine ⟨?_, ?_, ?_⟩
+  · -- ExtStateRel: every variable's encoded value matches its location
+    intro v loc hLoc
+    simp [hZeroStore]
+    match loc with
+    | .stack off => simp [Value.encode, hStack]
+    | .ireg r => simp [Value.encode, hRegs]
+    | .freg r => simp [Value.encode, hFregs]
+  · -- PcRel
+    exact hPC
+  · -- ArrayMem
+    exact hAM
 
 /-- Generate the complete assembly for a program.
     Calls `verifiedGenerateAsm` for the verified core, then wraps it with

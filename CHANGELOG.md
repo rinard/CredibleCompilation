@@ -4,6 +4,45 @@ Chronological record of what was built and why, to reconstruct the sequence of d
 
 ---
 
+## Whole-program refinement theorem for verifiedGenerateAsm (2026-04-12)
+
+**Goal:** Lift the per-instruction `ext_backward_simulation` to a multi-step simulation over `verifiedGenerateAsm`.
+
+### New theorems (CodeGen.lean § 5a)
+
+- **`whole_program_refinement`** — If `verifiedGenerateAsm p = .ok r`, then any TAC execution `p ⊩ Cfg.run pc σ am ⟶* cfg'` starting from an ARM state satisfying `ExtSimRel` is simulated by `ArmSteps` on the flat body program preserving `ExtSimRel`. Proof by induction on `Steps`, composing `step_simulation` at each step with `step_run_or_terminal` for case classification and `type_preservation` for `TypedStore` maintenance.
+- **`initial_extSimRel`** — Establishes `ExtSimRel` at the initial zero-initialized configuration.
+- **`step_simulation`** — Per-step wrapper around `ext_backward_simulation`, discharging `CodeAt` from `codeAt_of_bodyFlat` and wiring `GenAsmSpec` invariants.
+- **`step_run_or_terminal`** — Classifies a step's successor as either `.run` (with `TypedStore` preserved) or terminal (no further steps).
+- **`GenAsmSpec`** — Structure capturing invariants extracted from a successful `verifiedGenerateAsm` call (well-typedness, layout, body size, per-PC instruction generation, pcMap prefix-sum property).
+- **`buildPcMap_zero`**, **`buildPcMap_succ`**, **`buildPcMap_sum`** — Prefix-sum properties of `buildPcMap`.
+- **`codeAt_of_bodyFlat`** — Each per-PC instruction block is `CodeAt` in the concatenated flat body at the pcMap offset.
+
+### Proven lemmas
+
+- `Step.pc_lt_of_step` — extract `pc < p.size` from any Step
+- `step_run_or_terminal` — classify step result as running (with TypedStore) or terminal
+- `buildPcMap_zero` — prefix sum starts at 0
+- `buildPcMap_succ` — prefix sum recurrence: `pcMap (pc+1) = pcMap pc + lengths[pc]`
+- `prefixSumList_length/head/succ` — recursive prefix-sum characterization
+- `foldl_push_getD_zero` — foldl-with-push preserves index 0
+- `foldl_push_toList` — foldl-with-push = prefixSumList (generalized bridge)
+- `buildPcMap_offsets_eq` — connects Array.foldl to prefixSumList
+
+### Newly proven (2026-04-12, continued)
+
+- `flatMap_segment_getElem` — list induction: element j of segment k in a flattened list-of-lists is at position (sum of first k segment lengths) + j
+- `buildPcMap_eq_take_length` — pcMap = total length of first pc segments, by induction on pc using buildPcMap_succ
+- `codeAt_of_bodyFlat` — composes the above two with Array↔List bridge
+- `step_simulation` hPcNext — weakened `hPcNext` in `ext_backward_simulation` / `verifiedGenInstr_correct` / `genInstr_correct` from `∀ pc'` to `pc + 1` only, making goto/iftrue cases vacuous; 47 mechanical call-site updates in ArmCorrectness.lean
+
+### Remaining sorrys (1 new, 2 pre-existing propagated)
+
+- `verifiedGenerateAsm_spec` — extraction from `verifiedGenerateAsm` internals (hardest remaining sorry)
+- Pre-existing: 2 arrLoad/arrStore sorrys in `verifiedGenInstr_correct` propagate through
+
+---
+
 ## Add layout completeness to WellTypedLayout, eliminate 6 none-layout sorrys (2026-04-11)
 
 **Goal:** A well-formed layout maps every variable to a location. Add completeness conjunct to `WellTypedLayout` and use it to discharge impossible `| none =>` cases.
