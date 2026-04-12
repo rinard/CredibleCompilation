@@ -1357,7 +1357,10 @@ def generateAsm (p : Prog) : Except String String := do
     optimized program. Errors if the certificate check fails. -/
 def applyPass (name : String) (pass : Prog → ECertificate) (p : Prog) : Except String Prog :=
   let cert := pass p
-  if checkCertificateExec cert then .ok cert.trans
+  if cert.orig.code != p.code || cert.orig.observable != p.observable ||
+     cert.orig.arrayDecls != p.arrayDecls then
+    .error s!"optimization certificate orig mismatch for {name}"
+  else if checkCertificateExec cert then .ok cert.trans
   else
     let checks := checkCertificateVerboseExec cert
     let failures := checks.filter (fun (_, b) => !b)
@@ -1372,11 +1375,11 @@ def applyPass (name : String) (pass : Prog → ECertificate) (p : Prog) : Except
     Each pass is checked by the executable certificate checker. -/
 def optimizePipeline (p : Prog) : Except String Prog := do
   let p ← applyPass "DCE" DCEOpt.optimize p
+  let p ← applyPass "LICM" LICMOpt.optimize p
   let p ← applyPass "ConstProp" ConstPropOpt.optimize p
   let p ← applyPass "DCE" DCEOpt.optimize p
   let p ← applyPass "DAE" DAEOpt.optimize p
   let p ← applyPass "CSE" CSEOpt.optimize p
-  let p ← applyPass "LICM" LICMOpt.optimize p
   let p ← applyPass "ConstHoist" ConstHoistOpt.optimize p
   let p ← applyPass "Peephole" PeepholeOpt.optimize p
   let p ← applyPass "DCE" DCEOpt.optimize p
