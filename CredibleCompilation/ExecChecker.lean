@@ -1,4 +1,5 @@
 import CredibleCompilation.PropChecker
+import Std.Data.HashMap
 
 /-!
 # Executable Certificate Checker
@@ -400,6 +401,58 @@ def checkInvariantsAtStartExec (cert : ECertificate) : Bool :=
 def checkRelAtStartExec (cert : ECertificate) : Bool :=
   (cert.instrCerts.getD 0 default).rel.all fun (e_o, e_t) => e_o == e_t
 
+-- ============================================================
+-- § 2d. Fast HashMap-based lookups for checker performance
+-- ============================================================
+
+abbrev FastVarMap := Std.HashMap String Expr
+
+def FastVarMap.ofList (ss : List (Var × Expr)) : FastVarMap :=
+  ss.foldl (fun m (v, e) => m.insert v e) {}
+
+def Expr.substSymFast (m : FastVarMap) : Expr → Expr
+  | .lit n      => .lit n
+  | .blit b     => .blit b
+  | .var v      => m.getD v (.var v)
+  | .bin op a b => .bin op (a.substSymFast m) (b.substSymFast m)
+  | .tobool e       => .tobool (e.substSymFast m)
+  | .cmpE op a b    => .cmpE op (a.substSymFast m) (b.substSymFast m)
+  | .cmpLitE op a n => .cmpLitE op (a.substSymFast m) n
+  | .notE e         => .notE (e.substSymFast m)
+  | .andE a b       => .andE (a.substSymFast m) (b.substSymFast m)
+  | .orE a b        => .orE (a.substSymFast m) (b.substSymFast m)
+  | .arrRead arr idx => .arrRead arr (idx.substSymFast m)
+  | .flit n          => .flit n
+  | .fbin op a b     => .fbin op (a.substSymFast m) (b.substSymFast m)
+  | .fcmpE op a b    => .fcmpE op (a.substSymFast m) (b.substSymFast m)
+  | .intToFloat e    => .intToFloat (e.substSymFast m)
+  | .floatToInt e    => .floatToInt (e.substSymFast m)
+  | .floatExp e      => .floatExp (e.substSymFast m)
+  | .farrRead arr idx => .farrRead arr (idx.substSymFast m)
+
+def Expr.simplifyFast (m : FastVarMap) : Expr → Expr
+  | .lit n => .lit n
+  | .blit b => .blit b
+  | .var v => m.getD v (.var v)
+  | .bin op a b =>
+    match a.simplifyFast m, b.simplifyFast m with
+    | .lit na, .lit nb => .lit (op.eval na nb)
+    | a', b'           => Expr.reassoc op a' b'
+  | .tobool e       => .tobool e
+  | .cmpE op a b    => .cmpE op a b
+  | .cmpLitE op a n => .cmpLitE op a n
+  | .notE e         => .notE e
+  | .andE a b       => .andE a b
+  | .orE a b        => .orE a b
+  | .arrRead arr idx => .arrRead arr (idx.simplifyFast m)
+  | .flit n         => .flit n
+  | .fbin op a b    => .fbin op (a.simplifyFast m) (b.simplifyFast m)
+  | .fcmpE op a b   => .fcmpE op (a.simplifyFast m) (b.simplifyFast m)
+  | .intToFloat e   => .intToFloat (e.simplifyFast m)
+  | .floatToInt e   => .floatToInt (e.simplifyFast m)
+  | .floatExp e     => .floatExp (e.simplifyFast m)
+  | .farrRead arr idx => .farrRead arr (idx.simplifyFast m)
+
 /-- Substitute each variable in an expression with its symbolic post-value. -/
 def Expr.substSym (ss : SymStore) : Expr → Expr
   | .lit n      => .lit n
@@ -470,8 +523,14 @@ def checkInvariantsPreservedExec (cert : ECertificate) : Bool :=
     (List.range prog.size).all fun pc =>
       match prog[pc]? with
       | some instr =>
+        let (ss, _) := execSymbolic ([] : SymStore) ([] : SymArrayMem) instr
+        let ssMap := FastVarMap.ofList ss
+        let invMap := FastVarMap.ofList (inv.getD pc ([] : EInv))
         (successors instr pc).all fun pc' =>
-          (inv.getD pc' ([] : EInv)).all (checkInvAtom (inv.getD pc ([] : EInv)) instr)
+          (inv.getD pc' ([] : EInv)).all fun (x, e) =>
+            let lhs := (ssMap.getD x (.var x)).simplifyFast invMap
+            let rhs := e.substSymFast ssMap |>.simplifyFast invMap
+            lhs == rhs
       | none => true
   checkProg cert.orig cert.inv_orig &&
   checkProg cert.trans cert.inv_trans
@@ -583,24 +642,31 @@ def checkRelConsistency
   let (origSS, origSAM) := execPath orig ([] : SymStore) ([] : SymArrayMem) pc_orig origLabels
   let (transSS, transSAM) := execSymbolic ([] : SymStore) ([] : SymArrayMem) transInstr
   let preSubst := buildSubstMap rel_pre
+  -- Build HashMap versions for O(1) lookups in the hot inner loop
+  let origSSMap := FastVarMap.ofList origSS
+  let transSSMap := FastVarMap.ofList transSS
+  let preSubstMap := FastVarMap.ofList preSubst
+  let invMap := FastVarMap.ofList inv_orig
   let pairCheck := rel_post.all fun (e_o, e_t) =>
-    let origVal := e_o.substSym origSS |>.simplify inv_orig
-    let transVal := (e_t.substSym transSS).substSym preSubst |>.simplify inv_orig
+    let origVal := e_o.substSymFast origSSMap |>.simplifyFast invMap
+    let transVal := (e_t.substSymFast transSSMap).substSymFast preSubstMap |>.simplifyFast invMap
     origVal == transVal
   -- Free-variable coverage: for each (_, e_t) in rel_post, all free variables of
   -- (e_t.substSym transSS) must have a pair in rel_pre.
   -- Also covers array memory expression variables (i_t, v_t from transSAM).
-  let relHasVar (w : Var) := rel_pre.any fun (_, e_t') => e_t' == .var w
+  let relVarSet := Std.HashMap.ofList (rel_pre.filterMap fun (_, e_t') =>
+    match e_t' with | .var w => some (w, ()) | _ => none)
+  let relHasVar (w : Var) := relVarSet.contains w
   let fvCheck := rel_post.all fun (_, e_t) =>
-    (e_t.substSym transSS).freeVars.all fun w => relHasVar w
+    (e_t.substSymFast transSSMap).freeVars.all fun w => relHasVar w
   let amFvCheck := transSAM.all fun (_, i_t, v_t) =>
     i_t.freeVars.all (fun w => relHasVar w) &&
     v_t.freeVars.all (fun w => relHasVar w)
   let amCheck := origSAM.length == transSAM.length &&
     (origSAM.zip transSAM).all fun ((a_o, i_o, v_o), (a_t, i_t, v_t)) =>
       a_o == a_t &&
-      i_o.simplify inv_orig == (i_t.substSym preSubst).simplify inv_orig &&
-      v_o.simplify inv_orig == (v_t.substSym preSubst).simplify inv_orig
+      i_o.simplifyFast invMap == (i_t.substSymFast preSubstMap).simplifyFast invMap &&
+      v_o.simplifyFast invMap == (v_t.substSymFast preSubstMap).simplifyFast invMap
   pairCheck && fvCheck && amFvCheck && amCheck
 
 /-- **Condition 3**: Every transition in the transformed program has a
