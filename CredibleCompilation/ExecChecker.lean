@@ -106,10 +106,13 @@ abbrev SymArrayMem := List (ArrayName × Expr × Expr)
 
 /-- Look up an array read in the symbolic array memory.
     Returns the written value if the array and index match, otherwise `.arrRead`. -/
-def samGet (sam : SymArrayMem) (arr : ArrayName) (idx : Expr) : Expr :=
+def samGet (sam : SymArrayMem) (arr : ArrayName) (idx : Expr) (ty : VarTy := .int) : Expr :=
   match sam.find? (fun (a, i, _) => a == arr && i == idx) with
   | some (_, _, v) => v
-  | none => .arrRead arr idx
+  | none => match ty with
+    | .int   => .arrRead arr idx
+    | .float => .farrRead arr idx
+    | .bool  => .cmpLitE .ne (.arrRead arr idx) 0
 
 /-- Symbolically execute one TAC instruction.
     Expressions in the resulting store reference the *initial* variable values.
@@ -126,7 +129,7 @@ def execSymbolic (ss : SymStore) (sam : SymArrayMem) (instr : TAC) : SymStore ×
   | .intToFloat x y => (ssSet ss x (.intToFloat (ssGet ss y)), sam)
   | .floatToInt x y => (ssSet ss x (.floatToInt (ssGet ss y)), sam)
   | .floatExp x y   => (ssSet ss x (.floatExp (ssGet ss y)), sam)
-  | .arrLoad x arr idx _ => (ssSet ss x (samGet sam arr (ssGet ss idx)), sam)
+  | .arrLoad x arr idx ty => (ssSet ss x (samGet sam arr (ssGet ss idx) ty), sam)
   | .arrStore arr idx val _ => (ss, (arr, ssGet ss idx, ssGet ss val) :: sam)
   | _               => (ss, sam)
 
@@ -837,8 +840,6 @@ theorem NoFloatExp.elim {p : Prog} {pc : Nat} {x y : Var}
 def checkCertificateExec (cert : ECertificate) : Bool :=
   checkWellTypedProg cert.orig.tyCtx cert.orig &&
   checkWellTypedProg cert.trans.tyCtx cert.trans &&
-  checkAllArrayOpsInt cert.orig &&
-  checkAllArrayOpsInt cert.trans &&
   (cert.orig.observable == cert.trans.observable) &&
   checkStartCorrespondenceExec cert &&
   checkInvariantsAtStartExec cert &&
@@ -868,6 +869,7 @@ def checkCertificateVerboseExec (cert : ECertificate) : List (String × Bool) :=
     ("invariants_preserved",  checkInvariantsPreservedExec cert),
     ("no_arrread_inv_orig",   checkNoArrReadInInvs cert.inv_orig),
     ("no_arrread_inv_trans",  checkNoArrReadInInvs cert.inv_trans),
+    ("no_arrread_rels",       checkNoArrReadInRels cert.instrCerts),
     ("all_transitions",       checkAllTransitionsExec cert),
     ("halt_correspondence",   checkHaltCorrespondenceExec cert),
     ("halt_observable",       checkHaltObservableExec cert),

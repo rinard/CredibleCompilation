@@ -107,6 +107,14 @@ def toBits : Value → BitVec 64
 @[simp] theorem typeOf_ofBitVec (ty : VarTy) (v : BitVec 64) : (ofBitVec ty v).typeOf = ty := by
   cases ty <;> simp [ofBitVec, typeOf]
 
+/-- Roundtrip: if a value has type `ty`, wrapping its bits gives back the same value. -/
+theorem ofBitVec_toBits {v : Value} {ty : VarTy} (h : v.typeOf = ty) :
+    Value.ofBitVec ty v.toBits = v := by
+  cases v with
+  | int n => cases ty <;> simp [typeOf] at h <;> simp [ofBitVec, toBits, h]
+  | bool b => cases ty <;> simp [typeOf] at h <;> simp [ofBitVec, toBits, h]; cases b <;> rfl
+  | float f => cases ty <;> simp [typeOf] at h <;> simp [ofBitVec, toBits, h]
+
 end Value
 
 /-- A store (state) maps every variable to a typed value. -/
