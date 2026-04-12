@@ -678,9 +678,15 @@ def checkDivPreservationExec (cert : ECertificate) : Bool :=
     | _ =>
       -- When the trans instruction is not a binop, verify the mapped orig
       -- instruction is not div/mod (otherwise we cannot transfer div-safety).
+      -- Exception: if the orig invariant proves the divisor is a non-zero
+      -- constant, the division is provably safe and needs no trans counterpart.
       let ic := cert.instrCerts.getD pc_t default
       match cert.orig[ic.pc_orig]? with
-      | some (.binop _ .div _ _) | some (.binop _ .mod _ _) => false
+      | some (.binop _ .div _ z) | some (.binop _ .mod _ z) =>
+        let inv := cert.inv_orig.getD ic.pc_orig ([] : EInv)
+        match inv.find? (fun (v, _) => v == z) with
+        | some (_, .lit c) => c != 0
+        | _ => false
       | _ => true
 
 /-- **Condition 10 (error preservation for array bounds)**: for every

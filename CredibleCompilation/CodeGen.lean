@@ -1358,14 +1358,20 @@ def generateAsm (p : Prog) : Except String String := do
 def applyPass (name : String) (pass : Prog → ECertificate) (p : Prog) : Except String Prog :=
   let cert := pass p
   if checkCertificateExec cert then .ok cert.trans
-  else .error s!"optimization certificate check failed for {name}"
+  else
+    let checks := checkCertificateVerboseExec cert
+    let failures := checks.filter (fun (_, b) => !b)
+    let failNames := failures.map (fun (n, _) => n)
+    .error s!"optimization certificate check failed for {name}: {failNames}"
 
 /-- Apply each optimization pass in sequence:
-    ConstProp → DCE → DAE → CSE → LICM → ConstHoist → Peephole → DCE → RegAlloc.
-    DCE runs again before RegAlloc to eliminate unreachable code (e.g., dead code
-    after goto) that would otherwise cause RegAlloc's certificate check to fail.
+    DCE → ConstProp → DCE → DAE → CSE → LICM → ConstHoist → Peephole → DCE → RegAlloc.
+    DCE at start: eliminates dead code from goto patterns in source.
+    DCE after ConstProp: eliminates dead branches from constant folding.
+    DCE before RegAlloc: cleans up after Peephole.
     Each pass is checked by the executable certificate checker. -/
 def optimizePipeline (p : Prog) : Except String Prog := do
+  let p ← applyPass "DCE" DCEOpt.optimize p
   let p ← applyPass "ConstProp" ConstPropOpt.optimize p
   let p ← applyPass "DCE" DCEOpt.optimize p
   let p ← applyPass "DAE" DAEOpt.optimize p
@@ -1380,7 +1386,8 @@ def compileToAsm (input : String) : Except String String := do
   let prog ← parseProgram input
   if !prog.typeCheck then .error "program failed type check (frontend)"
   let tac := prog.compileToTAC
-  generateAsm tac
+  let opt ← optimizePipeline tac
+  generateAsm opt
 
 -- ============================================================
 -- § 7. IO driver: write assembly, assemble, and run
