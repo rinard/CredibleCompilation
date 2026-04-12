@@ -983,7 +983,7 @@ theorem checkInvariantsPreservedExec_sound (dc : ECertificate)
          checkProg_sound dc.trans dc.inv_trans h2 hnoarr_trans⟩
 
 /-- Variable names appearing in an instruction (matching collectAllVars.extract). -/
-private def instrVars (instr : TAC) : List Var :=
+private def instrDests (instr : TAC) : List Var :=
   match instr with
   | .const x _     => [x]
   | .copy x y      => [x, y]
@@ -1001,15 +1001,15 @@ private def instrVars (instr : TAC) : List Var :=
 /-- Elements already in the accumulator survive foldl. -/
 private theorem mem_foldl_init (xs : List TAC) (init : List Var)
     {v : Var} (hv : v ∈ init) :
-    v ∈ xs.foldl (fun acc i => acc ++ instrVars i) init := by
+    v ∈ xs.foldl (fun acc i => acc ++ instrDests i) init := by
   induction xs generalizing init with
   | nil => exact hv
-  | cons _ tl ih => exact ih (init ++ instrVars _) (List.mem_append_left _ hv)
+  | cons _ tl ih => exact ih (init ++ instrDests _) (List.mem_append_left _ hv)
 
-/-- Elements from any member's instrVars end up in the foldl result. -/
+/-- Elements from any member's instrDests end up in the foldl result. -/
 private theorem mem_foldl_elem (xs : List TAC) (init : List Var)
-    {x : TAC} (hx : x ∈ xs) {v : Var} (hv : v ∈ instrVars x) :
-    v ∈ xs.foldl (fun acc i => acc ++ instrVars i) init := by
+    {x : TAC} (hx : x ∈ xs) {v : Var} (hv : v ∈ instrDests x) :
+    v ∈ xs.foldl (fun acc i => acc ++ instrDests i) init := by
   induction xs generalizing init with
   | nil => simp at hx
   | cons hd tl ih =>
@@ -1017,17 +1017,17 @@ private theorem mem_foldl_elem (xs : List TAC) (init : List Var)
     | inl heq => subst heq; exact mem_foldl_init tl _ (List.mem_append_right init hv)
     | inr htl => exact ih _ htl
 
-/-- If v ∈ instrVars of an instruction in p1, then v ∈ collectAllVars p1 p2. -/
-private theorem instrVars_sub_collectAllVars_left (p1 p2 : Prog) (instr : TAC)
-    (hmem : instr ∈ p1.code.toList) (v : Var) (hv : v ∈ instrVars instr) :
+/-- If v ∈ instrDests of an instruction in p1, then v ∈ collectAllVars p1 p2. -/
+private theorem instrDests_sub_collectAllVars_left (p1 p2 : Prog) (instr : TAC)
+    (hmem : instr ∈ p1.code.toList) (v : Var) (hv : v ∈ instrDests instr) :
     v ∈ collectAllVars p1 p2 := by
   unfold collectAllVars
   apply List.mem_append_left
   exact mem_foldl_elem p1.code.toList ([] : List Var) hmem hv
 
-/-- If v ∈ instrVars of an instruction in p2, then v ∈ collectAllVars p1 p2. -/
-private theorem instrVars_sub_collectAllVars_right (p1 p2 : Prog) (instr : TAC)
-    (hmem : instr ∈ p2.code.toList) (v : Var) (hv : v ∈ instrVars instr) :
+/-- If v ∈ instrDests of an instruction in p2, then v ∈ collectAllVars p1 p2. -/
+private theorem instrDests_sub_collectAllVars_right (p1 p2 : Prog) (instr : TAC)
+    (hmem : instr ∈ p2.code.toList) (v : Var) (hv : v ∈ instrDests instr) :
     v ∈ collectAllVars p1 p2 := by
   unfold collectAllVars
   apply List.mem_append_right
@@ -1044,40 +1044,40 @@ private theorem getElem?_mem_toList {arr : Prog} {i : Nat} {x : TAC}
 /-- If v is not the dest of instr, execSymbolic preserves ssGet v. -/
 private theorem execSymbolic_preserves_var (ss : SymStore) (sam : SymArrayMem)
     (instr : TAC) (v : Var)
-    (hv : v ∉ instrVars instr) :
+    (hv : v ∉ instrDests instr) :
     ssGet (execSymbolic ss sam instr).1 v = ssGet ss v := by
   cases instr with
   | const x n =>
-    simp [instrVars] at hv
+    simp [instrDests] at hv
     cases n with
     | int k => simp only [execSymbolic]; exact ssGet_ssSet_other ss x v _ hv
     | bool b => simp only [execSymbolic]; exact ssGet_ssSet_other ss x v _ hv
     | float f => simp only [execSymbolic]; exact ssGet_ssSet_other ss x v _ hv
   | copy x y =>
-    simp [instrVars] at hv; simp only [execSymbolic]; exact ssGet_ssSet_other ss x v _ hv.1
+    simp [instrDests] at hv; simp only [execSymbolic]; exact ssGet_ssSet_other ss x v _ hv.1
   | binop x op y z =>
-    simp [instrVars] at hv; simp only [execSymbolic]; exact ssGet_ssSet_other ss x v _ hv.1
+    simp [instrDests] at hv; simp only [execSymbolic]; exact ssGet_ssSet_other ss x v _ hv.1
   | fbinop x fop y z =>
-    simp [instrVars] at hv; simp only [execSymbolic]; exact ssGet_ssSet_other ss x v _ hv.1
+    simp [instrDests] at hv; simp only [execSymbolic]; exact ssGet_ssSet_other ss x v _ hv.1
   | intToFloat x y =>
-    simp [instrVars] at hv; simp only [execSymbolic]; exact ssGet_ssSet_other ss x v _ hv.1
+    simp [instrDests] at hv; simp only [execSymbolic]; exact ssGet_ssSet_other ss x v _ hv.1
   | floatToInt x y =>
-    simp [instrVars] at hv; simp only [execSymbolic]; exact ssGet_ssSet_other ss x v _ hv.1
+    simp [instrDests] at hv; simp only [execSymbolic]; exact ssGet_ssSet_other ss x v _ hv.1
   | floatExp x y =>
-    simp [instrVars] at hv; simp only [execSymbolic]; exact ssGet_ssSet_other ss x v _ hv.1
+    simp [instrDests] at hv; simp only [execSymbolic]; exact ssGet_ssSet_other ss x v _ hv.1
   | boolop x _ =>
-    simp [instrVars] at hv; simp only [execSymbolic]; exact ssGet_ssSet_other ss x v _ hv
+    simp [instrDests] at hv; simp only [execSymbolic]; exact ssGet_ssSet_other ss x v _ hv
   | goto _ => rfl
   | ifgoto _ _ => simp only [execSymbolic]
   | halt => rfl
   | arrLoad x _ idx _ =>
-    simp [instrVars] at hv; simp only [execSymbolic]; exact ssGet_ssSet_other ss x v _ hv.1
+    simp [instrDests] at hv; simp only [execSymbolic]; exact ssGet_ssSet_other ss x v _ hv.1
   | arrStore _ _ _ _ => rfl
 
 /-- If v is not the dest of any instruction in the program, execPath preserves ssGet v. -/
 private theorem execPath_preserves_var (orig : Prog) (ss : SymStore) (sam : SymArrayMem)
     (pc : Label) (labels : List Label) (v : Var)
-    (hv : ∀ (l : Label) (instr : TAC), orig[l]? = some instr → v ∉ instrVars instr) :
+    (hv : ∀ (l : Label) (instr : TAC), orig[l]? = some instr → v ∉ instrDests instr) :
     ssGet (execPath orig ss sam pc labels).1 v = ssGet ss v := by
   induction labels generalizing ss sam pc with
   | nil => rfl

@@ -328,22 +328,6 @@ private def isBoundsSafe (arrayDecls : List (ArrayName × Nat × VarTy))
 -- § 3. Well-formedness checks (discharge proof hypotheses at runtime)
 -- ============================================================
 
-/-- Collect all variables referenced by a TAC instruction. -/
-private def instrVars : TAC → List Var
-  | .const x _          => [x]
-  | .copy x y           => [x, y]
-  | .binop x _ y z      => [x, y, z]
-  | .boolop x be        => x :: be.vars
-  | .arrLoad x _ idx _  => [x, idx]
-  | .arrStore _ idx v _  => [idx, v]
-  | .fbinop x _ y z     => [x, y, z]
-  | .intToFloat x y     => [x, y]
-  | .floatToInt x y     => [x, y]
-  | .floatExp x y       => [x, y]
-  | .goto _             => []
-  | .ifgoto be _        => be.vars
-  | .halt               => []
-
 /-- Check WellTypedLayout: no float var in ireg, no non-float var in freg,
     and every variable referenced by the program has a layout entry.
     Corresponds to the `hWTL` hypothesis in verifiedGenInstr_correct. -/
@@ -351,7 +335,7 @@ private def checkWellTypedLayout (Γ : TyCtx) (layout : VarLayout)
     (code : Array TAC) : Option String :=
   -- Collect all variables referenced in the program
   let allVars := code.foldl (init := ([] : List Var)) fun acc instr =>
-    acc ++ (instrVars instr).filter fun v => !acc.contains v
+    acc ++ (TAC.vars instr).filter fun v => !acc.contains v
   -- Check type/register consistency for all layout entries
   let typeErr := layout.entries.find? fun (v, loc) =>
     match loc with
@@ -586,19 +570,19 @@ private theorem checkWellTypedLayout_wellTyped {Γ : TyCtx} {layout : VarLayout}
 private theorem foldl_preserves_mem {init : List Var} {instrs : List TAC} {v : Var}
     (hv : v ∈ init) :
     v ∈ instrs.foldl (fun acc i =>
-      acc ++ (instrVars i).filter fun w => !acc.contains w) init := by
+      acc ++ (TAC.vars i).filter fun w => !acc.contains w) init := by
   induction instrs generalizing init with
   | nil => exact hv
   | cons _ tl ih => simp only [List.foldl]; exact ih (List.mem_append_left _ hv)
 
-/-- The foldl in checkWellTypedLayout collects all instrVars from all instructions. -/
+/-- The foldl in checkWellTypedLayout collects all TAC.vars from all instructions. -/
 private theorem foldl_collects (instrs : List TAC) (v : Var) (instr : TAC)
-    (hMem : instr ∈ instrs) (hv : v ∈ instrVars instr) :
+    (hMem : instr ∈ instrs) (hv : v ∈ TAC.vars instr) :
     v ∈ instrs.foldl (init := ([] : List Var)) fun acc i =>
-      acc ++ (instrVars i).filter fun w => !acc.contains w := by
+      acc ++ (TAC.vars i).filter fun w => !acc.contains w := by
   suffices ∀ (init : List Var),
       v ∈ instrs.foldl (fun acc i =>
-        acc ++ (instrVars i).filter fun w => !acc.contains w) init from this []
+        acc ++ (TAC.vars i).filter fun w => !acc.contains w) init from this []
   intro init
   induction instrs generalizing init with
   | nil => simp at hMem
@@ -613,12 +597,12 @@ private theorem foldl_collects (instrs : List TAC) (v : Var) (instr : TAC)
         exact ⟨hv, by simp [List.contains_iff_mem, hmem]⟩
     · exact ih htl _
 
-/-- checkWellTypedLayout returning none implies all instrVars are in the layout. -/
+/-- checkWellTypedLayout returning none implies all TAC.vars are in the layout. -/
 private theorem checkWellTypedLayout_instrMapped {Γ : TyCtx} {layout : VarLayout}
     {code : Array TAC}
     (h : checkWellTypedLayout Γ layout code = none)
     {pc : Nat} (hpc : pc < code.size) {v : Var}
-    (hv : v ∈ instrVars code[pc]) : layout v ≠ none := by
+    (hv : v ∈ TAC.vars code[pc]) : layout v ≠ none := by
   simp only [checkWellTypedLayout] at h
   split at h
   · simp at h
@@ -628,7 +612,7 @@ private theorem checkWellTypedLayout_instrMapped {Γ : TyCtx} {layout : VarLayou
     · rename_i hComplete
       intro hNone
       have hInAll : v ∈ code.foldl (init := ([] : List Var)) fun acc instr =>
-          acc ++ (instrVars instr).filter fun w => !acc.contains w := by
+          acc ++ (TAC.vars instr).filter fun w => !acc.contains w := by
         rw [← Array.foldl_toList]
         exact foldl_collects code.toList v code[pc] (Array.getElem_mem_toList hpc) hv
       have := (List.find?_eq_none.mp hComplete) v hInAll
@@ -767,9 +751,6 @@ private theorem instrLength_eq_length {layout : VarLayout} {pcMap : Nat → Nat}
     (try split at h ⊢); (try split at h ⊢); (try split at h ⊢); (try split at h ⊢)
     all_goals (first | simp_all | (split at h <;> simp_all))
 
-/-- instrVars and TAC.vars are definitionally equal. -/
-private theorem instrVars_eq_vars (instr : TAC) : instrVars instr = instr.vars := by
-  cases instr <;> rfl
 
 /-- A successful `verifiedGenerateAsm` call satisfies `GenAsmSpec`. -/
 theorem verifiedGenerateAsm_spec {p : Prog} {r : VerifiedAsmResult}
@@ -821,8 +802,7 @@ theorem verifiedGenerateAsm_spec {p : Prog} {r : VerifiedAsmResult}
                 exact instrLength_eq_length (hPCs i (hSz ▸ (by omega)))
             layoutComplete := fun pc hpc v hv => by
               simp [Prog.size_eq] at hpc
-              exact checkWellTypedLayout_instrMapped hWTL_check hpc
-                (instrVars_eq_vars _ ▸ hv)
+              exact checkWellTypedLayout_instrMapped hWTL_check hpc hv
           }
 
 -- ──────────────────────────────────────────────────────────────
