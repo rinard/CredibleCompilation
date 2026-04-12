@@ -110,7 +110,7 @@ theorem whileToTAC_halt (prog : Program) (fuel : Nat) (σ' : Store) (am' : Array
     (htc : prog.typeCheck = true)
     (hinterp : prog.body.interp fuel prog.initStore ArrayMem.init prog.arrayDecls = some (σ', am'))
     (hsafe : prog.body.safe fuel prog.initStore ArrayMem.init prog.arrayDecls) :
-    ∃ σ_tac am_h, haltsWithResult prog.compileToTAC 0 prog.initStore σ_tac ArrayMem.init am_h ∧
+    ∃ σ_tac, haltsWithResult prog.compileToTAC 0 prog.initStore σ_tac ArrayMem.init am' ∧
       (∀ v, v.isTmp = false → v.isFTmp = false → σ_tac v = σ' v) := by
   let labels := collectLabels prog.body prog.decls.length
   have htmpfree := Program.typeCheck_tmpFree prog htc
@@ -131,7 +131,7 @@ theorem whileToTAC_halt (prog : Program) (fuel : Nat) (σ' : Store) (am' : Array
       (prog.decls.length + (compileStmt prog.body prog.decls.length 0 labels).1.length)
       σ_tac ArrayMem.init am' :=
     FragExec.trans' hinit hexec
-  exact ⟨σ_tac, am', FragExec.toHalt hfull hhalt_instr, hagree⟩
+  exact ⟨σ_tac, FragExec.toHalt hfull hhalt_instr, hagree⟩
 /-- **Forward error** for `prog.compileToTAC`: if `¬safe`, the compiled program
     cannot halt (it reaches an error). -/
 theorem whileToTAC_error (prog : Program) (fuel : Nat)
@@ -272,7 +272,7 @@ theorem whileToTAC_refinement (prog : Program) (htc : prog.typeCheck = true)
       obtain ⟨σ', am'⟩ := r
       by_cases hsafe : prog.body.safe fuel prog.initStore ArrayMem.init prog.arrayDecls
       · -- Source terminates safely → forward halt → determinism gives store match
-        obtain ⟨σ_fwd, am_fwd, hhalt_fwd, hagree⟩ :=
+        obtain ⟨σ_fwd, hhalt_fwd, hagree⟩ :=
           whileToTAC_halt prog fuel σ' am' htc hinterp hsafe
         have heq := haltsWithResult_unique hhalt hhalt_fwd
         subst heq
@@ -315,9 +315,9 @@ theorem whileToTAC_refinement (prog : Program) (htc : prog.typeCheck = true)
       obtain ⟨fuel, hfuel⟩ := hdiv
       obtain ⟨r, hinterp⟩ := Option.some_of_ne_none hfuel
       obtain ⟨σ', am'⟩ := r
-      obtain ⟨σ_fwd, am_fwd, hhalt_fwd, _⟩ :=
+      obtain ⟨σ_fwd, hhalt_fwd, _⟩ :=
         whileToTAC_halt prog fuel σ' am' htc hinterp (hall fuel)
-      have halt_terminal : ∀ d, ¬ Step prog.compileToTAC (Cfg.halt σ_fwd am_fwd) d :=
+      have halt_terminal : ∀ d, ¬ Step prog.compileToTAC (Cfg.halt σ_fwd am') d :=
         fun _ h => Step.no_step_from_halt h
       have err_terminal : ∀ d, ¬ Step prog.compileToTAC (Cfg.error σ_e am_e) d :=
         fun _ h => Step.no_step_from_error h
@@ -366,9 +366,9 @@ theorem whileToTAC_refinement (prog : Program) (htc : prog.typeCheck = true)
       obtain ⟨r, hinterp⟩ := Option.some_of_ne_none hfuel
       obtain ⟨σ', am'⟩ := r
       by_cases hsafe : prog.body.safe fuel prog.initStore ArrayMem.init prog.arrayDecls
-      · obtain ⟨σ_fwd, am_fwd, hhalt_fwd, _⟩ :=
+      · obtain ⟨σ_fwd, hhalt_fwd, _⟩ :=
           whileToTAC_halt prog fuel σ' am' htc hinterp hsafe
-        have halt_terminal : ∀ d, ¬ Step prog.compileToTAC (Cfg.halt σ_fwd am_fwd) d :=
+        have halt_terminal : ∀ d, ¬ Step prog.compileToTAC (Cfg.halt σ_fwd am') d :=
           fun _ h => Step.no_step_from_halt h
         have te_terminal : ∀ d, ¬ Step prog.compileToTAC (Cfg.typeError σ_te am_te) d :=
           fun _ h => Step.no_step_from_typeError h
@@ -391,7 +391,7 @@ theorem whileToTAC_refinement (prog : Program) (htc : prog.typeCheck = true)
     obtain ⟨σ', am'⟩ := r
     by_cases hsafe : prog.body.safe fuel prog.initStore ArrayMem.init prog.arrayDecls
     · -- safe → forward halt → contradicts infinite exec
-      obtain ⟨σ_fwd, am_fwd, hhalt_fwd, _⟩ :=
+      obtain ⟨σ_fwd, hhalt_fwd, _⟩ :=
         whileToTAC_halt prog fuel σ' am' htc hinterp hsafe
       obtain ⟨k, hk⟩ := hhalt_fwd.to_RefStepsN
       have hstepsN := inf_exec_to_StepsN hinf (k + 1)

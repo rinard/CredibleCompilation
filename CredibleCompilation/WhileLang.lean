@@ -19,7 +19,7 @@ TAC-level semantics. The source language serves as a convenient front-end
 for writing programs.
 
 The `RefCompiler/` module provides correctness proofs for the compiler
-(refinement, error handling, divergence) with zero sorry holes.
+(refinement, error handling, divergence) with no proof gaps.
 -/
 
 -- ============================================================
