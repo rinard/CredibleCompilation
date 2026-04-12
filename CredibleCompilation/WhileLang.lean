@@ -514,14 +514,6 @@ def compileStmt (s : Stmt) (offset nextTmp : Nat)
     let target := (labels.lookup lbl).getD 0
     (codeB ++ [.ifgoto be target], tmpB)
 
-/-- Compile a while-language program to a TAC program.
-    Two-pass: first collects label→PC mappings, then emits code.
-    Appends `halt` at the end. -/
-def compile (s : Stmt) : Prog :=
-  let labels := collectLabels s 0
-  let (code, _) := compileStmt s 0 0 labels
-  .ofCode (code ++ [TAC.halt]).toArray
-
 -- ============================================================
 -- § 4. Pretty-printing
 -- ============================================================
@@ -627,14 +619,14 @@ def checkExpr (lookup : Var → Option VarTy) (arrayDecls : List (ArrayName × N
   | .int, .lit _ => true
   | .int, .var x => lookup x == some .int
   | .int, .bin _ a b => checkExpr lookup arrayDecls .int a && checkExpr lookup arrayDecls .int b
-  | .int, .arrRead arr idx => arrayDeclared arrayDecls arr && checkExpr lookup arrayDecls .int idx
+  | .int, .arrRead arr idx => arrayDeclared arrayDecls arr && (arrayElemTy arrayDecls arr == .int) && checkExpr lookup arrayDecls .int idx
   | .int, .floatToInt e => checkExpr lookup arrayDecls .float e
   | .float, .flit _ => true
   | .float, .var x => lookup x == some .float
   | .float, .fbin _ a b => checkExpr lookup arrayDecls .float a && checkExpr lookup arrayDecls .float b
   | .float, .intToFloat e => checkExpr lookup arrayDecls .int e
   | .float, .floatExp e => checkExpr lookup arrayDecls .float e
-  | .float, .farrRead arr idx => arrayDeclared arrayDecls arr && checkExpr lookup arrayDecls .int idx
+  | .float, .farrRead arr idx => arrayDeclared arrayDecls arr && (arrayElemTy arrayDecls arr == .float) && checkExpr lookup arrayDecls .int idx
   | _, _ => false
 
 /-- Check that an expression is well-typed as `int`. -/
@@ -653,7 +645,7 @@ def checkSBool (lookup : Var → Option VarTy) (arrayDecls : List (ArrayName × 
   | .not e => checkSBool lookup arrayDecls e
   | .and a b => checkSBool lookup arrayDecls a && checkSBool lookup arrayDecls b
   | .or a b => checkSBool lookup arrayDecls a && checkSBool lookup arrayDecls b
-  | .barrRead arr idx => arrayDeclared arrayDecls arr && checkSExpr lookup arrayDecls idx
+  | .barrRead arr idx => arrayDeclared arrayDecls arr && (arrayElemTy arrayDecls arr == .int) && checkSExpr lookup arrayDecls idx
   | .fcmp _ a b => checkFExpr lookup arrayDecls a && checkFExpr lookup arrayDecls b
 
 /-- Check that a statement body is well-typed w.r.t. declarations. -/
@@ -662,16 +654,16 @@ def checkStmt (lookup : Var → Option VarTy) (arrayDecls : List (ArrayName × N
   | .assign x e => lookup x == some .int && checkSExpr lookup arrayDecls e
   | .bassign x b => lookup x == some .bool && checkSBool lookup arrayDecls b
   | .arrWrite arr idx val =>
-    arrayDeclared arrayDecls arr && checkSExpr lookup arrayDecls idx && checkSExpr lookup arrayDecls val
+    arrayDeclared arrayDecls arr && (arrayElemTy arrayDecls arr == .int) && checkSExpr lookup arrayDecls idx && checkSExpr lookup arrayDecls val
   | .barrWrite arr idx bval =>
-    arrayDeclared arrayDecls arr && checkSExpr lookup arrayDecls idx && checkSBool lookup arrayDecls bval
+    arrayDeclared arrayDecls arr && (arrayElemTy arrayDecls arr == .int) && checkSExpr lookup arrayDecls idx && checkSBool lookup arrayDecls bval
   | .seq s1 s2 => checkStmt lookup arrayDecls s1 && checkStmt lookup arrayDecls s2
   | .ite b s1 s2 =>
     checkSBool lookup arrayDecls b && checkStmt lookup arrayDecls s1 && checkStmt lookup arrayDecls s2
   | .loop b body => checkSBool lookup arrayDecls b && checkStmt lookup arrayDecls body
   | .fassign x e => lookup x == some .float && checkFExpr lookup arrayDecls e
   | .farrWrite arr idx val =>
-    arrayDeclared arrayDecls arr && checkSExpr lookup arrayDecls idx && checkFExpr lookup arrayDecls val
+    arrayDeclared arrayDecls arr && (arrayElemTy arrayDecls arr == .float) && checkSExpr lookup arrayDecls idx && checkFExpr lookup arrayDecls val
   | .label _ => true
   | .goto _ => false  -- goto/ifgoto not supported by the refinement compiler
   | .ifgoto _ _ => false
@@ -957,7 +949,7 @@ theorem compile_halt_getElem (prog : Program) :
 def checkWellTypedProg (Γ : TyCtx) (p : Prog) : Bool :=
   (List.range p.size).all fun i =>
     match p[i]? with
-    | some instr => checkWellTypedInstr Γ instr
+    | some instr => checkWellTypedInstr Γ p.arrayDecls instr
     | none => true
 
 /-- Executable verification: if the source type-checks, the compiled TAC
@@ -972,48 +964,49 @@ def verifyWellTyped (prog : Program) : Bool :=
 end Program  -- temporarily close namespace for helper definitions
 
 -- Helper: every element of a list satisfies WellTypedInstr
-def AllWTI (Γ : TyCtx) (l : List TAC) : Prop :=
-  ∀ instr, instr ∈ l → WellTypedInstr Γ instr
+def AllWTI (Γ : TyCtx) (decls : List (ArrayName × Nat × VarTy)) (l : List TAC) : Prop :=
+  ∀ instr, instr ∈ l → WellTypedInstr Γ decls instr
 
-theorem allWTI_nil' (Γ : TyCtx) : AllWTI Γ List.nil := by
+theorem allWTI_nil' (Γ : TyCtx) (decls : List (ArrayName × Nat × VarTy)) : AllWTI Γ decls List.nil := by
   intro _ h; simp at h
 
-theorem allWTI_cons' {Γ : TyCtx} {x : TAC} {xs : List TAC}
-    (hx : WellTypedInstr Γ x) (hxs : AllWTI Γ xs) :
-    AllWTI Γ (x :: xs) := by
+theorem allWTI_cons' {Γ : TyCtx} {decls : List (ArrayName × Nat × VarTy)} {x : TAC} {xs : List TAC}
+    (hx : WellTypedInstr Γ decls x) (hxs : AllWTI Γ decls xs) :
+    AllWTI Γ decls (x :: xs) := by
   intro instr hmem
   simp at hmem
   rcases hmem with rfl | hmem
   · exact hx
   · exact hxs instr hmem
 
-theorem allWTI_one {Γ : TyCtx} {x : TAC}
-    (h : WellTypedInstr Γ x) : AllWTI Γ (x :: List.nil) :=
-  allWTI_cons' h (allWTI_nil' Γ)
+theorem allWTI_one {Γ : TyCtx} {decls : List (ArrayName × Nat × VarTy)} {x : TAC}
+    (h : WellTypedInstr Γ decls x) : AllWTI Γ decls (x :: List.nil) :=
+  allWTI_cons' h (allWTI_nil' Γ decls)
 
-theorem allWTI_append' {Γ : TyCtx} {l1 l2 : List TAC}
-    (h1 : AllWTI Γ l1) (h2 : AllWTI Γ l2) :
-    AllWTI Γ (l1 ++ l2) := by
+theorem allWTI_append' {Γ : TyCtx} {decls : List (ArrayName × Nat × VarTy)} {l1 l2 : List TAC}
+    (h1 : AllWTI Γ decls l1) (h2 : AllWTI Γ decls l2) :
+    AllWTI Γ decls (l1 ++ l2) := by
   intro instr hmem
   simp at hmem
   rcases hmem with h | h
   · exact h1 instr h
   · exact h2 instr h
 
-theorem allWTI_append3 {Γ : TyCtx} {l1 l2 l3 : List TAC}
-    (h1 : AllWTI Γ l1) (h2 : AllWTI Γ l2) (h3 : AllWTI Γ l3) :
-    AllWTI Γ (l1 ++ l2 ++ l3) :=
+theorem allWTI_append3 {Γ : TyCtx} {decls : List (ArrayName × Nat × VarTy)} {l1 l2 l3 : List TAC}
+    (h1 : AllWTI Γ decls l1) (h2 : AllWTI Γ decls l2) (h3 : AllWTI Γ decls l3) :
+    AllWTI Γ decls (l1 ++ l2 ++ l3) :=
   allWTI_append' (allWTI_append' h1 h2) h3
 
-theorem allWTI_toArray' {Γ : TyCtx} {l : List TAC} {p : Prog}
+theorem allWTI_toArray' {Γ : TyCtx} {decls : List (ArrayName × Nat × VarTy)} {l : List TAC} {p : Prog}
     (hcode : p.code = l.toArray)
-    (h : AllWTI Γ l) : WellTypedProg Γ p := by
+    (hdecls : p.arrayDecls = decls)
+    (h : AllWTI Γ decls l) : WellTypedProg Γ p := by
   intro i hi
   have hi' : i < l.length := by rw [Prog.size, hcode] at hi; simp at hi; exact hi
   have hmem : l[i] ∈ l := List.getElem_mem hi'
-  show WellTypedInstr Γ p[i]
+  show WellTypedInstr Γ p.arrayDecls p[i]
   have : p[i] = l[i] := by simp [Prog.getElem_eq, hcode, List.getElem_toArray]
-  rw [this]
+  rw [this, hdecls]
   exact h _ hmem
 
 -- If (x, ty) ∈ decls and noDups, then lookup x = some ty
@@ -1132,7 +1125,7 @@ theorem compileExpr_typed_wt (prog : Program)
     (e : SExpr) (ty : VarTy)
     (hchk : Program.checkExpr prog.lookupTy prog.arrayDecls ty e = true)
     (offset nextTmp : Nat) :
-    AllWTI prog.tyCtx (compileExpr e offset nextTmp).1
+    AllWTI prog.tyCtx prog.arrayDecls (compileExpr e offset nextTmp).1
     ∧ prog.tyCtx (compileExpr e offset nextTmp).2.1 = ty := by
   induction e generalizing ty offset nextTmp with
   | lit n =>
@@ -1148,13 +1141,13 @@ theorem compileExpr_typed_wt (prog : Program)
     | .int =>
       simp only [compileExpr]
       constructor
-      · exact allWTI_nil' _
+      · exact allWTI_nil' _ _
       · simp [Program.checkExpr, beq_iff_eq] at hchk
         exact tyCtx_of_lookup_wt prog x .int hchk
     | .float =>
       simp only [compileExpr]
       constructor
-      · exact allWTI_nil' _
+      · exact allWTI_nil' _ _
       · simp [Program.checkExpr, beq_iff_eq] at hchk
         exact tyCtx_of_lookup_wt prog x .float hchk
     | .bool => simp [Program.checkExpr] at hchk
@@ -1177,10 +1170,11 @@ theorem compileExpr_typed_wt (prog : Program)
   | arrRead _arr idx ih =>
     match ty with
     | .int =>
-      simp [Program.checkExpr, Bool.and_eq_true] at hchk
-      have ⟨hi_wt, hi_ty⟩ := ih .int hchk.2 offset nextTmp
+      simp [Program.checkExpr, Bool.and_eq_true, beq_iff_eq] at hchk
+      have ⟨⟨_, hety⟩, hci⟩ := hchk
+      have ⟨hi_wt, hi_ty⟩ := ih .int hci offset nextTmp
       simp only [compileExpr]
-      exact ⟨allWTI_append' hi_wt (allWTI_one (.arrLoad (tyCtx_tmp_wt prog hnt _) hi_ty)),
+      exact ⟨allWTI_append' hi_wt (allWTI_one (.arrLoad (tyCtx_tmp_wt prog hnt _) hi_ty hety.symm)),
              tyCtx_tmp_wt prog hnt _⟩
     | .float => simp [Program.checkExpr] at hchk
     | .bool => simp [Program.checkExpr] at hchk
@@ -1247,10 +1241,11 @@ theorem compileExpr_typed_wt (prog : Program)
   | farrRead _arr idx ih =>
     match ty with
     | .float =>
-      simp [Program.checkExpr, Bool.and_eq_true] at hchk
-      have ⟨hi_wt, hi_ty⟩ := ih .int hchk.2 offset nextTmp
+      simp [Program.checkExpr, Bool.and_eq_true, beq_iff_eq] at hchk
+      have ⟨⟨_, hety⟩, hci⟩ := hchk
+      have ⟨hi_wt, hi_ty⟩ := ih .int hci offset nextTmp
       simp only [compileExpr]
-      exact ⟨allWTI_append' hi_wt (allWTI_one (.arrLoad (tyCtx_ftmp_wt prog hnt _) hi_ty)),
+      exact ⟨allWTI_append' hi_wt (allWTI_one (.arrLoad (tyCtx_ftmp_wt prog hnt _) hi_ty hety.symm)),
              tyCtx_ftmp_wt prog hnt _⟩
     | .int => simp [Program.checkExpr] at hchk
     | .bool => simp [Program.checkExpr] at hchk
@@ -1260,7 +1255,7 @@ theorem compileExpr_wt (prog : Program)
     (hnt : Program.noTmpDecls prog.decls = true)
     (e : SExpr) (hchk : Program.checkSExpr prog.lookupTy prog.arrayDecls e = true)
     (offset nextTmp : Nat) :
-    AllWTI prog.tyCtx (compileExpr e offset nextTmp).1
+    AllWTI prog.tyCtx prog.arrayDecls (compileExpr e offset nextTmp).1
     ∧ prog.tyCtx (compileExpr e offset nextTmp).2.1 = .int :=
   compileExpr_typed_wt prog hnt e .int hchk offset nextTmp
 
@@ -1268,7 +1263,7 @@ theorem compileExpr_float_wt (prog : Program)
     (hnt : Program.noTmpDecls prog.decls = true)
     (e : SExpr) (hchk : Program.checkFExpr prog.lookupTy prog.arrayDecls e = true)
     (offset nextTmp : Nat) :
-    AllWTI prog.tyCtx (compileExpr e offset nextTmp).1
+    AllWTI prog.tyCtx prog.arrayDecls (compileExpr e offset nextTmp).1
     ∧ prog.tyCtx (compileExpr e offset nextTmp).2.1 = .float :=
   compileExpr_typed_wt prog hnt e .float hchk offset nextTmp
 
@@ -1277,16 +1272,16 @@ theorem compileBool_wt (prog : Program)
     (hnt : Program.noTmpDecls prog.decls = true)
     (b : SBool) (hchk : Program.checkSBool prog.lookupTy prog.arrayDecls b = true)
     (offset nextTmp : Nat) :
-    AllWTI prog.tyCtx (compileBool b offset nextTmp).1
+    AllWTI prog.tyCtx prog.arrayDecls (compileBool b offset nextTmp).1
     ∧ WellTypedBoolExpr prog.tyCtx (compileBool b offset nextTmp).2.1 := by
   induction b generalizing offset nextTmp with
   | lit b =>
     simp only [compileBool]
-    exact ⟨allWTI_nil' _, .lit⟩
+    exact ⟨allWTI_nil' _ _, .lit⟩
   | bvar x =>
     simp only [compileBool]
     constructor
-    · exact allWTI_nil' _
+    · exact allWTI_nil' _ _
     · simp [Program.checkSBool, beq_iff_eq] at hchk
       exact .bvar (tyCtx_of_lookup_wt prog x .bool hchk)
   | cmp op a b =>
@@ -1347,10 +1342,11 @@ theorem compileBool_wt (prog : Program)
           (allWTI_cons' .goto
             (allWTI_one (.const htR1)))))
   | barrRead _arr idx =>
-    simp [Program.checkSBool, Bool.and_eq_true] at hchk
-    have ⟨hi_wt, hi_ty⟩ := compileExpr_wt prog hnt idx hchk.2 offset nextTmp
+    simp [Program.checkSBool, Bool.and_eq_true, beq_iff_eq] at hchk
+    have ⟨⟨_, hety⟩, hci⟩ := hchk
+    have ⟨hi_wt, hi_ty⟩ := compileExpr_wt prog hnt idx hci offset nextTmp
     simp only [compileBool]
-    exact ⟨allWTI_append' hi_wt (allWTI_one (.arrLoad (tyCtx_tmp_wt prog hnt _) hi_ty)),
+    exact ⟨allWTI_append' hi_wt (allWTI_one (.arrLoad (tyCtx_tmp_wt prog hnt _) hi_ty hety.symm)),
            .cmpLit (tyCtx_tmp_wt prog hnt _) (by native_decide) (by native_decide)⟩
   | fcmp op a b =>
     simp [Program.checkSBool, Bool.and_eq_true] at hchk
@@ -1368,9 +1364,9 @@ theorem compileStmt_wt (prog : Program)
     (s : Stmt) (hchk : Program.checkStmt prog.lookupTy prog.arrayDecls s = true)
     (offset nextTmp : Nat)
     (labels : List (String × Nat) := []) :
-    AllWTI prog.tyCtx (compileStmt s offset nextTmp labels).1 := by
+    AllWTI prog.tyCtx prog.arrayDecls (compileStmt s offset nextTmp labels).1 := by
   induction s generalizing offset nextTmp labels with
-  | skip => simp [compileStmt]; exact allWTI_nil' _
+  | skip => simp [compileStmt]; exact allWTI_nil' _ _
   | assign x e =>
     simp [Program.checkStmt, Bool.and_eq_true] at hchk
     obtain ⟨hx, he⟩ := hchk
@@ -1395,12 +1391,13 @@ theorem compileStmt_wt (prog : Program)
       exact allWTI_append3 ha_wt hb_wt
         (allWTI_one (.binop hxty ha_ty hb_ty))
     | arrRead _arr idx =>
-      simp [Program.checkExpr, Bool.and_eq_true] at he
-      have ⟨hi_wt, hi_ty⟩ := compileExpr_wt prog hnt idx he.2 offset nextTmp
+      simp [Program.checkExpr, Bool.and_eq_true, beq_iff_eq] at he
+      have ⟨⟨_, hety⟩, hci⟩ := he
+      have ⟨hi_wt, hi_ty⟩ := compileExpr_wt prog hnt idx hci offset nextTmp
       simp only [compileStmt]
       have htmp_ty := tyCtx_tmp_wt prog hnt (compileExpr idx offset nextTmp).2.2
       exact allWTI_append' hi_wt
-        (allWTI_cons' (.arrLoad htmp_ty hi_ty)
+        (allWTI_cons' (.arrLoad htmp_ty hi_ty hety.symm)
           (allWTI_one (.copy (by rw [hxty, htmp_ty]))))
     | flit _ | fbin _ _ _ | intToFloat _ | floatExp _ | farrRead _ _ =>
       simp [Program.checkExpr] at he
@@ -1416,17 +1413,17 @@ theorem compileStmt_wt (prog : Program)
     simp only [compileStmt]
     exact allWTI_append' hb_wt (allWTI_one (.boolop hxty hb_ty))
   | arrWrite _arr idx val =>
-    simp [Program.checkStmt, Bool.and_eq_true] at hchk
-    obtain ⟨⟨_, hi⟩, hv⟩ := hchk
+    simp [Program.checkStmt, Bool.and_eq_true, beq_iff_eq] at hchk
+    obtain ⟨⟨⟨_, hety⟩, hi⟩, hv⟩ := hchk
     have ⟨hi_wt, hi_ty⟩ := compileExpr_wt prog hnt idx hi offset nextTmp
     have ⟨hv_wt, hv_ty⟩ := compileExpr_wt prog hnt val hv
       (offset + (compileExpr idx offset nextTmp).1.length)
       (compileExpr idx offset nextTmp).2.2
     simp only [compileStmt]
-    exact allWTI_append3 hi_wt hv_wt (allWTI_one (.arrStore hi_ty hv_ty))
+    exact allWTI_append3 hi_wt hv_wt (allWTI_one (.arrStore hi_ty hv_ty hety.symm))
   | barrWrite arr idx bval =>
-    simp [Program.checkStmt, Bool.and_eq_true] at hchk
-    obtain ⟨⟨_, hi⟩, hb⟩ := hchk
+    simp [Program.checkStmt, Bool.and_eq_true, beq_iff_eq] at hchk
+    obtain ⟨⟨⟨_, hety⟩, hi⟩, hb⟩ := hchk
     have ⟨hi_wt, hi_ty⟩ := compileExpr_wt prog hnt idx hi offset nextTmp
     have ⟨hb_wt, hb_ty⟩ := compileBool_wt prog hnt bval hb
       (offset + (compileExpr idx offset nextTmp).1.length)
@@ -1443,7 +1440,7 @@ theorem compileStmt_wt (prog : Program)
           (allWTI_cons' (.const htR)
             (allWTI_cons' .goto
               (allWTI_one (.const htR1))))))
-      (allWTI_one (.arrStore hi_ty (tyCtx_tmp_wt prog hnt _)))
+      (allWTI_one (.arrStore hi_ty (tyCtx_tmp_wt prog hnt _) hety.symm))
   | seq s1 s2 ih1 ih2 =>
     simp [Program.checkStmt, Bool.and_eq_true] at hchk
     obtain ⟨hc1, hc2⟩ := hchk
@@ -1523,33 +1520,34 @@ theorem compileStmt_wt (prog : Program)
       exact allWTI_append' he_wt
         (allWTI_one (.floatExp hxty he_ty))
     | farrRead arr idx =>
-      simp [Program.checkExpr, Bool.and_eq_true] at he
-      have ⟨hi_wt, hi_ty⟩ := compileExpr_wt prog hnt idx he.2 offset nextTmp
+      simp [Program.checkExpr, Bool.and_eq_true, beq_iff_eq] at he
+      have ⟨⟨_, hety⟩, hci⟩ := he
+      have ⟨hi_wt, hi_ty⟩ := compileExpr_wt prog hnt idx hci offset nextTmp
       simp only [compileStmt]
       have htmp_ty := tyCtx_ftmp_wt prog hnt (compileExpr idx offset nextTmp).2.2
       exact allWTI_append' hi_wt
-        (allWTI_cons' (.arrLoad htmp_ty hi_ty)
+        (allWTI_cons' (.arrLoad htmp_ty hi_ty hety.symm)
           (allWTI_one (.copy (by rw [hxty, htmp_ty]))))
     | floatToInt _ | lit _ | bin _ _ _ | arrRead _ _ =>
       simp [Program.checkExpr] at he
   | farrWrite arr idx val =>
-    simp [Program.checkStmt, Bool.and_eq_true] at hchk
-    obtain ⟨⟨_, hi⟩, hv⟩ := hchk
+    simp [Program.checkStmt, Bool.and_eq_true, beq_iff_eq] at hchk
+    obtain ⟨⟨⟨_, hety⟩, hi⟩, hv⟩ := hchk
     have ⟨hi_wt, hi_ty⟩ := compileExpr_wt prog hnt idx hi offset nextTmp
     have ⟨hv_wt, hv_ty⟩ := compileExpr_float_wt prog hnt val hv
       (offset + (compileExpr idx offset nextTmp).1.length)
       (compileExpr idx offset nextTmp).2.2
     simp only [compileStmt]
-    exact allWTI_append3 hi_wt hv_wt (allWTI_one (.arrStore hi_ty hv_ty))
+    exact allWTI_append3 hi_wt hv_wt (allWTI_one (.arrStore hi_ty hv_ty hety.symm))
   | label _ =>
-    simp [compileStmt]; exact allWTI_nil' _
+    simp [compileStmt]; exact allWTI_nil' _ _
   | goto lbl => simp [Program.checkStmt] at hchk
   | ifgoto b lbl => simp [Program.checkStmt] at hchk
 
 -- initCode produces well-typed instructions
 theorem initCode_wt (prog : Program)
     (hnd : Program.noDups (prog.decls.map Prod.fst) = true) :
-    AllWTI prog.tyCtx (Program.initCode prog.decls) := by
+    AllWTI prog.tyCtx prog.arrayDecls (Program.initCode prog.decls) := by
   intro instr hmem
   simp only [Program.initCode, List.mem_map] at hmem
   obtain ⟨⟨x, ty⟩, hmem_decl, hgen⟩ := hmem
@@ -1585,7 +1583,7 @@ theorem compile_wellTyped (prog : Program) (h : prog.typeCheck = true) :
       (compileStmt prog.body (initCode prog.decls).length 0
         (collectLabels prog.body (initCode prog.decls).length)).1 ++ [TAC.halt]).toArray :=
     by simp [Program.compile]
-  exact allWTI_toArray' this (allWTI_append3 (initCode_wt prog hnd)
+  exact allWTI_toArray' this rfl (allWTI_append3 (initCode_wt prog hnd)
     (compileStmt_wt prog hnt prog.body hchk _ _
       (collectLabels prog.body (initCode prog.decls).length)) (allWTI_one .halt))
 

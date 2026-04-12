@@ -10,6 +10,7 @@ import CredibleCompilation.PeepholeOpt
 import CredibleCompilation.RegAllocOpt
 import CredibleCompilation.ExecChecker
 import CredibleCompilation.BoundsOpt
+import CredibleCompilation.ArmSemantics
 
 /-!
 # ARM64 Code Generator for TAC Programs
@@ -83,6 +84,7 @@ private def collectArrays (p : Prog) : List String :=
 private def emit (lines : List String) : String :=
   String.intercalate "\n" lines
 
+/-- Load/store a stack variable (used only in prologue/epilogue/printf code). -/
 private def loadVar (varMap : List (Var × Nat)) (v : Var) (reg : String) : String :=
   match lookupVar varMap v with
   | some off => s!"  ldr {reg}, [sp, #{off}]"
@@ -98,412 +100,514 @@ private def loadVarFP (varMap : List (Var × Nat)) (v : Var) (freg : String) : S
   | some off => s!"  ldr {freg}, [sp, #{off}]"
   | none => s!"  // ERROR: unknown variable {v}"
 
-private def storeVarFP (varMap : List (Var × Nat)) (v : Var) (freg : String) : String :=
-  match lookupVar varMap v with
-  | some off => s!"  str {freg}, [sp, #{off}]"
-  | none => s!"  // ERROR: unknown variable {v}"
-
 -- ============================================================
--- § 2a. Register-aware load/store helpers
+-- § 2a. ArmInstr pretty-printer
 -- ============================================================
 
-/-- Detect register allocation by variable name prefix.
-    `__xN` → integer register xN, `__dN` → float register dN. -/
-private def lookupReg (v : Var) : Option String :=
-  if v.startsWith "__x" then some (v.drop 2).toString  -- "__x3" → "x3"
-  else if v.startsWith "__d" then some (v.drop 2).toString  -- "__d5" → "d5"
+private def ppReg : ArmReg → String
+  | .x0 => "x0" | .x1 => "x1" | .x2 => "x2" | .x3 => "x3"
+  | .x4 => "x4" | .x5 => "x5" | .x6 => "x6" | .x7 => "x7"
+  | .x8 => "x8" | .x9 => "x9" | .x10 => "x10" | .x11 => "x11"
+  | .x12 => "x12" | .x13 => "x13" | .x14 => "x14" | .x15 => "x15"
+  | .x16 => "x16" | .x17 => "x17" | .x18 => "x18"
+
+private def ppFReg : ArmFReg → String
+  | .d0 => "d0" | .d1 => "d1" | .d2 => "d2" | .d3 => "d3"
+  | .d4 => "d4" | .d5 => "d5" | .d6 => "d6" | .d7 => "d7"
+  | .d8 => "d8" | .d9 => "d9" | .d10 => "d10" | .d11 => "d11"
+  | .d12 => "d12" | .d13 => "d13" | .d14 => "d14" | .d15 => "d15"
+
+private def ppCond : Cond → String
+  | .eq => "eq" | .ne => "ne" | .lt => "lt" | .le => "le"
+
+/-- Map float-comparison condition codes to ARM64 mnemonics.
+    After `fcmp`, ARM64 uses `mi` (minus) for less-than and `ls` (lower or same)
+    for less-or-equal, unlike integer `cmp` which uses `lt`/`le`. -/
+private def ppCondFloat : Cond → String
+  | .eq => "eq" | .ne => "ne" | .lt => "mi" | .le => "ls"
+
+/-- Resolve a branch target (Nat) to a label string.
+    Sentinel values map to special labels; others are reverse-mapped from
+    ARM PC offsets back to TAC PC labels. -/
+private def ppLabel (haltS divS boundsS : Nat) (tacPcOf : Nat → Option Nat)
+    (target : Nat) : String :=
+  if target == haltS then ".Lhalt"
+  else if target == divS then ".Ldiv_by_zero"
+  else if target == boundsS then ".Lbounds_err"
+  else match tacPcOf target with
+    | some tacPC => s!".L{tacPC}"
+    | none => s!".Larm{target}"
+
+/-- Pretty-print a single ArmInstr to one or more assembly lines.
+    `afterFcmp` indicates the preceding instruction was `fcmpR`, so
+    condition codes for `cset` use the float convention. -/
+private def ppInstr (lbl : Nat → String) (afterFcmp : Bool) (instr : ArmInstr) : List String :=
+  match instr with
+  | .mov rd n =>
+    [s!"  mov {ppReg rd}, #{n.toInt}"]
+  | .movR rd rn =>
+    if rd == rn then [] else [s!"  mov {ppReg rd}, {ppReg rn}"]
+  | .movz rd imm16 shift =>
+    if shift == 0 then [s!"  movz {ppReg rd}, #{imm16}"]
+    else [s!"  movz {ppReg rd}, #{imm16}, lsl #{shift}"]
+  | .movk rd imm16 shift =>
+    [s!"  movk {ppReg rd}, #{imm16}, lsl #{shift}"]
+  | .ldr rd off =>
+    [s!"  ldr {ppReg rd}, [sp, #{off}]"]
+  | .str rs off =>
+    [s!"  str {ppReg rs}, [sp, #{off}]"]
+  | .addR rd rn rm =>
+    [s!"  add {ppReg rd}, {ppReg rn}, {ppReg rm}"]
+  | .subR rd rn rm =>
+    [s!"  sub {ppReg rd}, {ppReg rn}, {ppReg rm}"]
+  | .mulR rd rn rm =>
+    [s!"  mul {ppReg rd}, {ppReg rn}, {ppReg rm}"]
+  | .sdivR rd rn rm =>
+    [s!"  sdiv {ppReg rd}, {ppReg rn}, {ppReg rm}"]
+  | .cmp rn rm =>
+    [s!"  cmp {ppReg rn}, {ppReg rm}"]
+  | .cmpImm rn imm =>
+    [s!"  cmp {ppReg rn}, #{imm.toInt}"]
+  | .cset _rd c =>
+    [s!"  cset w0, {if afterFcmp then ppCondFloat c else ppCond c}"]
+  | .cbz rn target =>
+    [s!"  cbz {ppReg rn}, {lbl target}"]
+  | .cbnz _rn target =>
+    [s!"  cbnz w0, {lbl target}"]
+  | .andImm _rd _rn imm =>
+    [s!"  and w0, w0, #{imm.toInt}"]
+  | .andR rd rn rm =>
+    [s!"  and {ppReg rd}, {ppReg rn}, {ppReg rm}"]
+  | .eorImm _rd _rn imm =>
+    [s!"  eor w0, w0, #{imm.toInt}"]
+  | .orrR rd rn rm =>
+    [s!"  orr {ppReg rd}, {ppReg rn}, {ppReg rm}"]
+  | .b target =>
+    [s!"  b {lbl target}"]
+  | .arrLd dst arr idxReg =>
+    [s!"  adrp x8, _arr_{arr}@PAGE",
+     s!"  add x8, x8, _arr_{arr}@PAGEOFF",
+     s!"  ldr {ppReg dst}, [x8, {ppReg idxReg}, lsl #3]"]
+  | .arrSt arr idxReg valReg =>
+    [s!"  adrp x8, _arr_{arr}@PAGE",
+     s!"  add x8, x8, _arr_{arr}@PAGEOFF",
+     s!"  str {ppReg valReg}, [x8, {ppReg idxReg}, lsl #3]"]
+  | .fmovToFP fd rn =>
+    [s!"  fmov {ppFReg fd}, {ppReg rn}"]
+  | .fmovRR fd fn =>
+    if fd == fn then [] else [s!"  fmov {ppFReg fd}, {ppFReg fn}"]
+  | .fldr fd off =>
+    [s!"  ldr {ppFReg fd}, [sp, #{off}]"]
+  | .fstr fs off =>
+    [s!"  str {ppFReg fs}, [sp, #{off}]"]
+  | .faddR fd fn fm =>
+    [s!"  fadd {ppFReg fd}, {ppFReg fn}, {ppFReg fm}"]
+  | .fsubR fd fn fm =>
+    [s!"  fsub {ppFReg fd}, {ppFReg fn}, {ppFReg fm}"]
+  | .fmulR fd fn fm =>
+    [s!"  fmul {ppFReg fd}, {ppFReg fn}, {ppFReg fm}"]
+  | .fdivR fd fn fm =>
+    [s!"  fdiv {ppFReg fd}, {ppFReg fn}, {ppFReg fm}"]
+  | .fcmpR fn fm =>
+    [s!"  fcmp {ppFReg fn}, {ppFReg fm}"]
+  | .scvtf fd rn =>
+    [s!"  scvtf {ppFReg fd}, {ppReg rn}"]
+  | .fcvtzs rd fn =>
+    [s!"  fcvtzs {ppReg rd}, {ppFReg fn}"]
+  | .farrLd fd arr idxReg =>
+    [s!"  adrp x8, _arr_{arr}@PAGE",
+     s!"  add x8, x8, _arr_{arr}@PAGEOFF",
+     s!"  ldr {ppFReg fd}, [x8, {ppReg idxReg}, lsl #3]"]
+  | .farrSt arr idxReg fs =>
+    [s!"  adrp x8, _arr_{arr}@PAGE",
+     s!"  add x8, x8, _arr_{arr}@PAGEOFF",
+     s!"  str {ppFReg fs}, [x8, {ppReg idxReg}, lsl #3]"]
+  | .callExp fd fn =>
+    let load := if fn == .d0 then [] else [s!"  fmov d0, {ppFReg fn}"]
+    let store := if fd == .d0 then [] else [s!"  fmov {ppFReg fd}, d0"]
+    load ++ ["  stp x29, x30, [sp, #-16]!", "  bl _exp",
+             "  ldp x29, x30, [sp], #16"] ++ store
+
+/-- Pretty-print a list of ArmInstr, tracking fcmp state for cset. -/
+private def ppInstrs (lbl : Nat → String) : List ArmInstr → List String
+  | [] => []
+  | instr :: rest =>
+    let afterFcmp := match instr with | .fcmpR .. => true | _ => false
+    let lines := ppInstr lbl false instr
+    let restLines := ppInstrsAux lbl afterFcmp rest
+    lines ++ restLines
+where
+  ppInstrsAux (lbl : Nat → String) (prevWasFcmp : Bool) : List ArmInstr → List String
+    | [] => []
+    | instr :: rest =>
+      let lines := ppInstr lbl prevWasFcmp instr
+      let nextFcmp := match instr with | .fcmpR .. => true | _ => false
+      lines ++ ppInstrsAux lbl nextFcmp rest
+
+-- ============================================================
+-- § 2b. VarLayout construction
+-- ============================================================
+
+private def varToArmReg (v : Var) : Option ArmReg :=
+  if v.startsWith "__x" then
+    match (v.drop 3).toNat? with
+    | some 0 => some .x0 | some 1 => some .x1 | some 2 => some .x2
+    | some 3 => some .x3 | some 4 => some .x4 | some 5 => some .x5
+    | some 6 => some .x6 | some 7 => some .x7 | some 8 => some .x8
+    | some 9 => some .x9 | some 10 => some .x10 | some 11 => some .x11
+    | some 12 => some .x12 | some 13 => some .x13 | some 14 => some .x14
+    | some 15 => some .x15 | some 16 => some .x16 | some 17 => some .x17
+    | some 18 => some .x18 | _ => none
   else none
 
-/-- Is this register name a float register (dN)? -/
-private def isFloatReg (reg : String) : Bool := reg.startsWith "d"
+private def varToArmFReg (v : Var) : Option ArmFReg :=
+  if v.startsWith "__d" then
+    match (v.drop 3).toNat? with
+    | some 0 => some .d0 | some 1 => some .d1 | some 2 => some .d2
+    | some 3 => some .d3 | some 4 => some .d4 | some 5 => some .d5
+    | some 6 => some .d6 | some 7 => some .d7 | some 8 => some .d8
+    | some 9 => some .d9 | some 10 => some .d10 | some 11 => some .d11
+    | some 12 => some .d12 | some 13 => some .d13 | some 14 => some .d14
+    | some 15 => some .d15 | _ => none
+  else none
 
-/-- Load an integer variable into a scratch register. If the variable is in a
-    register, emit `mov`; otherwise load from stack. -/
-private def smartLoadVar (varMap : List (Var × Nat))
-    (v : Var) (reg : String) : String :=
-  match lookupReg v with
-  | some r => if r == reg then s!"  // {v} already in {reg}" else s!"  mov {reg}, {r}"
-  | none => loadVar varMap v reg
-
-/-- Store a value from a scratch register into an integer variable. If the
-    variable is register-allocated, emit `mov`; otherwise store to stack. -/
-private def smartStoreVar (varMap : List (Var × Nat))
-    (v : Var) (reg : String) : String :=
-  match lookupReg v with
-  | some r => if r == reg then s!"  // {v} already in {reg}" else s!"  mov {r}, {reg}"
-  | none => storeVar varMap v reg
-
-/-- Load a float variable into a scratch FP register. -/
-private def smartLoadVarFP (varMap : List (Var × Nat))
-    (v : Var) (freg : String) : String :=
-  match lookupReg v with
-  | some r => if r == freg then s!"  // {v} already in {freg}" else s!"  fmov {freg}, {r}"
-  | none => loadVarFP varMap v freg
-
-/-- Store a value from a scratch FP register into a float variable. -/
-private def smartStoreVarFP (varMap : List (Var × Nat))
-    (v : Var) (freg : String) : String :=
-  match lookupReg v with
-  | some r => if r == freg then s!"  // {v} already in {freg}" else s!"  fmov {r}, {freg}"
-  | none => storeVarFP varMap v freg
-
-/-- Load an arbitrary 64-bit integer into a register.
-    Uses `mov` for small values, `movz`/`movk` sequence for large ones. -/
-private def loadImm64 (reg : String) (n : BitVec 64) : List String :=
-  if n.toInt.natAbs < 65536 then
-    s!"  mov {reg}, #{n.toInt}" :: List.nil
-  else
-    let bits : UInt64 := n.toNat.toUInt64
-    let w0 := bits &&& 0xFFFF
-    let w1 := (bits >>> 16) &&& 0xFFFF
-    let w2 := (bits >>> 32) &&& 0xFFFF
-    let w3 := (bits >>> 48) &&& 0xFFFF
-    let base := s!"  movz {reg}, #{w0}" :: List.nil
-    let k1 := if w1 != 0 then s!"  movk {reg}, #{w1}, lsl #16" :: List.nil else List.nil
-    let k2 := if w2 != 0 then s!"  movk {reg}, #{w2}, lsl #32" :: List.nil else List.nil
-    let k3 := if w3 != 0 then s!"  movk {reg}, #{w3}, lsl #48" :: List.nil else List.nil
-    base ++ k1 ++ k2 ++ k3
+/-- Build a VarLayout from the variable list and stack offset map.
+    Register-allocated vars (named `__xN`/`__dN`) map to their register;
+    all others map to their stack slot. -/
+private def buildVarLayout (vars : List Var) (varMap : List (Var × Nat)) : VarLayout :=
+  { entries := vars.filterMap fun v =>
+      match varToArmReg v with
+      | some r => some (v, .ireg r)
+      | none => match varToArmFReg v with
+        | some r => some (v, .freg r)
+        | none => match lookupVar varMap v with
+          | some off => some (v, .stack off)
+          | none => none }
 
 -- ============================================================
--- § 3. Boolean expression codegen
+-- § 2c. pcMap and bounds-safe computation
 -- ============================================================
 
-/-- Generate code for a BoolExpr, result in w0 (0 or 1). Clobbers x0-x2, d1-d2. -/
-private partial def genBoolExpr (varMap : List (Var × Nat))
-    (be : BoolExpr) : List String :=
-  match be with
-  | .lit b =>
-    s!"  mov x0, #{if b then 1 else 0}" :: List.nil
-  | .bvar v =>
-    (smartLoadVar varMap v "x0") :: "  and w0, w0, #1" :: List.nil
-  | .cmp op lv rv =>
-    let cond := match op with | .eq => "eq" | .ne => "ne" | .lt => "lt" | .le => "le"
-    match lookupReg lv, lookupReg rv with
-    | some rl, some rr =>
-      s!"  cmp {rl}, {rr}" :: s!"  cset w0, {cond}" :: List.nil
-    | _, _ =>
-      (smartLoadVar varMap lv "x1") :: (smartLoadVar varMap rv "x2") ::
-      "  cmp x1, x2" :: s!"  cset w0, {cond}" :: List.nil
-  | .cmpLit op v n =>
-    let cond := match op with | .eq => "eq" | .ne => "ne" | .lt => "lt" | .le => "le"
-    (smartLoadVar varMap v "x1") :: List.nil ++
-    loadImm64 "x2" n ++
-    ("  cmp x1, x2" :: s!"  cset w0, {cond}" :: List.nil)
-  | .not e =>
-    genBoolExpr varMap e ++ ("  eor w0, w0, #1" :: List.nil)
-  | .fcmp op lv rv =>
-    let cond := match op with | .feq => "eq" | .fne => "ne" | .flt => "mi" | .fle => "ls"
-    match lookupReg lv, lookupReg rv with
-    | some rl, some rr =>
-      s!"  fcmp {rl}, {rr}" :: s!"  cset w0, {cond}" :: List.nil
-    | _, _ =>
-      (smartLoadVarFP varMap lv "d1") :: (smartLoadVarFP varMap rv "d2") ::
-      "  fcmp d1, d2" :: s!"  cset w0, {cond}" :: List.nil
+/-- Compute instruction length for a TAC instruction.
+    `pcMap` does not affect instruction count (only branch target values). -/
+private def instrLength (layout : VarLayout) (arrayDecls : List (ArrayName × Nat × VarTy))
+    (boundsSafe : Bool) (instr : TAC)
+    (haltS divS boundsS : Nat) : Nat :=
+  match verifiedGenInstr layout (fun _ => 0) instr haltS divS boundsS arrayDecls boundsSafe with
+  | some l => l.length
+  | none => 0
 
--- ============================================================
--- § 4. Instruction codegen
--- ============================================================
+/-- Build a pcMap (TAC PC → cumulative ARM instruction offset) as a prefix sum. -/
+private def buildPcMap (lengths : Array Nat) : Nat → Nat :=
+  let offsets := lengths.foldl (init := #[0]) fun acc len =>
+    acc.push (acc.back! + len)
+  fun tacPC => offsets.getD tacPC 0
 
-private def genInstr (varMap : List (Var × Nat))
-    (arrayDecls : List (ArrayName × Nat × VarTy))
-    (imap : Option BoundsOpt.IMap)
-    (pc : Nat) (instr : TAC) : List String :=
-  (s!".L{pc}:" :: List.nil) ++
+/-- Build reverse map: ARM instruction offset → TAC PC (only defined at boundaries). -/
+private def buildTacPcOf (lengths : Array Nat) : Nat → Option Nat :=
+  let init : List (Nat × Nat) × Nat := ([], 0)
+  let pairs := (List.range lengths.size).foldl (init := init) fun state i =>
+    let acc := state.1
+    let cumLen := state.2
+    ((cumLen, i) :: acc, cumLen + (lengths.getD i 0))
+  fun armPC => (pairs.1.find? fun p => p.1 == armPC).map Prod.snd
+
+/-- Compute whether a bounds check can be elided for a given instruction at `pc`. -/
+private def isBoundsSafe (arrayDecls : List (ArrayName × Nat × VarTy))
+    (intervals : Array (Option BoundsOpt.IMap)) (pc : Nat) (instr : TAC) : Bool :=
   match instr with
-  | .const v (.int n) =>
-    match lookupReg v with
-    | some r => loadImm64 r n
-    | none => loadImm64 "x0" n ++ [storeVar varMap v "x0"]
-  | .const v (.bool b) =>
-    match lookupReg v with
-    | some r => [s!"  mov {r}, #{if b then 1 else 0}"]
-    | none => [s!"  mov x0, #{if b then 1 else 0}", storeVar varMap v "x0"]
-  | .const v (.float n) =>
-    match lookupReg v with
-    | some r => loadImm64 "x0" n ++ [s!"  fmov {r}, x0"]
-    | none => loadImm64 "x0" n ++ [storeVar varMap v "x0"]
-  | .copy dst src =>
-    let srcReg := lookupReg src
-    let dstReg := lookupReg dst
-    let isFloat := srcReg.any isFloatReg || dstReg.any isFloatReg
-    if isFloat then
-      match srcReg, dstReg with
-      | some rs, some rd => if rs == rd then [] else [s!"  fmov {rd}, {rs}"]
-      | some rs, none => [storeVarFP varMap dst rs]
-      | none, some rd => [loadVarFP varMap src rd]
-      | none, none => [loadVarFP varMap src "d0", storeVarFP varMap dst "d0"]
-    else
-      match srcReg, dstReg with
-      | some rs, some rd => if rs == rd then [] else [s!"  mov {rd}, {rs}"]
-      | some rs, none => [storeVar varMap dst rs]
-      | none, some rd => [loadVar varMap src rd]
-      | none, none => [loadVar varMap src "x0", storeVar varMap dst "x0"]
-  | .binop dst op lv rv =>
-    match lookupReg dst, lookupReg lv, lookupReg rv with
-    | some rd, some rl, some rr =>
-      if op == .div || op == .mod then
-        if op == .div then
-          [s!"  cbz {rr}, .Ldiv_by_zero", s!"  sdiv {rd}, {rl}, {rr}"]
-        else if rd == rl || rd == rr then
-          -- dest overlaps an operand: use scratch x0 for quotient
-          [s!"  cbz {rr}, .Ldiv_by_zero", s!"  sdiv x0, {rl}, {rr}",
-           s!"  msub {rd}, x0, {rr}, {rl}"]
-        else
-          [s!"  cbz {rr}, .Ldiv_by_zero", s!"  sdiv {rd}, {rl}, {rr}",
-           s!"  msub {rd}, {rd}, {rr}, {rl}"]
-      else match op with
-        | .add => [s!"  add {rd}, {rl}, {rr}"]
-        | .sub => [s!"  sub {rd}, {rl}, {rr}"]
-        | .mul => [s!"  mul {rd}, {rl}, {rr}"]
-        | _ => [s!"  add {rd}, {rl}, {rr}"]
-    | _, _, _ =>
-      let opInstr := match op with
-        | .add => ["  add x0, x1, x2"]
-        | .sub => ["  sub x0, x1, x2"]
-        | .mul => ["  mul x0, x1, x2"]
-        | .div => ["  sdiv x0, x1, x2"]
-        | .mod => ["  sdiv x0, x1, x2", "  msub x0, x0, x2, x1"]
-      if op == .div || op == .mod then
-        [smartLoadVar varMap rv "x2", "  cbz x2, .Ldiv_by_zero",
-         smartLoadVar varMap lv "x1", smartLoadVar varMap rv "x2"] ++
-        opInstr ++ [smartStoreVar varMap dst "x0"]
-      else
-        [smartLoadVar varMap lv "x1", smartLoadVar varMap rv "x2"] ++
-        opInstr ++ [smartStoreVar varMap dst "x0"]
-  | .boolop dst be =>
-    genBoolExpr varMap be ++ [smartStoreVar varMap dst "x0"]
-  | .goto l =>
-    s!"  b .L{l}" :: List.nil
-  | .ifgoto be l =>
-    genBoolExpr varMap be ++ (s!"  cbnz w0, .L{l}" :: List.nil)
-  | .halt =>
-    "  b .Lhalt" :: List.nil
-  | .arrLoad x _arr idx _ =>
-    let arrSize := arraySize arrayDecls _arr
-    let safe := match imap with
-      | some m => (BoundsOpt.imLookup m idx).inBounds arrSize
-      | none => false
-    let isFloatDest := (lookupReg x).any isFloatReg
-    let boundsCheck := if safe then [] else
-      [smartLoadVar varMap idx "x1",
-       s!"  cmp x1, #{arrSize}", "  b.hs .Lbounds_err"]
-    let idxReg := if safe then
-      match lookupReg idx with
-      | some r => r
-      | none => "x1"
-    else "x1"
-    let loadIdx := if safe then
-      match lookupReg idx with
-      | some _ => []
-      | none => [smartLoadVar varMap idx "x1"]
-    else []
-    -- For float destinations, load directly into float register (skip integer bounce)
-    let (loadInstr, storeResult) := if isFloatDest then
-      match lookupReg x with
-      | some rd =>
-        (s!"  ldr {rd}, [x8, {idxReg}, lsl #3]", ([] : List String))
-      | none =>
-        (s!"  ldr d0, [x8, {idxReg}, lsl #3]", [smartStoreVarFP varMap x "d0"])
-    else
-      (s!"  ldr x0, [x8, {idxReg}, lsl #3]", [smartStoreVar varMap x "x0"])
-    boundsCheck ++ loadIdx ++
-    s!"  adrp x8, _arr_{_arr}@PAGE" ::
-    s!"  add x8, x8, _arr_{_arr}@PAGEOFF" ::
-    loadInstr ::
-    storeResult
-  | .arrStore _arr idx val _ =>
-    let arrSize := arraySize arrayDecls _arr
-    let safe := match imap with
-      | some m => (BoundsOpt.imLookup m idx).inBounds arrSize
-      | none => false
-    let isFloatVal := (lookupReg val).any isFloatReg
-    let boundsCheck := if safe then [] else
-      [smartLoadVar varMap idx "x1",
-       s!"  cmp x1, #{arrSize}", "  b.hs .Lbounds_err"]
-    let idxReg := if safe then
-      match lookupReg idx with
-      | some r => r
-      | none => "x1"
-    else "x1"
-    let loadIdx := if safe then
-      match lookupReg idx with
-      | some _ => []
-      | none => [smartLoadVar varMap idx "x1"]
-    else []
-    -- For float values, store directly from float register (skip integer bounce)
-    let (loadVal, storeInstr) := if isFloatVal then
-      match lookupReg val with
-      | some rv =>
-        (([] : List String), s!"  str {rv}, [x8, {idxReg}, lsl #3]")
-      | none =>
-        ([smartLoadVarFP varMap val "d0"], s!"  str d0, [x8, {idxReg}, lsl #3]")
-    else
-      ([smartLoadVar varMap val "x2"], s!"  str x2, [x8, {idxReg}, lsl #3]")
-    boundsCheck ++ loadIdx ++ loadVal ++
-    s!"  adrp x8, _arr_{_arr}@PAGE" ::
-    s!"  add x8, x8, _arr_{_arr}@PAGEOFF" ::
-    storeInstr :: List.nil
-  | .fbinop dst op lv rv =>
-    let opName := match op with
-      | .fadd => "fadd" | .fsub => "fsub" | .fmul => "fmul" | .fdiv => "fdiv"
-    match lookupReg dst, lookupReg lv, lookupReg rv with
-    | some rd, some rl, some rr =>
-      [s!"  {opName} {rd}, {rl}, {rr}"]
-    | _, _, _ =>
-      (smartLoadVarFP varMap lv "d1") ::
-      (smartLoadVarFP varMap rv "d2") ::
-      s!"  {opName} d0, d1, d2" :: (smartStoreVarFP varMap dst "d0") :: List.nil
-  | .intToFloat dst src =>
-    match lookupReg dst, lookupReg src with
-    | some rd, some rs => [s!"  scvtf {rd}, {rs}"]
-    | _, _ =>
-      (smartLoadVar varMap src "x0") ::
-      "  scvtf d0, x0" ::
-      (smartStoreVarFP varMap dst "d0") :: List.nil
-  | .floatToInt dst src =>
-    match lookupReg dst, lookupReg src with
-    | some rd, some rs => [s!"  fcvtzs {rd}, {rs}"]
-    | _, _ =>
-      (smartLoadVarFP varMap src "d0") ::
-      "  fcvtzs x0, d0" ::
-      (smartStoreVar varMap dst "x0") :: List.nil
-  | .floatExp dst src =>
-    match lookupReg dst, lookupReg src with
-    | some rd, some rs =>
-      let load := if rs == "d0" then [] else [s!"  fmov d0, {rs}"]
-      let store := if rd == "d0" then [] else [s!"  fmov {rd}, d0"]
-      load ++ ["  stp x29, x30, [sp, #-16]!", "  bl _exp",
-               "  ldp x29, x30, [sp], #16"] ++ store
-    | _, _ =>
-      (smartLoadVarFP varMap src "d0") ::
-      "  stp x29, x30, [sp, #-16]!" ::
-      "  bl _exp" ::
-      "  ldp x29, x30, [sp], #16" ::
-      (smartStoreVarFP varMap dst "d0") :: List.nil
+  | .arrLoad _ arr idx _ | .arrStore arr idx _ _ =>
+    match intervals.getD pc none with
+    | some m => (BoundsOpt.imLookup m idx).inBounds (arraySize arrayDecls arr)
+    | none => false
+  | _ => false
+
+-- ============================================================
+-- § 3. Well-formedness checks (discharge proof hypotheses at runtime)
+-- ============================================================
+
+/-- Collect all variables referenced by a TAC instruction. -/
+private def instrVars : TAC → List Var
+  | .const x _          => [x]
+  | .copy x y           => [x, y]
+  | .binop x _ y z      => [x, y, z]
+  | .boolop x be        => x :: be.vars
+  | .arrLoad x _ idx _  => [x, idx]
+  | .arrStore _ idx v _  => [idx, v]
+  | .fbinop x _ y z     => [x, y, z]
+  | .intToFloat x y     => [x, y]
+  | .floatToInt x y     => [x, y]
+  | .floatExp x y       => [x, y]
+  | .goto _             => []
+  | .ifgoto be _        => be.vars
+  | .halt               => []
+
+/-- Check WellTypedLayout: no float var in ireg, no non-float var in freg,
+    and every variable referenced by the program has a layout entry.
+    Corresponds to the `hWTL` hypothesis in verifiedGenInstr_correct. -/
+private def checkWellTypedLayout (Γ : TyCtx) (layout : VarLayout)
+    (code : Array TAC) : Option String :=
+  -- Collect all variables referenced in the program
+  let allVars := code.foldl (init := ([] : List Var)) fun acc instr =>
+    acc ++ (instrVars instr).filter fun v => !acc.contains v
+  -- Check type/register consistency for all layout entries
+  let typeErr := layout.entries.find? fun (v, loc) =>
+    match loc with
+    | .freg _ => Γ v != .float  -- non-float in freg
+    | .ireg _ => Γ v == .float  -- float in ireg
+    | .stack _ => false
+  match typeErr with
+  | some (v, loc) =>
+    let locStr := match loc with
+      | .freg _ => "freg" | .ireg _ => "ireg" | .stack _ => "stack"
+    let tyStr := match Γ v with | .int => "int" | .bool => "bool" | .float => "float"
+    some s!"layout type mismatch: {v} (type {tyStr}) in {locStr}"
+  | none =>
+  -- Check completeness: every referenced variable must be in the layout
+  match allVars.find? fun v => (layout v).isNone with
+  | some v => some s!"variable {v} referenced but not in layout"
+  | none => none
+
+/-- Check that all branch targets are in bounds.
+    Corresponds to the `hPC_bound` hypothesis on successor PCs. -/
+private def checkBranchTargets (code : Array TAC) : Option String :=
+  let n := code.size
+  match (List.range n).find? fun pc =>
+    match code.getD pc .halt with
+    | .goto l | .ifgoto _ l => l >= n
+    | _ => false
+  with
+  | some pc =>
+    let target := match code.getD pc .halt with
+      | .goto l | .ifgoto _ l => l | _ => 0
+    some s!"branch at PC {pc} targets {target} (out of bounds, size = {n})"
+  | none => none
 
 -- ============================================================
 -- § 5. Program codegen
 -- ============================================================
 
-/-- Generate the complete assembly for a program. Returns none if type check fails. -/
-def generateAsm (p : Prog) : Option String :=
-  if !checkWellTypedProg p.tyCtx p then none
+/-- Result of the verified code generation core.
+    Contains structured ArmInstr arrays that can be pretty-printed by the
+    unverified shell, and all metadata needed for label resolution. -/
+structure VerifiedAsmResult where
+  /-- Variable zeroing instructions (register zeros + stack zeros). -/
+  initInstrs : Array ArmInstr
+  /-- Per-TAC-PC list of generated ARM instructions. -/
+  bodyPerPC : Array (List ArmInstr)
+  /-- Instructions to save register-allocated observable values to stack. -/
+  haltSaveInstrs : Array ArmInstr
+  /-- TAC PC → cumulative ARM instruction offset. -/
+  pcMap : Nat → Nat
+  /-- Variable layout (register/stack assignments). -/
+  layout : VarLayout
+  /-- Variable name → stack offset map (all vars have slots for printf). -/
+  varMap : List (Var × Nat)
+  /-- Number of init instructions (for label offset computation). -/
+  initLen : Nat
+  /-- Sentinel values for special branch targets. -/
+  haltS : Nat
+  divS : Nat
+  boundsS : Nat
+  /-- Reverse map: ARM offset → TAC PC. -/
+  tacPcOf : Nat → Option Nat
+
+/-- Generate init instructions that zero all variables.
+    Register vars get register-zero moves; stack vars get str x0. -/
+private def genInitCode (vars : List Var) (layout : VarLayout) : List ArmInstr :=
+  vars.filterMap fun v =>
+    match layout v with
+    | some (.freg r) => some (.fmovToFP r .x0)   -- fmov dN, xzr  (x0 is 0)
+    | some (.ireg r) => some (.mov r 0)
+    | some (.stack off) => some (.str .x0 off)
+    | none => none
+
+/-- Generate instructions to save register-allocated observable values to stack. -/
+private def genHaltSave (observable : List Var) (layout : VarLayout)
+    (varMap : List (Var × Nat)) : List ArmInstr :=
+  observable.filterMap fun v =>
+    match layout v with
+    | some (.ireg r) =>
+      match lookupVar varMap v with
+      | some off => some (.str r off)
+      | none => none
+    | some (.freg r) =>
+      match lookupVar varMap v with
+      | some off => some (.fstr r off)
+      | none => none
+    | _ => none
+
+/-- Verified core of code generation. Performs all validation and produces
+    structured ArmInstr data. No string emission or platform-specific code. -/
+def verifiedGenerateAsm (p : Prog) : Except String VerifiedAsmResult := do
+  if !checkWellTypedProg p.tyCtx p then
+    .error "program failed type check"
   else
     let vars := collectVars p
     let varMap := buildVarMap vars
-    -- Stack frame: 16-byte aligned
-    -- Layout: [scratch 8B] [var1 8B] ... [varN 8B] [padding] [x29 8B] [x30 8B]
-    -- All variables get stack slots (needed for halt save of register values)
-    let frameSize := ((vars.length + 1) * 8 + 16 + 15) / 16 * 16
-    let header := [
-      ".global _main",
-      ".align 2",
-      "",
-      "_main:",
-      s!"  sub sp, sp, #{frameSize}",
-      s!"  str x30, [sp, #{frameSize - 8}]",
-      s!"  str x29, [sp, #{frameSize - 16}]",
-      s!"  add x29, sp, #{frameSize - 16}",
-      "",
-      "  // Initialize all variables to 0",
-      "  mov x0, #0"
-    ]
-    -- Initialize: register vars get register zero, stack vars get stack zero
-    let initVars := vars.flatMap fun v =>
-      match lookupReg v with
-      | some r =>
-        if isFloatReg r then [s!"  fmov {r}, xzr"]
-        else [s!"  mov {r}, #0"]
-      | none => [storeVar varMap v "x0"]
+    let layout := buildVarLayout vars varMap
+    -- Check WellTypedLayout (hWTL hypothesis)
+    match checkWellTypedLayout p.tyCtx layout p.code with
+    | some err => .error s!"well-typed layout check failed: {err}"
+    | none =>
+    -- Check branch targets in bounds (hPC_bound on successors)
+    match checkBranchTargets p.code with
+    | some err => .error s!"branch target check failed: {err}"
+    | none =>
     let intervals := BoundsOpt.analyzeIntervals p
-    let body := (List.range p.code.size).flatMap fun pc =>
-      genInstr varMap p.arrayDecls (intervals.getD pc none) pc (p.code.getD pc .halt)
-    -- At halt: save register-allocated observable values to stack for printf
-    let saveRegs := p.observable.filterMap fun v =>
-      match lookupReg v with
-      | some r =>
-        match lookupVar varMap v with
-        | some off => some s!"  str {r}, [sp, #{off}]"
-        | none => none
+    -- Sentinel values for special labels
+    let haltS := p.code.size * 1000
+    let divS  := p.code.size * 1000 + 1
+    let boundsS := p.code.size * 1000 + 2
+    -- Pass 1: compute instruction lengths (pcMap-independent)
+    let lengths := (List.range p.code.size).map fun pc =>
+      let instr := p.code.getD pc .halt
+      let safe := isBoundsSafe p.arrayDecls intervals pc instr
+      instrLength layout p.arrayDecls safe instr haltS divS boundsS
+    let lengthsArr := lengths.toArray
+    -- Build real pcMap and reverse map
+    let pcMap := buildPcMap lengthsArr
+    let tacPcOf := buildTacPcOf lengthsArr
+    -- Generate init code
+    let initInstrs := genInitCode vars layout
+    -- Pass 2: generate instructions with real pcMap
+    let bodyResult := (List.range p.code.size).foldl
+        (init := some (Array.mkEmpty p.code.size)) fun acc pc =>
+      match acc with
       | none => none
-    -- Print observable variables at halt (loads from stack, safe after saveRegs)
-    let printCode := p.observable.flatMap fun v =>
-      let isFloat := p.tyCtx v == .float
-      let fmtLabel := if isFloat then s!".Lfmt_float" else ".Lfmt"
-      if isFloat then
-        s!"  // print {v} (float)" ::
-        (loadVarFP varMap v "d0") ::
-        "  sub sp, sp, #32" ::
-        s!"  adrp x8, .Lname_{v}@PAGE" ::
-        s!"  add x8, x8, .Lname_{v}@PAGEOFF" ::
-        "  str x8, [sp]" ::
-        "  str d0, [sp, #8]" ::
-        s!"  adrp x0, {fmtLabel}@PAGE" ::
-        s!"  add x0, x0, {fmtLabel}@PAGEOFF" ::
-        "  bl _printf" ::
-        "  add sp, sp, #32" :: List.nil
-      else
-        s!"  // print {v}" ::
-        (loadVar varMap v "x9") ::
-        "  sub sp, sp, #16" ::
-        s!"  adrp x8, .Lname_{v}@PAGE" ::
-        s!"  add x8, x8, .Lname_{v}@PAGEOFF" ::
-        "  str x8, [sp]" ::
-        "  str x9, [sp, #8]" ::
-        s!"  adrp x0, {fmtLabel}@PAGE" ::
-        s!"  add x0, x0, {fmtLabel}@PAGEOFF" ::
-        "  bl _printf" ::
-        "  add sp, sp, #16" :: List.nil
-    let footer := [
-      "",
-      ".Lhalt:",
-      "  // Save register values to stack for printf"] ++
-      saveRegs ++
-      ["  // Print observable variables"] ++
-      printCode ++
-      ["",
-       "  // Exit with code 0",
-       "  mov x0, #0",
-       s!"  ldr x29, [sp, #{frameSize - 16}]",
-       s!"  ldr x30, [sp, #{frameSize - 8}]",
-       s!"  add sp, sp, #{frameSize}",
-       "  ret",
-       "",
-       ".Ldiv_by_zero:",
-       "  adrp x0, .Ldiv_msg@PAGE",
-       "  add x0, x0, .Ldiv_msg@PAGEOFF",
-       "  bl _printf",
-       "  mov x0, #1",
-       "  bl _exit",
-       "",
-       ".Lbounds_err:",
-       "  adrp x0, .Lbounds_msg@PAGE",
-       "  add x0, x0, .Lbounds_msg@PAGEOFF",
-       "  bl _printf",
-       "  mov x0, #1",
-       "  bl _exit",
-       "",
-       ".section __TEXT,__cstring",
-       ".Lfmt:",
-       "  .asciz \"%s = %ld\\n\"",
-       ".Lfmt_float:",
-       "  .asciz \"%s = %f\\n\"",
-       ".Ldiv_msg:",
-       "  .asciz \"error: division by zero\\n\"",
-       ".Lbounds_msg:",
-       "  .asciz \"error: array index out of bounds\\n\""] ++
-      p.observable.map fun v =>
-       s!".Lname_{v}:\n  .asciz \"{v}\""
-    -- Emit .data section for each array (size × 8 bytes, zero-initialized)
-    let arrays := collectArrays p
-    let arrayData := if arrays.isEmpty then [] else
-      ["", ".section __DATA,__data"] ++
-      arrays.flatMap fun arr =>
-        [s!".global _arr_{arr}",
-         ".align 3",
-         s!"_arr_{arr}:",
-         s!"  .space {(if p.arraySize arr == 0 then 1024 else p.arraySize arr) * 8}"]
-    some (emit (header ++ [""] ++ initVars ++ [""] ++ body ++ footer ++ arrayData ++ [""]))
+      | some arr =>
+        let instr := p.code.getD pc .halt
+        let safe := isBoundsSafe p.arrayDecls intervals pc instr
+        match verifiedGenInstr layout pcMap instr haltS divS boundsS p.arrayDecls safe with
+        | none => none
+        | some armInstrs => some (arr.push armInstrs)
+    match bodyResult with
+    | none => .error "verifiedGenInstr failed (layout or type mismatch)"
+    | some bodyPerPC =>
+    -- Generate halt-save instructions
+    let haltSaveInstrs := genHaltSave p.observable layout varMap
+    .ok {
+      initInstrs := initInstrs.toArray
+      bodyPerPC := bodyPerPC
+      haltSaveInstrs := haltSaveInstrs.toArray
+      pcMap := pcMap
+      layout := layout
+      varMap := varMap
+      initLen := initInstrs.length
+      haltS := haltS
+      divS := divS
+      boundsS := boundsS
+      tacPcOf := tacPcOf
+    }
+
+/-- Generate the complete assembly for a program.
+    Calls `verifiedGenerateAsm` for the verified core, then wraps it with
+    prologue/epilogue, printf code, error handlers, and data sections. -/
+def generateAsm (p : Prog) : Except String String := do
+  let r ← verifiedGenerateAsm p
+  let vars := collectVars p
+  -- Stack frame: 16-byte aligned
+  -- Layout: [scratch 8B] [var1 8B] ... [varN 8B] [padding] [x29 8B] [x30 8B]
+  let frameSize := ((vars.length + 1) * 8 + 16 + 15) / 16 * 16
+  let header := [
+    ".global _main",
+    ".align 2",
+    "",
+    "_main:",
+    s!"  sub sp, sp, #{frameSize}",
+    s!"  str x30, [sp, #{frameSize - 8}]",
+    s!"  str x29, [sp, #{frameSize - 16}]",
+    s!"  add x29, sp, #{frameSize - 16}",
+    "",
+    "  // Initialize all variables to 0",
+    "  mov x0, #0"
+  ]
+  let lbl := ppLabel r.haltS r.divS r.boundsS r.tacPcOf
+  -- Pretty-print init instructions
+  let initLines := ppInstrs lbl r.initInstrs.toList
+  -- Pretty-print body with TAC PC labels
+  let body := (List.range r.bodyPerPC.size).flatMap fun pc =>
+    [s!".L{pc}:"] ++ ppInstrs lbl ((r.bodyPerPC[pc]!))
+  -- Print observable variables at halt (loads from stack, safe after saveRegs)
+  let printCode := p.observable.flatMap fun v =>
+    let isFloat := p.tyCtx v == .float
+    let fmtLabel := if isFloat then s!".Lfmt_float" else ".Lfmt"
+    if isFloat then
+      s!"  // print {v} (float)" ::
+      (loadVarFP r.varMap v "d0") ::
+      "  sub sp, sp, #32" ::
+      s!"  adrp x8, .Lname_{v}@PAGE" ::
+      s!"  add x8, x8, .Lname_{v}@PAGEOFF" ::
+      "  str x8, [sp]" ::
+      "  str d0, [sp, #8]" ::
+      s!"  adrp x0, {fmtLabel}@PAGE" ::
+      s!"  add x0, x0, {fmtLabel}@PAGEOFF" ::
+      "  bl _printf" ::
+      "  add sp, sp, #32" :: List.nil
+    else
+      s!"  // print {v}" ::
+      (loadVar r.varMap v "x9") ::
+      "  sub sp, sp, #16" ::
+      s!"  adrp x8, .Lname_{v}@PAGE" ::
+      s!"  add x8, x8, .Lname_{v}@PAGEOFF" ::
+      "  str x8, [sp]" ::
+      "  str x9, [sp, #8]" ::
+      s!"  adrp x0, {fmtLabel}@PAGE" ::
+      s!"  add x0, x0, {fmtLabel}@PAGEOFF" ::
+      "  bl _printf" ::
+      "  add sp, sp, #16" :: List.nil
+  -- Pretty-print halt-save instructions
+  let saveLines := ppInstrs lbl r.haltSaveInstrs.toList
+  let footer := [
+    "",
+    ".Lhalt:",
+    "  // Save register values to stack for printf"] ++
+    saveLines ++
+    ["  // Print observable variables"] ++
+    printCode ++
+    ["",
+     "  // Exit with code 0",
+     "  mov x0, #0",
+     s!"  ldr x29, [sp, #{frameSize - 16}]",
+     s!"  ldr x30, [sp, #{frameSize - 8}]",
+     s!"  add sp, sp, #{frameSize}",
+     "  ret",
+     "",
+     ".Ldiv_by_zero:",
+     "  adrp x0, .Ldiv_msg@PAGE",
+     "  add x0, x0, .Ldiv_msg@PAGEOFF",
+     "  bl _printf",
+     "  mov x0, #1",
+     "  bl _exit",
+     "",
+     ".Lbounds_err:",
+     "  adrp x0, .Lbounds_msg@PAGE",
+     "  add x0, x0, .Lbounds_msg@PAGEOFF",
+     "  bl _printf",
+     "  mov x0, #1",
+     "  bl _exit",
+     "",
+     ".section __TEXT,__cstring",
+     ".Lfmt:",
+     "  .asciz \"%s = %ld\\n\"",
+     ".Lfmt_float:",
+     "  .asciz \"%s = %f\\n\"",
+     ".Ldiv_msg:",
+     "  .asciz \"error: division by zero\\n\"",
+     ".Lbounds_msg:",
+     "  .asciz \"error: array index out of bounds\\n\""] ++
+    p.observable.map fun v =>
+     s!".Lname_{v}:\n  .asciz \"{v}\""
+  -- Emit .data section for each array (size × 8 bytes, zero-initialized)
+  let arrays := collectArrays p
+  let arrayData := if arrays.isEmpty then [] else
+    ["", ".section __DATA,__data"] ++
+    arrays.flatMap fun arr =>
+      [s!".global _arr_{arr}",
+       ".align 3",
+       s!"_arr_{arr}:",
+       s!"  .space {(if p.arraySize arr == 0 then 1024 else p.arraySize arr) * 8}"]
+  .ok (emit (header ++ [""] ++ initLines ++ [""] ++ body ++ footer ++ arrayData ++ [""]))
 
 -- ============================================================
 -- § 6. End-to-end: parse → compile → codegen
@@ -534,13 +638,12 @@ def optimizePipeline (p : Prog) : Except String Prog := do
 
 def compileToAsm (input : String) : Except String String := do
   let prog ← parseProgram input
+  if !prog.typeCheck then .error "program failed type check (frontend)"
   let tac := prog.compile
   let opt ← do
     let p ← optimizePipeline tac
     optimizePipeline p
-  match generateAsm opt with
-  | some asm => .ok asm
-  | none => .error "program failed type check"
+  generateAsm opt
 
 -- ============================================================
 -- § 7. IO driver: write assembly, assemble, and run

@@ -12,6 +12,13 @@ optimize → certificate check.
 
 open SExpr SBool Stmt
 
+/-- Compile a bare Stmt to a Prog (for test examples only).
+    The verified path is `Program.compile`; this is a convenience wrapper. -/
+private def compileStmtToProg (s : Stmt) : Prog :=
+  let labels := collectLabels s 0
+  let (code, _) := compileStmt s 0 0 labels
+  .ofCode (code ++ [TAC.halt]).toArray
+
 -- ============================================================
 -- § 1. Sum 1..n
 -- ============================================================
@@ -26,7 +33,7 @@ def prog : Stmt :=
     (assign "s" (bin .add (var "s") (var "i")) ;;
      assign "i" (bin .add (var "i") (lit 1)))
 
-def tac : Prog := { compile prog with observable := ["s"] }
+def tac : Prog := { compileStmtToProg prog with observable := ["s"] }
 
 -- Compile and verify
 #eval tac.code.toList
@@ -52,7 +59,7 @@ def prog : Stmt :=
     (assign "r" (bin .mul (var "r") (var "n")) ;;
      assign "n" (bin .sub (var "n") (lit 1)))
 
-def tac : Prog := { compile prog with observable := ["r"] }
+def tac : Prog := { compileStmtToProg prog with observable := ["r"] }
 
 #eval tac.code.toList
 #eval do let (σ, _) ← Stmt.interp 1000 (fun v => if v == "n" then .int 5 else .int 0) ArrayMem.init ([] : List (ArrayName × Nat × VarTy)) prog; return σ "r"
@@ -75,7 +82,7 @@ def prog : Stmt :=
     (assign "m" (var "b"))
     (assign "m" (var "a"))
 
-def tac : Prog := { compile prog with observable := ["m"] }
+def tac : Prog := { compileStmtToProg prog with observable := ["m"] }
 
 #eval tac.code.toList
 #eval do let (σ, _) ← Stmt.interp 100 (fun v => if v == "a" then .int 3 else if v == "b" then .int 7 else .int 0) ArrayMem.init ([] : List (ArrayName × Nat × VarTy)) prog; return σ "m"
@@ -97,7 +104,7 @@ def prog : Stmt :=
   assign "x" (bin .add (lit 2) (lit 3)) ;;
   assign "y" (bin .mul (var "x") (lit 4))
 
-def tac : Prog := { compile prog with observable := ["y"] }
+def tac : Prog := { compileStmtToProg prog with observable := ["y"] }
 
 #eval tac.code.toList
 #eval do let (σ, _) ← Stmt.interp 100 (fun _ => .int 0) ArrayMem.init ([] : List (ArrayName × Nat × VarTy)) prog; return σ "y"
@@ -122,7 +129,7 @@ def prog : Stmt :=
     (assign "r" (bin .sub (lit 0) (var "x")))
     (assign "r" (var "x"))
 
-def tac : Prog := { compile prog with observable := ["r"] }
+def tac : Prog := { compileStmtToProg prog with observable := ["r"] }
 
 #eval tac.code.toList
 
@@ -154,7 +161,7 @@ def prog : Stmt :=
         assign "j" (bin .add (var "j") (lit 1))) ;;
      assign "i" (bin .add (var "i") (lit 1)))
 
-def tac : Prog := { compile prog with observable := ["s"] }
+def tac : Prog := { compileStmtToProg prog with observable := ["s"] }
 
 #eval tac.code.toList
 #eval do let (σ, _) ← Stmt.interp 10000 (fun v => if v == "n" then .int 3 else .int 0) ArrayMem.init ([] : List (ArrayName × Nat × VarTy)) prog; return σ "s"
@@ -175,7 +182,7 @@ namespace WhileDiv
 def prog : Stmt :=
   assign "q" (bin .div (var "a") (var "b"))
 
-def tac : Prog := { compile prog with observable := ["q"] }
+def tac : Prog := { compileStmtToProg prog with observable := ["q"] }
 
 #eval tac.code.toList
 
@@ -216,8 +223,8 @@ def cert := ConstPropOpt.optimize tac
 #eval! generateAsm tac
 #eval! do
   match generateAsm tac with
-  | some asm => let _ ← assembleAndRun asm "/tmp/boollit.s" "/tmp/boollit.s"; return ()
-  | none => IO.eprintln "codegen failed"
+  | .ok asm => let _ ← assembleAndRun asm "/tmp/boollit.s" "/tmp/boollit.s"; return ()
+  | .error err => IO.eprintln s!"codegen failed: {err}"
 
 end WhileBoolLit
 
@@ -235,7 +242,7 @@ def prog : Stmt :=
     (assign "s" (bin .add (var "s") (arrRead "a" (var "i"))) ;;
      assign "i" (bin .add (var "i") (lit 1)))
 
-def tac : Prog := { compile prog with observable := ["s"] }
+def tac : Prog := { compileStmtToProg prog with observable := ["s"] }
 
 #eval tac.code.toList
 
@@ -265,7 +272,7 @@ def prog : Stmt :=
     (Stmt.arrWrite "a" (var "i") (bin .mul (var "i") (var "i")) ;;
      assign "i" (bin .add (var "i") (lit 1)))
 
-def tac : Prog := { compile prog with observable := ["i"] }
+def tac : Prog := { compileStmtToProg prog with observable := ["i"] }
 
 #eval tac.code.toList
 
