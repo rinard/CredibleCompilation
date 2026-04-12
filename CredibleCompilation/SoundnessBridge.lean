@@ -3072,6 +3072,8 @@ theorem exec_checker_correct
     ∃ b', program_behavior dc.orig σ₀ b' ∧
       match b, b' with
       | .halts σ_t, .halts σ_o =>
+          (∃ am_f, (∃ am, haltsWithResult dc.orig 0 σ₀ σ_o am am_f) ∧
+            (∃ am, haltsWithResult dc.trans 0 σ₀ σ_t am am_f)) ∧
           ∀ v ∈ dc.observable, σ_t v = σ_o v
       | .errors _, .errors _ => True
       | .typeErrors _, _ => True
@@ -3080,9 +3082,9 @@ theorem exec_checker_correct
   have hvalid := soundness_bridge dc h htyctx
   cases b with
   | halts σ_t' =>
-    obtain ⟨σ_o', ho, hobs⟩ := soundness_halt
+    obtain ⟨σ_o', am_f, ⟨am_o, ho⟩, ht, hobs⟩ := soundness_halt
       (toPCertificate dc) hvalid σ₀ σ_t' hts₀ htrans
-    exact ⟨.halts σ_o', ho, hobs⟩
+    exact ⟨.halts σ_o', ⟨am_o, am_f, ho⟩, ⟨am_f, ⟨am_o, ho⟩, ht⟩, hobs⟩
   | errors σ_e =>
     obtain ⟨am₀, am_e, hreach⟩ := htrans
     obtain ⟨σ_o, am_o, am_o', ho⟩ := error_preservation
@@ -3108,7 +3110,10 @@ theorem exec_checker_total
     ∃ b, program_behavior dc.trans σ₀ b ∧
       ∃ b', program_behavior dc.orig σ₀ b' ∧
         match b, b' with
-        | .halts σ_t, .halts σ_o => ∀ v ∈ dc.observable, σ_t v = σ_o v
+        | .halts σ_t, .halts σ_o =>
+            (∃ am_f, (∃ am, haltsWithResult dc.orig 0 σ₀ σ_o am am_f) ∧
+              (∃ am, haltsWithResult dc.trans 0 σ₀ σ_t am am_f)) ∧
+            ∀ v ∈ dc.observable, σ_t v = σ_o v
         | .errors _, .errors _ => True
         | .typeErrors _, _ => True
         | .diverges, .diverges => True
@@ -3117,9 +3122,9 @@ theorem exec_checker_total
   have hvalid := soundness_bridge dc h htyctx
   cases b with
   | halts σ_t =>
-    obtain ⟨σ_o', ho, hobs⟩ := soundness_halt
+    obtain ⟨σ_o', am_f, ⟨am_o, ho⟩, ht, hobs⟩ := soundness_halt
       (toPCertificate dc) hvalid σ₀ σ_t hts₀ hb
-    exact ⟨.halts σ_t, hb, .halts σ_o', ho, hobs⟩
+    exact ⟨.halts σ_t, hb, .halts σ_o', ⟨am_o, am_f, ho⟩, ⟨am_f, ⟨am_o, ho⟩, ht⟩, hobs⟩
   | errors σ_e =>
     obtain ⟨am₀, am_e, hreach⟩ := hb
     obtain ⟨σ_o, am_o, am_o', ho⟩ := error_preservation
@@ -3148,7 +3153,8 @@ theorem exec_halt_preservation
     (htyctx : dc.orig.tyCtx = dc.trans.tyCtx)
     (σ₀ σ_t' : Store) (hts₀ : TypedStore dc.tyCtx σ₀)
     (hexec : ∃ am am', haltsWithResult dc.trans 0 σ₀ σ_t' am am') :
-    ∃ σ_o', (∃ am am', haltsWithResult dc.orig 0 σ₀ σ_o' am am') ∧
+    ∃ σ_o' am_f, (∃ am, haltsWithResult dc.orig 0 σ₀ σ_o' am am_f) ∧
+      (∃ am, haltsWithResult dc.trans 0 σ₀ σ_t' am am_f) ∧
       ∀ v ∈ dc.observable, σ_t' v = σ_o' v :=
   soundness_halt (toPCertificate dc) (soundness_bridge dc h htyctx) σ₀ σ_t' hts₀ hexec
 

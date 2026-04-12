@@ -260,12 +260,12 @@ private theorem steps_to_halt_decompose {p : Prog} {pc₀ : Nat} {σ₀ : Store}
     {σ_h : Store} {am_h : ArrayMem}
     (hsteps : p ⊩ Cfg.run pc₀ σ₀ am₀ ⟶* Cfg.halt σ_h am_h) :
     ∃ pc σ am, (p ⊩ Cfg.run pc₀ σ₀ am₀ ⟶* Cfg.run pc σ am) ∧
-      p[pc]? = some .halt ∧ σ = σ_h := by
+      p[pc]? = some .halt ∧ σ = σ_h ∧ am = am_h := by
   suffices h : ∀ c c', Steps p c c' →
       ∀ (pc₀ : Nat) (σ₀ : Store) (am₀ : ArrayMem), c = Cfg.run pc₀ σ₀ am₀ →
       ∀ (σ_h : Store) (am_h : ArrayMem), c' = Cfg.halt σ_h am_h →
       ∃ pc σ am, (p ⊩ Cfg.run pc₀ σ₀ am₀ ⟶* Cfg.run pc σ am) ∧
-        p[pc]? = some .halt ∧ σ = σ_h from
+        p[pc]? = some .halt ∧ σ = σ_h ∧ am = am_h from
     h _ _ hsteps pc₀ σ₀ am₀ rfl σ_h am_h rfl
   intro c c' hsteps
   induction hsteps with
@@ -275,7 +275,7 @@ private theorem steps_to_halt_decompose {p : Prog} {pc₀ : Nat} {σ₀ : Store}
     cases hstep with
     | halt h =>
       cases rest with
-      | refl => cases hc'; exact ⟨pc₀, σ₀, am₀, Steps.refl, h, rfl⟩
+      | refl => cases hc'; exact ⟨pc₀, σ₀, am₀, Steps.refl, h, rfl, rfl⟩
       | step s _ => exact absurd s Step.no_step_from_halt
     | error h _ _ _ => cases rest with
       | refl => exact absurd hc' Cfg.noConfusion
@@ -286,44 +286,44 @@ private theorem steps_to_halt_decompose {p : Prog} {pc₀ : Nat} {σ₀ : Store}
       | refl => exact absurd hc' Cfg.noConfusion
       | step s _ => exact absurd s Step.no_step_from_typeError
     | const h =>
-      obtain ⟨pc, σ, am, hpre, hhalt, heq⟩ := ih _ _ _ rfl _ _ hc'
-      exact ⟨pc, σ, am, Steps.step (Step.const (σ := σ₀) (am := am₀) h) hpre, hhalt, heq⟩
+      obtain ⟨pc, σ, am, hpre, hhalt, heq_σ, heq_am⟩ := ih _ _ _ rfl _ _ hc'
+      exact ⟨pc, σ, am, Steps.step (Step.const (σ := σ₀) (am := am₀) h) hpre, hhalt, heq_σ, heq_am⟩
     | copy h =>
-      obtain ⟨pc, σ, am, hpre, hhalt, heq⟩ := ih _ _ _ rfl _ _ hc'
-      exact ⟨pc, σ, am, Steps.step (Step.copy (σ := σ₀) (am := am₀) h) hpre, hhalt, heq⟩
+      obtain ⟨pc, σ, am, hpre, hhalt, heq_σ, heq_am⟩ := ih _ _ _ rfl _ _ hc'
+      exact ⟨pc, σ, am, Steps.step (Step.copy (σ := σ₀) (am := am₀) h) hpre, hhalt, heq_σ, heq_am⟩
     | binop h hy hz hs =>
-      obtain ⟨pc, σ, am, hpre, hhalt, heq⟩ := ih _ _ _ rfl _ _ hc'
-      exact ⟨pc, σ, am, Steps.step (Step.binop (am := am₀) h hy hz hs) hpre, hhalt, heq⟩
+      obtain ⟨pc, σ, am, hpre, hhalt, heq_σ, heq_am⟩ := ih _ _ _ rfl _ _ hc'
+      exact ⟨pc, σ, am, Steps.step (Step.binop (am := am₀) h hy hz hs) hpre, hhalt, heq_σ, heq_am⟩
     | boolop h =>
-      obtain ⟨pc, σ, am, hpre, hhalt, heq⟩ := ih _ _ _ rfl _ _ hc'
-      exact ⟨pc, σ, am, Steps.step (Step.boolop (σ := σ₀) (am := am₀) h) hpre, hhalt, heq⟩
+      obtain ⟨pc, σ, am, hpre, hhalt, heq_σ, heq_am⟩ := ih _ _ _ rfl _ _ hc'
+      exact ⟨pc, σ, am, Steps.step (Step.boolop (σ := σ₀) (am := am₀) h) hpre, hhalt, heq_σ, heq_am⟩
     | goto h =>
-      obtain ⟨pc, σ, am, hpre, hhalt, heq⟩ := ih _ _ _ rfl _ _ hc'
-      exact ⟨pc, σ, am, Steps.step (Step.goto (σ := σ₀) (am := am₀) h) hpre, hhalt, heq⟩
+      obtain ⟨pc, σ, am, hpre, hhalt, heq_σ, heq_am⟩ := ih _ _ _ rfl _ _ hc'
+      exact ⟨pc, σ, am, Steps.step (Step.goto (σ := σ₀) (am := am₀) h) hpre, hhalt, heq_σ, heq_am⟩
     | iftrue h hne =>
-      obtain ⟨pc, σ, am, hpre, hhalt, heq⟩ := ih _ _ _ rfl _ _ hc'
-      exact ⟨pc, σ, am, Steps.step (Step.iftrue (am := am₀) h hne) hpre, hhalt, heq⟩
+      obtain ⟨pc, σ, am, hpre, hhalt, heq_σ, heq_am⟩ := ih _ _ _ rfl _ _ hc'
+      exact ⟨pc, σ, am, Steps.step (Step.iftrue (am := am₀) h hne) hpre, hhalt, heq_σ, heq_am⟩
     | iffall h heq' =>
-      obtain ⟨pc, σ, am, hpre, hhalt, heq⟩ := ih _ _ _ rfl _ _ hc'
-      exact ⟨pc, σ, am, Steps.step (Step.iffall (am := am₀) h heq') hpre, hhalt, heq⟩
+      obtain ⟨pc, σ, am, hpre, hhalt, heq_σ, heq_am⟩ := ih _ _ _ rfl _ _ hc'
+      exact ⟨pc, σ, am, Steps.step (Step.iffall (am := am₀) h heq') hpre, hhalt, heq_σ, heq_am⟩
     | arrLoad h hidx hb =>
-      obtain ⟨pc, σ, am, hpre, hhalt, heq⟩ := ih _ _ _ rfl _ _ hc'
-      exact ⟨pc, σ, am, Steps.step (Step.arrLoad (am := am₀) h hidx hb) hpre, hhalt, heq⟩
+      obtain ⟨pc, σ, am, hpre, hhalt, heq_σ, heq_am⟩ := ih _ _ _ rfl _ _ hc'
+      exact ⟨pc, σ, am, Steps.step (Step.arrLoad (am := am₀) h hidx hb) hpre, hhalt, heq_σ, heq_am⟩
     | arrStore h hidx hv hb =>
-      obtain ⟨pc, σ, am, hpre, hhalt, heq⟩ := ih _ _ _ rfl _ _ hc'
-      exact ⟨pc, σ, am, Steps.step (Step.arrStore (am := am₀) h hidx hv hb) hpre, hhalt, heq⟩
+      obtain ⟨pc, σ, am, hpre, hhalt, heq_σ, heq_am⟩ := ih _ _ _ rfl _ _ hc'
+      exact ⟨pc, σ, am, Steps.step (Step.arrStore (am := am₀) h hidx hv hb) hpre, hhalt, heq_σ, heq_am⟩
     | fbinop h hy hz =>
-      obtain ⟨pc, σ, am, hpre, hhalt, heq⟩ := ih _ _ _ rfl _ _ hc'
-      exact ⟨pc, σ, am, Steps.step (Step.fbinop (am := am₀) h hy hz) hpre, hhalt, heq⟩
+      obtain ⟨pc, σ, am, hpre, hhalt, heq_σ, heq_am⟩ := ih _ _ _ rfl _ _ hc'
+      exact ⟨pc, σ, am, Steps.step (Step.fbinop (am := am₀) h hy hz) hpre, hhalt, heq_σ, heq_am⟩
     | intToFloat h hy =>
-      obtain ⟨pc, σ, am, hpre, hhalt, heq⟩ := ih _ _ _ rfl _ _ hc'
-      exact ⟨pc, σ, am, Steps.step (Step.intToFloat (am := am₀) h hy) hpre, hhalt, heq⟩
+      obtain ⟨pc, σ, am, hpre, hhalt, heq_σ, heq_am⟩ := ih _ _ _ rfl _ _ hc'
+      exact ⟨pc, σ, am, Steps.step (Step.intToFloat (am := am₀) h hy) hpre, hhalt, heq_σ, heq_am⟩
     | floatToInt h hy =>
-      obtain ⟨pc, σ, am, hpre, hhalt, heq⟩ := ih _ _ _ rfl _ _ hc'
-      exact ⟨pc, σ, am, Steps.step (Step.floatToInt (am := am₀) h hy) hpre, hhalt, heq⟩
+      obtain ⟨pc, σ, am, hpre, hhalt, heq_σ, heq_am⟩ := ih _ _ _ rfl _ _ hc'
+      exact ⟨pc, σ, am, Steps.step (Step.floatToInt (am := am₀) h hy) hpre, hhalt, heq_σ, heq_am⟩
     | floatExp h hy =>
-      obtain ⟨pc, σ, am, hpre, hhalt, heq⟩ := ih _ _ _ rfl _ _ hc'
-      exact ⟨pc, σ, am, Steps.step (Step.floatExp (am := am₀) h hy) hpre, hhalt, heq⟩
+      obtain ⟨pc, σ, am, hpre, hhalt, heq_σ, heq_am⟩ := ih _ _ _ rfl _ _ hc'
+      exact ⟨pc, σ, am, Steps.step (Step.floatExp (am := am₀) h hy) hpre, hhalt, heq_σ, heq_am⟩
     | arrLoad_boundsError h _ _ => cases rest with
       | refl => exact absurd hc' Cfg.noConfusion
       | step s _ => exact absurd s Step.no_step_from_error
@@ -631,19 +631,21 @@ theorem simulation_trace {cert : PCertificate} (hvalid : PCertificateValid cert)
 theorem soundness_halt (cert : PCertificate) (hvalid : PCertificateValid cert)
     (σ₀ σ_t' : Store) (hts₀ : TypedStore cert.tyCtx σ₀)
     (hexec : ∃ am am', haltsWithResult cert.trans 0 σ₀ σ_t' am am') :
-    ∃ σ_o', (∃ am am', haltsWithResult cert.orig 0 σ₀ σ_o' am am') ∧
+    ∃ σ_o' am_f, (∃ am, haltsWithResult cert.orig 0 σ₀ σ_o' am am_f) ∧
+      (∃ am, haltsWithResult cert.trans 0 σ₀ σ_t' am am_f) ∧
       ∀ v ∈ cert.observable, σ_t' v = σ_o' v := by
   obtain ⟨am, am', hhalt⟩ := hexec
   -- Decompose the halt execution into a run-to-run prefix + halt step
-  obtain ⟨pc_t, σ_t, am_t, hrun, hhalt_instr, rfl⟩ := steps_to_halt_decompose hhalt
+  obtain ⟨pc_t, σ_t, am_t, hrun, hhalt_instr, rfl, rfl⟩ := steps_to_halt_decompose hhalt
   -- Use simulation_trace on the run-to-run prefix
-  obtain ⟨pc_o, σ_o, a1, a2, horig, hpc_eq, hrel, _, _hinv_t, _hinv_o, _hts⟩ :=
+  obtain ⟨pc_o, σ_o, a1, a2, horig, hpc_eq, hrel, ham_eq, _hinv_t, _hinv_o, _hts⟩ :=
     simulation_trace hvalid hts₀ hrun
   -- The original program must also halt at pc_o
   have horig_halt : cert.orig[pc_o]? = some TAC.halt := by
     rw [← hpc_eq]; exact hvalid.halt_corr pc_t hhalt_instr
-  -- Construct the original halting execution: prefix + halt step
-  refine ⟨σ_o, ⟨a1, a2, Steps.trans horig (Steps.step (Step.halt horig_halt) .refl)⟩, ?_⟩
+  -- Both programs halt with the same final array memory
+  refine ⟨σ_o, a2, ⟨a1, Steps.trans horig (Steps.step (Step.halt horig_halt) .refl)⟩,
+    ⟨am, ham_eq ▸ hhalt⟩, ?_⟩
   -- Observable equivalence
   exact fun v hv => hvalid.halt_obs pc_t σ_t σ_o am_t a2 hhalt_instr hrel v hv
 
@@ -732,10 +734,9 @@ theorem halt_preservation (cert : PCertificate) (hvalid : PCertificateValid cert
   obtain ⟨am₀, hreach⟩ := hreach
   cases c_t with
   | halt σ_t am_h =>
-    obtain ⟨σ_o, horig, hobs_eq⟩ := soundness_halt cert hvalid σ₀ σ_t hts₀ ⟨am₀, am_h, hreach⟩
-    obtain ⟨amo1, amo2, horig'⟩ := horig
+    obtain ⟨σ_o, am_f, ⟨amo1, horig'⟩, _, hobs_eq⟩ := soundness_halt cert hvalid σ₀ σ_t hts₀ ⟨am₀, am_h, hreach⟩
     simp only [observe] at hobs; rw [Observation.halt.injEq] at hobs; subst hobs
-    exact ⟨Cfg.halt σ_o amo2, ⟨amo1, horig'⟩,
+    exact ⟨Cfg.halt σ_o am_f, ⟨amo1, horig'⟩,
       congrArg Observation.halt (obs_map_eq (fun v hv => (hobs_eq v hv).symm))⟩
   | run pc_t σ_t am_t =>
     have hpc := steps_run_in_bounds hvalid.step_closed hvalid.step_closed.1 hreach
@@ -865,7 +866,8 @@ theorem credible_compilation_soundness (cert : PCertificate) (hvalid : PCertific
     (σ₀ : Store) (hts₀ : TypedStore cert.tyCtx σ₀) (b : Behavior)
     (htrans : program_behavior cert.trans σ₀ b) :
     match b with
-    | .halts σ_t => ∃ σ_o, (∃ am am', haltsWithResult cert.orig 0 σ₀ σ_o am am') ∧
+    | .halts σ_t => ∃ σ_o am_f, (∃ am, haltsWithResult cert.orig 0 σ₀ σ_o am am_f) ∧
+        (∃ am, haltsWithResult cert.trans 0 σ₀ σ_t am am_f) ∧
         ∀ v ∈ cert.observable, σ_t v = σ_o v
     | .errors _ => ∃ σ_o am_o am_o', cert.orig ⊩ Cfg.run 0 σ₀ am_o ⟶* Cfg.error σ_o am_o'
     | .typeErrors _ => False
@@ -884,7 +886,8 @@ theorem credible_compilation_total (cert : PCertificate) (hvalid : PCertificateV
     (σ₀ : Store) (hts₀ : TypedStore cert.tyCtx σ₀) :
     ∃ b, program_behavior cert.trans σ₀ b ∧
       match b with
-      | .halts σ_t => ∃ σ_o, (∃ am am', haltsWithResult cert.orig 0 σ₀ σ_o am am') ∧
+      | .halts σ_t => ∃ σ_o am_f, (∃ am, haltsWithResult cert.orig 0 σ₀ σ_o am am_f) ∧
+          (∃ am, haltsWithResult cert.trans 0 σ₀ σ_t am am_f) ∧
           ∀ v ∈ cert.observable, σ_t v = σ_o v
       | .errors _ => ∃ σ_o am_o am_o', cert.orig ⊩ Cfg.run 0 σ₀ am_o ⟶* Cfg.error σ_o am_o'
       | .typeErrors _ => False
