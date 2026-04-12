@@ -518,12 +518,6 @@ execution `p ⊩ Cfg.run pc σ am ⟶* cfg'` starting from an ARM state satisfyi
 
 **Known sorrys that propagate:**
 - 2 sorrys from `verifiedGenInstr_correct` (arrLoad, arrStore)
-- `verifiedGenerateAsm_spec` (extraction of invariants from `hGen`)
-- `buildPcMap` prefix-sum lemmas (routine but tedious foldl reasoning)
-- `codeAt_of_bodyFlat` (list-join indexing)
-- `hPcNext` obligation for goto/ifgoto-taken (the per-instruction proof
-  doesn't use it, but the theorem statement requires it; removing the
-  unused hypothesis from `ext_backward_simulation` is a safe refactor)
 -/
 
 /-- The flat ARM body: all per-PC instruction lists concatenated. -/
@@ -1168,7 +1162,7 @@ private theorem step_run_or_terminal {p : Prog} {pc : Nat} {σ : Store}
     intermediate config, and `type_preservation` for `TypedStore`.
 
     **Propagated sorrys:** 2 from `verifiedGenInstr_correct` (arrLoad,
-    arrStore); 1 from `verifiedGenerateAsm_spec` (extraction). -/
+    arrStore). -/
 theorem whole_program_refinement {p : Prog} {r : VerifiedAsmResult}
     (hGen : verifiedGenerateAsm p = .ok r)
     {pc : Nat} {σ : Store} {am : ArrayMem}
@@ -1215,7 +1209,7 @@ theorem whole_program_refinement {p : Prog} {r : VerifiedAsmResult}
     then `ExtSimRel` holds at the initial configuration. -/
 theorem initial_extSimRel (layout : VarLayout) (pcMap : Nat → Nat)
     (σ₀ : Store) (am₀ : ArrayMem) (s₀ : ArmState)
-    (hZeroStore : ∀ v, σ₀ v = .int 0)
+    (hEncode : ∀ v, (σ₀ v).encode = 0)
     (hPC : s₀.pc = pcMap 0)
     (hRegs : ∀ r, s₀.regs r = 0)
     (hFregs : ∀ r, s₀.fregs r = 0)
@@ -1223,17 +1217,48 @@ theorem initial_extSimRel (layout : VarLayout) (pcMap : Nat → Nat)
     (hAM : s₀.arrayMem = am₀) :
     ExtSimRel layout pcMap (.run 0 σ₀ am₀) s₀ := by
   refine ⟨?_, ?_, ?_⟩
-  · -- ExtStateRel: every variable's encoded value matches its location
-    intro v loc hLoc
-    simp [hZeroStore]
+  · intro v loc hLoc
+    rw [hEncode]
     match loc with
-    | .stack off => simp [Value.encode, hStack]
-    | .ireg r => simp [Value.encode, hRegs]
-    | .freg r => simp [Value.encode, hFregs]
-  · -- PcRel
-    exact hPC
-  · -- ArrayMem
-    exact hAM
+    | .stack off => exact hStack off
+    | .ireg r => exact hRegs r
+    | .freg r => exact hFregs r
+  · exact hPC
+  · exact hAM
+
+/-- Top-level correctness: if code generation succeeds and the TAC program
+    starts from a zero-initialized store, every reachable TAC configuration
+    is simulated by ARM steps from a zeroed ARM state.
+
+    This combines `whole_program_refinement` with `initial_extSimRel` to
+    eliminate all intermediate hypotheses. The only requirements are:
+    1. Code generation succeeded (`verifiedGenerateAsm p = .ok r`)
+    2. The TAC program reaches `cfg'` from the typed zero-initialized store
+
+    `Store.typedInit` assigns each variable the zero value of its declared type
+    (`Value.ofBitVec (Γ v) 0`), so `TypedStore` holds for any type context.
+
+    **Propagated sorrys:** 2 from `verifiedGenInstr_correct` (arrLoad, arrStore). -/
+private theorem typedInit_encode (Γ : TyCtx) (v : Var) :
+    (Store.typedInit Γ v).encode = 0 := by
+  simp [Store.typedInit, Value.ofBitVec, Value.encode]
+  cases Γ v <;> simp [Value.ofBitVec, Value.encode]
+
+theorem end_to_end_correctness {p : Prog} {r : VerifiedAsmResult}
+    (hGen : verifiedGenerateAsm p = .ok r)
+    {cfg' : Cfg}
+    (hSteps : p ⊩ Cfg.run 0 (Store.typedInit p.tyCtx) (fun _ _ => 0) ⟶* cfg') :
+    ∃ s', ArmSteps r.bodyFlat
+      { regs := fun _ => 0, fregs := fun _ => 0, stack := fun _ => 0,
+        pc := r.pcMap 0, flags := ⟨0, 0⟩ } s' ∧
+      ExtSimRel r.layout r.pcMap cfg' s' :=
+  whole_program_refinement hGen _
+    (initial_extSimRel r.layout r.pcMap (Store.typedInit p.tyCtx) (fun _ _ => 0)
+      { regs := fun _ => 0, fregs := fun _ => 0, stack := fun _ => 0,
+        pc := r.pcMap 0, flags := ⟨0, 0⟩ }
+      (typedInit_encode p.tyCtx) rfl (fun _ => rfl) (fun _ => rfl) (fun _ => rfl) rfl)
+    (TypedStore.typedInit p.tyCtx)
+    cfg' hSteps
 
 /-- Generate the complete assembly for a program.
     Calls `verifiedGenerateAsm` for the verified core, then wraps it with

@@ -31,3 +31,5 @@ Record of key design decisions for CredibleCompilation.
 13) Make sure tac programs are well typed. more generally, codegen is self validating and can refuse to generate code if checks fail. also scratch register safety and layout injectivity. also consider making data structures finite maps not functions. Also while to tac is self validating and does not generate tac code if various well formedness checks fail. 
 
 14) Always be sure using verified code. Claude has a habit of doing both verified and unverified versions. This was the case for translations into and out of TAC intermediate representation. 
+
+15) top level theorems should work with initial states to eliminate overly general hypotheses. 

@@ -132,6 +132,9 @@ namespace Store
 
 def init : Store := fun _ => .int (0 : BitVec 64)
 
+/-- Type-respecting zero store: each variable gets the zero value of its declared type. -/
+def typedInit (Γ : TyCtx) : Store := fun v => Value.ofBitVec (Γ v) 0
+
 /-- Functional update  σ[x ↦ v] -/
 def update (σ : Store) (x : Var) (v : Value) : Store :=
   fun y => if y == x then v else σ y
@@ -169,6 +172,10 @@ notation:max σ "[" x " ↦ " v "]" => Store.update σ x v
 theorem TypedStore.init (Γ : TyCtx) (h : ∀ x, Γ x = .int) :
     TypedStore Γ Store.init := by
   intro x; simp [Store.init, Value.typeOf, h]
+
+theorem TypedStore.typedInit (Γ : TyCtx) : TypedStore Γ (Store.typedInit Γ) := by
+  intro x; simp [Store.typedInit]
+
 
 theorem TypedStore.update_typed {Γ : TyCtx} {σ : Store} {x : Var} {v : Value}
     (hts : TypedStore Γ σ) (hv : v.typeOf = Γ x) :
