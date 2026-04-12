@@ -1380,10 +1380,7 @@ def compileToAsm (input : String) : Except String String := do
   let prog ← parseProgram input
   if !prog.typeCheck then .error "program failed type check (frontend)"
   let tac := prog.compileToTAC
-  let opt ← do
-    let p ← optimizePipeline tac
-    optimizePipeline p
-  generateAsm opt
+  generateAsm tac
 
 -- ============================================================
 -- § 7. IO driver: write assembly, assemble, and run

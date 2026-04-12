@@ -17,8 +17,8 @@ are consumed by CodeGen to emit register-aware instructions.
 | Int scratch | x0, x1, x2 | 3 |
 | Addr scratch | x8 | 1 |
 | Int allocatable | x3-x7, x9-x18 | 15 |
-| Float scratch | d0, d1 | 2 |
-| Float allocatable | d2-d15 | 14 |
+| Float scratch | d0, d1, d2 | 3 |
+| Float allocatable | d3-d15 | 13 |
 
 ## Algorithm: graph coloring
 
@@ -135,9 +135,9 @@ partial def graphColor (graph : List (Var × List Var)) (K : Nat)
     x0-x2 reserved as scratch, x8 reserved for array address. -/
 def intRegNums : Array Nat := #[3, 4, 5, 6, 7, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]
 
-/-- Float allocatable registers: d2-d15 (14 total).
-    d0-d1 reserved as scratch. -/
-def floatRegNums : Array Nat := #[2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+/-- Float allocatable registers: d3-d15 (13 total).
+    d0-d2 reserved as scratch (d2 used by fcmp/fbinop fallback). -/
+def floatRegNums : Array Nat := #[3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
 
 /-- Compute register allocation for a program.
     Returns a list of (variable_name, register_name) pairs.

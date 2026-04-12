@@ -665,8 +665,8 @@ def checkStmt (lookup : Var → Option VarTy) (arrayDecls : List (ArrayName × N
   | .farrWrite arr idx val =>
     arrayDeclared arrayDecls arr && (arrayElemTy arrayDecls arr == .float) && checkSExpr lookup arrayDecls idx && checkFExpr lookup arrayDecls val
   | .label _ => true
-  | .goto _ => false  -- goto/ifgoto not supported by the refinement compiler
-  | .ifgoto _ _ => false
+  | .goto _ => true
+  | .ifgoto b _ => checkSBool lookup arrayDecls b
 
 /-- Full static type check: no duplicate declarations, no compiler-reserved
     temporary names in declarations, and the body is well-typed w.r.t.
@@ -1541,8 +1541,13 @@ theorem compileStmt_wt (prog : Program)
     exact allWTI_append3 hi_wt hv_wt (allWTI_one (.arrStore hi_ty hv_ty hety.symm))
   | label _ =>
     simp [compileStmt]; exact allWTI_nil' _ _
-  | goto lbl => simp [Program.checkStmt] at hchk
-  | ifgoto b lbl => simp [Program.checkStmt] at hchk
+  | goto lbl =>
+    simp [compileStmt]; exact allWTI_one .goto
+  | ifgoto b lbl =>
+    simp only [Program.checkStmt] at hchk
+    simp only [compileStmt]
+    have ⟨hb_wt, hb_ty⟩ := compileBool_wt prog hnt b hchk offset nextTmp
+    exact allWTI_append' hb_wt (allWTI_one (.ifgoto hb_ty))
 
 -- initCode produces well-typed instructions
 theorem initCode_wt (prog : Program)

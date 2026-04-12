@@ -32,4 +32,6 @@ Record of key design decisions for CredibleCompilation.
 
 14) Always be sure using verified code. Claude has a habit of doing both verified and unverified versions. This was the case for translations into and out of TAC intermediate representation. 
 
-15) top level theorems should work with initial states to eliminate overly general hypotheses. 
+15) Top level theorems should work with initial states to eliminate overly general hypotheses. 
+
+16) Think about adding a nondeterministic choice, something like choose bexpr1 : l1 bexpr2: l2; where bexpr1 and bexpr2 can both be true and implementation can choose one nondeterministically. 
