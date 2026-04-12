@@ -315,14 +315,11 @@ private def buildTacPcOf (lengths : Array Nat) : Nat → Option Nat :=
   fun armPC => (pairs.1.find? fun p => p.1 == armPC).map Prod.snd
 
 /-- Compute whether a bounds check can be elided for a given instruction at `pc`. -/
-private def isBoundsSafe (arrayDecls : List (ArrayName × Nat × VarTy))
-    (intervals : Array (Option BoundsOpt.IMap)) (pc : Nat) (instr : TAC) : Bool :=
-  match instr with
-  | .arrLoad _ arr idx _ | .arrStore arr idx _ _ =>
-    match intervals.getD pc none with
-    | some m => (BoundsOpt.imLookup m idx).inBounds (arraySize arrayDecls arr)
-    | none => false
-  | _ => false
+private def isBoundsSafe (_arrayDecls : List (ArrayName × Nat × VarTy))
+    (_intervals : Array (Option BoundsOpt.IMap)) (_pc : Nat) (_instr : TAC) : Bool :=
+  -- Disabled: interval analysis is unchecked and can be unsound.
+  -- Always generate bounds checks until interval analysis produces a verified certificate.
+  false
 
 -- ============================================================
 -- § 3. Well-formedness checks (discharge proof hypotheses at runtime)
