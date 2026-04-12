@@ -247,12 +247,15 @@ private theorem Option.some_of_ne_none {o : Option α} (h : o ≠ none) : ∃ a,
   | some a => exact ⟨a, rfl⟩
 
 /-- Backward refinement: any observable behavior of `prog.compileToTAC` starting from
-    `ArrayMem.init` corresponds to a behavior of the source program. -/
+    `ArrayMem.init` corresponds to a behavior of the source program.
+    For halting programs, both store (on non-temporary variables) and array memory match. -/
 theorem whileToTAC_refinement (prog : Program) (htc : prog.typeCheck = true)
     (b : Behavior)
     (hbeh : program_behavior_init prog.compileToTAC prog.initStore b) :
     match b with
-    | .halts σ_tac => ∃ fuel σ' am', prog.interp fuel = some (σ', am') ∧
+    | .halts σ_tac => ∃ fuel σ' am_h am', prog.interp fuel = some (σ', am') ∧
+        haltsWithResult prog.compileToTAC 0 prog.initStore σ_tac ArrayMem.init am_h ∧
+        am_h = am' ∧
         ∀ v, v.isTmp = false → v.isFTmp = false → σ_tac v = σ' v
     | .errors _ => ∃ fuel, ¬ prog.body.safe fuel prog.initStore ArrayMem.init prog.arrayDecls
     | .typeErrors _ => False
@@ -271,12 +274,12 @@ theorem whileToTAC_refinement (prog : Program) (htc : prog.typeCheck = true)
       obtain ⟨r, hinterp⟩ := Option.some_of_ne_none hfuel
       obtain ⟨σ', am'⟩ := r
       by_cases hsafe : prog.body.safe fuel prog.initStore ArrayMem.init prog.arrayDecls
-      · -- Source terminates safely → forward halt → determinism gives store match
+      · -- Source terminates safely → forward halt → determinism gives store+array match
         obtain ⟨σ_fwd, hhalt_fwd, hagree⟩ :=
           whileToTAC_halt prog fuel σ' am' htc hinterp hsafe
-        have heq := haltsWithResult_unique hhalt hhalt_fwd
-        subst heq
-        exact ⟨fuel, σ', am', hinterp, hagree⟩
+        obtain ⟨heq_σ, heq_am⟩ := haltsWithResult_unique hhalt hhalt_fwd
+        subst heq_σ
+        exact ⟨fuel, σ', am_h, am', hinterp, hhalt, heq_am, hagree⟩
       · -- not safe → compiled cannot halt → contradiction
         exact absurd ⟨σ_tac, am_h, hhalt⟩ (whileToTAC_error prog fuel htc hsafe)
   | errors σ_e =>

@@ -400,13 +400,13 @@ private theorem steps_det {p : Prog} {c c₁ c₂ : Cfg}
       have heq := Step.deterministic s s'
       subst heq; exact ih rest' hn₁ hn₂
 
-/-- Termination produces a **unique** final store. -/
+/-- Termination produces a **unique** final store and array memory. -/
 theorem haltsWithResult_unique {p : Prog} {pc : Nat} {σ σ₁ σ₂ : Store} {am am₁ am₂ : ArrayMem}
-    (h₁ : haltsWithResult p pc σ σ₁ am am₁) (h₂ : haltsWithResult p pc σ σ₂ am am₂) : σ₁ = σ₂ := by
+    (h₁ : haltsWithResult p pc σ σ₁ am am₁) (h₂ : haltsWithResult p pc σ σ₂ am am₂) : σ₁ = σ₂ ∧ am₁ = am₂ := by
   simp only [haltsWithResult] at h₁ h₂
   have stuck : ∀ τ am' d, ¬ (p ⊩ Cfg.halt τ am' ⟶ d) := fun _ _ _ h => by cases h
   have := steps_det h₁ h₂ (stuck σ₁ am₁) (stuck σ₂ am₂)
-  exact (Cfg.halt.inj this).1
+  exact ⟨(Cfg.halt.inj this).1, (Cfg.halt.inj this).2⟩
 
 /-- If two stores agree on all variables, any step from one can be
     matched by a step from the other. -/
