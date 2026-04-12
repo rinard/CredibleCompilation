@@ -13,7 +13,7 @@ optimize → certificate check.
 open SExpr SBool Stmt
 
 /-- Compile a bare Stmt to a Prog (for test examples only).
-    The verified path is `Program.compile`; this is a convenience wrapper. -/
+    The verified path is `Program.compileToTAC`; this is a convenience wrapper. -/
 private def compileStmtToProg (s : Stmt) : Prog :=
   let labels := collectLabels s 0
   let (code, _) := compileStmt s 0 0 labels
@@ -210,7 +210,7 @@ def prog : Program where
          skip)
 
 #eval prog.typeCheck
-def tac : Prog := prog.compile
+def tac : Prog := prog.compileToTAC
 
 #eval tac.code.toList
 #eval do let (σ, _) ← prog.interp 1000; return σ "x"

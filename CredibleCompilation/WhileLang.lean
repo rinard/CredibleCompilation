@@ -18,8 +18,8 @@ certificate checker verifies that any subsequent optimization preserves
 TAC-level semantics. The source language serves as a convenient front-end
 for writing programs.
 
-The reference compiler (`RefCompiler.lean`) provides a verified alternative
-with a complete correctness proof and zero sorry holes.
+The `RefCompiler/` module provides correctness proofs for the compiler
+(refinement, error handling, divergence) with zero sorry holes.
 -/
 
 -- ============================================================
@@ -712,7 +712,7 @@ private def buildTyCtx (base : TyCtx) (code : Array TAC) : TyCtx :=
 
 /-- Compile a typed program: initialize declared variables, then compile body.
     Appends `halt` at the end. -/
-def compile (prog : Program) : Prog :=
+def compileToTAC (prog : Program) : Prog :=
   let inits := initCode prog.decls
   let labels := collectLabels prog.body inits.length
   let (body, _) := compileStmt prog.body inits.length 0 labels
@@ -864,11 +864,11 @@ private theorem initCode_length (decls : List (Var × VarTy)) :
 
 /-- Running init code from `initStore` is idempotent: each `const x v` sets a variable
     that already holds `v`, so the store is unchanged. -/
-theorem compile_initExec (prog : Program)
+theorem compileToTAC_initExec (prog : Program)
     (hnd : noDups (prog.decls.map Prod.fst) = true) :
-    prog.compile ⊩ Cfg.run 0 prog.initStore ArrayMem.init ⟶* Cfg.run prog.decls.length prog.initStore ArrayMem.init := by
+    prog.compileToTAC ⊩ Cfg.run 0 prog.initStore ArrayMem.init ⟶* Cfg.run prog.decls.length prog.initStore ArrayMem.init := by
   suffices h : ∀ (k : Nat), k ≤ prog.decls.length →
-      prog.compile ⊩ Cfg.run 0 prog.initStore ArrayMem.init ⟶* Cfg.run k prog.initStore ArrayMem.init from
+      prog.compileToTAC ⊩ Cfg.run 0 prog.initStore ArrayMem.init ⟶* Cfg.run k prog.initStore ArrayMem.init from
     h prog.decls.length (Nat.le_refl _)
   intro k hk
   induction k with
@@ -880,7 +880,7 @@ theorem compile_initExec (prog : Program)
     have hmem_decl : prog.decls[k] ∈ prog.decls := List.getElem_mem hk_lt
     have hval := initStore_declared prog hmem_decl hnd
     -- The const step is a no-op because the value is already present
-    have hstep : Step prog.compile (.run k prog.initStore ArrayMem.init)
+    have hstep : Step prog.compileToTAC (.run k prog.initStore ArrayMem.init)
         (.run (k + 1) prog.initStore ArrayMem.init) := by
       -- Normalize get/getElem
       have hget : prog.decls.get ⟨k, hk_lt⟩ = prog.decls[k] := rfl
@@ -889,9 +889,9 @@ theorem compile_initExec (prog : Program)
       cases hty : (prog.decls[k]).2 with
       | int =>
         simp only [hty, VarTy.defaultVal] at hval
-        have hinst : prog.compile[k]? =
+        have hinst : prog.compileToTAC[k]? =
             some (.const (prog.decls[k]).1 (.int 0)) := by
-          simp only [Prog.getElem?_code, Program.compile, List.getElem?_toArray]
+          simp only [Prog.getElem?_code, Program.compileToTAC, List.getElem?_toArray]
           rw [List.getElem?_append_left (by rw [List.length_append, initCode_length]; omega)]
           rw [List.getElem?_append_left (by rw [initCode_length]; omega)]
           simp only [initCode, List.getElem?_map, List.getElem?_eq_getElem hk_lt,
@@ -900,9 +900,9 @@ theorem compile_initExec (prog : Program)
         rwa [Store.update_of_eq _ _ _ hval] at this
       | bool =>
         simp only [hty, VarTy.defaultVal] at hval
-        have hinst : prog.compile[k]? =
+        have hinst : prog.compileToTAC[k]? =
             some (.const (prog.decls[k]).1 (.bool false)) := by
-          simp only [Prog.getElem?_code, Program.compile, List.getElem?_toArray]
+          simp only [Prog.getElem?_code, Program.compileToTAC, List.getElem?_toArray]
           rw [List.getElem?_append_left (by rw [List.length_append, initCode_length]; omega)]
           rw [List.getElem?_append_left (by rw [initCode_length]; omega)]
           simp only [initCode, List.getElem?_map, List.getElem?_eq_getElem hk_lt,
@@ -911,9 +911,9 @@ theorem compile_initExec (prog : Program)
         rwa [Store.update_of_eq _ _ _ hval] at this
       | float =>
         simp only [hty, VarTy.defaultVal] at hval
-        have hinst : prog.compile[k]? =
+        have hinst : prog.compileToTAC[k]? =
             some (.const (prog.decls[k]).1 (.float 0)) := by
-          simp only [Prog.getElem?_code, Program.compile, List.getElem?_toArray]
+          simp only [Prog.getElem?_code, Program.compileToTAC, List.getElem?_toArray]
           rw [List.getElem?_append_left (by rw [List.length_append, initCode_length]; omega)]
           rw [List.getElem?_append_left (by rw [initCode_length]; omega)]
           simp only [initCode, List.getElem?_map, List.getElem?_eq_getElem hk_lt,
@@ -922,24 +922,24 @@ theorem compile_initExec (prog : Program)
         rwa [Store.update_of_eq _ _ _ hval] at this
     exact Steps.trans ih_steps (Steps.step hstep Steps.refl)
 
-/-- Index into body code within `prog.compile`. The body starts at offset `decls.length`. -/
-theorem compile_body_getElem (prog : Program) (i : Nat)
+/-- Index into body code within `prog.compileToTAC`. The body starts at offset `decls.length`. -/
+theorem compileToTAC_body_getElem (prog : Program) (i : Nat)
     (hi : i < (compileStmt prog.body prog.decls.length 0
       (collectLabels prog.body prog.decls.length)).1.length) :
-    prog.compile[prog.decls.length + i]? =
+    prog.compileToTAC[prog.decls.length + i]? =
       (compileStmt prog.body prog.decls.length 0
         (collectLabels prog.body prog.decls.length)).1[i]? := by
-  simp only [Prog.getElem?_code, Program.compile, List.getElem?_toArray, initCode_length]
+  simp only [Prog.getElem?_code, Program.compileToTAC, List.getElem?_toArray, initCode_length]
   rw [List.getElem?_append_left (by simp [List.length_append, initCode_length]; omega)]
   rw [List.getElem?_append_right (by rw [initCode_length]; omega)]
   simp [initCode_length]
 
-/-- The halt instruction sits right after the body code in `prog.compile`. -/
-theorem compile_halt_getElem (prog : Program) :
-    prog.compile[prog.decls.length +
+/-- The halt instruction sits right after the body code in `prog.compileToTAC`. -/
+theorem compileToTAC_halt_getElem (prog : Program) :
+    prog.compileToTAC[prog.decls.length +
       (compileStmt prog.body prog.decls.length 0
         (collectLabels prog.body prog.decls.length)).1.length]? = some .halt := by
-  simp [Program.compile, initCode_length, List.length_append]
+  simp [Program.compileToTAC, initCode_length, List.length_append]
 
 -- ============================================================
 -- § 5e. Executable well-typedness check for compiled output
@@ -955,7 +955,7 @@ def checkWellTypedProg (Γ : TyCtx) (p : Prog) : Bool :=
 /-- Executable verification: if the source type-checks, the compiled TAC
     is well-typed under the program's TyCtx. -/
 def verifyWellTyped (prog : Program) : Bool :=
-  prog.typeCheck && checkWellTypedProg prog.tyCtx prog.compile
+  prog.typeCheck && checkWellTypedProg prog.tyCtx prog.compileToTAC
 
 -- ============================================================
 -- § 5f. Soundness: type checking ⟹ compiled TAC is well-typed
@@ -1575,29 +1575,29 @@ namespace Program  -- reopen namespace
     Note: `prog.tyCtx` maps declared variables to their declared type,
     int temporaries (`__tN`) to `.int`, and float temporaries (`__ftN`) to `.float`.
     All other undeclared variables default to `.int`. -/
-theorem compile_wellTyped (prog : Program) (h : prog.typeCheck = true) :
-    WellTypedProg prog.tyCtx prog.compile := by
+theorem compileToTAC_wellTyped (prog : Program) (h : prog.typeCheck = true) :
+    WellTypedProg prog.tyCtx prog.compileToTAC := by
   simp [typeCheck, Bool.and_eq_true] at h
   obtain ⟨⟨hnd, hnt⟩, hchk⟩ := h
-  have : prog.compile.code = (initCode prog.decls ++
+  have : prog.compileToTAC.code = (initCode prog.decls ++
       (compileStmt prog.body (initCode prog.decls).length 0
         (collectLabels prog.body (initCode prog.decls).length)).1 ++ [TAC.halt]).toArray :=
-    by simp [Program.compile]
+    by simp [Program.compileToTAC]
   exact allWTI_toArray' this rfl (allWTI_append3 (initCode_wt prog hnd)
     (compileStmt_wt prog hnt prog.body hchk _ _
       (collectLabels prog.body (initCode prog.decls).length)) (allWTI_one .halt))
 
 /-- **Corollary**: A type-checked program with a well-typed initial store
     always makes progress. The next configuration may be `run`, `halt`, or
-    `error` (for div-by-zero). This follows directly from `compile_wellTyped`
+    `error` (for div-by-zero). This follows directly from `compileToTAC_wellTyped`
     and the progress theorem (`Step.progress`). -/
 theorem no_type_stuck (prog : Program)
     (htc : prog.typeCheck = true)
     (σ : Store) (hts : TypedStore prog.tyCtx σ)
-    (pc : Nat) (hpc : pc < prog.compile.size) :
-    ∀ am, ∃ c', Step prog.compile (Cfg.run pc σ am) c' :=
-  fun am => Step.progress prog.compile pc σ am prog.tyCtx hpc
-    (prog.compile_wellTyped htc) hts
+    (pc : Nat) (hpc : pc < prog.compileToTAC.size) :
+    ∀ am, ∃ c', Step prog.compileToTAC (Cfg.run pc σ am) c' :=
+  fun am => Step.progress prog.compileToTAC pc σ am prog.tyCtx hpc
+    (prog.compileToTAC_wellTyped htc) hts
 
 -- ============================================================
 -- § 5g. Compiled programs are step-closed in bounds
@@ -2116,12 +2116,12 @@ private theorem stepClosed_of_allJumpsLe {code : List TAC} {p : Prog}
 
 /-- **Step-closedness**: A type-checked program's compiled output has all
     jump targets within bounds — no instruction can jump outside the program. -/
-theorem compile_stepClosed (prog : Program) (_h : prog.typeCheck = true) :
-    StepClosedInBounds prog.compile := by
+theorem compileToTAC_stepClosed (prog : Program) (_h : prog.typeCheck = true) :
+    StepClosedInBounds prog.compileToTAC := by
   apply stepClosed_of_allJumpsLe (code := initCode prog.decls ++
     (compileStmt prog.body (initCode prog.decls).length 0
       (collectLabels prog.body (initCode prog.decls).length)).1)
-  · simp [Program.compile, List.append_assoc]
+  · simp [Program.compileToTAC, List.append_assoc]
   · simp only [List.length_append]
     apply AllJumpsLe_append
     · exact AllJumpsLe_of_allSeq (initCode_allSeq prog.decls)
@@ -2137,12 +2137,12 @@ theorem compile_stepClosed (prog : Program) (_h : prog.typeCheck = true) :
 
 /-- **No-stuck guarantee**: A type-checked program always has a behavior —
     it either halts, errors (div-by-zero), or diverges. No execution can
-    get stuck. Combines `compile_wellTyped`, `compile_stepClosed`, and
+    get stuck. Combines `compileToTAC_wellTyped`, `compileToTAC_stepClosed`, and
     `has_behavior`. -/
-theorem compile_has_behavior (prog : Program) (htc : prog.typeCheck = true)
+theorem compileToTAC_has_behavior (prog : Program) (htc : prog.typeCheck = true)
     (σ₀ : Store) :
-    ∃ b, program_behavior prog.compile σ₀ b :=
-  has_behavior prog.compile σ₀ (prog.compile_stepClosed htc)
+    ∃ b, program_behavior prog.compileToTAC σ₀ b :=
+  has_behavior prog.compileToTAC σ₀ (prog.compileToTAC_stepClosed htc)
 
 -- ============================================================
 -- § 5h. Pretty-printing

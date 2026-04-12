@@ -31,7 +31,7 @@ def prog : Program where
 #eval prog.verifyWellTyped     -- true (compiled TAC is well-typed)
 
 -- Compile and run
-def tac : Prog := prog.compile
+def tac : Prog := prog.compileToTAC
 #eval tac.code.toList
 #eval do let (σ, _) ← prog.interp 1000 (inputs := [("n", .int 10)]); return σ "s"
 

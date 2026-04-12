@@ -1143,7 +1143,7 @@ private theorem step_run_or_terminal {p : Prog} {pc : Nat} {σ : Store}
 
     **Propagated sorrys:** 2 from `verifiedGenInstr_correct` (arrLoad,
     arrStore). -/
-theorem whole_program_refinement {p : Prog} {r : VerifiedAsmResult}
+theorem tacToArm_refinement {p : Prog} {r : VerifiedAsmResult}
     (hGen : verifiedGenerateAsm p = .ok r)
     {pc : Nat} {σ : Store} {am : ArrayMem}
     (s : ArmState)
@@ -1210,7 +1210,7 @@ theorem initial_extSimRel (layout : VarLayout) (pcMap : Nat → Nat)
     starts from a zero-initialized store, every reachable TAC configuration
     is simulated by ARM steps from a zeroed ARM state.
 
-    This combines `whole_program_refinement` with `initial_extSimRel` to
+    This combines `tacToArm_refinement` with `initial_extSimRel` to
     eliminate all intermediate hypotheses. The only requirements are:
     1. Code generation succeeded (`verifiedGenerateAsm p = .ok r`)
     2. The TAC program reaches `cfg'` from the typed zero-initialized store
@@ -1224,7 +1224,7 @@ private theorem typedInit_encode (Γ : TyCtx) (v : Var) :
   simp [Store.typedInit, Value.ofBitVec, Value.encode]
   cases Γ v <;> simp [Value.ofBitVec, Value.encode]
 
-theorem end_to_end_correctness {p : Prog} {r : VerifiedAsmResult}
+theorem tacToArm_correctness {p : Prog} {r : VerifiedAsmResult}
     (hGen : verifiedGenerateAsm p = .ok r)
     {cfg' : Cfg}
     (hSteps : p ⊩ Cfg.run 0 (Store.typedInit p.tyCtx) (fun _ _ => 0) ⟶* cfg') :
@@ -1232,7 +1232,7 @@ theorem end_to_end_correctness {p : Prog} {r : VerifiedAsmResult}
       { regs := fun _ => 0, fregs := fun _ => 0, stack := fun _ => 0,
         pc := r.pcMap 0, flags := ⟨0, 0⟩ } s' ∧
       ExtSimRel r.layout r.pcMap cfg' s' :=
-  whole_program_refinement hGen _
+  tacToArm_refinement hGen _
     (initial_extSimRel r.layout r.pcMap (Store.typedInit p.tyCtx) (fun _ _ => 0)
       { regs := fun _ => 0, fregs := fun _ => 0, stack := fun _ => 0,
         pc := r.pcMap 0, flags := ⟨0, 0⟩ }
@@ -1379,7 +1379,7 @@ def optimizePipeline (p : Prog) : Except String Prog := do
 def compileToAsm (input : String) : Except String String := do
   let prog ← parseProgram input
   if !prog.typeCheck then .error "program failed type check (frontend)"
-  let tac := prog.compile
+  let tac := prog.compileToTAC
   let opt ← do
     let p ← optimizePipeline tac
     optimizePipeline p

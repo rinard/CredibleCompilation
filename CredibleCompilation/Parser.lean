@@ -576,4 +576,4 @@ def parseProgram (input : String) : Except String Program := do
       i := i + 1
     }
   "
-  return (prog.compile.code.toList, checkCertificateVerboseExec (ConstPropOpt.optimize prog.compile))
+  return (prog.compileToTAC.code.toList, checkCertificateVerboseExec (ConstPropOpt.optimize prog.compileToTAC))

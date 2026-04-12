@@ -60,10 +60,10 @@ def testPipeline (name : String) (tac : Prog) : IO Unit := do
   | .error e => IO.println s!"FAIL ({e})"
 
 #eval! do
-  testPipeline "forward goto" fwdGotoProg.compile
-  testPipeline "backward goto" backwardGoto.compile
-  testPipeline "irreducible" irreducible.compile
-  testPipeline "early exit" earlyExit.compile
+  testPipeline "forward goto" fwdGotoProg.compileToTAC
+  testPipeline "backward goto" backwardGoto.compileToTAC
+  testPipeline "irreducible" irreducible.compileToTAC
+  testPipeline "early exit" earlyExit.compileToTAC
 
 -- End-to-end compileToAsm on benchmark goto programs
 #eval! do

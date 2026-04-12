@@ -183,7 +183,7 @@ end RunTests
       i := i + 1
     }
   "
-  return checkCertificateVerboseExec (ConstPropOpt.optimize prog.compile)
+  return checkCertificateVerboseExec (ConstPropOpt.optimize prog.compileToTAC)
 
 -- Factorial: constant propagation
 #eval! do
@@ -195,7 +195,7 @@ end RunTests
       n := n - 1
     }
   "
-  return checkCertificateVerboseExec (ConstPropOpt.optimize prog.compile)
+  return checkCertificateVerboseExec (ConstPropOpt.optimize prog.compileToTAC)
 
 -- Max: constant propagation
 #eval! do
@@ -203,7 +203,7 @@ end RunTests
     var a : int, b : int, m : int;
     if (a < b) { m := b } else { m := a }
   "
-  return checkCertificateVerboseExec (ConstPropOpt.optimize prog.compile)
+  return checkCertificateVerboseExec (ConstPropOpt.optimize prog.compileToTAC)
 
 -- Nested loops: constant propagation
 #eval! do
@@ -220,7 +220,7 @@ end RunTests
       i := i + 1
     }
   "
-  return checkCertificateVerboseExec (ConstPropOpt.optimize prog.compile)
+  return checkCertificateVerboseExec (ConstPropOpt.optimize prog.compileToTAC)
 
 -- Swap: CSE optimization
 #eval! do
@@ -230,7 +230,7 @@ end RunTests
     a := b;
     b := t
   "
-  return checkCertificateVerboseExec (CSEOpt.optimize prog.compile)
+  return checkCertificateVerboseExec (CSEOpt.optimize prog.compileToTAC)
 
 -- ============================================================
 -- § 7. Parse error tests
