@@ -387,33 +387,33 @@ def refCompile (s : Stmt) : Prog :=
 -- § 3. Code embedding predicate
 -- ============================================================
 
-def CodeAt (code : List TAC) (p : Prog) (offset : Nat) : Prop :=
+def RC.CodeAt (code : List TAC) (p : Prog) (offset : Nat) : Prop :=
   ∀ i, i < code.length → p[offset + i]? = code[i]?
 
-@[simp] theorem CodeAt.nil : CodeAt [] p offset :=
+@[simp] theorem RC.CodeAt.nil : RC.CodeAt [] p offset :=
   fun _ h => absurd h (Nat.not_lt_zero _)
 
-theorem CodeAt.left {c₁ c₂ : List TAC} {p : Prog} {offset : Nat}
-    (h : CodeAt (c₁ ++ c₂) p offset) : CodeAt c₁ p offset := by
+theorem RC.CodeAt.left {c₁ c₂ : List TAC} {p : Prog} {offset : Nat}
+    (h : RC.CodeAt (c₁ ++ c₂) p offset) : RC.CodeAt c₁ p offset := by
   intro i hi
   have := h i (by simp; omega)
   rwa [List.getElem?_append_left (by exact hi)] at this
 
-theorem CodeAt.right {c₁ c₂ : List TAC} {p : Prog} {offset : Nat}
-    (h : CodeAt (c₁ ++ c₂) p offset) : CodeAt c₂ p (offset + c₁.length) := by
+theorem RC.CodeAt.right {c₁ c₂ : List TAC} {p : Prog} {offset : Nat}
+    (h : RC.CodeAt (c₁ ++ c₂) p offset) : RC.CodeAt c₂ p (offset + c₁.length) := by
   intro i hi
   have := h (c₁.length + i) (by simp; omega)
   rw [show offset + (c₁.length + i) = offset + c₁.length + i from by omega] at this
   rwa [List.getElem?_append_right (by omega),
        show c₁.length + i - c₁.length = i from by omega] at this
 
-theorem CodeAt.head {x : TAC} {xs : List TAC} {p : Prog} {offset : Nat}
-    (h : CodeAt (x :: xs) p offset) : p[offset]? = some x := by
+theorem RC.CodeAt.head {x : TAC} {xs : List TAC} {p : Prog} {offset : Nat}
+    (h : RC.CodeAt (x :: xs) p offset) : p[offset]? = some x := by
   have := h 0 (by simp); simpa using this
 
-theorem CodeAt.intro {c₁ c₂ : List TAC} {p : Prog} {offset : Nat}
-    (h₁ : CodeAt c₁ p offset) (h₂ : CodeAt c₂ p (offset + c₁.length)) :
-    CodeAt (c₁ ++ c₂) p offset := by
+theorem RC.CodeAt.intro {c₁ c₂ : List TAC} {p : Prog} {offset : Nat}
+    (h₁ : RC.CodeAt c₁ p offset) (h₂ : RC.CodeAt c₂ p (offset + c₁.length)) :
+    RC.CodeAt (c₁ ++ c₂) p offset := by
   intro i hi
   by_cases hlt : i < c₁.length
   · rw [List.getElem?_append_left hlt]; exact h₁ i hlt

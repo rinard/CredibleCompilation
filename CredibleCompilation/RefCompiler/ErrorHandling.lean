@@ -22,7 +22,7 @@ theorem refCompileExpr_stuck (e : SExpr) (offset nextTmp : Nat) (σ σ_tac : Sto
     (htypedv : e.typedVars σ am)
     (hunsafe : ¬ e.safe σ am p.arrayDecls)
     (hagree : ∀ v, v.isTmp = false → v.isFTmp = false → σ_tac v = σ v)
-    (hcode : CodeAt (refCompileExpr e offset nextTmp).1 p offset) :
+    (hcode : RC.CodeAt (refCompileExpr e offset nextTmp).1 p offset) :
     ∃ pc_s σ_s, FragExec p offset σ_tac pc_s σ_s am am ∧
       Step p (Cfg.run pc_s σ_s am) (Cfg.error σ_s am) ∧
       pc_s < offset + (refCompileExpr e offset nextTmp).1.length := by
@@ -37,7 +37,7 @@ theorem refCompileExpr_stuck (e : SExpr) (offset nextTmp : Nat) (σ σ_tac : Sto
     generalize hri : refCompileExpr idx offset nextTmp = ri at hcode ⊢
     obtain ⟨codeIdx, vIdx, tmp1⟩ := ri
     simp only [] at hcode ⊢
-    have hcodeIdx : CodeAt (refCompileExpr idx offset nextTmp).1 p offset := by
+    have hcodeIdx : RC.CodeAt (refCompileExpr idx offset nextTmp).1 p offset := by
       rw [hri]; exact hcode.left
     by_cases hidx : idx.safe σ am p.arrayDecls
     · -- idx safe, bounds fail
@@ -77,9 +77,9 @@ theorem refCompileExpr_stuck (e : SExpr) (offset nextTmp : Nat) (σ σ_tac : Sto
     generalize hrb : refCompileExpr b (offset + codeA.length) tmp1 = rb at hcode ⊢
     obtain ⟨codeB, vb, tmp2⟩ := rb
     simp only [] at hcode ⊢
-    have hcodeA : CodeAt (refCompileExpr a offset nextTmp).1 p offset := by
+    have hcodeA : RC.CodeAt (refCompileExpr a offset nextTmp).1 p offset := by
       rw [hra]; exact hcode.left.left
-    have hcodeB : CodeAt (refCompileExpr b (offset + codeA.length) tmp1).1 p
+    have hcodeB : RC.CodeAt (refCompileExpr b (offset + codeA.length) tmp1).1 p
         (offset + codeA.length) := by rw [hrb]; exact hcode.left.right
     have hbinop : p[offset + codeA.length + codeB.length]? =
         some (.binop (tmpName tmp2) op va vb) := by
@@ -157,9 +157,9 @@ theorem refCompileExpr_stuck (e : SExpr) (offset nextTmp : Nat) (σ σ_tac : Sto
     generalize hrb : refCompileExpr b (offset + codeA.length) tmp1 = rb at hcode ⊢
     obtain ⟨codeB, vb, tmp2⟩ := rb
     simp only [] at hcode ⊢
-    have hcodeA : CodeAt (refCompileExpr a offset nextTmp).1 p offset := by
+    have hcodeA : RC.CodeAt (refCompileExpr a offset nextTmp).1 p offset := by
       rw [hra]; exact hcode.left.left
-    have hcodeB : CodeAt (refCompileExpr b (offset + codeA.length) tmp1).1 p
+    have hcodeB : RC.CodeAt (refCompileExpr b (offset + codeA.length) tmp1).1 p
         (offset + codeA.length) := by rw [hrb]; exact hcode.left.right
     simp only [SExpr.safe] at hunsafe
     by_cases ha : a.safe σ am p.arrayDecls
@@ -190,7 +190,7 @@ theorem refCompileExpr_stuck (e : SExpr) (offset nextTmp : Nat) (σ σ_tac : Sto
     generalize hre : refCompileExpr e offset nextTmp = re at hcode ⊢
     obtain ⟨codeE, ve, tmp1⟩ := re
     simp only [] at hcode ⊢
-    have hcodeE : CodeAt (refCompileExpr e offset nextTmp).1 p offset := by
+    have hcodeE : RC.CodeAt (refCompileExpr e offset nextTmp).1 p offset := by
       rw [hre]; exact hcode.left
     obtain ⟨pc_s, σ_s, hfrag, hstuck, hlt⟩ :=
       ih offset nextTmp σ_tac htf hftf htv_e hunsafe hagree hcodeE
@@ -205,7 +205,7 @@ theorem refCompileExpr_stuck (e : SExpr) (offset nextTmp : Nat) (σ σ_tac : Sto
     generalize hre : refCompileExpr e offset nextTmp = re at hcode ⊢
     obtain ⟨codeE, ve, tmp1⟩ := re
     simp only [] at hcode ⊢
-    have hcodeE : CodeAt (refCompileExpr e offset nextTmp).1 p offset := by
+    have hcodeE : RC.CodeAt (refCompileExpr e offset nextTmp).1 p offset := by
       rw [hre]; exact hcode.left
     obtain ⟨pc_s, σ_s, hfrag, hstuck, hlt⟩ :=
       ih offset nextTmp σ_tac htf hftf htv_e hunsafe hagree hcodeE
@@ -220,7 +220,7 @@ theorem refCompileExpr_stuck (e : SExpr) (offset nextTmp : Nat) (σ σ_tac : Sto
     generalize hre : refCompileExpr e offset nextTmp = re at hcode ⊢
     obtain ⟨codeE, ve, tmp1⟩ := re
     simp only [] at hcode ⊢
-    have hcodeE : CodeAt (refCompileExpr e offset nextTmp).1 p offset := by
+    have hcodeE : RC.CodeAt (refCompileExpr e offset nextTmp).1 p offset := by
       rw [hre]; exact hcode.left
     obtain ⟨pc_s, σ_s, hfrag, hstuck, hlt⟩ :=
       ih offset nextTmp σ_tac htf hftf htv_e hunsafe hagree hcodeE
@@ -235,7 +235,7 @@ theorem refCompileExpr_stuck (e : SExpr) (offset nextTmp : Nat) (σ σ_tac : Sto
     generalize hri : refCompileExpr idx offset nextTmp = ri at hcode ⊢
     obtain ⟨codeIdx, vIdx, tmp1⟩ := ri
     simp only [] at hcode ⊢
-    have hcodeIdx : CodeAt (refCompileExpr idx offset nextTmp).1 p offset := by
+    have hcodeIdx : RC.CodeAt (refCompileExpr idx offset nextTmp).1 p offset := by
       rw [hri]; exact hcode.left
     by_cases hidx : idx.safe σ am p.arrayDecls
     · -- idx safe, bounds fail
@@ -266,7 +266,7 @@ theorem refCompileBool_stuck (sb : SBool) (offset nextTmp : Nat) (σ σ_tac : St
     (htypedv : sb.typedVars σ am)
     (hunsafe : ¬ sb.safe σ am p.arrayDecls)
     (hagree : ∀ v, v.isTmp = false → v.isFTmp = false → σ_tac v = σ v)
-    (hcode : CodeAt (refCompileBool sb offset nextTmp).1 p offset) :
+    (hcode : RC.CodeAt (refCompileBool sb offset nextTmp).1 p offset) :
     ∃ pc_s σ_s, FragExec p offset σ_tac pc_s σ_s am am ∧
       Step p (Cfg.run pc_s σ_s am) (Cfg.error σ_s am) ∧
       pc_s < offset + (refCompileBool sb offset nextTmp).1.length := by
@@ -282,7 +282,7 @@ theorem refCompileBool_stuck (sb : SBool) (offset nextTmp : Nat) (σ σ_tac : St
     generalize hri : refCompileExpr idx offset nextTmp = ri at hcode ⊢
     obtain ⟨codeIdx, vIdx, tmp1⟩ := ri
     simp only [] at hcode ⊢
-    have hcodeIdx : CodeAt (refCompileExpr idx offset nextTmp).1 p offset := by
+    have hcodeIdx : RC.CodeAt (refCompileExpr idx offset nextTmp).1 p offset := by
       rw [hri]; exact hcode.left
     by_cases hidx : idx.safe σ am p.arrayDecls
     · -- idx safe, bounds fail
@@ -322,9 +322,9 @@ theorem refCompileBool_stuck (sb : SBool) (offset nextTmp : Nat) (σ σ_tac : St
     generalize hrb : refCompileExpr b (offset + codeA.length) tmp1 = rb at hcode ⊢
     obtain ⟨codeB, vb, tmp2⟩ := rb
     simp only [] at hcode ⊢
-    have hcodeA : CodeAt (refCompileExpr a offset nextTmp).1 p offset := by
+    have hcodeA : RC.CodeAt (refCompileExpr a offset nextTmp).1 p offset := by
       rw [hra]; exact hcode.left
-    have hcodeB : CodeAt (refCompileExpr b (offset + codeA.length) tmp1).1 p
+    have hcodeB : RC.CodeAt (refCompileExpr b (offset + codeA.length) tmp1).1 p
         (offset + codeA.length) := by rw [hrb]; exact hcode.right
     by_cases ha : a.safe σ am p.arrayDecls
     · have hb : ¬ b.safe σ am p.arrayDecls := fun h => hunsafe ⟨ha, h⟩
@@ -348,7 +348,7 @@ theorem refCompileBool_stuck (sb : SBool) (offset nextTmp : Nat) (σ σ_tac : St
     generalize hrc : refCompileBool e offset nextTmp = rc at hcode ⊢
     obtain ⟨code, be, tmp'⟩ := rc
     simp only [] at hcode ⊢
-    have hcodeE : CodeAt (refCompileBool e offset nextTmp).1 p offset := by
+    have hcodeE : RC.CodeAt (refCompileBool e offset nextTmp).1 p offset := by
       rw [hrc]; exact hcode
     obtain ⟨pc_s, σ_s, hfrag, hstuck, hlt⟩ := ih offset nextTmp σ_tac htf hftf htypedv hunsafe hagree hcodeE
     rw [hrc] at hlt; simp at hlt
@@ -371,7 +371,7 @@ theorem refCompileBool_stuck (sb : SBool) (offset nextTmp : Nat) (σ σ_tac : St
     generalize hrb : refCompileBool b (offset + codeA.length + 1) (tmp1 + 1) = rb at hcode ⊢
     obtain ⟨codeB, bb, tmp2⟩ := rb
     simp only [] at hcode ⊢
-    have hcodeA : CodeAt (refCompileBool a offset nextTmp).1 p offset := by
+    have hcodeA : RC.CodeAt (refCompileBool a offset nextTmp).1 p offset := by
       rw [hra]; exact hcode.left.left.left
     by_cases ha : a.safe σ am p.arrayDecls
     · have ⟨ha_eval, hb_unsafe⟩ := hunsafe ha
@@ -386,7 +386,7 @@ theorem refCompileBool_stuck (sb : SBool) (offset nextTmp : Nat) (σ σ_tac : St
       have hnot_ba_false : (BoolExpr.not ba).eval σ_a = false := by
         simp [BoolExpr.eval, hba_true]
       have hexec_ifA := FragExec.single_iffalse (am := am) hifgA hnot_ba_false
-      have hcodeB : CodeAt (refCompileBool b (offset + codeA.length + 1) (tmp1 + 1)).1 p
+      have hcodeB : RC.CodeAt (refCompileBool b (offset + codeA.length + 1) (tmp1 + 1)).1 p
           (offset + codeA.length + 1) := by
         rw [hrb]
         have h := hcode.left.right
@@ -420,7 +420,7 @@ theorem refCompileBool_stuck (sb : SBool) (offset nextTmp : Nat) (σ σ_tac : St
     generalize hrb : refCompileBool b (offset + codeA.length + 1) (tmp1 + 1) = rb at hcode ⊢
     obtain ⟨codeB, bb, tmp2⟩ := rb
     simp only [] at hcode ⊢
-    have hcodeA : CodeAt (refCompileBool a offset nextTmp).1 p offset := by
+    have hcodeA : RC.CodeAt (refCompileBool a offset nextTmp).1 p offset := by
       rw [hra]; exact hcode.left.left.left
     by_cases ha : a.safe σ am p.arrayDecls
     · have ⟨ha_eval, hb_unsafe⟩ := hunsafe ha
@@ -433,7 +433,7 @@ theorem refCompileBool_stuck (sb : SBool) (offset nextTmp : Nat) (σ σ_tac : St
       have hifgA : p[offset + codeA.length]? = some (TAC.ifgoto ba (offset + codeA.length + 1 + codeB.length + 3)) :=
         hcode.left.left.right.head
       have hexec_ifA := FragExec.single_iffalse (am := am) hifgA hba_false
-      have hcodeB : CodeAt (refCompileBool b (offset + codeA.length + 1) (tmp1 + 1)).1 p
+      have hcodeB : RC.CodeAt (refCompileBool b (offset + codeA.length + 1) (tmp1 + 1)).1 p
           (offset + codeA.length + 1) := by
         rw [hrb]
         have h := hcode.left.right
@@ -468,9 +468,9 @@ theorem refCompileBool_stuck (sb : SBool) (offset nextTmp : Nat) (σ σ_tac : St
     generalize hrb : refCompileExpr b (offset + codeA.length) tmp1 = rb at hcode ⊢
     obtain ⟨codeB, vb, tmp2⟩ := rb
     simp only [] at hcode ⊢
-    have hcodeA : CodeAt (refCompileExpr a offset nextTmp).1 p offset := by
+    have hcodeA : RC.CodeAt (refCompileExpr a offset nextTmp).1 p offset := by
       rw [hra]; exact hcode.left
-    have hcodeB : CodeAt (refCompileExpr b (offset + codeA.length) tmp1).1 p
+    have hcodeB : RC.CodeAt (refCompileExpr b (offset + codeA.length) tmp1).1 p
         (offset + codeA.length) := by rw [hrb]; exact hcode.right
     by_cases ha : a.safe σ am p.arrayDecls
     · have hb : ¬ b.safe σ am p.arrayDecls := fun h => hunsafe ⟨ha, h⟩
@@ -505,7 +505,7 @@ theorem refCompileStmt_stuck (s : Stmt) (fuel : Nat) (σ σ' : Store) (am am' : 
     (htypedv : s.typedVars fuel σ am p.arrayDecls)
     (hagree : ∀ v, v.isTmp = false → v.isFTmp = false → σ_tac v = σ v)
     (labels : List (String × Nat) := [])
-    (hcode : CodeAt (refCompileStmt s offset nextTmp labels).1 p offset) :
+    (hcode : RC.CodeAt (refCompileStmt s offset nextTmp labels).1 p offset) :
     ∃ pc_s σ_s am_s, FragExec p offset σ_tac pc_s σ_s am am_s ∧
       Step p (Cfg.run pc_s σ_s am_s) (Cfg.error σ_s am_s) ∧
       pc_s < offset + (refCompileStmt s offset nextTmp labels).1.length := by
@@ -641,7 +641,7 @@ theorem refCompileStmt_stuck (s : Stmt) (fuel : Nat) (σ σ' : Store) (am am' : 
         simp [heval] at hinterp hbranch_unsafe htv_branch
         have hexec_if := FragExec.single_iffalse (am := am) hifgoto_instr
           (by rw [heval_bool, heval])
-        have hcode_else : CodeAt (refCompileStmt s2 (offset + codeBool.length + 1) tmpB labels).1 p
+        have hcode_else : RC.CodeAt (refCompileStmt s2 (offset + codeBool.length + 1) tmpB labels).1 p
             (offset + codeBool.length + 1) := by
           rw [hrce]; have := hcode.left.left.right
           simp only [List.length_append, List.length_cons, List.length_nil] at this
@@ -658,7 +658,7 @@ theorem refCompileStmt_stuck (s : Stmt) (fuel : Nat) (σ σ' : Store) (am am' : 
         simp [heval] at hinterp hbranch_unsafe htv_branch
         have hexec_if := FragExec.single_iftrue (am := am) hifgoto_instr
           (by rw [heval_bool, heval])
-        have hcode_then : CodeAt (refCompileStmt s1
+        have hcode_then : RC.CodeAt (refCompileStmt s1
             (offset + codeBool.length + 1 + codeElse.length + 1) tmpElse labels).1 p
             (offset + codeBool.length + 1 + codeElse.length + 1) := by
           rw [hrct]; have := hcode.right
@@ -723,7 +723,7 @@ theorem refCompileStmt_stuck (s : Stmt) (fuel : Nat) (σ σ' : Store) (am am' : 
               exact this
             have hexec_if := FragExec.single_iffalse (am := am) hifgoto_instr
               (by simp only [BoolExpr.eval]; rw [heval_bool, heval]; decide)
-            have hcode_body : CodeAt (refCompileStmt body
+            have hcode_body : RC.CodeAt (refCompileStmt body
                 (offset + codeBool.length + 1) tmpB labels).1 p
                 (offset + codeBool.length + 1) := by
               rw [hrcbody]; have := hcode.left.right
@@ -781,7 +781,7 @@ theorem refCompile_stuck (s : Stmt) (fuel : Nat) (σ σ' : Store)
     (htypedv : s.typedVars fuel σ ArrayMem.init (refCompile s).arrayDecls) :
     ¬ ∃ σ_tac am', haltsWithResult (refCompile s) 0 σ σ_tac ArrayMem.init am' := by
   intro ⟨σ_tac, am', hhalt⟩
-  have hcode : CodeAt (refCompileStmt s 0 0).1 (refCompile s) 0 := by
+  have hcode : RC.CodeAt (refCompileStmt s 0 0).1 (refCompile s) 0 := by
     intro i hi; unfold refCompile; simp only [Prog.ofCode, Prog.getElem?_code, List.getElem?_toArray, Nat.zero_add]
     exact List.getElem?_append_left hi
   obtain ⟨pc_s, σ_s, am_s, hfrag, herror, _⟩ :=
@@ -805,7 +805,7 @@ theorem refCompileStmt_unsafe (s : Stmt) (fuel : Nat) (σ : Store) (am : ArrayMe
     (htypedv : s.typedVars fuel σ am p.arrayDecls)
     (hagree : ∀ v, v.isTmp = false → v.isFTmp = false → σ_tac v = σ v)
     (labels : List (String × Nat) := [])
-    (hcode : CodeAt (refCompileStmt s offset nextTmp labels).1 p offset) :
+    (hcode : RC.CodeAt (refCompileStmt s offset nextTmp labels).1 p offset) :
     ∃ pc_s σ_s am_s, FragExec p offset σ_tac pc_s σ_s am am_s ∧
       Step p (Cfg.run pc_s σ_s am_s) (Cfg.error σ_s am_s) ∧
       pc_s < offset + (refCompileStmt s offset nextTmp labels).1.length := by
@@ -879,9 +879,9 @@ theorem refCompileStmt_unsafe (s : Stmt) (fuel : Nat) (σ : Store) (am : ArrayMe
       obtain ⟨codeA, va, tmp1⟩ := ra
       generalize hrb : refCompileExpr b (offset + codeA.length) tmp1 = rb at hcode ⊢
       obtain ⟨codeB, vb, tmp2⟩ := rb; simp only [] at hcode ⊢
-      have hcodeA : CodeAt (refCompileExpr a offset nextTmp).1 p offset := by
+      have hcodeA : RC.CodeAt (refCompileExpr a offset nextTmp).1 p offset := by
         rw [hra]; exact hcode.left.left
-      have hcodeB : CodeAt (refCompileExpr b (offset + codeA.length) tmp1).1 p
+      have hcodeB : RC.CodeAt (refCompileExpr b (offset + codeA.length) tmp1).1 p
           (offset + codeA.length) := by rw [hrb]; exact hcode.left.right
       by_cases ha : a.safe σ am p.arrayDecls
       · by_cases hb : b.safe σ am p.arrayDecls
@@ -934,7 +934,7 @@ theorem refCompileStmt_unsafe (s : Stmt) (fuel : Nat) (σ : Store) (am : ArrayMe
       dsimp only [refCompileStmt] at hcode ⊢
       generalize hri : refCompileExpr idx offset nextTmp = ri at hcode ⊢
       obtain ⟨codeIdx, vIdx, tmp1⟩ := ri; simp only [] at hcode ⊢
-      have hcodeIdx : CodeAt (refCompileExpr idx offset nextTmp).1 p offset := by
+      have hcodeIdx : RC.CodeAt (refCompileExpr idx offset nextTmp).1 p offset := by
         rw [hri]; exact hcode.left
       by_cases hidx : idx.safe σ am p.arrayDecls
       · have hbounds : ¬ (idx.eval σ am) < arraySizeBv p.arrayDecls arr :=
@@ -977,7 +977,7 @@ theorem refCompileStmt_unsafe (s : Stmt) (fuel : Nat) (σ : Store) (am : ArrayMe
       simp only [SExpr.safe] at hunsafe
       simp only [SExpr.typedVars] at htv_e
       obtain ⟨_, htv_inner⟩ := htv_e
-      have hcodeE : CodeAt (refCompileExpr e' offset nextTmp).1 p offset := by
+      have hcodeE : RC.CodeAt (refCompileExpr e' offset nextTmp).1 p offset := by
         rw [hre]; exact hcode.left
       obtain ⟨pc_s, σ_s, hfrag, hstuck, hlt⟩ :=
         refCompileExpr_stuck e' offset nextTmp σ σ_tac am p
@@ -991,7 +991,7 @@ theorem refCompileStmt_unsafe (s : Stmt) (fuel : Nat) (σ : Store) (am : ArrayMe
       simp only [SExpr.safe] at hunsafe
       simp only [SExpr.typedVars] at htv_e
       obtain ⟨_, htv_inner⟩ := htv_e
-      have hcodeE : CodeAt (refCompileExpr e' offset nextTmp).1 p offset := by
+      have hcodeE : RC.CodeAt (refCompileExpr e' offset nextTmp).1 p offset := by
         rw [hre]; exact hcode.left
       obtain ⟨pc_s, σ_s, hfrag, hstuck, hlt⟩ :=
         refCompileExpr_stuck e' offset nextTmp σ σ_tac am p
@@ -1012,9 +1012,9 @@ theorem refCompileStmt_unsafe (s : Stmt) (fuel : Nat) (σ : Store) (am : ArrayMe
       obtain ⟨codeA, va, tmp1⟩ := ra
       generalize hrb : refCompileExpr b (offset + codeA.length) tmp1 = rb at hcode ⊢
       obtain ⟨codeB, vb, tmp2⟩ := rb; simp only [] at hcode ⊢
-      have hcodeA : CodeAt (refCompileExpr a offset nextTmp).1 p offset := by
+      have hcodeA : RC.CodeAt (refCompileExpr a offset nextTmp).1 p offset := by
         rw [hra]; exact hcode.left.left
-      have hcodeB : CodeAt (refCompileExpr b (offset + codeA.length) tmp1).1 p
+      have hcodeB : RC.CodeAt (refCompileExpr b (offset + codeA.length) tmp1).1 p
           (offset + codeA.length) := by rw [hrb]; exact hcode.left.right
       by_cases ha : a.safe σ am p.arrayDecls
       · by_cases hb : b.safe σ am p.arrayDecls
@@ -1041,7 +1041,7 @@ theorem refCompileStmt_unsafe (s : Stmt) (fuel : Nat) (σ : Store) (am : ArrayMe
       dsimp only [refCompileStmt] at hcode ⊢
       generalize hri : refCompileExpr idx offset nextTmp = ri at hcode ⊢
       obtain ⟨codeIdx, vIdx, tmp1⟩ := ri; simp only [] at hcode ⊢
-      have hcodeIdx : CodeAt (refCompileExpr idx offset nextTmp).1 p offset := by
+      have hcodeIdx : RC.CodeAt (refCompileExpr idx offset nextTmp).1 p offset := by
         rw [hri]; exact hcode.left
       by_cases hidx : idx.safe σ am p.arrayDecls
       · have hbounds : ¬ (idx.eval σ am) < arraySizeBv p.arrayDecls arr :=
@@ -1075,9 +1075,9 @@ theorem refCompileStmt_unsafe (s : Stmt) (fuel : Nat) (σ : Store) (am : ArrayMe
     obtain ⟨codeIdx, vIdx, tmp1⟩ := ri
     generalize hrv : refCompileExpr val (offset + codeIdx.length) tmp1 = rv at hcode ⊢
     obtain ⟨codeVal, vVal, tmp2⟩ := rv; simp only [] at hcode ⊢
-    have hcodeIdx : CodeAt (refCompileExpr idx offset nextTmp).1 p offset := by
+    have hcodeIdx : RC.CodeAt (refCompileExpr idx offset nextTmp).1 p offset := by
       rw [hri]; exact hcode.left.left
-    have hcodeVal : CodeAt (refCompileExpr val (offset + codeIdx.length) tmp1).1 p
+    have hcodeVal : RC.CodeAt (refCompileExpr val (offset + codeIdx.length) tmp1).1 p
         (offset + codeIdx.length) := by rw [hrv]; exact hcode.left.right
     by_cases hidx : idx.safe σ am p.arrayDecls
     · by_cases hval : val.safe σ am p.arrayDecls
@@ -1173,7 +1173,7 @@ theorem refCompileStmt_unsafe (s : Stmt) (fuel : Nat) (σ : Store) (am : ArrayMe
         set afterCB := offset + codeIdx.length + codeBool.length with afterCB_def
         set tInt := tmpName tmp2
         -- Extract instructions
-        have hconv_adj : CodeAt [TAC.ifgoto be (afterCB + 3), TAC.const tInt (.int 0),
+        have hconv_adj : RC.CodeAt [TAC.ifgoto be (afterCB + 3), TAC.const tInt (.int 0),
             TAC.goto (afterCB + 3 + 1), TAC.const tInt (.int 1)] p afterCB := by
           have := hcode.left.right
           simp only [List.length_append] at this; rwa [show offset + (codeIdx.length + codeBool.length) = afterCB from by omega] at this
@@ -1246,7 +1246,7 @@ theorem refCompileStmt_unsafe (s : Stmt) (fuel : Nat) (σ : Store) (am : ArrayMe
       dsimp only [refCompileStmt] at hcode ⊢
       generalize hri : refCompileExpr idx offset nextTmp = ri at hcode ⊢
       obtain ⟨codeIdx, vIdx, tmp1⟩ := ri; simp only [] at hcode ⊢
-      have hcodeIdx : CodeAt (refCompileExpr idx offset nextTmp).1 p offset := by
+      have hcodeIdx : RC.CodeAt (refCompileExpr idx offset nextTmp).1 p offset := by
         rw [hri]; exact hcode.left.left.left
       obtain ⟨pc_s, σ_s, hfrag, hstuck, hlt⟩ :=
         refCompileExpr_stuck idx offset nextTmp σ σ_tac am p htf_idx hftf_idx htv_idx hidx
@@ -1267,9 +1267,9 @@ theorem refCompileStmt_unsafe (s : Stmt) (fuel : Nat) (σ : Store) (am : ArrayMe
     obtain ⟨codeIdx, vIdx, tmp1⟩ := ri
     generalize hrv : refCompileExpr val (offset + codeIdx.length) tmp1 = rv at hcode ⊢
     obtain ⟨codeVal, vVal, tmp2⟩ := rv; simp only [] at hcode ⊢
-    have hcodeIdx : CodeAt (refCompileExpr idx offset nextTmp).1 p offset := by
+    have hcodeIdx : RC.CodeAt (refCompileExpr idx offset nextTmp).1 p offset := by
       rw [hri]; exact hcode.left.left
-    have hcodeVal : CodeAt (refCompileExpr val (offset + codeIdx.length) tmp1).1 p
+    have hcodeVal : RC.CodeAt (refCompileExpr val (offset + codeIdx.length) tmp1).1 p
         (offset + codeIdx.length) := by rw [hrv]; exact hcode.left.right
     by_cases hidx : idx.safe σ am p.arrayDecls
     · by_cases hval : val.safe σ am p.arrayDecls
@@ -1403,7 +1403,7 @@ theorem refCompileStmt_unsafe (s : Stmt) (fuel : Nat) (σ : Store) (am : ArrayMe
       · simp [heval] at hbranch_unsafe htv_branch
         have hexec_if := FragExec.single_iffalse (am := am) hifgoto_instr
           (by rw [heval_bool, heval])
-        have hcode_else : CodeAt (refCompileStmt s2 (offset + codeBool.length + 1) tmpB labels).1 p
+        have hcode_else : RC.CodeAt (refCompileStmt s2 (offset + codeBool.length + 1) tmpB labels).1 p
             (offset + codeBool.length + 1) := by
           rw [hrce]; have := hcode.left.left.right
           simp only [List.length_append, List.length_cons, List.length_nil] at this
@@ -1419,7 +1419,7 @@ theorem refCompileStmt_unsafe (s : Stmt) (fuel : Nat) (σ : Store) (am : ArrayMe
       · simp [heval] at hbranch_unsafe htv_branch
         have hexec_if := FragExec.single_iftrue (am := am) hifgoto_instr
           (by rw [heval_bool, heval])
-        have hcode_then : CodeAt (refCompileStmt s1
+        have hcode_then : RC.CodeAt (refCompileStmt s1
             (offset + codeBool.length + 1 + codeElse.length + 1) tmpElse labels).1 p
             (offset + codeBool.length + 1 + codeElse.length + 1) := by
           rw [hrct]; have := hcode.right
@@ -1485,7 +1485,7 @@ theorem refCompileStmt_unsafe (s : Stmt) (fuel : Nat) (σ : Store) (am : ArrayMe
             exact this
           have hexec_if := FragExec.single_iffalse (am := am) hifgoto_instr
             (by simp only [BoolExpr.eval]; rw [heval_bool, heval]; decide)
-          have hcode_body : CodeAt (refCompileStmt body
+          have hcode_body : RC.CodeAt (refCompileStmt body
               (offset + codeBool.length + 1) tmpB labels).1 p
               (offset + codeBool.length + 1) := by
             rw [hrcbody]; have := hcode.left.right
@@ -1557,7 +1557,7 @@ theorem refCompile_unsafe (s : Stmt) (fuel : Nat) (σ : Store)
     (htypedv : s.typedVars fuel σ ArrayMem.init (refCompile s).arrayDecls) :
     ¬ ∃ σ_tac am', haltsWithResult (refCompile s) 0 σ σ_tac ArrayMem.init am' := by
   intro ⟨σ_tac, am', hhalt⟩
-  have hcode : CodeAt (refCompileStmt s 0 0).1 (refCompile s) 0 := by
+  have hcode : RC.CodeAt (refCompileStmt s 0 0).1 (refCompile s) 0 := by
     intro i hi; unfold refCompile; simp only [Prog.ofCode, Prog.getElem?_code, List.getElem?_toArray, Nat.zero_add]
     exact List.getElem?_append_left hi
   obtain ⟨pc_s, σ_s, am_s, hfrag, herror, _⟩ :=

@@ -156,7 +156,7 @@ private theorem inf_exec_to_StepsN {p : Prog} {f : Nat → Cfg}
 
 /-- The body code from `refCompileStmt` is embedded in `prog.compile`. -/
 private theorem progCompile_body_codeAt (prog : Program) :
-    CodeAt (refCompileStmt prog.body prog.decls.length 0
+    RC.CodeAt (refCompileStmt prog.body prog.decls.length 0
       (collectLabels prog.body prog.decls.length)).1
       prog.compile prog.decls.length := by
   rw [← compileStmt_eq_refCompileStmt (labels := collectLabels prog.body prog.decls.length)]

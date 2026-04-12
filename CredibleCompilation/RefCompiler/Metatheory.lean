@@ -379,7 +379,7 @@ private theorem loop_one_iter
     (hNoGoto : body.noGoto)
     (hagree : ∀ v, v.isTmp = false → v.isFTmp = false → σ_tac v = σ v)
     (labels : List (String × Nat) := [])
-    (hcode : CodeAt (refCompileStmt (.loop b body) offset nextTmp labels).1 p offset) :
+    (hcode : RC.CodeAt (refCompileStmt (.loop b body) offset nextTmp labels).1 p offset) :
     ∃ σ₁_tac k,
       RefStepsN p k (Cfg.run offset σ_tac am) (Cfg.run offset σ₁_tac am₁) ∧
       (∀ v, v.isTmp = false → v.isFTmp = false → σ₁_tac v = σ₁ v) ∧ 1 ≤ k := by
@@ -399,7 +399,7 @@ private theorem loop_one_iter
     fun v hv => htmpfree v (List.mem_append_right _ hv)
   have hftf_body : body.ftmpFree :=
     fun v hv => hftmpfree v (List.mem_append_right _ hv)
-  have hcb : CodeAt (refCompileBool b offset nextTmp).1 p offset := by
+  have hcb : RC.CodeAt (refCompileBool b offset nextTmp).1 p offset := by
     rw [hrcb]; exact hcode.left.left.left
   -- Step 1: Execute bool
   obtain ⟨σ_bool, hexec_bool, heval_bool, hntmp_bool, _⟩ :=
@@ -416,7 +416,7 @@ private theorem loop_one_iter
     simp [BoolExpr.eval, heval_bool, hb]
   have hexec_if := FragExec.single_iffalse (am := am) hifg hnotbe
   -- Step 3: Execute body
-  have hcbody : CodeAt (refCompileStmt body (offset + codeBool.length + 1) tmpB labels).1 p
+  have hcbody : RC.CodeAt (refCompileStmt body (offset + codeBool.length + 1) tmpB labels).1 p
       (offset + codeBool.length + 1) := by
     rw [hrcbody]; have := hcode.left.right
     simp only [List.length_append, List.length_cons, List.length_nil] at this
@@ -454,7 +454,7 @@ theorem refCompileStmt_diverges (s : Stmt) (σ : Store) (am : ArrayMem)
     (htypedv : ∀ fuel, s.typedVars fuel σ am p.arrayDecls)
     (hagree : ∀ v, v.isTmp = false → v.isFTmp = false → σ_tac v = σ v)
     (labels : List (String × Nat) := [])
-    (hcode : CodeAt (refCompileStmt s offset nextTmp labels).1 p offset) :
+    (hcode : RC.CodeAt (refCompileStmt s offset nextTmp labels).1 p offset) :
     ∀ N, ∃ n, n ≥ N ∧ ∃ pc' σ' am', RefStepsN p n (Cfg.run offset σ_tac am) (Cfg.run pc' σ' am') := by
   induction s generalizing σ am offset nextTmp σ_tac with
   | skip => exact absurd (hdiv 0) (by simp [Stmt.interp])
@@ -594,7 +594,7 @@ theorem refCompileStmt_diverges (s : Stmt) (σ : Store) (am : ArrayMem)
         intro fuel; have := htypedv fuel; simp [Stmt.typedVars, heval] at this; exact this.2
       have hexec_if := FragExec.single_iffalse (am := am) hifgoto_instr (by rw [heval_bool, heval])
       obtain ⟨k_if, hk_if⟩ := hexec_if.to_RefStepsN
-      have hcode_else : CodeAt (refCompileStmt s2 (offset + codeBool.length + 1) tmpB labels).1 p
+      have hcode_else : RC.CodeAt (refCompileStmt s2 (offset + codeBool.length + 1) tmpB labels).1 p
           (offset + codeBool.length + 1) := by
         rw [hrce]; have := hcode.left.left.right
         simp only [List.length_append, List.length_cons, List.length_nil] at this
@@ -620,7 +620,7 @@ theorem refCompileStmt_diverges (s : Stmt) (σ : Store) (am : ArrayMem)
         intro fuel; have := htypedv fuel; simp [Stmt.typedVars, heval] at this; exact this.2
       have hexec_if := FragExec.single_iftrue (am := am) hifgoto_instr (by rw [heval_bool, heval])
       obtain ⟨k_if, hk_if⟩ := hexec_if.to_RefStepsN
-      have hcode_then : CodeAt (refCompileStmt s1
+      have hcode_then : RC.CodeAt (refCompileStmt s1
           (offset + codeBool.length + 1 + codeElse.length + 1) tmpElse labels).1 p
           (offset + codeBool.length + 1 + codeElse.length + 1) := by
         rw [hrct]; have := hcode.right
@@ -728,7 +728,7 @@ theorem refCompileStmt_diverges (s : Stmt) (σ : Store) (am : ArrayMem)
         have hexec_if := FragExec.single_iffalse (am := am') (σ := σ_bool) hifg
           (by simp [BoolExpr.eval, heval_bool, hbe])
         obtain ⟨k_pre, hk_pre⟩ := (FragExec.trans' hexec_bool hexec_if).to_RefStepsN
-        have hcode_body : CodeAt (refCompileStmt body (offset + codeBool.length + 1) tmpB labels).1 p
+        have hcode_body : RC.CodeAt (refCompileStmt body (offset + codeBool.length + 1) tmpB labels).1 p
             (offset + codeBool.length + 1) := by
           rw [hrcbody]; have := hcode.left.right
           simp only [List.length_append, List.length_cons, List.length_nil] at this
@@ -765,7 +765,7 @@ theorem refCompile_diverge (s : Stmt) (σ : Store)
     (hsafe : ∀ fuel, s.safe fuel σ ArrayMem.init (refCompile s).arrayDecls)
     (htypedv : ∀ fuel, s.typedVars fuel σ ArrayMem.init (refCompile s).arrayDecls) :
     ∀ σ_tac am', ¬ haltsWithResult (refCompile s) 0 σ σ_tac ArrayMem.init am' := by
-  have hcode : CodeAt (refCompileStmt s 0 0).1 (refCompile s) 0 := by
+  have hcode : RC.CodeAt (refCompileStmt s 0 0).1 (refCompile s) 0 := by
     intro i hi; unfold refCompile; simp only [Prog.ofCode, Prog.getElem?_code, List.getElem?_toArray, Nat.zero_add]
     exact List.getElem?_append_left hi
   have hunbounded := refCompileStmt_diverges s σ ArrayMem.init 0 0 (refCompile s) σ
