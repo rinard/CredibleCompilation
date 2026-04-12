@@ -319,8 +319,8 @@ where
         -- Colored: add (.var origName, .var regName)
         (.var origVar, .var regVar) :: rel'
       else
-        -- Spilled: no mapping needed
-        rel'
+        -- Identity: add (.var v, .var v) so free-variable coverage holds
+        (.var origVar, .var origVar) :: rel'
     | none => rel
   relLoop (prog : Prog) (coloring : List (Var × String))
       (rels : Array (Option EExprRel)) (worklist : List Nat) : Array (Option EExprRel) :=

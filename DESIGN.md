@@ -28,4 +28,6 @@ Record of key design decisions for CredibleCompilation.
 
 12) Make sure codegen works with register allocation information (special variable names for registers) and arrays bounds check elimination information. This means that initial system needs some kind of array bounds elimination information from an analysis like interval analysis. Codegen should check that scratch registers are not used and reject program if they are (or save on stack before use). Or just make scratch registers unnamable - interpret __x? as stack variables.
 
-13) Make sure tac programs are well typed. more generally, codegen is self validating and can refuse to generate code if checks fail.
+13) Make sure tac programs are well typed. more generally, codegen is self validating and can refuse to generate code if checks fail. also scratch register safety and layout injectivity. also consider making data structures finite maps not functions. Also while to tac is self validating and does not generate tac code if various well formedness checks fail. 
+
+14) Always be sure using verified code. Claude has a habit of doing both verified and unverified versions. This was the case for translations into and out of TAC intermediate representation. 
