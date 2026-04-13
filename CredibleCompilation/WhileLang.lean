@@ -581,6 +581,14 @@ structure Program where
   body       : Stmt
   deriving Repr
 
+/-- Decidable check that a statement has no goto/ifgoto. -/
+def Stmt.checkNoGoto : Stmt → Bool
+  | .goto _ | .ifgoto _ _ => false
+  | .seq s₁ s₂ => Stmt.checkNoGoto s₁ && Stmt.checkNoGoto s₂
+  | .ite _ s₁ s₂ => Stmt.checkNoGoto s₁ && Stmt.checkNoGoto s₂
+  | .loop _ body => Stmt.checkNoGoto body
+  | _ => true
+
 namespace Program
 
 /-- Look up a variable's declared type. -/
@@ -674,7 +682,8 @@ def checkStmt (lookup : Var → Option VarTy) (arrayDecls : List (ArrayName × N
 def typeCheck (prog : Program) : Bool :=
   noDups (prog.decls.map Prod.fst) &&
   noTmpDecls prog.decls &&
-  checkStmt prog.lookupTy prog.arrayDecls prog.body
+  checkStmt prog.lookupTy prog.arrayDecls prog.body &&
+  prog.body.checkNoGoto
 
 -- ============================================================
 -- § 5b. Compilation
@@ -823,7 +832,7 @@ theorem initStore_typedStore (prog : Program)
 /-- Extract noDups from typeCheck (public, so other files can use it). -/
 theorem typeCheck_noDups (prog : Program) (h : prog.typeCheck = true) :
     noDups (prog.decls.map Prod.fst) = true := by
-  simp [typeCheck, Bool.and_eq_true] at h; exact h.1.1
+  unfold typeCheck at h; simp only [Bool.and_eq_true] at h; exact h.1.1.1
 
 /-- If a program type-checks, its initial store is well-typed. -/
 theorem typeCheck_initStore_typedStore (prog : Program) (h : prog.typeCheck = true) :
@@ -1582,8 +1591,10 @@ namespace Program  -- reopen namespace
     All other undeclared variables default to `.int`. -/
 theorem compileToTAC_wellTyped (prog : Program) (h : prog.typeCheck = true) :
     WellTypedProg prog.tyCtx prog.compileToTAC := by
-  simp [typeCheck, Bool.and_eq_true] at h
-  obtain ⟨⟨hnd, hnt⟩, hchk⟩ := h
+  unfold typeCheck at h; simp only [Bool.and_eq_true] at h
+  have hnd := h.1.1.1
+  have hnt := h.1.1.2
+  have hchk := h.1.2
   have : prog.compileToTAC.code = (initCode prog.decls ++
       (compileStmt prog.body (initCode prog.decls).length 0
         (collectLabels prog.body (initCode prog.decls).length)).1 ++ [TAC.halt]).toArray :=

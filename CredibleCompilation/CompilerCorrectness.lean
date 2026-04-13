@@ -1014,15 +1014,19 @@ private theorem checkStmt_declared {lookup : Var → Option VarTy}
     · exact checkSExpr_declared hi v hi'
     · exact checkExpr_declared hv v hv'
   | label _ => intro v hv; simp [Stmt.allVars] at hv
-  | goto _ => simp [Program.checkStmt] at h
-  | ifgoto b _ => simp [Program.checkStmt] at h
+  | goto _ => intro v hv; simp [Stmt.allVars] at hv
+  | ifgoto b _ =>
+    simp [Program.checkStmt] at h
+    intro v hv; simp [Stmt.allVars] at hv
+    exact checkSBool_declared h v hv
 
 /-- **Bridge lemma**: A type-checked program's body is tmp-free — no variable
     in the source program uses the compiler-reserved `__t` prefix. -/
 theorem Program.typeCheck_tmpFree (prog : Program) (h : prog.typeCheck = true) :
     prog.body.tmpFree := by
-  simp [Program.typeCheck, Bool.and_eq_true] at h
-  obtain ⟨⟨_, hnt⟩, hchk⟩ := h
+  unfold Program.typeCheck at h; simp only [Bool.and_eq_true] at h
+  have hnt := h.1.1.2
+  have hchk := h.1.2
   intro v hv
   obtain ⟨ty, hlook⟩ := checkStmt_declared hchk v hv
   exact noTmpDecls_not_tmp hnt hlook
@@ -1030,32 +1034,32 @@ theorem Program.typeCheck_tmpFree (prog : Program) (h : prog.typeCheck = true) :
 /-- A type-checked program's body has no ftmp-prefixed variables. -/
 theorem Program.typeCheck_ftmpFree (prog : Program) (h : prog.typeCheck = true) :
     ∀ v ∈ prog.body.allVars, v.isFTmp = false := by
-  simp [Program.typeCheck, Bool.and_eq_true] at h
-  obtain ⟨⟨_, hnt⟩, hchk⟩ := h
+  unfold Program.typeCheck at h; simp only [Bool.and_eq_true] at h
+  have hnt := h.1.1.2
+  have hchk := h.1.2
   intro v hv
   obtain ⟨ty, hlook⟩ := checkStmt_declared hchk v hv
   exact noTmpDecls_not_ftmp hnt hlook
 
-/-- A type-checked statement has no goto/ifgoto. -/
-private theorem checkStmt_noGoto {lookup arrayDecls} {s : Stmt}
-    (h : Program.checkStmt lookup arrayDecls s = true) : s.noGoto := by
+/-- A statement that passes checkNoGoto has no goto/ifgoto. -/
+private theorem checkNoGoto_sound {s : Stmt}
+    (h : s.checkNoGoto = true) : s.noGoto := by
   induction s with
-  | goto _ => unfold Program.checkStmt at h; exact absurd h Bool.false_ne_true
-  | ifgoto _ _ => unfold Program.checkStmt at h; exact absurd h Bool.false_ne_true
+  | goto _ => simp [Stmt.checkNoGoto] at h
+  | ifgoto _ _ => simp [Stmt.checkNoGoto] at h
   | seq s1 s2 ih1 ih2 =>
-    unfold Program.checkStmt at h; rw [Bool.and_eq_true] at h; exact ⟨ih1 h.1, ih2 h.2⟩
+    simp [Stmt.checkNoGoto, Bool.and_eq_true] at h; exact ⟨ih1 h.1, ih2 h.2⟩
   | ite b s1 s2 ih1 ih2 =>
-    unfold Program.checkStmt at h; rw [Bool.and_eq_true] at h
-    rw [Bool.and_eq_true] at h; exact ⟨ih1 h.1.2, ih2 h.2⟩
+    simp [Stmt.checkNoGoto, Bool.and_eq_true] at h; exact ⟨ih1 h.1, ih2 h.2⟩
   | loop b body ih =>
-    unfold Program.checkStmt at h; rw [Bool.and_eq_true] at h; exact ih h.2
+    simp [Stmt.checkNoGoto] at h; exact ih h
   | _ => exact trivial
 
 /-- A type-checked program's body has no goto/ifgoto. -/
 theorem Program.typeCheck_noGoto (prog : Program) (h : prog.typeCheck = true) :
     prog.body.noGoto := by
-  simp [Program.typeCheck, Bool.and_eq_true] at h
-  exact checkStmt_noGoto h.2
+  unfold Program.typeCheck at h; simp only [Bool.and_eq_true] at h
+  exact checkNoGoto_sound h.2
 
 -- ============================================================
 -- § 4d. Source-level type preservation
@@ -1281,15 +1285,18 @@ theorem checkStmt_typedVars
     have ⟨htv_v, _, hwf_v⟩ := checkExpr_typedVars (am := am) hcompat hv hts
     exact ⟨⟨htv_i, hwi_i rfl⟩, ⟨htv_v, hwf_v rfl⟩⟩
   | label _ => simp only [Stmt.typedVars]
-  | goto _ => simp [Program.checkStmt] at hchk
-  | ifgoto b _ => simp [Program.checkStmt] at hchk
+  | goto _ => simp only [Stmt.typedVars]
+  | ifgoto b _ =>
+    simp [Program.checkStmt] at hchk
+    simp only [Stmt.typedVars]
+    exact checkSBool_typedVars hcompat hchk hts
 
 /-- **Bridge lemma**: A type-checked program with a well-typed store satisfies typedVars. -/
 theorem Program.typeCheck_typedVars (prog : Program) (h : prog.typeCheck = true)
     (σ : Store) (am : ArrayMem) (hts : TypedStore prog.tyCtx σ) (fuel : Nat) :
     prog.body.typedVars fuel σ am prog.arrayDecls := by
-  simp [Program.typeCheck, Bool.and_eq_true] at h
-  obtain ⟨⟨_, _⟩, hchk⟩ := h
+  unfold Program.typeCheck at h; simp only [Bool.and_eq_true] at h
+  have hchk := h.1.2
   exact checkStmt_typedVars prog.lookupTy prog.arrayDecls prog.tyCtx σ am prog.body fuel
     (fun x ty hlook => by
       show (prog.lookupTy x).getD (if x.isFTmp then .float else .int) = ty

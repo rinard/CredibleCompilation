@@ -1781,7 +1781,23 @@ private theorem relFindOrigVar_mem {rel : EExprRel} {x x' : Var}
       simp at hp; subst hp
       cases e_o with
       | var v => simp at h; subst h; exact List.Mem.head _
-      | _ => simp at h
+      | lit => simp at h
+      | blit => simp at h
+      | bin => simp at h
+      | tobool => simp at h
+      | cmpE => simp at h
+      | cmpLitE => simp at h
+      | notE => simp at h
+      | andE => simp at h
+      | orE => simp at h
+      | arrRead => simp at h
+      | flit => simp at h
+      | fbin => simp at h
+      | fcmpE => simp at h
+      | intToFloat => simp at h
+      | floatToInt => simp at h
+      | floatExp => simp at h
+      | farrRead => simp at h
     · simp [hp] at h; exact List.Mem.tail _ (ih h)
 
 /-- If `b.mapVarsRel rel = some origCond`, then `b.eval σ_t = origCond.eval σ_o`
@@ -2196,8 +2212,12 @@ private theorem transRel_sound (dc : ECertificate)
           simp [Array.getD, dif_pos (bound_of_getElem? hdic)]
           exact (Array.getElem?_eq_some_iff.mp hdic).2
         rw [hgetD] at hpc_check; rw [horig] at hpc_check
-        rw [Bool.and_eq_true] at hpc_check; obtain ⟨h12, hz_rel⟩ := hpc_check
-        rw [Bool.and_eq_true] at h12; obtain ⟨hop_eq, hy_rel⟩ := h12
+        -- Extract op == op' (checked for all binops)
+        rw [Bool.and_eq_true] at hpc_check; obtain ⟨hop_eq, hrest⟩ := hpc_check
+        have hop := beq_iff_eq.mp hop_eq
+        -- Resolve the match on op_t in hrest (op_t = div or mod)
+        rw [hop] at hrest
+        rw [Bool.and_eq_true] at hrest; obtain ⟨hy_rel, hz_rel⟩ := hrest
         -- From the step: extract a_t, b_t and op_t.safe a_t b_t
         have ⟨a_t, b_t, hya_t, hzb_t, hsafe_t⟩ : ∃ a_t b_t : BitVec 64,
             σ_t y_t = .int a_t ∧ σ_t z_t = .int b_t ∧ op_t.safe a_t b_t := by
@@ -2216,16 +2236,33 @@ private theorem transRel_sound (dc : ECertificate)
         have ha_eq : a_o = a_t := Value.int.inj ((hya).symm.trans (hσt_y ▸ hya_t))
         have hb_eq : b_o = b_t := Value.int.inj ((hzb).symm.trans (hσt_z ▸ hzb_t))
         subst ha_eq; subst hb_eq
-        simp only [BinOp.safe]; rw [beq_iff_eq.mp hop_eq] at hsafe_t; exact hsafe_t
+        simp only [BinOp.safe]; rw [hop] at hsafe_t; exact hsafe_t
       | _ =>
         intro hstep hpc_check
-        -- The strengthened checker rejects non-binop trans with div/mod orig
         rw [hinstr] at hpc_check
         have hgetD : dc.instrCerts.getD pc_t default = dic := by
           simp [Array.getD, dif_pos (bound_of_getElem? hdic)]
           exact (Array.getElem?_eq_some_iff.mp hdic).2
         rw [hgetD] at hpc_check; rw [horig] at hpc_check
-        simp at hpc_check
+        simp only at hpc_check
+        set inv := dc.inv_orig.getD dic.pc_orig ([] : EInv) with hinv_def
+        cases hfind : inv.find? (fun (w, _) => w == z_o) with
+        | none => simp [hfind] at hpc_check
+        | some p =>
+          obtain ⟨v, e⟩ := p
+          have hmem := List.mem_of_find?_eq_some hfind
+          have hpred : v = z_o := by
+            have hfs := List.find?_some hfind
+            simp only at hfs; exact beq_iff_eq.mp hfs
+          cases e with
+          | lit c =>
+            simp [hfind] at hpc_check
+            rw [hpred] at hmem
+            have hinv_z := hinv_o (z_o, .lit c) hmem
+            simp [Expr.eval] at hinv_z
+            rw [hinv_z] at hzb; cases hzb
+            simp only [BinOp.safe]; exact hpc_check
+          | _ => simp [hfind] at hpc_check
   -- Derive arguments for execPath_sound
   set inv_o := dc.inv_orig.getD dic.pc_orig ([] : EInv) with hinv_o_def
   have hrepr_nil : ∀ v, (ssGet ([] : SymStore) v).eval σ_o am_t = σ_o v :=
@@ -2826,20 +2863,36 @@ theorem checkDivPreservationExec_sound (dc : ECertificate)
     | some instr_o =>
       cases instr_o with
       | binop x' op' y' z' =>
-        rw [Bool.and_eq_true] at hpc; obtain ⟨h12, hz_eq⟩ := hpc
-        rw [Bool.and_eq_true] at h12; obtain ⟨hop_eq, hy_eq⟩ := h12
+        rw [Bool.and_eq_true] at hpc; obtain ⟨hop_eq, hrest⟩ := hpc
         have hop : op = op' := beq_iff_eq.mp hop_eq
-        have hy_find : relFindOrigVar ic.rel y = some y' := beq_iff_eq.mp hy_eq
-        have hz_find : relFindOrigVar ic.rel z = some z' := beq_iff_eq.mp hz_eq
-        -- Transfer values through membership-based store relation
-        have hy_mem := relFindOrigVar_mem hy_find
-        have hz_mem := relFindOrigVar_mem hz_find
-        have hσt_y := hrel (.var y') y hy_mem; simp [Expr.eval] at hσt_y
-        have hσt_z := hrel (.var z') z hz_mem; simp [Expr.eval] at hσt_z
-        have hya' : σ_o y' = .int a := by rw [← hσt_y]; exact hya
-        have hzb' : σ_o z' = .int b := by rw [← hσt_z]; exact hzb
-        exact ⟨σ_o, am_o, Steps.single (Step.error horig hya' hzb' (hop ▸ hunsafe))⟩
-      | _ => simp at hpc
+        have : op = .div ∨ op = .mod := by
+          cases op with
+          | add | sub | mul => exact absurd True.intro hunsafe
+          | div => exact Or.inl rfl
+          | mod => exact Or.inr rfl
+        rcases this with rfl | rfl <;> (
+          rw [Bool.and_eq_true] at hrest; obtain ⟨hy_eq, hz_eq⟩ := hrest
+          have hy_find : relFindOrigVar ic.rel y = some y' := beq_iff_eq.mp hy_eq
+          have hz_find : relFindOrigVar ic.rel z = some z' := beq_iff_eq.mp hz_eq
+          have hy_mem := relFindOrigVar_mem hy_find
+          have hz_mem := relFindOrigVar_mem hz_find
+          have hσt_y := hrel (.var y') y hy_mem; simp [Expr.eval] at hσt_y
+          have hσt_z := hrel (.var z') z hz_mem; simp [Expr.eval] at hσt_z
+          have hya' : σ_o y' = .int a := by rw [← hσt_y]; exact hya
+          have hzb' : σ_o z' = .int b := by rw [← hσt_z]; exact hzb
+          exact ⟨σ_o, am_o, Steps.single (Step.error horig hya' hzb' (hop ▸ hunsafe))⟩)
+      | const => simp at hpc
+      | copy => simp at hpc
+      | boolop => simp at hpc
+      | goto => simp at hpc
+      | ifgoto => simp at hpc
+      | halt => simp at hpc
+      | arrLoad => simp at hpc
+      | arrStore => simp at hpc
+      | fbinop => simp at hpc
+      | intToFloat => simp at hpc
+      | floatToInt => simp at hpc
+      | floatExp => simp at hpc
   | arrLoad_boundsError hinstr hidx_val hbnd_fail =>
     rename_i idxVal arr _ idx _
     -- Extract bounds-preservation checker info for pc_t
