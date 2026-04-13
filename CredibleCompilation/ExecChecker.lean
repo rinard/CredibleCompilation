@@ -280,6 +280,9 @@ def relGetOrigExpr (rel : EExprRel) (v : Var) : Expr :=
 def relFindOrigVar (rel : EExprRel) (v : Var) : Option Var :=
   match rel.find? (fun p => p.2 == .var v) with
   | some (.var v', _) => some v'
+  -- For non-renaming transforms (e.g., LICM): a literal-valued pair (lit c, var x)
+  -- means x maps to itself (same variable, known constant value).
+  | some (_, .var v') => some v'
   | _ => none
 
 /-- Map variables in a BoolExpr through the expression relation.
@@ -520,8 +523,14 @@ def checkInvariantsPreservedExec (cert : ECertificate) : Bool :=
     (List.range prog.size).all fun pc =>
       match prog[pc]? with
       | some instr =>
+        let (ss, _) := execSymbolic ([] : SymStore) ([] : SymArrayMem) instr
+        let ssMap := FastVarMap.ofList ss
+        let invMap := FastVarMap.ofList (inv.getD pc ([] : EInv))
         (successors instr pc).all fun pc' =>
-          (inv.getD pc' ([] : EInv)).all (checkInvAtom (inv.getD pc ([] : EInv)) instr)
+          (inv.getD pc' ([] : EInv)).all fun (x, e) =>
+            let lhs := (ssMap.getD x (.var x)).simplifyFast invMap
+            let rhs := e.substSymFast ssMap |>.simplifyFast invMap
+            lhs == rhs
       | none => true
   checkProg cert.orig cert.inv_orig &&
   checkProg cert.trans cert.inv_trans
@@ -633,20 +642,31 @@ def checkRelConsistency
   let (origSS, origSAM) := execPath orig ([] : SymStore) ([] : SymArrayMem) pc_orig origLabels
   let (transSS, transSAM) := execSymbolic ([] : SymStore) ([] : SymArrayMem) transInstr
   let preSubst := buildSubstMap rel_pre
+  -- Build HashMap versions for O(1) lookups in the hot inner loop
+  let origSSMap := FastVarMap.ofList origSS
+  let transSSMap := FastVarMap.ofList transSS
+  let preSubstMap := FastVarMap.ofList preSubst
+  let invMap := FastVarMap.ofList inv_orig
   let pairCheck := rel_post.all fun (e_o, e_t) =>
-    (e_o.substSym origSS).simplify inv_orig ==
-    ((e_t.substSym transSS).substSym preSubst).simplify inv_orig
+    let origVal := e_o.substSymFast origSSMap |>.simplifyFast invMap
+    let transVal := (e_t.substSymFast transSSMap).substSymFast preSubstMap |>.simplifyFast invMap
+    origVal == transVal
+  -- Free-variable coverage: for each (_, e_t) in rel_post, all free variables of
+  -- (e_t.substSym transSS) must have a pair in rel_pre.
+  -- Also covers array memory expression variables (i_t, v_t from transSAM).
+  let relVarSet := Std.HashMap.ofList (rel_pre.filterMap fun (_, e_t') =>
+    match e_t' with | .var w => some (w, ()) | _ => none)
+  let relHasVar (w : Var) := relVarSet.contains w
   let fvCheck := rel_post.all fun (_, e_t) =>
-    (e_t.substSym transSS).freeVars.all fun w =>
-      rel_pre.any fun (_, e_t') => e_t' == .var w
+    (e_t.substSymFast transSSMap).freeVars.all fun w => relHasVar w
   let amFvCheck := transSAM.all fun (_, i_t, v_t) =>
-    (i_t.freeVars.all fun w => rel_pre.any fun (_, e_t') => e_t' == .var w) &&
-    (v_t.freeVars.all fun w => rel_pre.any fun (_, e_t') => e_t' == .var w)
+    i_t.freeVars.all (fun w => relHasVar w) &&
+    v_t.freeVars.all (fun w => relHasVar w)
   let amCheck := origSAM.length == transSAM.length &&
     (origSAM.zip transSAM).all fun ((a_o, i_o, v_o), (a_t, i_t, v_t)) =>
       a_o == a_t &&
-      i_o.simplify inv_orig == (i_t.substSym preSubst).simplify inv_orig &&
-      v_o.simplify inv_orig == (v_t.substSym preSubst).simplify inv_orig
+      i_o.simplifyFast invMap == (i_t.substSymFast preSubstMap).simplifyFast invMap &&
+      v_o.simplifyFast invMap == (v_t.substSymFast preSubstMap).simplifyFast invMap
   pairCheck && fvCheck && amFvCheck && amCheck
 
 /-- **Condition 3**: Every transition in the transformed program has a
