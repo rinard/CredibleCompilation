@@ -2,15 +2,32 @@ var rep : int, i : int, j : int, ink : int, n : int, k : int,
     scale : float, xnm : float, e6 : float, e3 : float,
     xnei : float, xnc : float,
     fuzz : float, buzz : float, fizz : float;
-array vsp[101] : float, vstp[101] : float, vxne[101] : float,
-      vxnd[101] : float, ve3[101] : float, vlr[101] : float,
-      vlin[101] : float;
+array vsp[102] : float, vstp[102] : float, vxne[102] : float,
+      vxnd[102] : float, ve3[102] : float, vlr[102] : float,
+      vlin[102] : float;
 
 n := 101;
 
-rep := 0;
-while (rep < 10000) {
-  i := n - 2;
+fuzz := 0.001234500;
+buzz := 1.0 + fuzz;
+fizz := 1.1 * fuzz;
+k := 1;
+while (k <= n) {
+  buzz := (1.0 - fuzz) * buzz + fuzz;
+  fuzz := 0.0 - fuzz;
+  vsp[k] := (buzz - fizz) * 0.1;
+  vstp[k] := (buzz - fizz) * 0.1;
+  vxne[k] := (buzz - fizz) * 0.1;
+  vxnd[k] := (buzz - fizz) * 0.1;
+  ve3[k] := (buzz - fizz) * 0.1;
+  vlr[k] := (buzz - fizz) * 0.1;
+  vlin[k] := (buzz - fizz) * 0.1;
+  k := k + 1
+};
+
+rep := 1;
+while (rep <= 10000) {
+  i := n - 1;
   j := 0;
   ink := 0 - 1;
   scale := 5.0 / 3.0;
@@ -18,22 +35,22 @@ while (rep < 10000) {
   e6 := 1.03 / 3.07;
   goto L61;
   L60:;
-  e6 := xnm * vsp[i] + vstp[i];
-  vxne[i] := e6;
+  e6 := xnm * vsp[i + 1] + vstp[i + 1];
+  vxne[i + 1] := e6;
   xnm := e6;
-  ve3[i] := e6;
+  ve3[i + 1] := e6;
   i := i + ink;
   if (i == j) goto L62;
   L61:;
-  e3 := xnm * vlr[i] + vlin[i];
-  xnei := vxne[i];
-  vxnd[i] := e6;
+  e3 := xnm * vlr[i + 1] + vlin[i + 1];
+  xnei := vxne[i + 1];
+  vxnd[i + 1] := e6;
   xnc := scale * e3;
   if (xnm > xnc) goto L60;
   if (xnei > xnc) goto L60;
-  ve3[i] := e3;
+  ve3[i + 1] := e3;
   e6 := e3 + e3 - xnm;
-  vxne[i] := e3 + e3 - xnei;
+  vxne[i + 1] := e3 + e3 - xnei;
   xnm := e6;
   i := i + ink;
   if (i != j) goto L61;

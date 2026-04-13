@@ -1,3 +1,6 @@
+/* K3 — Inner product (1-based indexing, matches Fortran exactly)
+   Fortran: DIMENSION Z(1001), X(1001), N=1001
+   DO K=1,N: Q = Q + Z(K)*X(K) */
 #include <stdio.h>
 #include <time.h>
 #include "signel.h"
@@ -6,19 +9,19 @@
 #define NREPS 10000
 
 int main(void) {
-    double x[N], z[N];
+    double x[1002], z[1002];
 
-    signel(x, N);
-    signel(z, N);
+    signel(z+1, 1001);
+    signel(x+1, 1001);
 
     struct timespec t0, t1;
     clock_gettime(CLOCK_MONOTONIC, &t0);
 
     double q = 0.0;
-    for (int rep = 0; rep < NREPS; rep++) {
+    for (long rep = 0; rep < NREPS; rep++) {
         q = 0.0;
-        for (int i = 0; i < N; i++) {
-            q += x[i] * z[i];
+        for (long k = 1; k <= N; k++) {
+            q = q + z[k] * x[k];
         }
     }
 

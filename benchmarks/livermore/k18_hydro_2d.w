@@ -1,128 +1,142 @@
 var rep : int, k : int, j : int, t : float, s : float,
-    kj : int, kjm1 : int, kjp1 : int,
-    kp1jm1 : int, km1j : int, kp1j : int,
     fuzz : float, buzz : float, fizz : float;
-array za[707] : float, zb[707] : float, zp[707] : float, zq[707] : float,
-      zr[707] : float, zm[707] : float, zu[707] : float, zv[707] : float,
-      zz[707] : float;
+array za[708] : float, zb[708] : float, zp[708] : float, zq[708] : float,
+      zr[708] : float, zm[708] : float, zu[708] : float, zv[708] : float,
+      zz[708] : float;
 
 fuzz := 0.001234500;
 buzz := 1.0 + fuzz;
 fizz := 1.1 * fuzz;
-k := 0;
-while (k < 707) {
-  buzz := (1.0 - fuzz) * buzz + fuzz;
-  fuzz := 0.0 - fuzz;
-  zp[k] := (buzz - fizz) * 0.1;
-  k := k + 1
-};
-
-fuzz := 0.001234500;
-buzz := 1.0 + fuzz;
-fizz := 1.1 * fuzz;
-k := 0;
-while (k < 707) {
-  buzz := (1.0 - fuzz) * buzz + fuzz;
-  fuzz := 0.0 - fuzz;
-  zq[k] := (buzz - fizz) * 0.1;
-  k := k + 1
+j := 1;
+while (j <= 7) {
+  k := 1;
+  while (k <= 101) {
+    buzz := (1.0 - fuzz) * buzz + fuzz;
+    fuzz := 0.0 - fuzz;
+    zp[(j - 1) * 101 + k] := (buzz - fizz) * 0.1;
+    k := k + 1
+  };
+  j := j + 1
 };
 
 fuzz := 0.001234500;
 buzz := 1.0 + fuzz;
 fizz := 1.1 * fuzz;
-k := 0;
-while (k < 707) {
-  buzz := (1.0 - fuzz) * buzz + fuzz;
-  fuzz := 0.0 - fuzz;
-  zr[k] := (buzz - fizz) * 0.1;
-  k := k + 1
+j := 1;
+while (j <= 7) {
+  k := 1;
+  while (k <= 101) {
+    buzz := (1.0 - fuzz) * buzz + fuzz;
+    fuzz := 0.0 - fuzz;
+    zq[(j - 1) * 101 + k] := (buzz - fizz) * 0.1;
+    k := k + 1
+  };
+  j := j + 1
 };
 
 fuzz := 0.001234500;
 buzz := 1.0 + fuzz;
 fizz := 1.1 * fuzz;
-k := 0;
-while (k < 707) {
-  buzz := (1.0 - fuzz) * buzz + fuzz;
-  fuzz := 0.0 - fuzz;
-  zm[k] := (buzz - fizz) * 0.1 + 10.0;
-  k := k + 1
+j := 1;
+while (j <= 7) {
+  k := 1;
+  while (k <= 101) {
+    buzz := (1.0 - fuzz) * buzz + fuzz;
+    fuzz := 0.0 - fuzz;
+    zr[(j - 1) * 101 + k] := (buzz - fizz) * 0.1;
+    k := k + 1
+  };
+  j := j + 1
 };
 
 fuzz := 0.001234500;
 buzz := 1.0 + fuzz;
 fizz := 1.1 * fuzz;
-k := 0;
-while (k < 707) {
-  buzz := (1.0 - fuzz) * buzz + fuzz;
-  fuzz := 0.0 - fuzz;
-  zz[k] := (buzz - fizz) * 0.1;
-  k := k + 1
+j := 1;
+while (j <= 7) {
+  k := 1;
+  while (k <= 101) {
+    buzz := (1.0 - fuzz) * buzz + fuzz;
+    fuzz := 0.0 - fuzz;
+    zm[(j - 1) * 101 + k] := (buzz - fizz) * 0.1 + 10.0;
+    k := k + 1
+  };
+  j := j + 1
 };
 
-k := 0;
-while (k < 707) {
-  zu[k] := 0.0;
-  zv[k] := 0.0;
-  za[k] := 0.0;
-  zb[k] := 0.0;
-  k := k + 1
+fuzz := 0.001234500;
+buzz := 1.0 + fuzz;
+fizz := 1.1 * fuzz;
+j := 1;
+while (j <= 7) {
+  k := 1;
+  while (k <= 101) {
+    buzz := (1.0 - fuzz) * buzz + fuzz;
+    fuzz := 0.0 - fuzz;
+    zz[(j - 1) * 101 + k] := (buzz - fizz) * 0.1;
+    k := k + 1
+  };
+  j := j + 1
 };
 
-rep := 0;
-while (rep < 10000) {
+j := 1;
+while (j <= 7) {
+  k := 1;
+  while (k <= 101) {
+    za[(j - 1) * 101 + k] := 0.0;
+    zb[(j - 1) * 101 + k] := 0.0;
+    zu[(j - 1) * 101 + k] := 0.0;
+    zv[(j - 1) * 101 + k] := 0.0;
+    k := k + 1
+  };
+  j := j + 1
+};
+
+rep := 1;
+while (rep <= 10000) {
   t := 0.0037;
   s := 0.0041;
 
-  k := 1;
-  while (k < 6) {
-    j := 1;
-    while (j < 100) {
-      kj := k * 101 + j;
-      kjm1 := k * 101 + (j - 1);
-      kp1jm1 := (k + 1) * 101 + (j - 1);
-      km1j := (k - 1) * 101 + j;
-      za[kj] := (zp[kp1jm1] + zq[kp1jm1] - zp[kjm1] - zq[kjm1])
-              * (zr[kj] + zr[kjm1])
-              / (zm[kjm1] + zm[kp1jm1]);
-      zb[kj] := (zp[kjm1] + zq[kjm1] - zp[kj] - zq[kj])
-              * (zr[kj] + zr[km1j])
-              / (zm[kj] + zm[kjm1]);
+  k := 2;
+  while (k <= 6) {
+    j := 2;
+    while (j <= 100) {
+      za[(k - 1) * 101 + j] := (zp[(k + 1 - 1) * 101 + j - 1] + zq[(k + 1 - 1) * 101 + j - 1]
+                - zp[(k - 1) * 101 + j - 1] - zq[(k - 1) * 101 + j - 1])
+              * (zr[(k - 1) * 101 + j] + zr[(k - 1) * 101 + j - 1])
+              / (zm[(k - 1) * 101 + j - 1] + zm[(k + 1 - 1) * 101 + j - 1]);
+      zb[(k - 1) * 101 + j] := (zp[(k - 1) * 101 + j - 1] + zq[(k - 1) * 101 + j - 1]
+                - zp[(k - 1) * 101 + j] - zq[(k - 1) * 101 + j])
+              * (zr[(k - 1) * 101 + j] + zr[(k - 1 - 1) * 101 + j])
+              / (zm[(k - 1) * 101 + j] + zm[(k - 1) * 101 + j - 1]);
       j := j + 1
     };
     k := k + 1
   };
 
-  k := 1;
-  while (k < 6) {
-    j := 1;
-    while (j < 100) {
-      kj := k * 101 + j;
-      kjm1 := k * 101 + (j - 1);
-      km1j := (k - 1) * 101 + j;
-      kjp1 := k * 101 + (j + 1);
-      kp1j := (k + 1) * 101 + j;
-      zu[kj] := zu[kj] + s * (za[kj] * (zz[kj] - zz[kjp1])
-                - za[kjm1] * (zz[kj] - zz[kjm1])
-                - zb[kj] * (zz[kj] - zz[km1j])
-                + zb[kp1j] * (zz[kj] - zz[kp1j]));
-      zv[kj] := zv[kj] + s * (za[kj] * (zr[kj] - zr[kjp1])
-                - za[kjm1] * (zr[kj] - zr[kjm1])
-                - zb[kj] * (zr[kj] - zr[km1j])
-                + zb[kp1j] * (zr[kj] - zr[kp1j]));
+  k := 2;
+  while (k <= 6) {
+    j := 2;
+    while (j <= 100) {
+      zu[(k - 1) * 101 + j] := zu[(k - 1) * 101 + j] + s * (za[(k - 1) * 101 + j] * (zz[(k - 1) * 101 + j] - zz[(k - 1) * 101 + j + 1])
+                - za[(k - 1) * 101 + j - 1] * (zz[(k - 1) * 101 + j] - zz[(k - 1) * 101 + j - 1])
+                - zb[(k - 1) * 101 + j] * (zz[(k - 1) * 101 + j] - zz[(k - 1 - 1) * 101 + j])
+                + zb[(k + 1 - 1) * 101 + j] * (zz[(k - 1) * 101 + j] - zz[(k + 1 - 1) * 101 + j]));
+      zv[(k - 1) * 101 + j] := zv[(k - 1) * 101 + j] + s * (za[(k - 1) * 101 + j] * (zr[(k - 1) * 101 + j] - zr[(k - 1) * 101 + j + 1])
+                - za[(k - 1) * 101 + j - 1] * (zr[(k - 1) * 101 + j] - zr[(k - 1) * 101 + j - 1])
+                - zb[(k - 1) * 101 + j] * (zr[(k - 1) * 101 + j] - zr[(k - 1 - 1) * 101 + j])
+                + zb[(k + 1 - 1) * 101 + j] * (zr[(k - 1) * 101 + j] - zr[(k + 1 - 1) * 101 + j]));
       j := j + 1
     };
     k := k + 1
   };
 
-  k := 1;
-  while (k < 6) {
-    j := 1;
-    while (j < 100) {
-      kj := k * 101 + j;
-      zr[kj] := zr[kj] + t * zu[kj];
-      zz[kj] := zz[kj] + t * zv[kj];
+  k := 2;
+  while (k <= 6) {
+    j := 2;
+    while (j <= 100) {
+      zr[(k - 1) * 101 + j] := zr[(k - 1) * 101 + j] + t * zu[(k - 1) * 101 + j];
+      zz[(k - 1) * 101 + j] := zz[(k - 1) * 101 + j] + t * zv[(k - 1) * 101 + j];
       j := j + 1
     };
     k := k + 1

@@ -4,7 +4,7 @@ C
       PROGRAM K04
       IMPLICIT DOUBLE PRECISION (A-H,O-Z)
       INTEGER REP
-      DIMENSION X(1001), Y(1001)
+      DIMENSION X(1201), Y(1001)
 C
 C     Initialize arrays using SIGNEL pattern
 C

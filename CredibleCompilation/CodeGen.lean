@@ -57,6 +57,8 @@ private def collectVars (p : Prog) : List Var :=
                           if a.contains y then a else a ++ [y]
     | .floatExp x y    => let a := if acc.contains x then acc else acc ++ [x]
                           if a.contains y then a else a ++ [y]
+    | .floatSqrt x y   => let a := if acc.contains x then acc else acc ++ [x]
+                          if a.contains y then a else a ++ [y]
     | .goto _          => acc
     | .ifgoto _ _      => acc
     | .halt            => acc
@@ -169,7 +171,11 @@ private def ppInstr (lbl : Nat → String) (afterFcmp : Bool) (instr : ArmInstr)
   | .cmp rn rm =>
     [s!"  cmp {ppReg rn}, {ppReg rm}"]
   | .cmpImm rn imm =>
-    [s!"  cmp {ppReg rn}, #{imm.toInt}"]
+    if imm.toInt ≤ 4095 then
+      [s!"  cmp {ppReg rn}, #{imm.toInt}"]
+    else
+      -- Large immediate: load into x0, then compare with register
+      [s!"  mov x0, #{imm.toInt}", s!"  cmp {ppReg rn}, x0"]
   | .cset _rd c =>
     [s!"  cset w0, {if afterFcmp then ppCondFloat c else ppCond c}"]
   | .cbz rn target =>
@@ -229,6 +235,8 @@ private def ppInstr (lbl : Nat → String) (afterFcmp : Bool) (instr : ArmInstr)
     let store := if fd == .d0 then [] else [s!"  fmov {ppFReg fd}, d0"]
     load ++ ["  stp x29, x30, [sp, #-16]!", "  bl _exp",
              "  ldp x29, x30, [sp], #16"] ++ store
+  | .fsqrt fd fn =>
+    [s!"  fsqrt {ppFReg fd}, {ppFReg fn}"]
 
 /-- Pretty-print a list of ArmInstr, tracking fcmp state for cset. -/
 private def ppInstrs (lbl : Nat → String) : List ArmInstr → List String
@@ -1117,6 +1125,9 @@ private theorem step_run_or_terminal {p : Prog} {pc : Nat} {σ : Store}
   | floatExp h h1 =>
     exact .inl ⟨_, _, _, rfl, type_preservation hwtp hts hpc
       (show Step p (.run pc σ am) _ from .floatExp h h1)⟩
+  | floatSqrt h h1 =>
+    exact .inl ⟨_, _, _, rfl, type_preservation hwtp hts hpc
+      (show Step p (.run pc σ am) _ from .floatSqrt h h1)⟩
   | halt _ => exact .inr fun _ h => Step.no_step_from_halt h
   | error _ _ _ _ => exact .inr fun _ h => Step.no_step_from_error h
   | binop_typeError _ _ => exact .inr fun _ h => Step.no_step_from_typeError h
@@ -1128,6 +1139,7 @@ private theorem step_run_or_terminal {p : Prog} {pc : Nat} {σ : Store}
   | intToFloat_typeError _ _ => exact .inr fun _ h => Step.no_step_from_typeError h
   | floatToInt_typeError _ _ => exact .inr fun _ h => Step.no_step_from_typeError h
   | floatExp_typeError _ _ => exact .inr fun _ h => Step.no_step_from_typeError h
+  | floatSqrt_typeError _ _ => exact .inr fun _ h => Step.no_step_from_typeError h
 
 /-- Whole-program backward simulation for `verifiedGenerateAsm`.
 

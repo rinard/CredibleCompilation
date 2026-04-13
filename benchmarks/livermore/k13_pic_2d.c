@@ -6,56 +6,104 @@
 #define NGRID 64
 #define NREPS 10000
 
+/* P(K,J) 1-based, column-major (64,4) */
+#define P(k,j) p[((j)-1)*64 + (k)]
+/* B(I,J), C(I,J), H(I,J) 1-based, column-major (64,64) */
+#define B(i,j) b[((j)-1)*64 + (i)]
+#define CC(i,j) cc[((j)-1)*64 + (i)]
+#define H(i,j) h[((j)-1)*64 + (i)]
+
 int main(void) {
-    double p_x[NPART], p_y[NPART], p_vx[NPART], p_vy[NPART];
-    double b[NGRID*NGRID], c[NGRID*NGRID], h[NGRID*NGRID];
-    double y[1001], z[1001];
-    long e[96], f[96];
+    double p[257], b[4097], cc[4097], h[4097];
+    double y[1002], z[1002];
+    long e[97], f[97];
 
-    /* Use init_particles layout for p arrays */
-    double p_flat[NPART * 4];
+    /* Init P */
+    double ds = 1.0, dw = 0.5;
+    for (long j = 1; j <= 4; j++)
+        for (long k = 1; k <= 64; k++) {
+            P(k,j) = ds;
+            ds += dw;
+        }
 
-    signel(b, NGRID*NGRID);
-    signel(c, NGRID*NGRID);
-    signel(y, 1001);
-    signel(z, 1001);
-    for (int i = 0; i < 96; i++) { e[i] = i % 64; f[i] = i % 64; }
+    /* Init B using signel pattern */
+    double fuzz = 1.2345e-3, buzz = 1.0 + fuzz, fizz = 1.1 * fuzz;
+    for (long j = 1; j <= 64; j++)
+        for (long i = 1; i <= 64; i++) {
+            buzz = (1.0 - fuzz) * buzz + fuzz;
+            fuzz = -fuzz;
+            B(i,j) = (buzz - fizz) * 0.1;
+        }
+
+    fuzz = 1.2345e-3; buzz = 1.0 + fuzz; fizz = 1.1 * fuzz;
+    for (long j = 1; j <= 64; j++)
+        for (long i = 1; i <= 64; i++) {
+            buzz = (1.0 - fuzz) * buzz + fuzz;
+            fuzz = -fuzz;
+            CC(i,j) = (buzz - fizz) * 0.1;
+        }
+
+    for (long j = 1; j <= 64; j++)
+        for (long i = 1; i <= 64; i++)
+            H(i,j) = 0.0;
+
+    fuzz = 1.2345e-3; buzz = 1.0 + fuzz; fizz = 1.1 * fuzz;
+    for (long k = 1; k <= 1001; k++) {
+        buzz = (1.0 - fuzz) * buzz + fuzz;
+        fuzz = -fuzz;
+        y[k] = (buzz - fizz) * 0.1;
+    }
+
+    fuzz = 1.2345e-3; buzz = 1.0 + fuzz; fizz = 1.1 * fuzz;
+    for (long k = 1; k <= 1001; k++) {
+        buzz = (1.0 - fuzz) * buzz + fuzz;
+        fuzz = -fuzz;
+        z[k] = (buzz - fizz) * 0.1;
+    }
+
+    for (long i = 1; i <= 96; i++) {
+        e[i] = (i-1) % 64;
+        f[i] = (i-1) % 64;
+    }
 
     struct timespec t0, t1;
     clock_gettime(CLOCK_MONOTONIC, &t0);
 
-    for (int rep = 0; rep < NREPS; rep++) {
-        /* Re-initialize particles each rep */
-        init_particles(p_flat, NPART);
-        for (int i = 0; i < NPART; i++) {
-            p_x[i] = p_flat[i * 4 + 0];
-            p_y[i] = p_flat[i * 4 + 1];
-            p_vx[i] = p_flat[i * 4 + 2];
-            p_vy[i] = p_flat[i * 4 + 3];
-        }
-        /* Zero h each rep */
-        for (int i = 0; i < NGRID*NGRID; i++) h[i] = 0.0;
+    for (long rep = 1; rep <= NREPS; rep++) {
+        ds = 1.0; dw = 0.5;
+        for (long j = 1; j <= 4; j++)
+            for (long k = 1; k <= 64; k++) {
+                P(k,j) = ds;
+                ds += dw;
+            }
+        for (long j = 1; j <= 64; j++)
+            for (long i = 1; i <= 64; i++)
+                H(i,j) = 0.0;
 
-        for (int ip = 0; ip < NPART; ip++) {
-            int i1 = (int)p_x[ip] & (NGRID-1);
-            int j1 = (int)p_y[ip] & (NGRID-1);
-            p_vx[ip] += b[j1*NGRID + i1];
-            p_vy[ip] += c[j1*NGRID + i1];
-            p_x[ip] += p_vx[ip];
-            p_y[ip] += p_vy[ip];
-            int i2 = ((int)p_x[ip] & (NGRID-1)) - 1;
-            int j2 = ((int)p_y[ip] & (NGRID-1)) - 1;
-            p_x[ip] += y[i2+32];
-            p_y[ip] += z[j2+32];
-            i2 += e[i2+32];
-            j2 += f[j2+32];
-            h[j2*NGRID + i2] += 1.0;
+        for (long ip = 1; ip <= NPART; ip++) {
+            long i1 = (long)P(ip,1);
+            long j1 = (long)P(ip,2);
+            i1 = i1 & 63;
+            j1 = j1 & 63;
+            P(ip,3) = P(ip,3) + B(i1+1,j1+1);
+            P(ip,4) = P(ip,4) + CC(i1+1,j1+1);
+            P(ip,1) = P(ip,1) + P(ip,3);
+            P(ip,2) = P(ip,2) + P(ip,4);
+            long i2 = (long)P(ip,1);
+            long j2 = (long)P(ip,2);
+            i2 = (i2 & 63) - 1;
+            j2 = (j2 & 63) - 1;
+            P(ip,1) = P(ip,1) + y[i2+32];
+            P(ip,2) = P(ip,2) + z[j2+32];
+            i2 = i2 + e[i2+32];
+            j2 = j2 + f[j2+32];
+            H(i2+1,j2+1) = H(i2+1,j2+1) + 1.0;
         }
     }
 
     clock_gettime(CLOCK_MONOTONIC, &t1);
     double elapsed = (t1.tv_sec - t0.tv_sec) + (t1.tv_nsec - t0.tv_nsec) * 1e-9;
     printf("elapsed: %.6f s\n", elapsed);
-    printf("p_vx[0] = %f\n", p_vx[0]);
+    printf("p(1,1) = %.15e\n", P(1,1));
     return 0;
 }

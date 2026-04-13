@@ -1,36 +1,36 @@
-var i : int, rep : int, q : float,
+var k : int, rep : int, q : float,
     fuzz : float, buzz : float, fizz : float;
-array x[1001] : float, z[1001] : float;
+array z[1002] : float, x[1002] : float;
 
 fuzz := 0.001234500;
 buzz := 1.0 + fuzz;
 fizz := 1.1 * fuzz;
-i := 0;
-while (i < 1001) {
+k := 1;
+while (k <= 1001) {
   buzz := (1.0 - fuzz) * buzz + fuzz;
   fuzz := 0.0 - fuzz;
-  x[i] := (buzz - fizz) * 0.1;
-  i := i + 1
+  z[k] := (buzz - fizz) * 0.1;
+  k := k + 1
 };
 
 fuzz := 0.001234500;
 buzz := 1.0 + fuzz;
 fizz := 1.1 * fuzz;
-i := 0;
-while (i < 1001) {
+k := 1;
+while (k <= 1001) {
   buzz := (1.0 - fuzz) * buzz + fuzz;
   fuzz := 0.0 - fuzz;
-  z[i] := (buzz - fizz) * 0.1;
-  i := i + 1
+  x[k] := (buzz - fizz) * 0.1;
+  k := k + 1
 };
 
-rep := 0;
-while (rep < 10000) {
+rep := 1;
+while (rep <= 10000) {
   q := 0.0;
-  i := 0;
-  while (i < 1001) {
-    q := q + x[i] * z[i];
-    i := i + 1
+  k := 1;
+  while (k <= 1001) {
+    q := q + z[k] * x[k];
+    k := k + 1
   };
   rep := rep + 1
 }

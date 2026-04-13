@@ -1,44 +1,53 @@
+/* K23 — 2-D Implicit Hydrodynamics (1-based indexing, matches Fortran exactly)
+   Fortran: DIMENSION ZA(101,7), ZR(101,7), ZB(101,7),
+            ZU(101,7), ZV(101,7), ZZ(101,7)
+   N=100. DO J=2,6: DO K=2,N:
+     QA = ZA(K,J+1)*ZR(K,J) + ZA(K,J-1)*ZB(K,J)
+        + ZA(K+1,J)*ZU(K,J) + ZA(K-1,J)*ZV(K,J) + ZZ(K,J)
+     ZA(K,J) = ZA(K,J) + 0.175*(QA - ZA(K,J))
+   Column-major: arr(K,J) at flat (J-1)*101 + K (1-based) */
 #include <stdio.h>
 #include <time.h>
 #include "signel.h"
 
-/* Original K23: 2-D implicit hydrodynamics
-   za[j][k] += 0.175*(qa - za[j][k])
-   qa = za[j+1][k]*zr[j][k] + za[j-1][k]*zb[j][k]
-      + za[j][k+1]*zu[j][k] + za[j][k-1]*zv[j][k] + zz[j][k]
-   Arrays are [7][101], j=1..5, k=1..n-1 (n=101) */
-
-#define NJ    7
-#define NK    101
-#define NTOT  (NJ * NK)
+#define JD    101
+#define KD    7
+#define NTOT  (JD * KD)
 #define NREPS 100000
 
-/* Flatten [j][k] as [j + k*NJ] (column-major matching Fortran) */
-#define IDX(j,k) ((j) + (k) * NJ)
+/* 1-based column-major: arr(k,j) with first dim 101 */
+#define ZA(k,j) za[((j)-1)*101 + (k)]
+#define ZR(k,j) zr[((j)-1)*101 + (k)]
+#define ZB(k,j) zb[((j)-1)*101 + (k)]
+#define ZU(k,j) zu[((j)-1)*101 + (k)]
+#define ZV(k,j) zv[((j)-1)*101 + (k)]
+#define ZZ(k,j) zz[((j)-1)*101 + (k)]
 
 int main(void) {
-    double za[NTOT], zr[NTOT], zb[NTOT], zu[NTOT], zv[NTOT], zz[NTOT];
+    /* 101*7=707, max flat index 707, need [708] */
+    double za[708], zr[708], zb[708], zu[708], zv[708], zz[708];
 
-    signel(za, NTOT);
-    signel(zr, NTOT);
-    signel(zb, NTOT);
-    signel(zu, NTOT);
-    signel(zv, NTOT);
-    signel(zz, NTOT);
-    /* Scale coefficients for stable relaxation: 0.175 * 4 * coeff < 1 */
-    for (int i = 0; i < NTOT; i++) {
+    signel(&za[1], NTOT);
+    signel(&zr[1], NTOT);
+    signel(&zb[1], NTOT);
+    signel(&zu[1], NTOT);
+    signel(&zv[1], NTOT);
+    signel(&zz[1], NTOT);
+    /* Scale coefficients for stable relaxation */
+    for (long i = 1; i <= NTOT; i++) {
         zr[i] *= 0.1; zb[i] *= 0.1; zu[i] *= 0.1; zv[i] *= 0.1;
     }
 
     struct timespec t0, t1;
     clock_gettime(CLOCK_MONOTONIC, &t0);
 
-    for (int rep = 0; rep < NREPS; rep++) {
-        for (int j = 1; j < 6; j++) {
-            for (int k = 1; k < NK - 1; k++) {
-                double qa = za[IDX(j+1,k)]*zr[IDX(j,k)] + za[IDX(j-1,k)]*zb[IDX(j,k)]
-                          + za[IDX(j,k+1)]*zu[IDX(j,k)] + za[IDX(j,k-1)]*zv[IDX(j,k)] + zz[IDX(j,k)];
-                za[IDX(j,k)] += 0.175 * (qa - za[IDX(j,k)]);
+    long n = 100;
+    for (long rep = 0; rep < NREPS; rep++) {
+        for (long j = 2; j <= 6; j++) {
+            for (long k = 2; k <= n; k++) {
+                double qa = ZA(k,j+1)*ZR(k,j) + ZA(k,j-1)*ZB(k,j)
+                          + ZA(k+1,j)*ZU(k,j) + ZA(k-1,j)*ZV(k,j) + ZZ(k,j);
+                ZA(k,j) = ZA(k,j) + 0.175 * (qa - ZA(k,j));
             }
         }
     }
@@ -46,6 +55,6 @@ int main(void) {
     clock_gettime(CLOCK_MONOTONIC, &t1);
     double elapsed = (t1.tv_sec - t0.tv_sec) + (t1.tv_nsec - t0.tv_nsec) * 1e-9;
     printf("elapsed: %.6f s\n", elapsed);
-    printf("za[0] = %f\n", za[IDX(1,1)]);
+    printf("za(51,4) = %f\n", ZA(51,4));
     return 0;
 }

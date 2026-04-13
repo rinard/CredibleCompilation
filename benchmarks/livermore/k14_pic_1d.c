@@ -6,52 +6,81 @@
 #define NREPS 10000
 
 int main(void) {
-    double grd[1001], dex_arr[1001], xi[1001];
-    double ex_arr[1001], ex1[1001], dex1[1001];
-    double vx[1001], xx[1001], rx[1001];
-    double rh[2049];
-    long ix[1001], ir[1001];
-    double spacer[39]; signel(spacer, 39);
-    double flx = spacer[26];
+    double grd[1002], dex[1002], xi[1002];
+    double ex[1002], ex1[1002], dex1[1002];
+    double vx[1002], xx[1002], rx[1002];
+    double rh[2050];
+    long ix[1002], ir[1002];
+    double spacer[40];
 
-    signel(grd, 1001);
-    /* Scale grd to be valid grid indices (1..512) */
-    for (int i = 0; i < 1001; i++) grd[i] = (i % 512) + 1.5;
-    signel(ex_arr, 1001);
-    signel(dex_arr, 1001);
+    /* Init spacer */
+    double fuzz = 1.2345e-3, buzz = 1.0 + fuzz, fizz = 1.1 * fuzz;
+    for (long k = 1; k <= 39; k++) {
+        buzz = (1.0 - fuzz) * buzz + fuzz;
+        fuzz = -fuzz;
+        spacer[k] = (buzz - fizz) * 0.1;
+    }
+    double flx = spacer[27];
+
+    /* GRD: valid grid indices */
+    for (long i = 1; i <= N; i++)
+        grd[i] = (double)((i-1) % 512) + 1.5;
+
+    /* Init EX using signel */
+    fuzz = 1.2345e-3; buzz = 1.0 + fuzz; fizz = 1.1 * fuzz;
+    for (long k = 1; k <= N; k++) {
+        buzz = (1.0 - fuzz) * buzz + fuzz;
+        fuzz = -fuzz;
+        ex[k] = (buzz - fizz) * 0.1;
+    }
+
+    /* Init DEX using signel */
+    fuzz = 1.2345e-3; buzz = 1.0 + fuzz; fizz = 1.1 * fuzz;
+    for (long k = 1; k <= N; k++) {
+        buzz = (1.0 - fuzz) * buzz + fuzz;
+        fuzz = -fuzz;
+        dex[k] = (buzz - fizz) * 0.1;
+    }
+
+    /* Zero arrays */
+    for (long i = 1; i <= N; i++) {
+        vx[i] = 0; xx[i] = 0; xi[i] = 0;
+        ex1[i] = 0; dex1[i] = 0; rx[i] = 0;
+        ix[i] = 0; ir[i] = 0;
+    }
+    for (long i = 1; i <= 2049; i++) rh[i] = 0;
 
     struct timespec t0, t1;
     clock_gettime(CLOCK_MONOTONIC, &t0);
 
-    for (int rep = 0; rep < NREPS; rep++) {
-        /* Re-zero rh each rep */
-        for (int i = 0; i < 2049; i++) rh[i] = 0.0;
+    for (long rep = 1; rep <= NREPS; rep++) {
+        for (long i = 1; i <= 2049; i++) rh[i] = 0.0;
 
-        for (int k = 0; k < N; k++) {
+        for (long k = 1; k <= N; k++) {
             vx[k] = 0.0;
             xx[k] = 0.0;
             ix[k] = (long)grd[k];
             xi[k] = (double)ix[k];
-            ex1[k] = ex_arr[ix[k] - 1];
-            dex1[k] = dex_arr[ix[k] - 1];
+            ex1[k] = ex[ix[k]];
+            dex1[k] = dex[ix[k]];
         }
-        for (int k = 0; k < N; k++) {
+        for (long k = 1; k <= N; k++) {
             vx[k] = vx[k] + ex1[k] + (xx[k] - xi[k]) * dex1[k];
             xx[k] = xx[k] + vx[k] + flx;
-            ir[k] = xx[k];
-            rx[k] = xx[k] - ir[k];
-            ir[k] = (ir[k] & (2048-1)) + 1;
-            xx[k] = rx[k] + ir[k];
+            ir[k] = (long)xx[k];
+            rx[k] = xx[k] - (double)ir[k];
+            ir[k] = (ir[k] & 2047) + 1;
+            xx[k] = rx[k] + (double)ir[k];
         }
-        for (int k = 0; k < N; k++) {
-            rh[ir[k]-1] += 1.0 - rx[k];
-            rh[ir[k]] += rx[k];
+        for (long k = 1; k <= N; k++) {
+            rh[ir[k]]   += 1.0 - rx[k];
+            rh[ir[k]+1] += rx[k];
         }
     }
 
     clock_gettime(CLOCK_MONOTONIC, &t1);
     double elapsed = (t1.tv_sec - t0.tv_sec) + (t1.tv_nsec - t0.tv_nsec) * 1e-9;
     printf("elapsed: %.6f s\n", elapsed);
-    printf("rh[0] = %f\n", rh[0]);
+    printf("xx[1] = %.15e\n", xx[1]);
     return 0;
 }

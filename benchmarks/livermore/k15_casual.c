@@ -1,8 +1,7 @@
-/* K15 -- Casual Fortran (Development version)
-   Original Livermore Loop kernel 15.
-   2D arrays: vy[25][101], vh,vf,vg,vs[7][101].
-   ng=7, nz=101. Scalars: ar=0.053, br=0.073, r, s, t.
-   Uses sqrt() as in original Fortran. */
+/* K15 — Casual Fortran (1-based indexing, matches Fortran exactly)
+   Fortran: DIMENSION VY(101,25), VH(101,7), VF(101,7), VG(101,7), VS(101,7)
+   NG=7, NZ=101. DO J=2,NG: DO K=2,NZ
+   Column-major: arr(K,J) at flat (J-1)*101 + K (1-based) */
 #include <stdio.h>
 #include <math.h>
 #include <time.h>
@@ -10,60 +9,77 @@
 
 #define NZ    101
 #define NG    7
-#define VYROWS 25
 #define NREPS 10000
 
-int main(void) {
-    double vy[VYROWS][NZ], vh[NG][NZ], vf[NG][NZ], vg[NG][NZ], vs[NG][NZ];
+/* 1-based column-major access with first dim 101 */
+#define VY(k,j) vy[((j)-1)*101 + (k)]
+#define VH(k,j) vh[((j)-1)*101 + (k)]
+#define VF(k,j) vf[((j)-1)*101 + (k)]
+#define VG(k,j) vg[((j)-1)*101 + (k)]
+#define VS(k,j) vs[((j)-1)*101 + (k)]
 
-    /* Initialise arrays with signel */
-    signel((double *)vh, NG * NZ);
-    signel((double *)vf, NG * NZ);
-    signel((double *)vg, NG * NZ);
-    /* Ensure vf is positive (used as divisor) */
-    for (int j = 0; j < NG; j++)
-        for (int k = 0; k < NZ; k++)
-            if (vf[j][k] <= 0.0) vf[j][k] = 0.001;
-    for (int j = 0; j < NG; j++)
-        for (int k = 0; k < NZ; k++)
-            vs[j][k] = 0.0;
-    /* Initialise vy with signel (not zeros) */
-    signel((double *)vy, VYROWS * NZ);
+int main(void) {
+    /* VY: 101*25 = 2525, max index 2525, need [2526] */
+    double vy[2526];
+    /* VH,VF,VG,VS: 101*7 = 707, max index 707, need [708] */
+    double vh[708], vf[708], vg[708], vs[708];
+
+    /* Initialise VY */
+    signel(&vy[1], 101 * 25);
+    /* Initialise VH */
+    signel(&vh[1], 101 * 7);
+    /* Initialise VF (ensure positive -- used as divisor) */
+    signel(&vf[1], 101 * 7);
+    for (long j = 1; j <= 7; j++)
+        for (long k = 1; k <= 101; k++)
+            if (VF(k,j) <= 0.0) VF(k,j) = 0.001;
+    /* Initialise VG */
+    signel(&vg[1], 101 * 7);
+    /* Initialise VS */
+    signel(&vs[1], 101 * 7);
 
     struct timespec t0, t1;
     clock_gettime(CLOCK_MONOTONIC, &t0);
 
     double ar, br, r, s, t;
-    for (int l = 0; l < NREPS; l++) {
+    for (long l = 0; l < NREPS; l++) {
         ar = 0.053; br = 0.073;
-        for (int j = 1; j < NG; j++) {
-            for (int k = 1; k < NZ; k++) {
-                if ((j + 1) >= NG) {
-                    vy[j][k] = 0.0;
-                    continue;
-                }
-                if (vh[j+1][k] > vh[j][k]) t = ar; else t = br;
-                if (vf[j][k] < vf[j][k-1]) {
-                    if (vh[j][k-1] > vh[j+1][k-1]) r = vh[j][k-1]; else r = vh[j+1][k-1];
-                    s = vf[j][k-1];
-                } else {
-                    if (vh[j][k] > vh[j+1][k]) r = vh[j][k]; else r = vh[j+1][k];
-                    s = vf[j][k];
-                }
-                vy[j][k] = sqrt(vg[j][k]*vg[j][k] + r*r) * t / s;
+        for (long j = 2; j <= NG; j++) {
+            for (long k = 2; k <= NZ; k++) {
 
-                if ((k + 1) >= NZ) {
-                    vs[j][k] = 0.0;
+                if (j >= NG) {
+                    VY(k,j) = 0.0;
                     continue;
                 }
-                if (vf[j][k] < vf[j-1][k]) {
-                    if (vg[j-1][k] > vg[j-1][k+1]) r = vg[j-1][k]; else r = vg[j-1][k+1];
-                    s = vf[j-1][k]; t = br;
+
+                if (VH(k,j+1) > VH(k,j)) t = ar; else t = br;
+
+                if (VF(k,j) < VF(k-1,j)) {
+                    if (VH(k-1,j) > VH(k-1,j+1)) r = VH(k-1,j); else r = VH(k-1,j+1);
+                    s = VF(k-1,j);
                 } else {
-                    if (vg[j][k] > vg[j][k+1]) r = vg[j][k]; else r = vg[j][k+1];
-                    s = vf[j][k]; t = ar;
+                    if (VH(k,j) > VH(k,j+1)) r = VH(k,j); else r = VH(k,j+1);
+                    s = VF(k,j);
                 }
-                vs[j][k] = sqrt(vh[j][k]*vh[j][k] + r*r) * t / s;
+
+                VY(k,j) = sqrt(VG(k,j)*VG(k,j) + r*r) * t / s;
+
+                if (k >= NZ) {
+                    VS(k,j) = 0.0;
+                    continue;
+                }
+
+                if (VF(k,j) < VF(k,j-1)) {
+                    if (VG(k,j-1) > VG(k+1,j-1)) r = VG(k,j-1); else r = VG(k+1,j-1);
+                    s = VF(k,j-1);
+                    t = br;
+                } else {
+                    if (VG(k,j) > VG(k+1,j)) r = VG(k,j); else r = VG(k+1,j);
+                    s = VF(k,j);
+                    t = ar;
+                }
+
+                VS(k,j) = sqrt(VH(k,j)*VH(k,j) + r*r) * t / s;
             }
         }
     }
@@ -71,6 +87,6 @@ int main(void) {
     clock_gettime(CLOCK_MONOTONIC, &t1);
     double elapsed = (t1.tv_sec - t0.tv_sec) + (t1.tv_nsec - t0.tv_nsec) * 1e-9;
     printf("elapsed: %.6f s\n", elapsed);
-    printf("vy[3][50] = %f\n", vy[3][50]);
+    printf("vy(51,4) = %f\n", VY(51,4));
     return 0;
 }

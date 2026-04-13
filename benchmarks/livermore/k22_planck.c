@@ -1,6 +1,7 @@
-/* K22 — Planck (Exponential) Function
-   Original Livermore Loop kernel 22.
-   n=101, 5 arrays u,v,x,y,w. y[k]=u[k]/v[k], w[k]=x[k]/(exp(y[k])-1). */
+/* K22 — Planckian Distribution (1-based indexing, matches Fortran exactly)
+   Fortran: DIMENSION U(1001), V(1001), X(1001), Y(1001), W(1001), N=101
+   U(N) = 0.99*EXPMAX*V(N)
+   DO K=1,N: Y(K) = U(K)/V(K); W(K) = X(K)/(DEXP(Y(K))-1.0) */
 #include <stdio.h>
 #include <math.h>
 #include <time.h>
@@ -10,24 +11,26 @@
 #define NREPS 10000
 
 int main(void) {
-    double u[N], v[N], x[N], y[N], w[N];
+    double u[1002], v[1002], x[1002], y[1002], w[1002];
 
-    signel(u, N);
-    signel(v, N);
-    signel(x, N);
-    /* Ensure v[k] > 0 and u[k]/v[k] is moderate so exp doesn't overflow */
-    for (int i = 0; i < N; i++) {
-        if (v[i] <= 0.0) v[i] = 0.01;
-        if (u[i] <= 0.0) u[i] = 0.01;
-    }
+    signel(u+1, 1001);
+    signel(v+1, 1001);
+    signel(x+1, 1001);
+    /* Ensure v[k] > 0 (used as divisor) */
+    for (long k = 1; k <= 1001; k++)
+        if (v[k] <= 0.0) v[k] = 1.0;
+    /* Ensure x[k] > 0 for exp-1 divisor */
+    for (long k = 1; k <= 1001; k++)
+        if (x[k] <= 0.0) x[k] = 0.01;
 
     struct timespec t0, t1;
     clock_gettime(CLOCK_MONOTONIC, &t0);
 
-    double expmax = 20.0;
-    for (int rep = 0; rep < NREPS; rep++) {
-        u[N-1] = 0.99 * expmax * v[N-1];
-        for (int k = 0; k < N; k++) {
+    double expmax;
+    for (long rep = 0; rep < NREPS; rep++) {
+        expmax = 20.0;
+        u[N] = 0.99 * expmax * v[N];
+        for (long k = 1; k <= N; k++) {
             y[k] = u[k] / v[k];
             w[k] = x[k] / (exp(y[k]) - 1.0);
         }
@@ -36,6 +39,6 @@ int main(void) {
     clock_gettime(CLOCK_MONOTONIC, &t1);
     double elapsed = (t1.tv_sec - t0.tv_sec) + (t1.tv_nsec - t0.tv_nsec) * 1e-9;
     printf("elapsed: %.6f s\n", elapsed);
-    printf("w[0] = %f\n", w[0]);
+    printf("w[51] = %f\n", w[51]);
     return 0;
 }
