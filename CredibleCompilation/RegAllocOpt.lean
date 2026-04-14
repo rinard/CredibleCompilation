@@ -105,7 +105,7 @@ private def lowestAvailableCalleePref (used : List Nat) (K : Nat)
       else some n
   match goCallee calleeSavedStart (K - calleeSavedStart + 1) with
   | some c => c
-  | none => lowestAvailable used  -- fall back to any available
+  | none => K  -- no callee-saved color available → force spill to stack
 
 /-- Is a FloatUnaryOp a library call (bl) rather than a native instruction? -/
 private def isLibraryCall : FloatUnaryOp → Bool
