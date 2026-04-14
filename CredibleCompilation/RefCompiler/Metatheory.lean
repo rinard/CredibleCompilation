@@ -21,9 +21,7 @@ theorem SExpr.isSafe_of_safe (e : SExpr) (σ : Store) (am : ArrayMem)
     simp [SExpr.safe] at h; simp [SExpr.isSafe, ih h]
   | floatToInt e ih =>
     simp [SExpr.safe] at h; simp [SExpr.isSafe, ih h]
-  | floatExp e ih =>
-    simp [SExpr.safe] at h; simp [SExpr.isSafe, ih h]
-  | floatSqrt e ih =>
+  | floatUnary op e ih =>
     simp [SExpr.safe] at h; simp [SExpr.isSafe, ih h]
   | farrRead arr idx ih =>
     simp [SExpr.safe] at h; simp [SExpr.isSafe, ih h.1, decide_eq_true_eq, h.2]

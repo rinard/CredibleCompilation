@@ -308,13 +308,18 @@ opaque intToFloatBv : BitVec 64 → BitVec 64
     Opaque — corresponds to ARM64 `fcvtzs`. -/
 opaque floatToIntBv : BitVec 64 → BitVec 64
 
-/-- Compute e^x for a float (BitVec 64).
-    Opaque — corresponds to ARM64 `bl _exp`. -/
-opaque floatExpBv : BitVec 64 → BitVec 64
+/-- Float unary intrinsic operations. Each is opaque in proofs. -/
+inductive FloatUnaryOp | exp | sqrt deriving Repr, DecidableEq
 
-/-- Compute sqrt(x) for a float (BitVec 64).
-    Opaque — corresponds to ARM64 `fsqrt`. -/
+/-- Compute e^x for a float (BitVec 64). Opaque — ARM64 `bl _exp`. -/
+opaque floatExpBv : BitVec 64 → BitVec 64
+/-- Compute sqrt(x) for a float (BitVec 64). Opaque — ARM64 `fsqrt`. -/
 opaque floatSqrtBv : BitVec 64 → BitVec 64
+
+/-- Evaluate a float unary op. Dispatches to the per-op opaques. -/
+def FloatUnaryOp.eval : FloatUnaryOp → BitVec 64 → BitVec 64
+  | .exp,  x => floatExpBv x
+  | .sqrt, x => floatSqrtBv x
 
 /-- Convert a Lean Float to its IEEE 754 bit representation as BitVec 64.
     Uses `Float.toBits` for proper bit reinterpretation (not truncation). -/
@@ -362,8 +367,7 @@ inductive Expr where
   | fcmpE    : FloatCmpOp → Expr → Expr → Expr        -- .bool (fop.eval a b)
   | intToFloat : Expr → Expr                           -- .float (intToFloat (e.toInt))
   | floatToInt : Expr → Expr                           -- .int (floatToInt (e.toFloat))
-  | floatExp  : Expr → Expr                            -- .float (exp(e.toFloat))
-  | floatSqrt : Expr → Expr                            -- .float (sqrt(e.toFloat))
+  | floatUnary : FloatUnaryOp → Expr → Expr             -- .float (op.eval(e.toFloat))
   | farrRead : ArrayName → Expr → Expr                -- .float (am.read arr idx)
   deriving Repr, DecidableEq
 
@@ -384,8 +388,7 @@ def Expr.eval (σ : Store) (am : ArrayMem) : Expr → Value
   | .fcmpE op a b      => .bool (FloatCmpOp.eval op (a.eval σ am).toFloat (b.eval σ am).toFloat)
   | .intToFloat e      => .float (intToFloatBv (e.eval σ am).toInt)
   | .floatToInt e      => .int (floatToIntBv (e.eval σ am).toFloat)
-  | .floatExp e        => .float (floatExpBv (e.eval σ am).toFloat)
-  | .floatSqrt e       => .float (floatSqrtBv (e.eval σ am).toFloat)
+  | .floatUnary op e   => .float (op.eval (e.eval σ am).toFloat)
   | .farrRead arr idx  => .float (am.read arr (idx.eval σ am).toInt)
 
 /-- Does an expression contain any `arrRead` or `farrRead` sub-expression? -/
@@ -403,8 +406,7 @@ def Expr.hasArrRead : Expr → Bool
   | .fcmpE _ a b   => a.hasArrRead || b.hasArrRead
   | .intToFloat e  => e.hasArrRead
   | .floatToInt e  => e.hasArrRead
-  | .floatExp e    => e.hasArrRead
-  | .floatSqrt e   => e.hasArrRead
+  | .floatUnary _ e => e.hasArrRead
   | .farrRead _ _  => true
 
 /-- Collect all variable names appearing in an expression (with possible duplicates). -/
@@ -423,8 +425,7 @@ def Expr.freeVars : Expr → List Var
   | .fcmpE _ a b    => a.freeVars ++ b.freeVars
   | .intToFloat e   => e.freeVars
   | .floatToInt e   => e.freeVars
-  | .floatExp e     => e.freeVars
-  | .floatSqrt e    => e.freeVars
+  | .floatUnary _ e => e.freeVars
   | .farrRead _ idx => idx.freeVars
 
 /-- For arrRead-free expressions, evaluation is independent of the array memory. -/
@@ -462,9 +463,7 @@ theorem Expr.eval_noArrRead (e : Expr) (σ : Store) (am₁ am₂ : ArrayMem)
     simp only [hasArrRead] at h; simp only [Expr.eval]; rw [ih h]
   | floatToInt e ih =>
     simp only [hasArrRead] at h; simp only [Expr.eval]; rw [ih h]
-  | floatExp e ih =>
-    simp only [hasArrRead] at h; simp only [Expr.eval]; rw [ih h]
-  | floatSqrt e ih =>
+  | floatUnary _ e ih =>
     simp only [hasArrRead] at h; simp only [Expr.eval]; rw [ih h]
   | farrRead _ _ => simp [hasArrRead] at h
 

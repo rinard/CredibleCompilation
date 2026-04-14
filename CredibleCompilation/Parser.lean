@@ -147,12 +147,12 @@ partial def parseAtom (toks : List Token) : Except String (SExpr × List Token) 
   | Token.kw "exp" :: Token.lparen :: rest => do
     let (e, rest') ← parseExpr rest
     match rest' with
-    | Token.rparen :: rest'' => .ok (.floatExp e, rest'')
+    | Token.rparen :: rest'' => .ok (.floatUnary .exp e, rest'')
     | _ => .error "expected ')' after exp argument"
   | Token.kw "sqrt" :: Token.lparen :: rest => do
     let (e, rest') ← parseExpr rest
     match rest' with
-    | Token.rparen :: rest'' => .ok (.floatSqrt e, rest'')
+    | Token.rparen :: rest'' => .ok (.floatUnary .sqrt e, rest'')
     | _ => .error "expected ')' after sqrt argument"
   | Token.ident x :: Token.lbracket :: rest => do
     let (idx, rest') ← parseExpr rest
@@ -477,7 +477,7 @@ private partial def parseArrayDecls (toks : List Token)
 /-- Infer whether an SExpr is a float expression based on variable/literal types. -/
 private def isFloatExpr (lookupVar : Var → Option VarTy)
     (lookupArr : ArrayName → Option VarTy) : SExpr → Bool
-  | .flit _ | .fbin _ _ _ | .intToFloat _ | .floatExp _ | .floatSqrt _ | .farrRead _ _ => true
+  | .flit _ | .fbin _ _ _ | .intToFloat _ | .floatUnary _ _ | .farrRead _ _ => true
   | .var x => lookupVar x == some .float
   | .arrRead arr _ => lookupArr arr == some .float
   | _ => false
@@ -503,8 +503,7 @@ private partial def resolveSExpr (lookupVar : Var → Option VarTy)
   | .fbin op a b => .fbin op (resolveSExpr lookupVar lookupArr a) (resolveSExpr lookupVar lookupArr b)
   | .intToFloat e => .intToFloat (resolveSExpr lookupVar lookupArr e)
   | .floatToInt e => .floatToInt (resolveSExpr lookupVar lookupArr e)
-  | .floatExp e => .floatExp (resolveSExpr lookupVar lookupArr e)
-  | .floatSqrt e => .floatSqrt (resolveSExpr lookupVar lookupArr e)
+  | .floatUnary op e => .floatUnary op (resolveSExpr lookupVar lookupArr e)
   | .farrRead arr idx => .farrRead arr (resolveSExpr lookupVar lookupArr idx)
 
 /-- Resolve types in an SBool: convert `.cmp` to `.fcmp` when operands are float. -/

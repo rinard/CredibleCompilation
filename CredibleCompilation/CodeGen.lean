@@ -55,9 +55,7 @@ private def collectVars (p : Prog) : List Var :=
                           if a.contains y then a else a ++ [y]
     | .floatToInt x y  => let a := if acc.contains x then acc else acc ++ [x]
                           if a.contains y then a else a ++ [y]
-    | .floatExp x y    => let a := if acc.contains x then acc else acc ++ [x]
-                          if a.contains y then a else a ++ [y]
-    | .floatSqrt x y   => let a := if acc.contains x then acc else acc ++ [x]
+    | .floatUnary x _ y => let a := if acc.contains x then acc else acc ++ [x]
                           if a.contains y then a else a ++ [y]
     | .goto _          => acc
     | .ifgoto _ _      => acc
@@ -1134,12 +1132,9 @@ private theorem step_run_or_terminal {p : Prog} {pc : Nat} {σ : Store}
   | floatToInt h h1 =>
     exact .inl ⟨_, _, _, rfl, type_preservation hwtp hts hpc
       (show Step p (.run pc σ am) _ from .floatToInt h h1)⟩
-  | floatExp h h1 =>
+  | floatUnary h h1 =>
     exact .inl ⟨_, _, _, rfl, type_preservation hwtp hts hpc
-      (show Step p (.run pc σ am) _ from .floatExp h h1)⟩
-  | floatSqrt h h1 =>
-    exact .inl ⟨_, _, _, rfl, type_preservation hwtp hts hpc
-      (show Step p (.run pc σ am) _ from .floatSqrt h h1)⟩
+      (show Step p (.run pc σ am) _ from .floatUnary h h1)⟩
   | halt _ => exact .inr fun _ h => Step.no_step_from_halt h
   | error _ _ _ _ => exact .inr fun _ h => Step.no_step_from_error h
   | binop_typeError _ _ => exact .inr fun _ h => Step.no_step_from_typeError h
@@ -1150,8 +1145,7 @@ private theorem step_run_or_terminal {p : Prog} {pc : Nat} {σ : Store}
   | fbinop_typeError _ _ => exact .inr fun _ h => Step.no_step_from_typeError h
   | intToFloat_typeError _ _ => exact .inr fun _ h => Step.no_step_from_typeError h
   | floatToInt_typeError _ _ => exact .inr fun _ h => Step.no_step_from_typeError h
-  | floatExp_typeError _ _ => exact .inr fun _ h => Step.no_step_from_typeError h
-  | floatSqrt_typeError _ _ => exact .inr fun _ h => Step.no_step_from_typeError h
+  | floatUnary_typeError _ _ => exact .inr fun _ h => Step.no_step_from_typeError h
 
 /-- Whole-program backward simulation for `verifiedGenerateAsm`.
 

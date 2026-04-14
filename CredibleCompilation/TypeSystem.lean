@@ -43,8 +43,7 @@ inductive WellTypedInstr (Γ : TyCtx) (decls : List (ArrayName × Nat × VarTy))
       WellTypedInstr Γ decls (.fbinop x fop y z)
   | intToFloat : Γ x = .float → Γ y = .int → WellTypedInstr Γ decls (.intToFloat x y)
   | floatToInt : Γ x = .int → Γ y = .float → WellTypedInstr Γ decls (.floatToInt x y)
-  | floatExp  : Γ x = .float → Γ y = .float → WellTypedInstr Γ decls (.floatExp x y)
-  | floatSqrt : Γ x = .float → Γ y = .float → WellTypedInstr Γ decls (.floatSqrt x y)
+  | floatUnary : Γ x = .float → Γ y = .float → WellTypedInstr Γ decls (.floatUnary x op y)
 
 /-- A program is well-typed if every instruction is well-typed. -/
 def WellTypedProg (Γ : TyCtx) (p : Prog) : Prop :=
@@ -117,16 +116,11 @@ theorem Step.progress (p : Prog) (pc : Nat) (σ : Store) (am : ArrayMem) (Γ : T
     | floatToInt _ hy =>
       obtain ⟨f, hf⟩ := Value.float_of_typeOf_float (by rw [hts y]; exact hy)
       exact ⟨_, .floatToInt (hp ▸ hinstr) hf⟩
-  | .floatExp x y =>
+  | .floatUnary x op y =>
     rw [hp] at hwti; cases hwti with
-    | floatExp _ hy =>
+    | floatUnary _ hy =>
       obtain ⟨f, hf⟩ := Value.float_of_typeOf_float (by rw [hts y]; exact hy)
-      exact ⟨_, .floatExp (hp ▸ hinstr) hf⟩
-  | .floatSqrt x y =>
-    rw [hp] at hwti; cases hwti with
-    | floatSqrt _ hy =>
-      obtain ⟨f, hf⟩ := Value.float_of_typeOf_float (by rw [hts y]; exact hy)
-      exact ⟨_, .floatSqrt (hp ▸ hinstr) hf⟩
+      exact ⟨_, .floatUnary (hp ▸ hinstr) hf⟩
 
 /-- **Type safety (single step)**: a well-typed program with a well-typed store
     never steps to a type-error configuration. -/
@@ -180,18 +174,12 @@ theorem Step.no_typeError_of_wellTyped {p : Prog} {pc : Nat} {σ τ : Store} {am
     rw [this] at hwti
     cases hwti with
     | floatToInt _ hy => exact hne (by rw [hts]; exact hy)
-  | floatExp_typeError hinstr hne =>
+  | floatUnary_typeError hinstr hne =>
     have hwti := hwtp pc hpc
     have := instr_eq_of_lookup hpc hinstr
     rw [this] at hwti
     cases hwti with
-    | floatExp _ hy => exact hne (by rw [hts]; exact hy)
-  | floatSqrt_typeError hinstr hne =>
-    have hwti := hwtp pc hpc
-    have := instr_eq_of_lookup hpc hinstr
-    rw [this] at hwti
-    cases hwti with
-    | floatSqrt _ hy => exact hne (by rw [hts]; exact hy)
+    | floatUnary _ hy => exact hne (by rw [hts]; exact hy)
 
 /-- **Progress (untyped)**: an in-bounds PC always admits a step,
     regardless of type safety. For ill-typed binop operands, the step
@@ -254,16 +242,11 @@ theorem Step.progress_untyped (p : Prog) (pc : Nat) (σ : Store) (am : ArrayMem)
     · obtain ⟨f, hf⟩ := Value.float_of_typeOf_float hy
       exact ⟨_, .floatToInt (hp ▸ hinstr) hf⟩
     · exact ⟨_, .floatToInt_typeError (hp ▸ hinstr) hy⟩
-  | .floatExp x y =>
+  | .floatUnary x op y =>
     by_cases hy : (σ y).typeOf = .float
     · obtain ⟨f, hf⟩ := Value.float_of_typeOf_float hy
-      exact ⟨_, .floatExp (hp ▸ hinstr) hf⟩
-    · exact ⟨_, .floatExp_typeError (hp ▸ hinstr) hy⟩
-  | .floatSqrt x y =>
-    by_cases hy : (σ y).typeOf = .float
-    · obtain ⟨f, hf⟩ := Value.float_of_typeOf_float hy
-      exact ⟨_, .floatSqrt (hp ▸ hinstr) hf⟩
-    · exact ⟨_, .floatSqrt_typeError (hp ▸ hinstr) hy⟩
+      exact ⟨_, .floatUnary (hp ▸ hinstr) hf⟩
+    · exact ⟨_, .floatUnary_typeError (hp ▸ hinstr) hy⟩
 
 -- ============================================================
 -- § 11. Decidable type checking
@@ -290,8 +273,7 @@ def checkWellTypedInstr (Γ : TyCtx) (decls : List (ArrayName × Nat × VarTy)) 
   | .fbinop x _ y z => decide (Γ x = .float) && decide (Γ y = .float) && decide (Γ z = .float)
   | .intToFloat x y => decide (Γ x = .float) && decide (Γ y = .int)
   | .floatToInt x y => decide (Γ x = .int) && decide (Γ y = .float)
-  | .floatExp x y => decide (Γ x = .float) && decide (Γ y = .float)
-  | .floatSqrt x y => decide (Γ x = .float) && decide (Γ y = .float)
+  | .floatUnary x _ y => decide (Γ x = .float) && decide (Γ y = .float)
 
 theorem checkWellTypedBoolExpr_sound {Γ : TyCtx} {b : BoolExpr}
     (h : checkWellTypedBoolExpr Γ b = true) : WellTypedBoolExpr Γ b := by
@@ -346,12 +328,9 @@ theorem checkWellTypedInstr_sound {Γ : TyCtx} {decls : List (ArrayName × Nat �
   | floatToInt x y =>
     simp [checkWellTypedInstr, Bool.and_eq_true, decide_eq_true_eq] at h
     exact .floatToInt h.1 h.2
-  | floatExp x y =>
+  | floatUnary x _ y =>
     simp [checkWellTypedInstr, Bool.and_eq_true, decide_eq_true_eq] at h
-    exact .floatExp h.1 h.2
-  | floatSqrt x y =>
-    simp [checkWellTypedInstr, Bool.and_eq_true, decide_eq_true_eq] at h
-    exact .floatSqrt h.1 h.2
+    exact .floatUnary h.1 h.2
 
 /-- Check that every instruction in a program is well-typed. -/
 def checkWellTypedProg (Γ : TyCtx) (p : Prog) : Bool :=
@@ -426,16 +405,11 @@ theorem type_preservation {Γ : TyCtx} {p : Prog} {pc pc' : Nat} {σ σ' : Store
     rw [this] at hwti
     match hwti with
     | .floatToInt hx _ => exact TypedStore.update_typed hts (by simp [Value.typeOf]; exact hx.symm)
-  | floatExp h _ =>
+  | floatUnary h _ =>
     have := instr_eq_of_lookup hpc h
     rw [this] at hwti
     match hwti with
-    | .floatExp hx _ => exact TypedStore.update_typed hts (by simp [Value.typeOf]; exact hx.symm)
-  | floatSqrt h _ =>
-    have := instr_eq_of_lookup hpc h
-    rw [this] at hwti
-    match hwti with
-    | .floatSqrt hx _ => exact TypedStore.update_typed hts (by simp [Value.typeOf]; exact hx.symm)
+    | .floatUnary hx _ => exact TypedStore.update_typed hts (by simp [Value.typeOf]; exact hx.symm)
 
 
 /-- **Type safety (multi-step)**: a well-typed, step-closed program never
@@ -545,21 +519,12 @@ theorem type_safety {p : Prog} {σ₀ σ' : Store} {am₀ am' : ArrayMem} {Γ : 
       | refl => exact Step.no_typeError_of_wellTyped (am := am) (am' := am) hpc hwtp hts
                   (.floatToInt_typeError (am := am) hinstr hne)
       | step s _ => exact Step.no_step_from_typeError s
-    | floatExp h hy =>
+    | floatUnary h hy =>
       exact ih _ _ am rfl hc'
-        (hclosed.2 pc _ σ _ am am hpc (Step.floatExp (am := am) h hy))
-        (type_preservation (am := am) (am' := am) hwtp hts hpc (Step.floatExp (am := am) h hy))
-    | floatExp_typeError hinstr hne =>
+        (hclosed.2 pc _ σ _ am am hpc (Step.floatUnary (am := am) h hy))
+        (type_preservation (am := am) (am' := am) hwtp hts hpc (Step.floatUnary (am := am) h hy))
+    | floatUnary_typeError hinstr hne =>
       cases rest with
       | refl => exact Step.no_typeError_of_wellTyped (am := am) (am' := am) hpc hwtp hts
-                  (.floatExp_typeError (am := am) hinstr hne)
-      | step s _ => exact Step.no_step_from_typeError s
-    | floatSqrt h hy =>
-      exact ih _ _ am rfl hc'
-        (hclosed.2 pc _ σ _ am am hpc (Step.floatSqrt (am := am) h hy))
-        (type_preservation (am := am) (am' := am) hwtp hts hpc (Step.floatSqrt (am := am) h hy))
-    | floatSqrt_typeError hinstr hne =>
-      cases rest with
-      | refl => exact Step.no_typeError_of_wellTyped (am := am) (am' := am) hpc hwtp hts
-                  (.floatSqrt_typeError (am := am) hinstr hne)
+                  (.floatUnary_typeError (am := am) hinstr hne)
       | step s _ => exact Step.no_step_from_typeError s

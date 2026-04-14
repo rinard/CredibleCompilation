@@ -718,15 +718,12 @@ def formalGenInstr (vm : VarMap) (pcMap : Nat → Nat) (instr : TAC)
     | some offS, some offD =>
       [.fldr .d0 offS, .fcvtzs .x0 .d0, .str .x0 offD]
     | _, _ => []
-  | .floatExp dst src =>
+  | .floatUnary dst op src =>
     match vm.lookup src, vm.lookup dst with
     | some offS, some offD =>
-      [.fldr .d0 offS, .callExp .d0 .d0, .fstr .d0 offD]
-    | _, _ => []
-  | .floatSqrt dst src =>
-    match vm.lookup src, vm.lookup dst with
-    | some offS, some offD =>
-      [.fldr .d0 offS, .fsqrtD .d0 .d0, .fstr .d0 offD]
+      match op with
+      | .exp  => [.fldr .d0 offS, .callExp .d0 .d0, .fstr .d0 offD]
+      | .sqrt => [.fldr .d0 offS, .fsqrtD .d0 .d0, .fstr .d0 offD]
     | _, _ => []
 
 -- ============================================================
@@ -910,22 +907,15 @@ def verifiedGenInstr (layout : VarLayout) (pcMap : Nat → Nat) (instr : TAC)
     | _, _ =>
       let src_reg := match layout src with | some (.freg r) => r | _ => .d0
       some (vLoadVarFP layout src src_reg ++ [.fcvtzs .x0 src_reg] ++ vStoreVar layout dst .x0)
-  | .floatExp dst src =>
+  | .floatUnary dst op src =>
     match layout src, layout dst with
     | some (.ireg _), _ => none
     | _, some (.ireg _) => none
     | _, _ =>
       let src_reg := match layout src with | some (.freg r) => r | _ => .d0
       let dst_reg := match layout dst with | some (.freg r) => r | _ => .d0
-      some (vLoadVarFP layout src src_reg ++ [.callExp dst_reg src_reg] ++ vStoreVarFP layout dst dst_reg)
-  | .floatSqrt dst src =>
-    match layout src, layout dst with
-    | some (.ireg _), _ => none
-    | _, some (.ireg _) => none
-    | _, _ =>
-      let src_reg := match layout src with | some (.freg r) => r | _ => .d0
-      let dst_reg := match layout dst with | some (.freg r) => r | _ => .d0
-      some (vLoadVarFP layout src src_reg ++ [.fsqrtD dst_reg src_reg] ++ vStoreVarFP layout dst dst_reg)
+      let armOp := match op with | .exp => ArmInstr.callExp dst_reg src_reg | .sqrt => ArmInstr.fsqrtD dst_reg src_reg
+      some (vLoadVarFP layout src src_reg ++ [armOp] ++ vStoreVarFP layout dst dst_reg)
 
 -- ============================================================
 -- § 9. CodeAt and helper lemmas

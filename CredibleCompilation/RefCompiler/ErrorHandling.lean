@@ -212,22 +212,7 @@ theorem compileExpr_stuck (e : SExpr) (offset nextTmp : Nat) (σ σ_tac : Store)
     rw [hre] at hlt; simp at hlt
     exact ⟨pc_s, σ_s, hfrag, hstuck,
       by simp [List.length_append]; omega⟩
-  | floatExp e ih =>
-    simp only [SExpr.safe] at hunsafe
-    obtain ⟨hwrap_e, htv_e⟩ :=
-      show e.wrapEval σ am = .float (e.eval σ am) ∧ e.typedVars σ am from htypedv
-    dsimp only [compileExpr] at hcode ⊢
-    generalize hre : compileExpr e offset nextTmp = re at hcode ⊢
-    obtain ⟨codeE, ve, tmp1⟩ := re
-    simp only [] at hcode ⊢
-    have hcodeE : RC.CodeAt (compileExpr e offset nextTmp).1 p offset := by
-      rw [hre]; exact hcode.left
-    obtain ⟨pc_s, σ_s, hfrag, hstuck, hlt⟩ :=
-      ih offset nextTmp σ_tac htf hftf htv_e hunsafe hagree hcodeE
-    rw [hre] at hlt; simp at hlt
-    exact ⟨pc_s, σ_s, hfrag, hstuck,
-      by simp [List.length_append]; omega⟩
-  | floatSqrt e ih =>
+  | floatUnary op e ih =>
     simp only [SExpr.safe] at hunsafe
     obtain ⟨hwrap_e, htv_e⟩ :=
       show e.wrapEval σ am = .float (e.eval σ am) ∧ e.typedVars σ am from htypedv
@@ -870,8 +855,7 @@ theorem compileStmt_unsafe (s : Stmt) (fuel : Nat) (σ : Store) (am : ArrayMem)
     | flit _ => exact absurd hwrap_e (by simp [SExpr.wrapEval])
     | fbin _ _ _ => exact absurd hwrap_e (by simp [SExpr.wrapEval])
     | intToFloat _ => exact absurd hwrap_e (by simp [SExpr.wrapEval])
-    | floatExp _ => exact absurd hwrap_e (by simp [SExpr.wrapEval])
-    | floatSqrt _ => exact absurd hwrap_e (by simp [SExpr.wrapEval])
+    | floatUnary _ _ => exact absurd hwrap_e (by simp [SExpr.wrapEval])
     | farrRead _ _ => exact absurd hwrap_e (by simp [SExpr.wrapEval])
     | floatToInt e' =>
       dsimp only [compileStmt] at hcode ⊢
@@ -1000,21 +984,7 @@ theorem compileStmt_unsafe (s : Stmt) (fuel : Nat) (σ : Store) (am : ArrayMem)
           htf_e hftf_e htv_inner hunsafe hagree hcodeE
       rw [hre] at hlt; simp at hlt
       exact ⟨pc_s, σ_s, am, hfrag, hstuck, by simp [List.length_append]; omega⟩
-    | floatExp e' =>
-      dsimp only [compileStmt] at hcode ⊢
-      generalize hre : compileExpr e' offset nextTmp = re at hcode ⊢
-      obtain ⟨codeE, ve, tmp1⟩ := re; simp only [] at hcode ⊢
-      simp only [SExpr.safe] at hunsafe
-      simp only [SExpr.typedVars] at htv_e
-      obtain ⟨_, htv_inner⟩ := htv_e
-      have hcodeE : RC.CodeAt (compileExpr e' offset nextTmp).1 p offset := by
-        rw [hre]; exact hcode.left
-      obtain ⟨pc_s, σ_s, hfrag, hstuck, hlt⟩ :=
-        compileExpr_stuck e' offset nextTmp σ σ_tac am p
-          htf_e hftf_e htv_inner hunsafe hagree hcodeE
-      rw [hre] at hlt; simp at hlt
-      exact ⟨pc_s, σ_s, am, hfrag, hstuck, by simp [List.length_append]; omega⟩
-    | floatSqrt e' =>
+    | floatUnary op' e' =>
       dsimp only [compileStmt] at hcode ⊢
       generalize hre : compileExpr e' offset nextTmp = re at hcode ⊢
       obtain ⟨codeE, ve, tmp1⟩ := re; simp only [] at hcode ⊢

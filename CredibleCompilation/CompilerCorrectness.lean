@@ -28,8 +28,7 @@ def SExpr.freeVars : SExpr → List Var
   | .fbin _ a b => a.freeVars ++ b.freeVars
   | .intToFloat e => e.freeVars
   | .floatToInt e => e.freeVars
-  | .floatExp e => e.freeVars
-  | .floatSqrt e => e.freeVars
+  | .floatUnary _ e => e.freeVars
   | .farrRead _ idx => idx.freeVars
 
 def SBool.freeVars : SBool → List Var
@@ -96,8 +95,7 @@ theorem SExpr.eval_agree (e : SExpr) (σ τ : Store) (am : ArrayMem)
         ihb (fun v hv => h v (List.mem_append_right _ hv))]
   | intToFloat e ih => simp only [SExpr.eval]; rw [ih h]
   | floatToInt e ih => simp only [SExpr.eval]; rw [ih h]
-  | floatExp e ih => simp only [SExpr.eval]; rw [ih h]
-  | floatSqrt e ih => simp only [SExpr.eval]; rw [ih h]
+  | floatUnary op e ih => simp only [SExpr.eval]; rw [ih h]
   | farrRead _ idx ih => simp only [SExpr.eval]; rw [ih h]
 
 theorem SBool.eval_agree (sb : SBool) (σ τ : Store) (am : ArrayMem)
@@ -164,8 +162,7 @@ theorem SExpr.isSafe_agree (e : SExpr) (σ τ : Store) (am : ArrayMem) (decls)
         ihb (fun v hv => h v (List.mem_append_right _ hv))]
   | intToFloat e ih => simp only [SExpr.isSafe]; rw [ih h]
   | floatToInt e ih => simp only [SExpr.isSafe]; rw [ih h]
-  | floatExp e ih => simp only [SExpr.isSafe]; rw [ih h]
-  | floatSqrt e ih => simp only [SExpr.isSafe]; rw [ih h]
+  | floatUnary op e ih => simp only [SExpr.isSafe]; rw [ih h]
   | farrRead arr idx ih =>
     simp only [SExpr.isSafe]
     rw [ih h, SExpr.eval_agree idx σ τ am h]
@@ -448,8 +445,7 @@ def SExpr.safe (σ : Store) (am : ArrayMem) (decls : List (ArrayName × Nat × V
   | .fbin _ a b => a.safe σ am decls ∧ b.safe σ am decls
   | .intToFloat e => e.safe σ am decls
   | .floatToInt e => e.safe σ am decls
-  | .floatExp e => e.safe σ am decls
-  | .floatSqrt e => e.safe σ am decls
+  | .floatUnary _ e => e.safe σ am decls
   | .farrRead arr idx => idx.safe σ am decls ∧ (idx.eval σ am) < arraySizeBv decls arr
 
 def SBool.safe (σ : Store) (am : ArrayMem) (decls : List (ArrayName × Nat × VarTy)) : SBool → Prop
@@ -521,8 +517,7 @@ theorem SExpr.isSafe_implies_safe (e : SExpr) (σ : Store) (am : ArrayMem) (decl
     intro ⟨ha, hb⟩; exact ⟨iha ha, ihb hb⟩
   | intToFloat e ih => simp only [SExpr.isSafe, SExpr.safe]; exact ih
   | floatToInt e ih => simp only [SExpr.isSafe, SExpr.safe]; exact ih
-  | floatExp e ih => simp only [SExpr.isSafe, SExpr.safe]; exact ih
-  | floatSqrt e ih => simp only [SExpr.isSafe, SExpr.safe]; exact ih
+  | floatUnary op e ih => simp only [SExpr.isSafe, SExpr.safe]; exact ih
   | farrRead arr idx ih =>
     simp only [SExpr.isSafe, SExpr.safe, Bool.and_eq_true, decide_eq_true_eq]
     intro ⟨hs, hb⟩; exact ⟨ih hs, hb⟩
@@ -781,14 +776,7 @@ private theorem checkExpr_declared {lookup : Var → Option VarTy}
       intro v hv; exact ih h v hv
     | .float => simp [Program.checkExpr] at h
     | .bool => simp [Program.checkExpr] at h
-  | floatExp e ih =>
-    match ty with
-    | .float =>
-      simp [Program.checkExpr] at h
-      intro v hv; exact ih h v hv
-    | .int => simp [Program.checkExpr] at h
-    | .bool => simp [Program.checkExpr] at h
-  | floatSqrt e ih =>
+  | floatUnary op e ih =>
     match ty with
     | .float =>
       simp [Program.checkExpr] at h
@@ -896,15 +884,7 @@ theorem checkExpr_typedVars {lookup : Var → Option VarTy}
       exact ⟨⟨hwf_e rfl, htv_e⟩, fun _ => rfl, fun h => absurd h (by decide)⟩
     | .float => simp [Program.checkExpr] at hchk
     | .bool => simp [Program.checkExpr] at hchk
-  | floatExp e ih =>
-    match ty with
-    | .float =>
-      simp [Program.checkExpr] at hchk
-      have ⟨htv_e, _, hwf_e⟩ := ih hchk
-      exact ⟨⟨hwf_e rfl, htv_e⟩, fun h => absurd h (by decide), fun _ => rfl⟩
-    | .int => simp [Program.checkExpr] at hchk
-    | .bool => simp [Program.checkExpr] at hchk
-  | floatSqrt e ih =>
+  | floatUnary op e ih =>
     match ty with
     | .float =>
       simp [Program.checkExpr] at hchk
