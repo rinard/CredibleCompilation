@@ -1101,7 +1101,7 @@ private theorem step_simulation {p : Prog} {r : VerifiedAsmResult}
     hStep hRel hPC spec.wellTypedProg hTS spec.wellTypedLayout
     p[pc] hInstr
     (r.bodyPerPC[pc]'hBodySz) hSome
-    hCodeAt hPcNext (spec.layoutComplete pc hPC)
+    hCodeAt hPcNext (spec.layoutComplete pc hPC) rfl
 
 -- ──────────────────────────────────────────────────────────────
 -- Multi-step simulation (main theorem)

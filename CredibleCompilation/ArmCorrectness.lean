@@ -2250,7 +2250,8 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
     (cfg' : Cfg) (hStep : p ⊩ Cfg.run pc σ am ⟶ cfg')
     (hCodeInstr : CodeAt prog (pcMap pc) instrs)
     (hPcNext : ∀ σ' am', cfg' = .run (pc + 1) σ' am' →
-      pcMap (pc + 1) = pcMap pc + instrs.length) :
+      pcMap (pc + 1) = pcMap pc + instrs.length)
+    (hAD : arrayDecls = p.arrayDecls) :
     ∃ s', ArmSteps prog s s' ∧ ExtSimRel layout pcMap cfg' s' := by
   -- Derive scratchSafe and injective from hSome (the if-guard passed)
   have hSS : layout.scratchSafe = true := by
@@ -3633,7 +3634,8 @@ theorem ext_backward_simulation (p : Prog) (armProg : ArmProg)
     (hCode : CodeAt armProg (pcMap pc) instrs)
     (hPcNext : ∀ σ' am', cfg' = .run (pc + 1) σ' am' →
       pcMap (pc + 1) = pcMap pc + instrs.length)
-    (hMapped : ∀ v, v ∈ instr.vars → layout v ≠ none) :
+    (hMapped : ∀ v, v ∈ instr.vars → layout v ≠ none)
+    (hAD : arrayDecls = p.arrayDecls) :
     ∃ s', ArmSteps armProg s s' ∧ ExtSimRel layout pcMap cfg' s' :=
   verifiedGenInstr_correct armProg layout pcMap p pc σ am s haltLabel divLabel boundsLabel
-    arrayDecls boundsSafe instr hInstr hRel instrs hSome hPC hWT hTS hWTL hMapped cfg' hStep hCode hPcNext
+    arrayDecls boundsSafe instr hInstr hRel instrs hSome hPC hWT hTS hWTL hMapped cfg' hStep hCode hPcNext hAD
