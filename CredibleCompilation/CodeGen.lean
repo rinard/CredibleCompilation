@@ -476,6 +476,10 @@ def verifiedGenerateAsm (p : Prog) : Except String VerifiedAsmResult := do
     match checkWellTypedLayout p.tyCtx layout p.code with
     | some err => .error s!"well-typed layout check failed: {err}"
     | none =>
+    -- Check NoCallerSavedLayout (no mapped variable in caller-saved register)
+    if !checkNoCallerSavedLayout layout then
+      .error "layout contains caller-saved registers (library calls require callee-saved only)"
+    else
     -- Check branch targets in bounds (hPC_bound on successors)
     match checkBranchTargets p.code with
     | some err => .error s!"branch target check failed: {err}"
@@ -572,6 +576,8 @@ structure GenAsmSpec (p : Prog) (r : VerifiedAsmResult) : Prop where
       lengths[i] = (r.bodyPerPC[i]).length
   /-- Every variable referenced by an instruction has a layout entry. -/
   layoutComplete : ∀ pc (hpc : pc < p.size), ∀ v, v ∈ (p[pc]).vars → r.layout v ≠ none
+  /-- No variable is mapped to a caller-saved register. -/
+  noCallerSavedLayout : NoCallerSavedLayout r.layout
 
 /-- If lookup returns some, the key-value pair is in the list. -/
 private theorem lookup_mem {v : String} {loc : VarLoc}
@@ -806,44 +812,50 @@ theorem verifiedGenerateAsm_spec {p : Prog} {r : VerifiedAsmResult}
     · rename_i hWTL_check
       split at hGen
       · simp at hGen
-      · rename_i hBT_check
+      · rename_i hNCSL_guard
         split at hGen
         · simp at hGen
-        · rename_i bodyPerPC hBodyMatch
-          -- Replace r with its concrete record value
-          have hr := Except.ok.inj hGen; subst hr
-          -- Now all r.field references become concrete
-          have ⟨hSz, hPCs⟩ := body_foldl_spec hBodyMatch
-          have hgetD : ∀ pc (h : pc < p.size), p.code.getD pc .halt = p[pc] := by
-            intro pc hpc; simp [Prog.size_eq] at hpc
-            simp [Array.getD, dif_pos hpc, Prog.getElem_eq]
-          exact {
-            wellTypedProg := checkWellTypedProg_sound hWT
-            wellTypedLayout := checkWellTypedLayout_wellTyped hWTL_check
-            bodySize := by simp [Prog.size_eq]; exact hSz
-            instrGen := fun pc hpc => by
-              have hpc' : pc < p.code.size := by simp [Prog.size_eq] at hpc; exact hpc
-              have hgen := hPCs pc (hSz ▸ hpc')
-              rw [hgetD pc hpc] at hgen
-              exact ⟨_, hgen⟩
-            pcMapLengths := by
-              refine ⟨((List.range p.code.size).map fun pc =>
-                instrLength (buildVarLayout (collectVars p) (buildVarMap (collectVars p)))
-                  p.arrayDecls
-                  (isBoundsSafe p.arrayDecls (BoundsOpt.analyzeIntervals p) pc (p.code.getD pc .halt))
-                  (p.code.getD pc .halt)
-                  (p.code.size * 1000) (p.code.size * 1000 + 1) (p.code.size * 1000 + 2)).toArray,
-                ?_, rfl, ?_⟩
-              · simp [List.length_map, List.length_range, hSz]
-              · intro i hL hB
-                dsimp only [] at hB ⊢
-                simp at hL
-                simp only [List.getElem_toArray, List.getElem_map, List.getElem_range]
-                exact instrLength_eq_length (hPCs i (hSz ▸ (by omega)))
-            layoutComplete := fun pc hpc v hv => by
-              simp [Prog.size_eq] at hpc
-              exact checkWellTypedLayout_instrMapped hWTL_check hpc hv
-          }
+        · rename_i hBT_check
+          split at hGen
+          · simp at hGen
+          · rename_i bodyPerPC hBodyMatch
+            -- Replace r with its concrete record value
+            have hr := Except.ok.inj hGen; subst hr
+            -- Now all r.field references become concrete
+            have ⟨hSz, hPCs⟩ := body_foldl_spec hBodyMatch
+            have hgetD : ∀ pc (h : pc < p.size), p.code.getD pc .halt = p[pc] := by
+              intro pc hpc; simp [Prog.size_eq] at hpc
+              simp [Array.getD, dif_pos hpc, Prog.getElem_eq]
+            have hNCSL : checkNoCallerSavedLayout (buildVarLayout (collectVars p) (buildVarMap (collectVars p))) = true := by
+              simpa using hNCSL_guard
+            exact {
+              wellTypedProg := checkWellTypedProg_sound hWT
+              wellTypedLayout := checkWellTypedLayout_wellTyped hWTL_check
+              bodySize := by simp [Prog.size_eq]; exact hSz
+              instrGen := fun pc hpc => by
+                have hpc' : pc < p.code.size := by simp [Prog.size_eq] at hpc; exact hpc
+                have hgen := hPCs pc (hSz ▸ hpc')
+                rw [hgetD pc hpc] at hgen
+                exact ⟨_, hgen⟩
+              pcMapLengths := by
+                refine ⟨((List.range p.code.size).map fun pc =>
+                  instrLength (buildVarLayout (collectVars p) (buildVarMap (collectVars p)))
+                    p.arrayDecls
+                    (isBoundsSafe p.arrayDecls (BoundsOpt.analyzeIntervals p) pc (p.code.getD pc .halt))
+                    (p.code.getD pc .halt)
+                    (p.code.size * 1000) (p.code.size * 1000 + 1) (p.code.size * 1000 + 2)).toArray,
+                  ?_, rfl, ?_⟩
+                · simp [List.length_map, List.length_range, hSz]
+                · intro i hL hB
+                  dsimp only [] at hB ⊢
+                  simp at hL
+                  simp only [List.getElem_toArray, List.getElem_map, List.getElem_range]
+                  exact instrLength_eq_length (hPCs i (hSz ▸ (by omega)))
+              layoutComplete := fun pc hpc v hv => by
+                simp [Prog.size_eq] at hpc
+                exact checkWellTypedLayout_instrMapped hWTL_check hpc hv
+              noCallerSavedLayout := checkNoCallerSavedLayout_spec _ hNCSL
+            }
 
 -- ──────────────────────────────────────────────────────────────
 -- buildPcMap prefix-sum lemmas
@@ -1101,7 +1113,7 @@ private theorem step_simulation {p : Prog} {r : VerifiedAsmResult}
     hStep hRel hPC spec.wellTypedProg hTS spec.wellTypedLayout
     p[pc] hInstr
     (r.bodyPerPC[pc]'hBodySz) hSome
-    hCodeAt hPcNext (spec.layoutComplete pc hPC) rfl
+    hCodeAt hPcNext (spec.layoutComplete pc hPC) rfl spec.noCallerSavedLayout
 
 -- ──────────────────────────────────────────────────────────────
 -- Multi-step simulation (main theorem)

@@ -316,6 +316,12 @@ inductive FloatUnaryOp
   | abs | neg | round
   deriving Repr, DecidableEq
 
+/-- True for ops that have native ARM64 instructions (fsqrt, fabs, fneg).
+    False for library calls (bl _exp, etc.) that clobber caller-saved registers. -/
+def FloatUnaryOp.isNative : FloatUnaryOp → Bool
+  | .sqrt | .abs | .neg => true
+  | .exp | .sin | .cos | .tan | .log | .log2 | .log10 | .round => false
+
 /-- Evaluate a float unary op. Opaque — each is an uninterpreted function over BitVec 64. -/
 opaque FloatUnaryOp.eval : FloatUnaryOp → BitVec 64 → BitVec 64
 

@@ -216,11 +216,16 @@ def computeColoring (prog : Prog) : List (Var × String) :=
           v != w && prog.tyCtx v != prog.tyCtx w && !nbrs.contains w
         (v, nbrs ++ extraNbrs)
       let floatGraph := buildInterference floatVars liveOut
-      -- Detect variables live across library calls (exp, sin, etc.)
-      -- These prefer callee-saved registers to avoid save/restore around bl.
+      -- Detect library calls. When present, ALL vars must use callee-saved
+      -- registers (or stack) to preserve ExtStateRel across havocCallerSaved.
+      let hasLibCall := prog.code.any fun instr =>
+        match instr with | .floatUnary _ op _ => isLibraryCall op | _ => false
       let callLiveVars := varsLiveAcrossCall prog liveOut
-      let intCallLive := callLiveVars.filter fun v => prog.tyCtx v != .float
-      let floatCallLive := callLiveVars.filter fun v => prog.tyCtx v == .float
+      -- When library calls exist, force ALL vars to prefer callee-saved.
+      -- Otherwise, only vars live across calls get the preference.
+      let calleePrefVars := if hasLibCall then allVars else callLiveVars
+      let intCallLive := calleePrefVars.filter fun v => prog.tyCtx v != .float
+      let floatCallLive := calleePrefVars.filter fun v => prog.tyCtx v == .float
       -- Color each graph. numCallerSavedIntRegs = 12 is where callee-saved colors start.
       -- For floats: d3-d7 are caller-saved (colors 0-4), d8-d15 callee-saved (colors 5-12).
       let (intBoolColoring, _) := graphColor intBoolGraph intRegNums.size liveRanges

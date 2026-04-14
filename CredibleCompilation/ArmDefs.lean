@@ -103,6 +103,27 @@ def ArmState.setFReg (s : ArmState) (r : ArmFReg) (v : BitVec 64) : ArmState :=
 def ArmState.nextPC (s : ArmState) : ArmState :=
   { s with pc := s.pc + 1 }
 
+/-- True for caller-saved integer registers: x0-x15, x18 (platform).
+    Callee-saved: x19-x28.  Linker scratch x16-x17 are also caller-saved. -/
+def ArmReg.isCallerSaved : ArmReg → Bool
+  | .x0 | .x1 | .x2 | .x3 | .x4 | .x5 | .x6 | .x7
+  | .x8 | .x9 | .x10 | .x11 | .x12 | .x13 | .x14 | .x15
+  | .x16 | .x17 | .x18 => true
+  | .x19 | .x20 | .x21 | .x22 | .x23 | .x24 | .x25 | .x26 | .x27 | .x28 => false
+
+/-- True for caller-saved FP registers: d0-d7.
+    Callee-saved: d8-d15. -/
+def ArmFReg.isCallerSaved : ArmFReg → Bool
+  | .d0 | .d1 | .d2 | .d3 | .d4 | .d5 | .d6 | .d7 => true
+  | .d8 | .d9 | .d10 | .d11 | .d12 | .d13 | .d14 | .d15 => false
+
+/-- Havoc all caller-saved registers (set to 0).
+    Models the effect of a library call on registers not preserved by the callee. -/
+def ArmState.havocCallerSaved (s : ArmState) : ArmState :=
+  { s with
+    regs := fun r => if r.isCallerSaved then 0 else s.regs r
+    fregs := fun r => if r.isCallerSaved then 0 else s.fregs r }
+
 -- ============================================================
 -- § 4. ARM64 instructions
 -- ============================================================

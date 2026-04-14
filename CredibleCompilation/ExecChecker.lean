@@ -990,6 +990,23 @@ theorem AllArrayOpsInt.arrStore_int {p : Prog} {pc : Nat} {arr : ArrayName}
   have heq := Option.some.inj ((Prog.getElem?_eq_getElem hlt).symm.trans hinstr)
   simp [heq] at hmatch; exact hmatch
 
+/-- **Condition 14 (rel–inv link)**: for every non-variable original-side
+    expression `(e_o, .var v)` in a relation, the original invariant at the
+    mapped PC contains `(v, e_o)`.  This lets the soundness proof derive
+    `e_o.eval σ_o am = σ_o v` from the invariant, which is needed when
+    `relFindOrigVar` maps a variable to itself via the LICM fallback. -/
+def checkRelInvLink (cert : ECertificate) : Bool :=
+  (List.range cert.trans.size).all fun pc_t =>
+    match cert.instrCerts[pc_t]? with
+    | some ic =>
+      let inv := cert.inv_orig.getD ic.pc_orig ([] : EInv)
+      ic.rel.all fun (e_o, e_t) =>
+        match e_o, e_t with
+        | .var _, _ => true
+        | _, .var v => inv.any fun (w, e) => w == v && e == e_o
+        | _, _ => true
+    | none => true
+
 /-- Check all certificate conditions. Returns `true` iff the certificate is valid. -/
 def checkCertificateExec (cert : ECertificate) : Bool :=
   checkWellTypedProg cert.orig.tyCtx cert.orig &&
@@ -1010,7 +1027,8 @@ def checkCertificateExec (cert : ECertificate) : Bool :=
   checkBoundsPreservationExec cert &&
   checkArraySizesExec cert &&
   checkOrigPathBoundsOk cert &&
-  checkSuccessorsInBounds cert
+  checkSuccessorsInBounds cert &&
+  checkRelInvLink cert
 
 /-- Verbose check: returns the result of each individual condition. -/
 def checkCertificateVerboseExec (cert : ECertificate) : List (String × Bool) :=
@@ -1032,7 +1050,8 @@ def checkCertificateVerboseExec (cert : ECertificate) : List (String × Bool) :=
     ("bounds_preservation",   checkBoundsPreservationExec cert),
     ("array_sizes_equal",     checkArraySizesExec cert),
     ("orig_path_bounds_ok",   checkOrigPathBoundsOk cert),
-    ("successors_in_bounds",  checkSuccessorsInBounds cert) ]
+    ("successors_in_bounds",  checkSuccessorsInBounds cert),
+    ("rel_inv_link",          checkRelInvLink cert) ]
 
 /-- Observable output of a configuration with respect to an executable certificate.
     - If the current instruction is `halt`, returns `halt` with observable variable–value pairs.

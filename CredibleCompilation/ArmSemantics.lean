@@ -203,9 +203,18 @@ inductive ArmStep (prog : ArmProg) : ArmState → ArmState → Prop where
     prog[s.pc]? = some (.callBinF fop fd fn fm) →
     ArmStep prog s (s.setFReg fd (FloatBinOp.eval fop (s.fregs fn) (s.fregs fm)) |>.nextPC)
 
-  | floatUnaryInstr (op : FloatUnaryOp) (fd fn : ArmFReg) :
+  /-- Native float unary (fsqrt, fabs, fneg): pure, only modifies fd. -/
+  | floatUnaryNative (op : FloatUnaryOp) (fd fn : ArmFReg) :
     prog[s.pc]? = some (.floatUnaryInstr op fd fn) →
+    op.isNative = true →
     ArmStep prog s (s.setFReg fd (op.eval (s.fregs fn)) |>.nextPC)
+
+  /-- Library float unary (exp, sin, cos, …): havocs all caller-saved
+      registers, then sets fd to result (models `bl _exp; fmov fd, d0`). -/
+  | floatUnaryLibCall (op : FloatUnaryOp) (fd fn : ArmFReg) :
+    prog[s.pc]? = some (.floatUnaryInstr op fd fn) →
+    op.isNative = false →
+    ArmStep prog s (s.havocCallerSaved |>.setFReg fd (op.eval (s.fregs fn)) |>.nextPC)
 
 /-- Multi-step closure. -/
 inductive ArmSteps (prog : ArmProg) : ArmState → ArmState → Prop where
@@ -585,6 +594,69 @@ theorem ExtStateRel.setArrayMem_preserved {layout : VarLayout} {σ : Store} {arm
   | .stack off => exact h w (.stack off) hW
   | .ireg r => exact h w (.ireg r) hW
   | .freg r => exact h w (.freg r) hW
+
+-- ============================================================
+-- § 7b. Caller-saved register safety for library calls
+-- ============================================================
+
+/-- No variable in the layout is mapped to a caller-saved register.
+    This is a compile-time invariant: the register allocator uses only
+    callee-saved registers (and stack) when library calls are present. -/
+def NoCallerSavedLayout (layout : VarLayout) : Prop :=
+  (∀ v r, layout v = some (.ireg r) → r.isCallerSaved = false) ∧
+  (∀ v r, layout v = some (.freg r) → r.isCallerSaved = false)
+
+/-- Decidable checker for `NoCallerSavedLayout`. -/
+def checkNoCallerSavedLayout (layout : VarLayout) : Bool :=
+  layout.entries.all fun (_, loc) =>
+    match loc with
+    | .ireg r => !r.isCallerSaved
+    | .freg r => !r.isCallerSaved
+    | .stack _ => true
+
+private theorem checkNoCallerSavedLayout_ireg {entries : List (String × VarLoc)}
+    (h : entries.all (fun (_, loc) => match loc with
+      | .ireg r => !r.isCallerSaved | .freg r => !r.isCallerSaved | .stack _ => true) = true)
+    {v : String} {r : ArmReg} (hlookup : entries.lookup v = some (.ireg r)) :
+    r.isCallerSaved = false := by
+  rw [List.all_eq_true] at h
+  obtain ⟨k, hk_mem, hk_eq⟩ := List.lookup_mem_of_some hlookup
+  have := h ⟨k, .ireg r⟩ hk_mem
+  simp [Bool.not_eq_false'] at this; exact this
+
+private theorem checkNoCallerSavedLayout_freg {entries : List (String × VarLoc)}
+    (h : entries.all (fun (_, loc) => match loc with
+      | .ireg r => !r.isCallerSaved | .freg r => !r.isCallerSaved | .stack _ => true) = true)
+    {v : String} {r : ArmFReg} (hlookup : entries.lookup v = some (.freg r)) :
+    r.isCallerSaved = false := by
+  rw [List.all_eq_true] at h
+  obtain ⟨k, hk_mem, hk_eq⟩ := List.lookup_mem_of_some hlookup
+  have := h ⟨k, .freg r⟩ hk_mem
+  simp [Bool.not_eq_false'] at this; exact this
+
+theorem checkNoCallerSavedLayout_spec (layout : VarLayout)
+    (h : checkNoCallerSavedLayout layout = true) :
+    NoCallerSavedLayout layout := by
+  unfold checkNoCallerSavedLayout at h
+  exact ⟨fun v r hloc => checkNoCallerSavedLayout_ireg h hloc,
+         fun v r hloc => checkNoCallerSavedLayout_freg h hloc⟩
+
+/-- `havocCallerSaved` preserves `ExtStateRel` when no mapped variable is
+    in a caller-saved register. -/
+theorem ExtStateRel.havocCallerSaved_preserved
+    {layout : VarLayout} {σ : Store} {s : ArmState}
+    (hRel : ExtStateRel layout σ s)
+    (hNCS : NoCallerSavedLayout layout) :
+    ExtStateRel layout σ s.havocCallerSaved := by
+  intro v loc hloc
+  match loc with
+  | .stack off => simp [ArmState.havocCallerSaved]; exact hRel v (.stack off) hloc
+  | .ireg r =>
+    have hcs := hNCS.1 v r hloc
+    simp [ArmState.havocCallerSaved, hcs]; exact hRel v (.ireg r) hloc
+  | .freg r =>
+    have hcs := hNCS.2 v r hloc
+    simp [ArmState.havocCallerSaved, hcs]; exact hRel v (.freg r) hloc
 
 -- ============================================================
 -- § 8. Formal instruction generation
