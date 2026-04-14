@@ -412,7 +412,7 @@ def checkRelAtStartExec (cert : ECertificate) : Bool :=
 abbrev FastVarMap := Std.HashMap String Expr
 
 def FastVarMap.ofList (ss : List (Var × Expr)) : FastVarMap :=
-  ss.foldl (fun m (v, e) => m.insert v e) {}
+  ss.reverse.foldl (fun m (v, e) => m.insert v e) {}
 
 def Expr.substSymFast (m : FastVarMap) : Expr → Expr
   | .lit n      => .lit n
@@ -457,6 +457,55 @@ def Expr.simplifyFast (m : FastVarMap) : Expr → Expr
   | .floatUnary op e => .floatUnary op (e.simplifyFast m)
   | .farrRead arr idx => .farrRead arr (idx.simplifyFast m)
 
+-- ============================================================
+-- § 4a. FastVarMap ↔ list-based lookup equivalence
+-- ============================================================
+
+/-- Core lemma: `foldl insert` with last-wins semantics relates to `find?` on the
+    reversed list (which finds the last matching entry, i.e. same as foldl's winner). -/
+private theorem foldl_insert_getD
+    (l : List (Var × Expr)) (m : FastVarMap) (v : Var) (d : Expr) :
+    (l.foldl (fun m (p : Var × Expr) => m.insert p.1 p.2) m).getD v d =
+    match l.reverse.find? (fun p => p.1 == v) with
+    | some (_, e) => e
+    | none => m.getD v d := by
+  induction l generalizing m with
+  | nil => simp
+  | cons p rest ih =>
+    simp only [List.foldl]; rw [ih]
+    simp only [List.reverse_cons, List.find?_append]
+    cases hfind : rest.reverse.find? (fun p => p.1 == v) with
+    | some val => simp [Option.or]
+    | none =>
+      simp only [Option.or, List.find?_cons, List.find?_nil, Std.HashMap.getD_insert]
+      cases hbeq : (p.1 == v) <;> simp
+
+/-- `FastVarMap.ofList` lookup agrees with `List.find?` (first-match semantics). -/
+theorem FastVarMap.ofList_getD (ss : List (Var × Expr)) (v : Var) (d : Expr) :
+    (FastVarMap.ofList ss).getD v d =
+    match ss.find? (fun p => p.1 == v) with
+    | some (_, e) => e
+    | none => d := by
+  unfold FastVarMap.ofList
+  rw [foldl_insert_getD]
+  simp only [Std.HashMap.getD_empty, List.reverse_reverse]
+
+/-- `FastVarMap.ofList` lookup agrees with `ssGet`. -/
+theorem FastVarMap.ofList_getD_eq_ssGet (ss : List (Var × Expr)) (v : Var) :
+    (FastVarMap.ofList ss).getD v (.var v) = ssGet ss v := by
+  rw [FastVarMap.ofList_getD]; unfold ssGet; rfl
+
+/-- `FastVarMap.ofList` lookup agrees with `lookupExpr` (used by `simplify`). -/
+theorem FastVarMap.ofList_getD_eq_lookupExpr (inv : EInv) (v : Var) :
+    (FastVarMap.ofList inv).getD v (.var v) =
+    match lookupExpr inv v with
+    | some e => e
+    | none   => .var v := by
+  rw [FastVarMap.ofList_getD]; unfold lookupExpr
+  cases hf : inv.find? (fun p => p.1 == v) with
+  | none => rfl
+  | some p => simp [Option.map]
+
 /-- Substitute each variable in an expression with its symbolic post-value. -/
 def Expr.substSym (ss : SymStore) : Expr → Expr
   | .lit n      => .lit n
@@ -477,6 +526,61 @@ def Expr.substSym (ss : SymStore) : Expr → Expr
   | .floatToInt e    => .floatToInt (e.substSym ss)
   | .floatUnary op e  => .floatUnary op (e.substSym ss)
   | .farrRead arr idx => .farrRead arr (idx.substSym ss)
+
+/-- `substSymFast` with `FastVarMap.ofList` equals `substSym`. -/
+theorem Expr.substSymFast_eq_substSym (e : Expr) (ss : SymStore) :
+    e.substSymFast (FastVarMap.ofList ss) = e.substSym ss := by
+  induction e with
+  | lit _ | blit _ | flit _ => rfl
+  | var v => exact FastVarMap.ofList_getD_eq_ssGet ss v
+  | bin op a b iha ihb => simp only [substSymFast, substSym, iha, ihb]
+  | tobool e ih => simp only [substSymFast, substSym, ih]
+  | cmpE op a b iha ihb => simp only [substSymFast, substSym, iha, ihb]
+  | cmpLitE op a n ih => simp only [substSymFast, substSym, ih]
+  | notE e ih => simp only [substSymFast, substSym, ih]
+  | andE a b iha ihb => simp only [substSymFast, substSym, iha, ihb]
+  | orE a b iha ihb => simp only [substSymFast, substSym, iha, ihb]
+  | arrRead arr idx ih => simp only [substSymFast, substSym, ih]
+  | fbin op a b iha ihb => simp only [substSymFast, substSym, iha, ihb]
+  | fcmpE op a b iha ihb => simp only [substSymFast, substSym, iha, ihb]
+  | intToFloat e ih => simp only [substSymFast, substSym, ih]
+  | floatToInt e ih => simp only [substSymFast, substSym, ih]
+  | floatUnary op e ih => simp only [substSymFast, substSym, ih]
+  | farrRead arr idx ih => simp only [substSymFast, substSym, ih]
+
+/-- `simplifyFast` with `FastVarMap.ofList` equals `simplify`. -/
+theorem Expr.simplifyFast_eq_simplify (e : Expr) (inv : EInv) :
+    e.simplifyFast (FastVarMap.ofList inv) = e.simplify inv := by
+  induction e with
+  | lit _ | blit _ | flit _ => rfl
+  | var v => exact FastVarMap.ofList_getD_eq_lookupExpr inv v
+  | bin op a b iha ihb => simp only [simplifyFast, simplify, iha, ihb]
+  | tobool _ | cmpE _ _ _ | cmpLitE _ _ _ | notE _ | andE _ _ | orE _ _ => rfl
+  | arrRead arr idx ih => simp only [simplifyFast, simplify, ih]
+  | fbin op a b iha ihb => simp only [simplifyFast, simplify, iha, ihb]
+  | fcmpE op a b iha ihb => simp only [simplifyFast, simplify, iha, ihb]
+  | intToFloat e ih => simp only [simplifyFast, simplify, ih]
+  | floatToInt e ih => simp only [simplifyFast, simplify, ih]
+  | floatUnary op e ih => simp only [simplifyFast, simplify, ih]
+  | farrRead arr idx ih => simp only [simplifyFast, simplify, ih]
+
+/-- The HashMap-based variable set lookup used in `checkRelConsistency` is equivalent
+    to the list-based `any` check used in the spec theorems. -/
+theorem relVarSet_contains_eq_any (rel_pre : EExprRel) (w : Var) :
+    (Std.HashMap.ofList (rel_pre.filterMap fun (_, e_t') =>
+      match e_t' with | .var v => some (v, ()) | _ => none)).contains w =
+    (rel_pre.any fun (_, e_t') => e_t' == .var w) := by
+  rw [Std.HashMap.contains_ofList]
+  induction rel_pre with
+  | nil => simp
+  | cons p rest ih =>
+    obtain ⟨e_o, e_t'⟩ := p
+    simp only [List.filterMap_cons, List.any_cons]
+    cases e_t' with
+    | var v =>
+      simp only [List.map_cons, List.contains_cons, BEq.beq, Expr.var.injEq, ih]
+      congr 1; exact decide_eq_decide.mpr ⟨Eq.symm, Eq.symm⟩
+    | _ => simpa [BEq.beq] using ih
 
 /-- Check that a single invariant atom `(x, e)` is preserved by an instruction.
     Uses symbolic execution: the post-value of `x` and the post-value of `e`

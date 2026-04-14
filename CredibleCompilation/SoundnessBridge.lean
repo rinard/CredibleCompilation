@@ -2064,9 +2064,9 @@ private theorem checkRelConsistency_pairCheck
       (e_o.substSym (execPath orig ([] : SymStore) ([] : SymArrayMem) pc_orig origLabels).1).simplify inv_orig ==
       ((e_t.substSym (execSymbolic ([] : SymStore) ([] : SymArrayMem) transInstr).1).substSym
         (buildSubstMap rel_pre)).simplify inv_orig) = true := by
-  -- TODO: checkRelConsistency uses FastVarMap/substSymFast/simplifyFast optimizations
-  -- but this theorem expects substSym/simplify. Need equivalence lemmas.
-  sorry
+  simp only [← Expr.substSymFast_eq_substSym, ← Expr.simplifyFast_eq_simplify]
+  simp only [checkRelConsistency, Bool.and_eq_true] at h
+  exact h.1.1.1
 
 /-- Free-variable coverage: all free vars of substSym'd expressions are in rel_pre. -/
 private theorem checkRelConsistency_fvCheck
@@ -2077,7 +2077,9 @@ private theorem checkRelConsistency_fvCheck
     rel_post.all (fun (_, e_t) =>
       (e_t.substSym transSS).freeVars.all fun w =>
         rel_pre.any fun (_, e_t') => e_t' == .var w) = true := by
-  sorry
+  simp only [← Expr.substSymFast_eq_substSym, ← relVarSet_contains_eq_any]
+  simp only [checkRelConsistency, Bool.and_eq_true] at h
+  exact h.1.1.2
 
 /-- Array memory free-variable coverage: all free vars of AM expressions are in rel_pre. -/
 private theorem checkRelConsistency_amFvCheck
@@ -2088,7 +2090,9 @@ private theorem checkRelConsistency_amFvCheck
     transSAM.all (fun (_, i_t, v_t) =>
       (i_t.freeVars.all fun w => rel_pre.any fun (_, e_t') => e_t' == .var w) &&
       (v_t.freeVars.all fun w => rel_pre.any fun (_, e_t') => e_t' == .var w)) = true := by
-  sorry
+  simp only [← relVarSet_contains_eq_any]
+  simp only [checkRelConsistency, Bool.and_eq_true] at h
+  exact h.1.2
 
 private theorem checkRelConsistency_amCheck
     (orig : Prog) (pc_orig : Label) (origLabels : List Label) (transInstr : TAC)
@@ -2102,7 +2106,11 @@ private theorem checkRelConsistency_amCheck
         a_o == a_t &&
         i_o.simplify inv_orig == (i_t.substSym (buildSubstMap rel_pre)).simplify inv_orig &&
         v_o.simplify inv_orig == (v_t.substSym (buildSubstMap rel_pre)).simplify inv_orig) = true := by
-  sorry
+  simp only [← Expr.substSymFast_eq_substSym, ← Expr.simplifyFast_eq_simplify]
+  simp only [checkRelConsistency, Bool.and_eq_true] at h
+  obtain ⟨_, hamCheck⟩ := h
+  simp only [beq_iff_eq] at hamCheck
+  exact hamCheck
 
 /-- Bridge: when a variable has a pair in the relation, the ssGet-based form follows. -/
 private theorem eRelToStoreRel_ssGet {rel : EExprRel} {σ_o σ_t : Store} {am_o am_t : ArrayMem}
