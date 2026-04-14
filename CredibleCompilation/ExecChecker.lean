@@ -73,6 +73,7 @@ def Expr.simplify (inv : EInv) : Expr → Expr
   | .intToFloat e   => .intToFloat (e.simplify inv)
   | .floatToInt e   => .floatToInt (e.simplify inv)
   | .floatExp e     => .floatExp (e.simplify inv)
+  | .floatSqrt e    => .floatSqrt (e.simplify inv)
   | .farrRead arr idx => .farrRead arr (idx.simplify inv)
 
 -- ============================================================
@@ -130,6 +131,7 @@ def execSymbolic (ss : SymStore) (sam : SymArrayMem) (instr : TAC) : SymStore ×
   | .intToFloat x y => (ssSet ss x (.intToFloat (ssGet ss y)), sam)
   | .floatToInt x y => (ssSet ss x (.floatToInt (ssGet ss y)), sam)
   | .floatExp x y   => (ssSet ss x (.floatExp (ssGet ss y)), sam)
+  | .floatSqrt x y  => (ssSet ss x (.floatSqrt (ssGet ss y)), sam)
   | .arrLoad x arr idx ty => (ssSet ss x (samGet sam arr (ssGet ss idx) ty), sam)
   | .arrStore arr idx val _ => (ss, (arr, ssGet ss idx, ssGet ss val) :: sam)
   | _               => (ss, sam)
@@ -153,7 +155,7 @@ def execPath (orig : Prog) (ss : SymStore) (sam : SymArrayMem) (pc : Label) :
 def successors (instr : TAC) (pc : Label) : List Label :=
   match instr with
   | .const _ _ | .copy _ _ | .binop _ _ _ _ | .boolop _ _ => [pc + 1]
-  | .fbinop _ _ _ _ | .intToFloat _ _ | .floatToInt _ _ | .floatExp _ _ => [pc + 1]
+  | .fbinop _ _ _ _ | .intToFloat _ _ | .floatToInt _ _ | .floatExp _ _ | .floatSqrt _ _ => [pc + 1]
   | .arrLoad _ _ _ _ | .arrStore _ _ _ _ => [pc + 1]
   | .goto l        => [l]
   | .ifgoto _ l    => [l, pc + 1]
@@ -169,7 +171,7 @@ def Expr.isNonZeroLit : Expr → Bool
   | .blit true => true
   | .blit false | .var _ | .bin _ _ _ => false
   | .tobool _ | .cmpE _ _ _ | .cmpLitE _ _ _ | .notE _ | .andE _ _ | .orE _ _ | .arrRead _ _ => false
-  | .flit _ | .fbin _ _ _ | .fcmpE _ _ _ | .intToFloat _ | .floatToInt _ | .floatExp _ | .farrRead _ _ => false
+  | .flit _ | .fbin _ _ _ | .fcmpE _ _ _ | .intToFloat _ | .floatToInt _ | .floatExp _ | .floatSqrt _ | .farrRead _ _ => false
 
 /-- Symbolically evaluate a BoolExpr under a symbolic store and invariant.
     Returns `some true`/`some false` if the result can be determined, `none` otherwise. -/
@@ -218,6 +220,7 @@ def collectAllVars (p1 p2 : Prog) : List Var :=
     | .intToFloat x y => [x, y]
     | .floatToInt x y => [x, y]
     | .floatExp x y   => [x, y]
+    | .floatSqrt x y  => [x, y]
     | .arrLoad x _ idx _ => [x, idx]
     | .arrStore _ idx val _ => [idx, val]
     | .ifgoto b _    => b.vars
@@ -342,7 +345,7 @@ def buildInstrCerts1to1 (trans : Prog) (allVars : List Var) : Array EInstrCert :
     match trans[i]? with
     | some .halt => { pc_orig := i, transitions := ([] : List ETransCorr), rel := idRel }
     | some (.const _ _) | some (.copy _ _) | some (.binop _ _ _ _) | some (.boolop _ _)
-    | some (.fbinop _ _ _ _) | some (.intToFloat _ _) | some (.floatToInt _ _) | some (.floatExp _ _)
+    | some (.fbinop _ _ _ _) | some (.intToFloat _ _) | some (.floatToInt _ _) | some (.floatExp _ _) | some (.floatSqrt _ _)
     | some (.arrLoad _ _ _ _) | some (.arrStore _ _ _ _) =>
       { pc_orig := i, rel := idRel,
         transitions := [{ origLabels := [i + 1], rel := idRel, rel_next := idRel }] }
@@ -428,6 +431,7 @@ def Expr.substSymFast (m : FastVarMap) : Expr → Expr
   | .intToFloat e    => .intToFloat (e.substSymFast m)
   | .floatToInt e    => .floatToInt (e.substSymFast m)
   | .floatExp e      => .floatExp (e.substSymFast m)
+  | .floatSqrt e     => .floatSqrt (e.substSymFast m)
   | .farrRead arr idx => .farrRead arr (idx.substSymFast m)
 
 def Expr.simplifyFast (m : FastVarMap) : Expr → Expr
@@ -451,6 +455,7 @@ def Expr.simplifyFast (m : FastVarMap) : Expr → Expr
   | .intToFloat e   => .intToFloat (e.simplifyFast m)
   | .floatToInt e   => .floatToInt (e.simplifyFast m)
   | .floatExp e     => .floatExp (e.simplifyFast m)
+  | .floatSqrt e    => .floatSqrt (e.simplifyFast m)
   | .farrRead arr idx => .farrRead arr (idx.simplifyFast m)
 
 /-- Substitute each variable in an expression with its symbolic post-value. -/
@@ -472,6 +477,7 @@ def Expr.substSym (ss : SymStore) : Expr → Expr
   | .intToFloat e    => .intToFloat (e.substSym ss)
   | .floatToInt e    => .floatToInt (e.substSym ss)
   | .floatExp e      => .floatExp (e.substSym ss)
+  | .floatSqrt e     => .floatSqrt (e.substSym ss)
   | .farrRead arr idx => .farrRead arr (idx.substSym ss)
 
 /-- Check that a single invariant atom `(x, e)` is preserved by an instruction.
@@ -564,7 +570,7 @@ def checkHaltObservableExec (cert : ECertificate) : Bool :=
 def computeNextPC (instr : TAC) (pc : Label) (ss : SymStore) (inv : EInv) : Option Label :=
   match instr with
   | .const _ _ | .copy _ _ | .binop _ _ _ _ | .boolop _ _ => some (pc + 1)
-  | .fbinop _ _ _ _ | .intToFloat _ _ | .floatToInt _ _ | .floatExp _ _ => some (pc + 1)
+  | .fbinop _ _ _ _ | .intToFloat _ _ | .floatToInt _ _ | .floatExp _ _ | .floatSqrt _ _ => some (pc + 1)
   | .arrLoad _ _ _ _ | .arrStore _ _ _ _ => some (pc + 1)
   | .goto l => some l
   | .ifgoto b l =>
@@ -887,34 +893,6 @@ theorem AllArrayOpsInt.arrStore_int {p : Prog} {pc : Nat} {arr : ArrayName}
   have hmatch := h pc hlt
   have heq := Option.some.inj ((Prog.getElem?_eq_getElem hlt).symm.trans hinstr)
   simp [heq] at hmatch; exact hmatch
-
-/-- No `floatExp` instructions in a program. -/
-def NoFloatExp (p : Prog) : Prop :=
-  ∀ i (h : i < p.size), match p[i] with
-    | .floatExp _ _ => False
-    | _ => True
-
-/-- Decidable check for `NoFloatExp`. -/
-def checkNoFloatExp (p : Prog) : Bool :=
-  p.code.all fun instr =>
-    match instr with
-    | .floatExp _ _ => false
-    | _ => true
-
-theorem checkNoFloatExp_sound (p : Prog) (h : checkNoFloatExp p = true) :
-    NoFloatExp p := by
-  intro i hi
-  unfold checkNoFloatExp at h
-  have hall := (Array.all_eq_true.mp h) i hi
-  revert hall
-  cases p.code[i] <;> simp
-
-theorem NoFloatExp.elim {p : Prog} {pc : Nat} {x y : Var}
-    (h : NoFloatExp p) (hinstr : p[pc]? = some (.floatExp x y)) : False := by
-  have hlt : pc < p.size := bound_of_getElem? hinstr
-  have hmatch := h pc hlt
-  have heq := Option.some.inj ((Prog.getElem?_eq_getElem hlt).symm.trans hinstr)
-  simp [heq] at hmatch
 
 /-- Check all certificate conditions. Returns `true` iff the certificate is valid. -/
 def checkCertificateExec (cert : ECertificate) : Bool :=

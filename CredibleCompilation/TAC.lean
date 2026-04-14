@@ -43,6 +43,7 @@ inductive TAC where
   | intToFloat : Var → Var → TAC                          -- x := intToFloat(y)
   | floatToInt : Var → Var → TAC                          -- x := floatToInt(y)
   | floatExp   : Var → Var → TAC                          -- x := exp(y) (float)
+  | floatSqrt  : Var → Var → TAC                          -- x := sqrt(y) (float)
   deriving Repr, DecidableEq
 
 /-- Variables referenced by a TAC instruction (destination + operands). -/
@@ -57,6 +58,7 @@ def TAC.vars : TAC → List Var
   | .intToFloat x y     => [x, y]
   | .floatToInt x y     => [x, y]
   | .floatExp x y       => [x, y]
+  | .floatSqrt x y      => [x, y]
   | .goto _             => []
   | .ifgoto be _        => be.vars
   | .halt               => []
@@ -64,7 +66,7 @@ def TAC.vars : TAC → List Var
 /-- A scalar instruction is one that does not touch ArrayMem. -/
 def TAC.isScalar : TAC → Bool
   | .const .. | .copy .. | .binop .. | .boolop .. | .goto .. | .ifgoto .. | .halt => true
-  | .fbinop .. | .intToFloat .. | .floatToInt .. | .floatExp .. => true
+  | .fbinop .. | .intToFloat .. | .floatToInt .. | .floatExp .. | .floatSqrt .. => true
   | .arrLoad .. | .arrStore .. => false
 
 /-- A program: TAC code together with its type context and observable variables. -/
@@ -263,6 +265,14 @@ inductive Step (p : Prog) : Cfg → Cfg → Prop where
       (σ y).typeOf ≠ .float →
       Step p (.run pc σ am) (.typeError σ am)
 
+  | floatSqrt {f : BitVec 64} : p[pc]? = some (.floatSqrt x y) →
+      σ y = .float f →
+      Step p (.run pc σ am) (.run (pc + 1) (σ[x ↦ .float (floatSqrtBv f)]) am)
+
+  | floatSqrt_typeError : p[pc]? = some (.floatSqrt x y) →
+      (σ y).typeOf ≠ .float →
+      Step p (.run pc σ am) (.typeError σ am)
+
 
 -- p ⊩ c ⟶ c'   (⊩ avoids conflict with Lean's reserved ⊢)
 notation:50 p " ⊩ " c " ⟶ " c' => Step p c c'
@@ -271,7 +281,7 @@ notation:50 p " ⊩ " c " ⟶ " c' => Step p c c'
 def TAC.successors (instr : TAC) (pc : Label) : List Label :=
   match instr with
   | .const _ _ | .copy _ _ | .binop _ _ _ _ | .boolop _ _ => [pc + 1]
-  | .fbinop _ _ _ _ | .intToFloat _ _ | .floatToInt _ _ | .floatExp _ _ => [pc + 1]
+  | .fbinop _ _ _ _ | .intToFloat _ _ | .floatToInt _ _ | .floatExp _ _ | .floatSqrt _ _ => [pc + 1]
   | .arrLoad _ _ _ _ | .arrStore _ _ _ _ => [pc + 1]
   | .goto l        => [l]
   | .ifgoto _ l    => [l, pc + 1]
@@ -296,6 +306,7 @@ theorem Step.mem_successors {p : Prog} {pc pc' : Nat} {σ σ' : Store} {am am' :
   | intToFloat h _     => exact ⟨_, h, by simp [TAC.successors]⟩
   | floatToInt h _     => exact ⟨_, h, by simp [TAC.successors]⟩
   | floatExp h _       => exact ⟨_, h, by simp [TAC.successors]⟩
+  | floatSqrt h _      => exact ⟨_, h, by simp [TAC.successors]⟩
 
 /-- A step from an in-bounds PC to a run-config stays in-bounds.
     This is the Prop-level condition for totality. -/
@@ -469,6 +480,10 @@ theorem Step.store_congr {p : Prog} {pc : Nat} {σ τ : Store} {am : ArrayMem} {
     exact ⟨_, .floatExp h (by rw [← hagree]; exact hy)⟩
   | floatExp_typeError h hne =>
     exact ⟨_, .floatExp_typeError h (by simp [Value.typeOf] at hne ⊢; rwa [← hagree])⟩
+  | floatSqrt h hy =>
+    exact ⟨_, .floatSqrt h (by rw [← hagree]; exact hy)⟩
+  | floatSqrt_typeError h hne =>
+    exact ⟨_, .floatSqrt_typeError h (by simp [Value.typeOf] at hne ⊢; rwa [← hagree])⟩
 
 -- ============================================================
 -- § 10. Observable output at a configuration

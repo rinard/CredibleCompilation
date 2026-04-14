@@ -29,6 +29,7 @@ def SExpr.freeVars : SExpr → List Var
   | .intToFloat e => e.freeVars
   | .floatToInt e => e.freeVars
   | .floatExp e => e.freeVars
+  | .floatSqrt e => e.freeVars
   | .farrRead _ idx => idx.freeVars
 
 def SBool.freeVars : SBool → List Var
@@ -96,6 +97,7 @@ theorem SExpr.eval_agree (e : SExpr) (σ τ : Store) (am : ArrayMem)
   | intToFloat e ih => simp only [SExpr.eval]; rw [ih h]
   | floatToInt e ih => simp only [SExpr.eval]; rw [ih h]
   | floatExp e ih => simp only [SExpr.eval]; rw [ih h]
+  | floatSqrt e ih => simp only [SExpr.eval]; rw [ih h]
   | farrRead _ idx ih => simp only [SExpr.eval]; rw [ih h]
 
 theorem SBool.eval_agree (sb : SBool) (σ τ : Store) (am : ArrayMem)
@@ -163,6 +165,7 @@ theorem SExpr.isSafe_agree (e : SExpr) (σ τ : Store) (am : ArrayMem) (decls)
   | intToFloat e ih => simp only [SExpr.isSafe]; rw [ih h]
   | floatToInt e ih => simp only [SExpr.isSafe]; rw [ih h]
   | floatExp e ih => simp only [SExpr.isSafe]; rw [ih h]
+  | floatSqrt e ih => simp only [SExpr.isSafe]; rw [ih h]
   | farrRead arr idx ih =>
     simp only [SExpr.isSafe]
     rw [ih h, SExpr.eval_agree idx σ τ am h]
@@ -446,6 +449,7 @@ def SExpr.safe (σ : Store) (am : ArrayMem) (decls : List (ArrayName × Nat × V
   | .intToFloat e => e.safe σ am decls
   | .floatToInt e => e.safe σ am decls
   | .floatExp e => e.safe σ am decls
+  | .floatSqrt e => e.safe σ am decls
   | .farrRead arr idx => idx.safe σ am decls ∧ (idx.eval σ am) < arraySizeBv decls arr
 
 def SBool.safe (σ : Store) (am : ArrayMem) (decls : List (ArrayName × Nat × VarTy)) : SBool → Prop
@@ -518,6 +522,7 @@ theorem SExpr.isSafe_implies_safe (e : SExpr) (σ : Store) (am : ArrayMem) (decl
   | intToFloat e ih => simp only [SExpr.isSafe, SExpr.safe]; exact ih
   | floatToInt e ih => simp only [SExpr.isSafe, SExpr.safe]; exact ih
   | floatExp e ih => simp only [SExpr.isSafe, SExpr.safe]; exact ih
+  | floatSqrt e ih => simp only [SExpr.isSafe, SExpr.safe]; exact ih
   | farrRead arr idx ih =>
     simp only [SExpr.isSafe, SExpr.safe, Bool.and_eq_true, decide_eq_true_eq]
     intro ⟨hs, hb⟩; exact ⟨ih hs, hb⟩
@@ -783,6 +788,13 @@ private theorem checkExpr_declared {lookup : Var → Option VarTy}
       intro v hv; exact ih h v hv
     | .int => simp [Program.checkExpr] at h
     | .bool => simp [Program.checkExpr] at h
+  | floatSqrt e ih =>
+    match ty with
+    | .float =>
+      simp [Program.checkExpr] at h
+      intro v hv; exact ih h v hv
+    | .int => simp [Program.checkExpr] at h
+    | .bool => simp [Program.checkExpr] at h
   | farrRead _ idx ih =>
     match ty with
     | .float =>
@@ -885,6 +897,14 @@ theorem checkExpr_typedVars {lookup : Var → Option VarTy}
     | .float => simp [Program.checkExpr] at hchk
     | .bool => simp [Program.checkExpr] at hchk
   | floatExp e ih =>
+    match ty with
+    | .float =>
+      simp [Program.checkExpr] at hchk
+      have ⟨htv_e, _, hwf_e⟩ := ih hchk
+      exact ⟨⟨hwf_e rfl, htv_e⟩, fun h => absurd h (by decide), fun _ => rfl⟩
+    | .int => simp [Program.checkExpr] at hchk
+    | .bool => simp [Program.checkExpr] at hchk
+  | floatSqrt e ih =>
     match ty with
     | .float =>
       simp [Program.checkExpr] at hchk
@@ -1025,8 +1045,8 @@ private theorem checkStmt_declared {lookup : Var → Option VarTy}
 theorem Program.typeCheck_tmpFree (prog : Program) (h : prog.typeCheck = true) :
     prog.body.tmpFree := by
   unfold Program.typeCheck at h; simp only [Bool.and_eq_true] at h
-  have hnt := h.1.1.2
-  have hchk := h.1.2
+  have hnt := h.1.2
+  have hchk := h.2
   intro v hv
   obtain ⟨ty, hlook⟩ := checkStmt_declared hchk v hv
   exact noTmpDecls_not_tmp hnt hlook
@@ -1035,8 +1055,8 @@ theorem Program.typeCheck_tmpFree (prog : Program) (h : prog.typeCheck = true) :
 theorem Program.typeCheck_ftmpFree (prog : Program) (h : prog.typeCheck = true) :
     ∀ v ∈ prog.body.allVars, v.isFTmp = false := by
   unfold Program.typeCheck at h; simp only [Bool.and_eq_true] at h
-  have hnt := h.1.1.2
-  have hchk := h.1.2
+  have hnt := h.1.2
+  have hchk := h.2
   intro v hv
   obtain ⟨ty, hlook⟩ := checkStmt_declared hchk v hv
   exact noTmpDecls_not_ftmp hnt hlook
@@ -1055,10 +1075,10 @@ private theorem checkNoGoto_sound {s : Stmt}
     simp [Stmt.checkNoGoto] at h; exact ih h
   | _ => exact trivial
 
-/-- A type-checked program's body has no goto/ifgoto. -/
-theorem Program.typeCheck_noGoto (prog : Program) (h : prog.typeCheck = true) :
+/-- A strictly type-checked program's body has no goto/ifgoto. -/
+theorem Program.typeCheck_noGoto (prog : Program) (h : prog.typeCheckStrict = true) :
     prog.body.noGoto := by
-  unfold Program.typeCheck at h; simp only [Bool.and_eq_true] at h
+  unfold Program.typeCheckStrict at h; simp only [Bool.and_eq_true] at h
   exact checkNoGoto_sound h.2
 
 -- ============================================================
@@ -1296,7 +1316,7 @@ theorem Program.typeCheck_typedVars (prog : Program) (h : prog.typeCheck = true)
     (σ : Store) (am : ArrayMem) (hts : TypedStore prog.tyCtx σ) (fuel : Nat) :
     prog.body.typedVars fuel σ am prog.arrayDecls := by
   unfold Program.typeCheck at h; simp only [Bool.and_eq_true] at h
-  have hchk := h.1.2
+  have hchk := h.2
   exact checkStmt_typedVars prog.lookupTy prog.arrayDecls prog.tyCtx σ am prog.body fuel
     (fun x ty hlook => by
       show (prog.lookupTy x).getD (if x.isFTmp then .float else .int) = ty

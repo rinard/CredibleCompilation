@@ -55,6 +55,7 @@ def instrDef (instr : TAC) : Option Var :=
   | .intToFloat x _ => some x
   | .floatToInt x _ => some x
   | .floatExp x _   => some x
+  | .floatSqrt x _  => some x
   | .arrLoad x _ _ _ => some x
   | _ => none
 
@@ -69,6 +70,7 @@ def instrUse (instr : TAC) : List Var :=
   | .intToFloat _ y  => [y]
   | .floatToInt _ y  => [y]
   | .floatExp _ y    => [y]
+  | .floatSqrt _ y   => [y]
   | .arrLoad _ _ idx _ => [idx]
   | .arrStore _ idx val _ => [idx, val]
   | .goto _          => []
@@ -144,6 +146,7 @@ def isDead (instr : TAC) (liveOut : List Var) : Bool :=
   | .intToFloat x _ => !liveOut.contains x
   | .floatToInt x _ => !liveOut.contains x
   | .floatExp x _   => !liveOut.contains x
+  | .floatSqrt x _  => !liveOut.contains x
   -- binop: only eliminate add/sub/mul (not div/mod which can error)
   | .binop x op _ _ =>
     match op with

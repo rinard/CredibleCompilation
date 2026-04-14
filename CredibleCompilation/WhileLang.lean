@@ -37,6 +37,7 @@ inductive SExpr where
   | intToFloat : SExpr → SExpr                      -- int→float cast
   | floatToInt : SExpr → SExpr                      -- float→int cast
   | floatExp   : SExpr → SExpr                      -- exp(x) (float)
+  | floatSqrt  : SExpr → SExpr                      -- sqrt(x) (float)
   | farrRead   : ArrayName → SExpr → SExpr          -- float arr[idx]
   deriving Repr
 
@@ -88,6 +89,7 @@ def SExpr.eval (σ : Store) (am : ArrayMem) : SExpr → BitVec 64
   | .intToFloat e  => intToFloatBv (e.eval σ am)
   | .floatToInt e  => floatToIntBv (e.eval σ am)
   | .floatExp e    => floatExpBv (e.eval σ am)
+  | .floatSqrt e   => floatSqrtBv (e.eval σ am)
   | .farrRead arr idx => am.read arr (idx.eval σ am)
 
 /-- Type-aware expression evaluation: wraps the result in the correct Value constructor.
@@ -102,6 +104,7 @@ def SExpr.wrapEval (σ : Store) (am : ArrayMem) : SExpr → Value
   | .intToFloat e     => .float (intToFloatBv (e.eval σ am))
   | .floatToInt e     => .int (floatToIntBv (e.eval σ am))
   | .floatExp e       => .float (floatExpBv (e.eval σ am))
+  | .floatSqrt e      => .float (floatSqrtBv (e.eval σ am))
   | .farrRead arr idx => .float (am.read arr (idx.eval σ am))
 
 /-- Context-sensitive typing: ensures sub-expressions evaluate to the right
@@ -125,6 +128,8 @@ def SExpr.typedVars (σ : Store) (am : ArrayMem) : SExpr → Prop
   | .floatToInt e =>
     e.wrapEval σ am = .float (e.eval σ am) ∧ e.typedVars σ am
   | .floatExp e =>
+    e.wrapEval σ am = .float (e.eval σ am) ∧ e.typedVars σ am
+  | .floatSqrt e =>
     e.wrapEval σ am = .float (e.eval σ am) ∧ e.typedVars σ am
   | .farrRead _ idx =>
     idx.wrapEval σ am = .int (idx.eval σ am) ∧ idx.typedVars σ am
@@ -166,6 +171,7 @@ def SExpr.isSafe (σ : Store) (am : ArrayMem) (decls : List (ArrayName × Nat ×
   | .intToFloat e => e.isSafe σ am decls
   | .floatToInt e => e.isSafe σ am decls
   | .floatExp e => e.isSafe σ am decls
+  | .floatSqrt e => e.isSafe σ am decls
   | .farrRead arr idx => idx.isSafe σ am decls && decide ((idx.eval σ am) < arraySizeBv decls arr)
 
 /-- Check whether a boolean expression is safe to evaluate. -/
@@ -289,6 +295,10 @@ def compileExpr (e : SExpr) (offset nextTmp : Nat) : List TAC × Var × Nat :=
     let (codeE, ve, tmp1) := compileExpr e offset nextTmp
     let t := ftmpName tmp1
     (codeE ++ [.floatExp t ve], t, tmp1 + 1)
+  | .floatSqrt e =>
+    let (codeE, ve, tmp1) := compileExpr e offset nextTmp
+    let t := ftmpName tmp1
+    (codeE ++ [.floatSqrt t ve], t, tmp1 + 1)
   | .farrRead arr idx =>
     let (codeIdx, vIdx, tmp1) := compileExpr idx offset nextTmp
     let t := ftmpName tmp1
@@ -362,7 +372,7 @@ def exprCodeLen : SExpr → Nat
   | .var _ => 0
   | .bin _ a b | .fbin _ a b => exprCodeLen a + exprCodeLen b + 1
   | .arrRead _ idx | .farrRead _ idx => exprCodeLen idx + 1
-  | .intToFloat e | .floatToInt e | .floatExp e => exprCodeLen e + 1
+  | .intToFloat e | .floatToInt e | .floatExp e | .floatSqrt e => exprCodeLen e + 1
 
 /-- Compute code length of a compiled boolean expression (offset-independent). -/
 def boolCodeLen : SBool → Nat
@@ -393,7 +403,7 @@ def stmtCodeLen : Stmt → Nat
     match e with
     | .flit _ | .var _ => 1
     | .fbin _ a b => exprCodeLen a + exprCodeLen b + 1
-    | .intToFloat e | .floatExp e => exprCodeLen e + 1
+    | .intToFloat e | .floatExp e | .floatSqrt e => exprCodeLen e + 1
     | .farrRead _ idx => exprCodeLen idx + 2
     | _ => exprCodeLen e + 1
   | .farrWrite _ idx val => exprCodeLen idx + exprCodeLen val + 1
@@ -493,6 +503,9 @@ def compileStmt (s : Stmt) (offset nextTmp : Nat)
     | .floatExp e =>
       let (codeE, ve, tmp1) := compileExpr e offset nextTmp
       (codeE ++ [.floatExp x ve], tmp1)
+    | .floatSqrt e =>
+      let (codeE, ve, tmp1) := compileExpr e offset nextTmp
+      (codeE ++ [.floatSqrt x ve], tmp1)
     | .farrRead arr idx =>
       let (codeIdx, vIdx, tmp1) := compileExpr idx offset nextTmp
       let t := ftmpName tmp1
@@ -532,6 +545,7 @@ def SExpr.toString : SExpr → String
   | .intToFloat e => s!"intToFloat({e.toString})"
   | .floatToInt e => s!"floatToInt({e.toString})"
   | .floatExp e => s!"exp({e.toString})"
+  | .floatSqrt e => s!"sqrt({e.toString})"
   | .farrRead arr idx => s!"{arr}[{idx.toString}]"
 
 def SBool.toString : SBool → String
@@ -634,6 +648,7 @@ def checkExpr (lookup : Var → Option VarTy) (arrayDecls : List (ArrayName × N
   | .float, .fbin _ a b => checkExpr lookup arrayDecls .float a && checkExpr lookup arrayDecls .float b
   | .float, .intToFloat e => checkExpr lookup arrayDecls .int e
   | .float, .floatExp e => checkExpr lookup arrayDecls .float e
+  | .float, .floatSqrt e => checkExpr lookup arrayDecls .float e
   | .float, .farrRead arr idx => arrayDeclared arrayDecls arr && (arrayElemTy arrayDecls arr == .float) && checkExpr lookup arrayDecls .int idx
   | _, _ => false
 
@@ -682,8 +697,12 @@ def checkStmt (lookup : Var → Option VarTy) (arrayDecls : List (ArrayName × N
 def typeCheck (prog : Program) : Bool :=
   noDups (prog.decls.map Prod.fst) &&
   noTmpDecls prog.decls &&
-  checkStmt prog.lookupTy prog.arrayDecls prog.body &&
-  prog.body.checkNoGoto
+  checkStmt prog.lookupTy prog.arrayDecls prog.body
+
+/-- Strict type check: typeCheck + no goto/ifgoto.
+    Used by compiler correctness proofs which require structured control flow. -/
+def typeCheckStrict (prog : Program) : Bool :=
+  prog.typeCheck && prog.body.checkNoGoto
 
 -- ============================================================
 -- § 5b. Compilation
@@ -708,6 +727,7 @@ private def instrDefType : TAC → Option (Var × VarTy)
   | .intToFloat x _   => some (x, .float)
   | .floatToInt x _   => some (x, .int)
   | .floatExp x _     => some (x, .float)
+  | .floatSqrt x _    => some (x, .float)
   | _                  => none
 
 /-- Build a type context from declarations augmented with types inferred from
@@ -829,10 +849,15 @@ theorem initStore_typedStore (prog : Program)
   simp only [initStoreBase]
   split <;> simp [Value.typeOf]
 
+/-- typeCheckStrict implies typeCheck. -/
+theorem typeCheckStrict_typeCheck (prog : Program) (h : prog.typeCheckStrict = true) :
+    prog.typeCheck = true := by
+  unfold typeCheckStrict at h; simp only [Bool.and_eq_true] at h; exact h.1
+
 /-- Extract noDups from typeCheck (public, so other files can use it). -/
 theorem typeCheck_noDups (prog : Program) (h : prog.typeCheck = true) :
     noDups (prog.decls.map Prod.fst) = true := by
-  unfold typeCheck at h; simp only [Bool.and_eq_true] at h; exact h.1.1.1
+  unfold typeCheck at h; simp only [Bool.and_eq_true] at h; exact h.1.1
 
 /-- If a program type-checks, its initial store is well-typed. -/
 theorem typeCheck_initStore_typedStore (prog : Program) (h : prog.typeCheck = true) :
@@ -1247,6 +1272,18 @@ theorem compileExpr_typed_wt (prog : Program)
       · exact tyCtx_ftmp_wt prog hnt _
     | .int => simp [Program.checkExpr] at hchk
     | .bool => simp [Program.checkExpr] at hchk
+  | floatSqrt e ih =>
+    match ty with
+    | .float =>
+      simp [Program.checkExpr] at hchk
+      have ⟨he_wt, he_ty⟩ := ih .float hchk offset nextTmp
+      simp only [compileExpr]
+      constructor
+      · exact allWTI_append' he_wt
+          (allWTI_one (.floatSqrt (tyCtx_ftmp_wt prog hnt _) he_ty))
+      · exact tyCtx_ftmp_wt prog hnt _
+    | .int => simp [Program.checkExpr] at hchk
+    | .bool => simp [Program.checkExpr] at hchk
   | farrRead _arr idx ih =>
     match ty with
     | .float =>
@@ -1408,7 +1445,7 @@ theorem compileStmt_wt (prog : Program)
       exact allWTI_append' hi_wt
         (allWTI_cons' (.arrLoad htmp_ty hi_ty hety.symm)
           (allWTI_one (.copy (by rw [hxty, htmp_ty]))))
-    | flit _ | fbin _ _ _ | intToFloat _ | floatExp _ | farrRead _ _ =>
+    | flit _ | fbin _ _ _ | intToFloat _ | floatExp _ | floatSqrt _ | farrRead _ _ =>
       simp [Program.checkExpr] at he
     | floatToInt e =>
       have ⟨he_wt, he_ty⟩ := compileExpr_wt prog hnt (.floatToInt e) he offset nextTmp
@@ -1528,6 +1565,12 @@ theorem compileStmt_wt (prog : Program)
       simp only [compileStmt]
       exact allWTI_append' he_wt
         (allWTI_one (.floatExp hxty he_ty))
+    | floatSqrt e =>
+      simp [Program.checkExpr] at he
+      have ⟨he_wt, he_ty⟩ := compileExpr_float_wt prog hnt e he offset nextTmp
+      simp only [compileStmt]
+      exact allWTI_append' he_wt
+        (allWTI_one (.floatSqrt hxty he_ty))
     | farrRead arr idx =>
       simp [Program.checkExpr, Bool.and_eq_true, beq_iff_eq] at he
       have ⟨⟨_, hety⟩, hci⟩ := he
@@ -1592,9 +1635,9 @@ namespace Program  -- reopen namespace
 theorem compileToTAC_wellTyped (prog : Program) (h : prog.typeCheck = true) :
     WellTypedProg prog.tyCtx prog.compileToTAC := by
   unfold typeCheck at h; simp only [Bool.and_eq_true] at h
-  have hnd := h.1.1.1
-  have hnt := h.1.1.2
-  have hchk := h.1.2
+  have hnd := h.1.1
+  have hnt := h.1.2
+  have hchk := h.2
   have : prog.compileToTAC.code = (initCode prog.decls ++
       (compileStmt prog.body (initCode prog.decls).length 0
         (collectLabels prog.body (initCode prog.decls).length)).1 ++ [TAC.halt]).toArray :=
@@ -1656,7 +1699,7 @@ def IsSeqInstr (instr : TAC) : Prop :=
   match instr with
   | .const _ _ | .copy _ _ | .binop _ _ _ _ | .boolop _ _
   | .arrLoad _ _ _ _ | .arrStore _ _ _ _
-  | .fbinop _ _ _ _ | .intToFloat _ _ | .floatToInt _ _ | .floatExp _ _ => True
+  | .fbinop _ _ _ _ | .intToFloat _ _ | .floatToInt _ _ | .floatExp _ _ | .floatSqrt _ _ => True
   | _ => False
 
 theorem AllJumpsLe_of_allSeq {code : List TAC}
@@ -1697,6 +1740,11 @@ theorem compileExpr_allSeq (e : SExpr) (offset nextTmp : Nat) :
     · exact ih _ _ instr he
     · trivial
   | floatExp e ih =>
+    intro instr hmem; simp [compileExpr, List.mem_append] at hmem
+    rcases hmem with he | rfl
+    · exact ih _ _ instr he
+    · trivial
+  | floatSqrt e ih =>
     intro instr hmem; simp [compileExpr, List.mem_append] at hmem
     rcases hmem with he | rfl
     · exact ih _ _ instr he
@@ -1811,6 +1859,8 @@ theorem compileExpr_length (e : SExpr) (offset nextTmp : Nat) :
     simp [compileExpr, exprCodeLen, List.length_append, ih]
   | floatExp e ih =>
     simp [compileExpr, exprCodeLen, List.length_append, ih]
+  | floatSqrt e ih =>
+    simp [compileExpr, exprCodeLen, List.length_append, ih]
 
 theorem compileBool_length (b : SBool) (offset nextTmp : Nat) :
     (compileBool b offset nextTmp).1.length = boolCodeLen b := by
@@ -1842,7 +1892,7 @@ theorem compileStmt_length (s : Stmt) (offset nextTmp : Nat)
       simp [compileStmt, stmtCodeLen, List.length_append, compileExpr_length]; omega
     | arrRead _ idx =>
       simp [compileStmt, stmtCodeLen, List.length_append, compileExpr_length]
-    | flit _ | fbin _ _ _ | intToFloat _ | floatExp _ | farrRead _ _ | floatToInt _ =>
+    | flit _ | fbin _ _ _ | intToFloat _ | floatExp _ | floatSqrt _ | farrRead _ _ | floatToInt _ =>
       simp [compileStmt, stmtCodeLen, List.length_append, compileExpr_length]; try omega
   | bassign _ b =>
     simp [compileStmt, stmtCodeLen, List.length_append, compileBool_length]
@@ -1867,6 +1917,8 @@ theorem compileStmt_length (s : Stmt) (offset nextTmp : Nat)
     | intToFloat e =>
       simp [compileStmt, stmtCodeLen, List.length_append, compileExpr_length]
     | floatExp e =>
+      simp [compileStmt, stmtCodeLen, List.length_append, compileExpr_length]
+    | floatSqrt e =>
       simp [compileStmt, stmtCodeLen, List.length_append, compileExpr_length]
     | farrRead _ idx =>
       simp [compileStmt, stmtCodeLen, List.length_append, compileExpr_length]
@@ -1940,7 +1992,7 @@ theorem compileStmt_allJumpsLe (s : Stmt) (offset nextTmp : Nat)
         · exact compileExpr_allSeq idx _ _ instr hi
         · trivial
         · trivial)
-    | flit _ | fbin _ _ _ | intToFloat _ | floatToInt _ | floatExp _ | farrRead _ _ =>
+    | flit _ | fbin _ _ _ | intToFloat _ | floatToInt _ | floatExp _ | floatSqrt _ | farrRead _ _ =>
       exact AllJumpsLe_of_allSeq (by
         intro instr hmem; simp [compileStmt, List.mem_append] at hmem
         rcases hmem with he | rfl
@@ -2059,6 +2111,12 @@ theorem compileStmt_allJumpsLe (s : Stmt) (offset nextTmp : Nat)
         rcases hmem with he | rfl
         · exact compileExpr_allSeq e _ _ instr he
         · trivial)
+    | floatSqrt e =>
+      exact AllJumpsLe_of_allSeq (by
+        intro instr hmem; simp [compileStmt, List.mem_append] at hmem
+        rcases hmem with he | rfl
+        · exact compileExpr_allSeq e _ _ instr he
+        · trivial)
     | farrRead arr idx =>
       exact AllJumpsLe_of_allSeq (by
         intro instr hmem; simp [compileStmt, List.mem_append] at hmem
@@ -2114,7 +2172,7 @@ private theorem stepClosed_of_allJumpsLe {code : List TAC} {p : Prog}
         simp [TAC.successors] at hmem; omega
       | arrLoad _ _ _ _ | arrStore _ _ _ _ =>
         simp [TAC.successors] at hmem; omega
-      | fbinop _ _ _ _ | intToFloat _ _ | floatToInt _ _ | floatExp _ _ =>
+      | fbinop _ _ _ _ | intToFloat _ _ | floatToInt _ _ | floatExp _ _ | floatSqrt _ _ =>
         simp [TAC.successors] at hmem; omega
       | goto l => simp [TAC.successors] at hmem; subst hmem; exact Nat.lt_of_le_of_lt hj (by omega)
       | ifgoto _ l =>

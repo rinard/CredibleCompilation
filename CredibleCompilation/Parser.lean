@@ -36,7 +36,7 @@ inductive Token where
 
 private def keywords : List String :=
   ["var", "array", "int", "bool", "float", "if", "else", "while", "skip", "true", "false",
-   "intToFloat", "floatToInt", "exp", "goto"]
+   "intToFloat", "floatToInt", "exp", "sqrt", "goto"]
 
 private def spanDigits : List Char → List Char × List Char
   | c :: rest => if c.isDigit then let (d, r) := spanDigits rest; (c :: d, r) else ([], c :: rest)
@@ -145,6 +145,11 @@ partial def parseAtom (toks : List Token) : Except String (SExpr × List Token) 
     match rest' with
     | Token.rparen :: rest'' => .ok (.floatExp e, rest'')
     | _ => .error "expected ')' after exp argument"
+  | Token.kw "sqrt" :: Token.lparen :: rest => do
+    let (e, rest') ← parseExpr rest
+    match rest' with
+    | Token.rparen :: rest'' => .ok (.floatSqrt e, rest'')
+    | _ => .error "expected ')' after sqrt argument"
   | Token.ident x :: Token.lbracket :: rest => do
     let (idx, rest') ← parseExpr rest
     match rest' with
@@ -425,7 +430,7 @@ private partial def parseArrayDecls (toks : List Token)
 /-- Infer whether an SExpr is a float expression based on variable/literal types. -/
 private def isFloatExpr (lookupVar : Var → Option VarTy)
     (lookupArr : ArrayName → Option VarTy) : SExpr → Bool
-  | .flit _ | .fbin _ _ _ | .intToFloat _ | .floatExp _ | .farrRead _ _ => true
+  | .flit _ | .fbin _ _ _ | .intToFloat _ | .floatExp _ | .floatSqrt _ | .farrRead _ _ => true
   | .var x => lookupVar x == some .float
   | .arrRead arr _ => lookupArr arr == some .float
   | _ => false
@@ -452,6 +457,7 @@ private partial def resolveSExpr (lookupVar : Var → Option VarTy)
   | .intToFloat e => .intToFloat (resolveSExpr lookupVar lookupArr e)
   | .floatToInt e => .floatToInt (resolveSExpr lookupVar lookupArr e)
   | .floatExp e => .floatExp (resolveSExpr lookupVar lookupArr e)
+  | .floatSqrt e => .floatSqrt (resolveSExpr lookupVar lookupArr e)
   | .farrRead arr idx => .farrRead arr (resolveSExpr lookupVar lookupArr idx)
 
 /-- Resolve types in an SBool: convert `.cmp` to `.fcmp` when operands are float. -/

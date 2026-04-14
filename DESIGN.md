@@ -16,7 +16,7 @@ Record of key design decisions for CredibleCompilation.
 
 6) Maybe add opaque noops like starttimer, endtimer, printimer that the code generator fills in appropriately to time the code.
 
-7) exp(), sqrt(), ... intrinsics
+7) exp(), sqrt() implemented. More intrinsics TBD.
 
 8) How to handle arrays efficiently. Looks like have a separate load array base and load/store array element instructions, enables array base to be allocated in register and not reconstructed every time. arrBase x arr loads address of array into x, arrLoad x i loads i'th element of x, arrStore x i v stores v into i'th element of x. To keep type safety would need to have a new type - array base (effectively an address). Another fix is to have codegen track array bases and not deal with it at TAC level. 
 
@@ -35,3 +35,5 @@ Record of key design decisions for CredibleCompilation.
 15) Top level theorems should work with initial states to eliminate overly general hypotheses. 
 
 16) Think about adding a nondeterministic choice, something like choose bexpr1 : l1 bexpr2: l2; where bexpr1 and bexpr2 can both be true and implementation can choose one nondeterministically. 
+
+17) Be sure register allocator respects register usage conventions - for example, can't use x16-x18, x19-x28 are callee save, x3-x15 caller save. Code was allocating x17. Note - usage convention is architecture specific so must change if change machines. 

@@ -306,6 +306,10 @@ opaque floatToIntBv : BitVec 64 → BitVec 64
     Opaque — corresponds to ARM64 `bl _exp`. -/
 opaque floatExpBv : BitVec 64 → BitVec 64
 
+/-- Compute sqrt(x) for a float (BitVec 64).
+    Opaque — corresponds to ARM64 `fsqrt`. -/
+opaque floatSqrtBv : BitVec 64 → BitVec 64
+
 /-- Convert a Lean Float to its IEEE 754 bit representation as BitVec 64.
     Uses `Float.toBits` for proper bit reinterpretation (not truncation). -/
 def floatToBits (f : Float) : BitVec 64 :=
@@ -353,6 +357,7 @@ inductive Expr where
   | intToFloat : Expr → Expr                           -- .float (intToFloat (e.toInt))
   | floatToInt : Expr → Expr                           -- .int (floatToInt (e.toFloat))
   | floatExp  : Expr → Expr                            -- .float (exp(e.toFloat))
+  | floatSqrt : Expr → Expr                            -- .float (sqrt(e.toFloat))
   | farrRead : ArrayName → Expr → Expr                -- .float (am.read arr idx)
   deriving Repr, DecidableEq
 
@@ -374,6 +379,7 @@ def Expr.eval (σ : Store) (am : ArrayMem) : Expr → Value
   | .intToFloat e      => .float (intToFloatBv (e.eval σ am).toInt)
   | .floatToInt e      => .int (floatToIntBv (e.eval σ am).toFloat)
   | .floatExp e        => .float (floatExpBv (e.eval σ am).toFloat)
+  | .floatSqrt e       => .float (floatSqrtBv (e.eval σ am).toFloat)
   | .farrRead arr idx  => .float (am.read arr (idx.eval σ am).toInt)
 
 /-- Does an expression contain any `arrRead` or `farrRead` sub-expression? -/
@@ -392,6 +398,7 @@ def Expr.hasArrRead : Expr → Bool
   | .intToFloat e  => e.hasArrRead
   | .floatToInt e  => e.hasArrRead
   | .floatExp e    => e.hasArrRead
+  | .floatSqrt e   => e.hasArrRead
   | .farrRead _ _  => true
 
 /-- Collect all variable names appearing in an expression (with possible duplicates). -/
@@ -411,6 +418,7 @@ def Expr.freeVars : Expr → List Var
   | .intToFloat e   => e.freeVars
   | .floatToInt e   => e.freeVars
   | .floatExp e     => e.freeVars
+  | .floatSqrt e    => e.freeVars
   | .farrRead _ idx => idx.freeVars
 
 /-- For arrRead-free expressions, evaluation is independent of the array memory. -/
@@ -449,6 +457,8 @@ theorem Expr.eval_noArrRead (e : Expr) (σ : Store) (am₁ am₂ : ArrayMem)
   | floatToInt e ih =>
     simp only [hasArrRead] at h; simp only [Expr.eval]; rw [ih h]
   | floatExp e ih =>
+    simp only [hasArrRead] at h; simp only [Expr.eval]; rw [ih h]
+  | floatSqrt e ih =>
     simp only [hasArrRead] at h; simp only [Expr.eval]; rw [ih h]
   | farrRead _ _ => simp [hasArrRead] at h
 

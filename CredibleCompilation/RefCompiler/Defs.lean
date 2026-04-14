@@ -323,6 +323,13 @@ theorem FragExec.single_floatExp {p : Prog} {pc : Nat} {σ : Store} {am : ArrayM
     FragExec p pc σ (pc + 1) (σ[x ↦ .float (floatExpBv f)]) am am :=
   Steps.single (Step.floatExp h hy)
 
+theorem FragExec.single_floatSqrt {p : Prog} {pc : Nat} {σ : Store} {am : ArrayMem}
+    {x y : Var} {f : BitVec 64}
+    (h : p[pc]? = some (.floatSqrt x y))
+    (hy : σ y = .float f) :
+    FragExec p pc σ (pc + 1) (σ[x ↦ .float (floatSqrtBv f)]) am am :=
+  Steps.single (Step.floatSqrt h hy)
+
 theorem FragExec.single_arrStore_float {p : Prog} {pc : Nat} {σ : Store} {am : ArrayMem}
     {arr : ArrayName} {idx val : Var} {idxVal v : BitVec 64}
     (h : p[pc]? = some (.arrStore arr idx val .float))

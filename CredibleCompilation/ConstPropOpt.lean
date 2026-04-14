@@ -87,6 +87,7 @@ def transfer (cm : ConstMap) (instr : TAC) : ConstMap :=
   | .intToFloat x _ => cmRemove cm x
   | .floatToInt x _ => cmRemove cm x
   | .floatExp x _ => cmRemove cm x
+  | .floatSqrt x _ => cmRemove cm x
   | _ => cm
 
 -- ============================================================

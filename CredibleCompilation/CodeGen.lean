@@ -57,6 +57,8 @@ private def collectVars (p : Prog) : List Var :=
                           if a.contains y then a else a ++ [y]
     | .floatExp x y    => let a := if acc.contains x then acc else acc ++ [x]
                           if a.contains y then a else a ++ [y]
+    | .floatSqrt x y   => let a := if acc.contains x then acc else acc ++ [x]
+                          if a.contains y then a else a ++ [y]
     | .goto _          => acc
     | .ifgoto _ _      => acc
     | .halt            => acc
@@ -112,6 +114,9 @@ private def ppReg : ArmReg → String
   | .x8 => "x8" | .x9 => "x9" | .x10 => "x10" | .x11 => "x11"
   | .x12 => "x12" | .x13 => "x13" | .x14 => "x14" | .x15 => "x15"
   | .x16 => "x16" | .x17 => "x17" | .x18 => "x18"
+  | .x19 => "x19" | .x20 => "x20" | .x21 => "x21" | .x22 => "x22"
+  | .x23 => "x23" | .x24 => "x24" | .x25 => "x25" | .x26 => "x26"
+  | .x27 => "x27" | .x28 => "x28"
 
 private def ppFReg : ArmFReg → String
   | .d0 => "d0" | .d1 => "d1" | .d2 => "d2" | .d3 => "d3"
@@ -233,6 +238,8 @@ private def ppInstr (lbl : Nat → String) (afterFcmp : Bool) (instr : ArmInstr)
     let store := if fd == .d0 then [] else [s!"  fmov {ppFReg fd}, d0"]
     load ++ ["  stp x29, x30, [sp, #-16]!", "  bl _exp",
              "  ldp x29, x30, [sp], #16"] ++ store
+  | .fsqrtD fd fn =>
+    [s!"  fsqrt {ppFReg fd}, {ppFReg fn}"]
 
 /-- Pretty-print a list of ArmInstr, tracking fcmp state for cset. -/
 private def ppInstrs (lbl : Nat → String) : List ArmInstr → List String
@@ -263,7 +270,10 @@ private def varToArmReg (v : Var) : Option ArmReg :=
     | some 9 => some .x9 | some 10 => some .x10 | some 11 => some .x11
     | some 12 => some .x12 | some 13 => some .x13 | some 14 => some .x14
     | some 15 => some .x15 | some 16 => some .x16 | some 17 => some .x17
-    | some 18 => some .x18 | _ => none
+    | some 18 => some .x18 | some 19 => some .x19 | some 20 => some .x20
+    | some 21 => some .x21 | some 22 => some .x22 | some 23 => some .x23
+    | some 24 => some .x24 | some 25 => some .x25 | some 26 => some .x26
+    | some 27 => some .x27 | some 28 => some .x28 | _ => none
   else none
 
 private def varToArmFReg (v : Var) : Option ArmFReg :=
@@ -1121,6 +1131,9 @@ private theorem step_run_or_terminal {p : Prog} {pc : Nat} {σ : Store}
   | floatExp h h1 =>
     exact .inl ⟨_, _, _, rfl, type_preservation hwtp hts hpc
       (show Step p (.run pc σ am) _ from .floatExp h h1)⟩
+  | floatSqrt h h1 =>
+    exact .inl ⟨_, _, _, rfl, type_preservation hwtp hts hpc
+      (show Step p (.run pc σ am) _ from .floatSqrt h h1)⟩
   | halt _ => exact .inr fun _ h => Step.no_step_from_halt h
   | error _ _ _ _ => exact .inr fun _ h => Step.no_step_from_error h
   | binop_typeError _ _ => exact .inr fun _ h => Step.no_step_from_typeError h
@@ -1132,6 +1145,7 @@ private theorem step_run_or_terminal {p : Prog} {pc : Nat} {σ : Store}
   | intToFloat_typeError _ _ => exact .inr fun _ h => Step.no_step_from_typeError h
   | floatToInt_typeError _ _ => exact .inr fun _ h => Step.no_step_from_typeError h
   | floatExp_typeError _ _ => exact .inr fun _ h => Step.no_step_from_typeError h
+  | floatSqrt_typeError _ _ => exact .inr fun _ h => Step.no_step_from_typeError h
 
 /-- Whole-program backward simulation for `verifiedGenerateAsm`.
 
@@ -1244,15 +1258,104 @@ theorem tacToArm_correctness {p : Prog} {r : VerifiedAsmResult}
     (TypedStore.typedInit p.tyCtx)
     cfg' hSteps
 
+/-- Reserved integer register numbers that must never appear in register allocation.
+    x16-x17: linker scratch (IP0/IP1), x18: platform-reserved. -/
+private def reservedIntRegs : List Nat := [16, 17, 18]
+
+/-- Callee-saved integer register numbers. If any are used, the prologue/epilogue
+    must save and restore them. -/
+private def calleeSavedIntRegs : List Nat := [19, 20, 21, 22, 23, 24, 25, 26, 27, 28]
+
+/-- Callee-saved float register numbers (d8-d15). -/
+private def calleeSavedFloatRegs : List Nat := [8, 9, 10, 11, 12, 13, 14, 15]
+
+/-- Check that no variable in the TAC program maps to a reserved register.
+    Returns an error if a reserved register is found. -/
+private def checkRegConvention (vars : List Var) : Except String Unit := do
+  for v in vars do
+    if v.startsWith "__x" then
+      match (v.drop 3).toNat? with
+      | some n =>
+        if reservedIntRegs.contains n then
+          throw s!"register allocator bug: variable '{v}' uses reserved register x{n}"
+      | none => pure ()
+
+/-- Detect which callee-saved registers are used by the program.
+    Returns (usedIntRegs, usedFloatRegs) as lists of register numbers. -/
+private def detectCalleeSaved (vars : List Var) : List Nat × List Nat :=
+  let usedInt := vars.filterMap fun v =>
+    if v.startsWith "__x" then
+      match (v.drop 3).toNat? with
+      | some n => if calleeSavedIntRegs.contains n then some n else none
+      | none => none
+    else none
+  let usedFloat := vars.filterMap fun v =>
+    if v.startsWith "__d" then
+      match (v.drop 3).toNat? with
+      | some n => if calleeSavedFloatRegs.contains n then some n else none
+      | none => none
+    else none
+  (usedInt.eraseDups, usedFloat.eraseDups)
+
+/-- Generate stp/ldp pairs for callee-saved registers.
+    Registers are saved in pairs for 16-byte alignment. -/
+private def calleeSavePrologue (intRegs : List Nat) (floatRegs : List Nat)
+    (baseOffset : Nat) : List String × Nat :=
+  -- Pair up registers, padding with a dummy if odd count
+  let allRegs : List (String × Option String) :=
+    let ints := intRegs.map fun n => s!"x{n}"
+    let floats := floatRegs.map fun n => s!"d{n}"
+    let all := ints ++ floats
+    let rec pairUp : List String → List (String × Option String)
+      | [] => []
+      | [r] => [(r, none)]
+      | r1 :: r2 :: rest => (r1, some r2) :: pairUp rest
+    pairUp all
+  let (lines, offset) := allRegs.foldl (fun (acc : List String × Nat) (r1, r2opt) =>
+    let off := acc.2
+    match r2opt with
+    | some r2 => (acc.1 ++ [s!"  stp {r1}, {r2}, [sp, #{off}]"], off + 16)
+    | none    => (acc.1 ++ [s!"  str {r1}, [sp, #{off}]"], off + 16)
+  ) ([], baseOffset)
+  (lines, offset)
+
+private def calleeSaveEpilogue (intRegs : List Nat) (floatRegs : List Nat)
+    (baseOffset : Nat) : List String :=
+  let allRegs : List (String × Option String) :=
+    let ints := intRegs.map fun n => s!"x{n}"
+    let floats := floatRegs.map fun n => s!"d{n}"
+    let all := ints ++ floats
+    let rec pairUp : List String → List (String × Option String)
+      | [] => []
+      | [r] => [(r, none)]
+      | r1 :: r2 :: rest => (r1, some r2) :: pairUp rest
+    pairUp all
+  let (lines, _) := allRegs.foldl (fun (acc : List String × Nat) (r1, r2opt) =>
+    let off := acc.2
+    match r2opt with
+    | some r2 => (acc.1 ++ [s!"  ldp {r1}, {r2}, [sp, #{off}]"], off + 16)
+    | none    => (acc.1 ++ [s!"  ldr {r1}, [sp, #{off}]"], off + 16)
+  ) ([], baseOffset)
+  lines
+
 /-- Generate the complete assembly for a program.
     Calls `verifiedGenerateAsm` for the verified core, then wraps it with
     prologue/epilogue, printf code, error handlers, and data sections. -/
 def generateAsm (p : Prog) : Except String String := do
   let r ← verifiedGenerateAsm p
   let vars := collectVars p
+  -- Check register convention before generating assembly
+  checkRegConvention vars
+  -- Detect callee-saved registers that need saving
+  let (csIntRegs, csFloatRegs) := detectCalleeSaved vars
   -- Stack frame: 16-byte aligned
-  -- Layout: [scratch 8B] [var1 8B] ... [varN 8B] [padding] [x29 8B] [x30 8B]
-  let frameSize := ((vars.length + 1) * 8 + 16 + 15) / 16 * 16
+  -- Layout: [scratch 8B] [var1 8B] ... [varN 8B] [callee-saved pairs] [padding] [x29 8B] [x30 8B]
+  let numCalleePairs := (csIntRegs.length + csFloatRegs.length + 1) / 2
+  let calleeSaveBytes := numCalleePairs * 16
+  let frameSize := ((vars.length + 1) * 8 + calleeSaveBytes + 16 + 15) / 16 * 16
+  let calleeSaveOffset := (vars.length + 1) * 8  -- right after variables
+  let (csProlog, _) := calleeSavePrologue csIntRegs csFloatRegs calleeSaveOffset
+  let csEpilog := calleeSaveEpilogue csIntRegs csFloatRegs calleeSaveOffset
   let header := [
     ".global _main",
     ".align 2",
@@ -1261,8 +1364,10 @@ def generateAsm (p : Prog) : Except String String := do
     s!"  sub sp, sp, #{frameSize}",
     s!"  str x30, [sp, #{frameSize - 8}]",
     s!"  str x29, [sp, #{frameSize - 16}]",
-    s!"  add x29, sp, #{frameSize - 16}",
-    "",
+    s!"  add x29, sp, #{frameSize - 16}"] ++
+    (if csProlog.isEmpty then [] else
+      ["  // Save callee-saved registers"] ++ csProlog) ++
+    ["",
     "  // Initialize all variables to 0",
     "  mov x0, #0"
   ]
@@ -1311,8 +1416,10 @@ def generateAsm (p : Prog) : Except String String := do
     printCode ++
     ["",
      "  // Exit with code 0",
-     "  mov x0, #0",
-     s!"  ldr x29, [sp, #{frameSize - 16}]",
+     "  mov x0, #0"] ++
+    (if csEpilog.isEmpty then [] else
+      ["  // Restore callee-saved registers"] ++ csEpilog) ++
+    [s!"  ldr x29, [sp, #{frameSize - 16}]",
      s!"  ldr x30, [sp, #{frameSize - 8}]",
      s!"  add sp, sp, #{frameSize}",
      "  ret",

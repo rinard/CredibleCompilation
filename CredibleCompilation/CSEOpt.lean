@@ -59,6 +59,7 @@ def exprRefsVar (e : Expr) (x : Var) : Bool :=
   | .intToFloat a => exprRefsVar a x
   | .floatToInt a => exprRefsVar a x
   | .floatExp a   => exprRefsVar a x
+  | .floatSqrt a  => exprRefsVar a x
   | .lit _     => false
   | .blit _    => false
   | .flit _    => false
@@ -117,6 +118,7 @@ def transfer (avail : AvailSet) (instr : TAC) : AvailSet :=
   | .intToFloat x _    => killVar avail x
   | .floatToInt x _    => killVar avail x
   | .floatExp x _      => killVar avail x
+  | .floatSqrt x _     => killVar avail x
   | _ => avail
 
 -- ============================================================

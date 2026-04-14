@@ -15,11 +15,14 @@ Split from `AsmSemantics.lean`.
 -- ============================================================
 
 /-- ARM64 integer registers used by the code generator.
-    x0-x2: scratch, x8: array address scratch, x3-x7/x9-x18: allocatable. -/
+    x0-x2: scratch, x8: array address scratch, x3-x7/x9-x15: caller-saved allocatable,
+    x16-x17: linker scratch (IP0/IP1), x18: platform-reserved,
+    x19-x28: callee-saved allocatable (must be saved/restored in prologue/epilogue). -/
 inductive ArmReg where
   | x0  | x1  | x2  | x3  | x4  | x5  | x6  | x7
   | x8  | x9  | x10 | x11 | x12 | x13 | x14 | x15
   | x16 | x17 | x18
+  | x19 | x20 | x21 | x22 | x23 | x24 | x25 | x26 | x27 | x28
   deriving Repr, DecidableEq
 
 -- sp is implicit (stack is addressed by offset)
@@ -180,6 +183,9 @@ inductive ArmInstr where
   /-- `stp x29, x30, [sp, #-16]!; bl _exp; ldp x29, x30, [sp], #16`
       Abstract: `d0 ← floatExpBv(d0)`, preserves everything else. -/
   | callExp  : ArmFReg → ArmFReg → ArmInstr
+  /-- `fsqrt Dd, Dn` — FP square root.
+      Abstract: `d ← floatSqrtBv(n)`, preserves everything else. -/
+  | fsqrtD   : ArmFReg → ArmFReg → ArmInstr
   deriving Repr, DecidableEq
 
 /-- An ARM64 program is an array of instructions. -/

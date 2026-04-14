@@ -16,7 +16,9 @@ are consumed by CodeGen to emit register-aware instructions.
 |------|-----------|-------|
 | Int scratch | x0, x1, x2 | 3 |
 | Addr scratch | x8 | 1 |
-| Int allocatable | x3-x7, x9-x18 | 15 |
+| Int caller-saved | x3-x7, x9-x15 | 12 |
+| Int callee-saved | x19-x28 | 10 |
+| Reserved         | x16-x17 (IP0/IP1), x18 (platform) | 3 |
 | Float scratch | d0, d1, d2 | 3 |
 | Float allocatable | d3-d15 | 13 |
 
@@ -131,9 +133,16 @@ partial def graphColor (graph : List (Var × List Var)) (K : Nat)
 -- § 4. Register mapping
 -- ============================================================
 
-/-- Integer allocatable registers: x3-x7, x9-x18 (15 total).
-    x0-x2 reserved as scratch, x8 reserved for array address. -/
-def intRegNums : Array Nat := #[3, 4, 5, 6, 7, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]
+/-- Integer allocatable registers: x3-x7, x9-x15 (caller-saved), x19-x28 (callee-saved).
+    Caller-saved listed first so graph coloring prefers them under low pressure.
+    x0-x2 reserved as scratch, x8 reserved for array address,
+    x16-x17 reserved (linker scratch IP0/IP1), x18 reserved (platform register). -/
+def intRegNums : Array Nat :=
+  #[3, 4, 5, 6, 7, 9, 10, 11, 12, 13, 14, 15,   -- caller-saved (12)
+    19, 20, 21, 22, 23, 24, 25, 26, 27, 28]       -- callee-saved (10)
+
+/-- Number of caller-saved integer registers (indices 0..11 in intRegNums). -/
+def numCallerSavedIntRegs : Nat := 12
 
 /-- Float allocatable registers: d3-d15 (13 total).
     d0-d2 reserved as scratch (d2 used by fcmp/fbinop fallback). -/
@@ -207,6 +216,7 @@ def renameInstr (coloring : List (Var × String)) (instr : TAC) : TAC :=
   | .intToFloat x y  => .intToFloat (r x) (r y)
   | .floatToInt x y  => .floatToInt (r x) (r y)
   | .floatExp x y    => .floatExp (r x) (r y)
+  | .floatSqrt x y   => .floatSqrt (r x) (r y)
   | .goto l          => .goto l
   | .ifgoto be l     => .ifgoto (renameBoolExpr coloring be) l
   | .halt            => .halt
@@ -278,6 +288,7 @@ def renameProg (prog : Prog) (coloring : List (Var × String)) : Prog :=
     | .intToFloat x _   => fun w => if w == x then .float else ctx w
     | .floatToInt x _   => fun w => if w == x then .int else ctx w
     | .floatExp x _     => fun w => if w == x then .float else ctx w
+    | .floatSqrt x _    => fun w => if w == x then .float else ctx w
     | .arrLoad x _ _ ty => fun w => if w == x then ty else ctx w
     | _                  => ctx
   ) prog.tyCtx

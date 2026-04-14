@@ -105,7 +105,7 @@ def buildInstrCerts (prog : Prog) (origMap : Array Nat)
       { pc_orig := origPC, rel := idRel, transitions := ([] : List ETransCorr) }
     | some (.const _ _) | some (.copy _ _) | some (.binop _ _ _ _) | some (.boolop _ _)
     | some (.arrLoad _ _ _ _) | some (.arrStore _ _ _ _)
-    | some (.fbinop _ _ _ _) | some (.intToFloat _ _) | some (.floatToInt _ _) | some (.floatExp _ _) =>
+    | some (.fbinop _ _ _ _) | some (.intToFloat _ _) | some (.floatToInt _ _) | some (.floatExp _ _) | some (.floatSqrt _ _) =>
       let nextOrigPC := origMap.getD (i + 1) 0
       { pc_orig := origPC, rel := idRel,
         transitions := [{ origLabels := buildPath (origPC + 1) nextOrigPC, rel := idRel, rel_next := idRel }] }
