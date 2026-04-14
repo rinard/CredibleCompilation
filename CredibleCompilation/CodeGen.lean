@@ -146,7 +146,8 @@ private def ppLabel (haltS divS boundsS : Nat) (tacPcOf : Nat → Option Nat)
 /-- Pretty-print a single ArmInstr to one or more assembly lines.
     `afterFcmp` indicates the preceding instruction was `fcmpR`, so
     condition codes for `cset` use the float convention. -/
-private def ppInstr (lbl : Nat → String) (afterFcmp : Bool) (instr : ArmInstr) : List String :=
+private def ppInstr (lbl : Nat → String) (afterFcmp : Bool)
+    (libSave libRestore : List String) (instr : ArmInstr) : List String :=
   match instr with
   | .mov rd n =>
     [s!"  mov {ppReg rd}, #{n.toInt}"]
@@ -254,31 +255,33 @@ private def ppInstr (lbl : Nat → String) (afterFcmp : Bool) (instr : ArmInstr)
     | .sqrt => [s!"  fsqrt {ppFReg fd}, {ppFReg fn}"]
     | .abs  => [s!"  fabs {ppFReg fd}, {ppFReg fn}"]
     | .neg  => [s!"  fneg {ppFReg fd}, {ppFReg fn}"]
-    | _ =>  -- library call intrinsics
+    | _ =>  -- library call intrinsics: save/restore caller-saved regs around bl
       let name := match op with
         | .exp => "_exp" | .sin => "_sin" | .cos => "_cos" | .tan => "_tan"
         | .log => "_log" | .log2 => "_log2" | .log10 => "_log10" | .round => "_round"
         | .sqrt | .abs | .neg => unreachable!
       let load := if fn == .d0 then [] else [s!"  fmov d0, {ppFReg fn}"]
       let store := if fd == .d0 then [] else [s!"  fmov {ppFReg fd}, d0"]
-      load ++ [s!"  stp x29, x30, [sp, #-16]!", s!"  bl {name}",
-               "  ldp x29, x30, [sp], #16"] ++ store
+      load ++ libSave ++ [s!"  stp x29, x30, [sp, #-16]!", s!"  bl {name}",
+               "  ldp x29, x30, [sp], #16"] ++ libRestore ++ store
 
 /-- Pretty-print a list of ArmInstr, tracking fcmp state for cset. -/
-private def ppInstrs (lbl : Nat → String) : List ArmInstr → List String
+private def ppInstrs (lbl : Nat → String) (libSave libRestore : List String)
+    : List ArmInstr → List String
   | [] => []
   | instr :: rest =>
     let afterFcmp := match instr with | .fcmpR .. => true | _ => false
-    let lines := ppInstr lbl false instr
-    let restLines := ppInstrsAux lbl afterFcmp rest
+    let lines := ppInstr lbl false libSave libRestore instr
+    let restLines := ppInstrsAux lbl libSave libRestore afterFcmp rest
     lines ++ restLines
 where
-  ppInstrsAux (lbl : Nat → String) (prevWasFcmp : Bool) : List ArmInstr → List String
+  ppInstrsAux (lbl : Nat → String) (libSave libRestore : List String)
+      (prevWasFcmp : Bool) : List ArmInstr → List String
     | [] => []
     | instr :: rest =>
-      let lines := ppInstr lbl prevWasFcmp instr
+      let lines := ppInstr lbl prevWasFcmp libSave libRestore instr
       let nextFcmp := match instr with | .fcmpR .. => true | _ => false
-      lines ++ ppInstrsAux lbl nextFcmp rest
+      lines ++ ppInstrsAux lbl libSave libRestore nextFcmp rest
 
 -- ============================================================
 -- § 2b. VarLayout construction
@@ -1281,6 +1284,12 @@ theorem tacToArm_correctness {p : Prog} {r : VerifiedAsmResult}
     x16-x17: linker scratch (IP0/IP1), x18: platform-reserved. -/
 private def reservedIntRegs : List Nat := [16, 17, 18]
 
+/-- Caller-saved integer register numbers (x3-x7, x9-x15). -/
+private def callerSavedIntRegs : List Nat := [3, 4, 5, 6, 7, 9, 10, 11, 12, 13, 14, 15]
+
+/-- Caller-saved float register numbers (d0-d7). d0 is the call arg/return. -/
+private def callerSavedFloatRegs : List Nat := [0, 1, 2, 3, 4, 5, 6, 7]
+
 /-- Callee-saved integer register numbers. If any are used, the prologue/epilogue
     must save and restore them. -/
 private def calleeSavedIntRegs : List Nat := [19, 20, 21, 22, 23, 24, 25, 26, 27, 28]
@@ -1316,13 +1325,58 @@ private def detectCalleeSaved (vars : List Var) : List Nat × List Nat :=
     else none
   (usedInt.eraseDups, usedFloat.eraseDups)
 
-/-- Generate stp/ldp pairs for callee-saved registers.
-    Registers are saved in pairs for 16-byte alignment. -/
+/-- Detect which caller-saved registers are used by the program.
+    These must be saved/restored around library function calls (bl _exp, etc.).
+    Returns (usedIntRegs, usedFloatRegs) excluding d0 (used as call arg/return). -/
+private def detectCallerSaved (vars : List Var) : List Nat × List Nat :=
+  let usedInt := vars.filterMap fun v =>
+    if v.startsWith "__x" then
+      match (v.drop 3).toNat? with
+      | some n => if callerSavedIntRegs.contains n then some n else none
+      | none => none
+    else none
+  let usedFloat := vars.filterMap fun v =>
+    if v.startsWith "__d" then
+      match (v.drop 3).toNat? with
+      -- Exclude d0: it's the call argument/return register
+      | some n => if n != 0 && callerSavedFloatRegs.contains n then some n else none
+      | none => none
+    else none
+  (usedInt.eraseDups, usedFloat.eraseDups)
+
+/-- Pair up registers of the same class for stp/ldp. -/
 private def pairUpSameClass (regs : List String) : List (String × Option String) :=
   match regs with
   | [] => []
   | [r] => [(r, none)]
   | r1 :: r2 :: rest => (r1, some r2) :: pairUpSameClass rest
+
+/-- Generate save/restore code for caller-saved registers around a library call.
+    Returns (saveLines, restoreLines). -/
+private def libcallSaveRestore (usedInt : List Nat) (usedFloat : List Nat)
+    : List String × List String :=
+  if usedInt.isEmpty && usedFloat.isEmpty then ([], [])
+  else
+    let intStrs := usedInt.map fun n => s!"x{n}"
+    let floatStrs := usedFloat.map fun n => s!"d{n}"
+    let intPairs := pairUpSameClass intStrs
+    let floatPairs := pairUpSameClass floatStrs
+    let allPairs := intPairs ++ floatPairs
+    let frameSize := ((allPairs.length * 16 + 15) / 16) * 16
+    let (saveLines, _) := allPairs.foldl (fun (acc : List String × Nat) (r1, r2opt) =>
+      let off := acc.2
+      match r2opt with
+      | some r2 => (acc.1 ++ [s!"  stp {r1}, {r2}, [sp, #{off}]"], off + 16)
+      | none    => (acc.1 ++ [s!"  str {r1}, [sp, #{off}]"], off + 16)
+    ) ([], 0)
+    let (restoreLines, _) := allPairs.foldl (fun (acc : List String × Nat) (r1, r2opt) =>
+      let off := acc.2
+      match r2opt with
+      | some r2 => (acc.1 ++ [s!"  ldp {r1}, {r2}, [sp, #{off}]"], off + 16)
+      | none    => (acc.1 ++ [s!"  ldr {r1}, [sp, #{off}]"], off + 16)
+    ) ([], 0)
+    ([s!"  sub sp, sp, #{frameSize}"] ++ saveLines,
+     restoreLines ++ [s!"  add sp, sp, #{frameSize}"])
 
 private def calleeSavePrologue (intRegs : List Nat) (floatRegs : List Nat)
     (baseOffset : Nat) : List String × Nat :=
@@ -1365,6 +1419,9 @@ def generateAsm (p : Prog) : Except String String := do
   checkRegConvention vars
   -- Detect callee-saved registers that need saving
   let (csIntRegs, csFloatRegs) := detectCalleeSaved vars
+  -- Compute caller-saved register save/restore for library calls (exp, sin, etc.)
+  let (csrInt, csrFloat) := detectCallerSaved vars
+  let (libSave, libRestore) := libcallSaveRestore csrInt csrFloat
   -- Stack frame: 16-byte aligned
   -- Layout: [scratch 8B] [var1 8B] ... [varN 8B] [callee-saved pairs] [padding] [x29 8B] [x30 8B]
   let numCalleePairs := (csIntRegs.length + csFloatRegs.length + 1) / 2
@@ -1390,10 +1447,10 @@ def generateAsm (p : Prog) : Except String String := do
   ]
   let lbl := ppLabel r.haltS r.divS r.boundsS r.tacPcOf
   -- Pretty-print init instructions
-  let initLines := ppInstrs lbl r.initInstrs.toList
+  let initLines := ppInstrs lbl libSave libRestore r.initInstrs.toList
   -- Pretty-print body with TAC PC labels
   let body := (List.range r.bodyPerPC.size).flatMap fun pc =>
-    [s!".L{pc}:"] ++ ppInstrs lbl ((r.bodyPerPC[pc]!))
+    [s!".L{pc}:"] ++ ppInstrs lbl libSave libRestore ((r.bodyPerPC[pc]!))
   -- Print observable variables at halt (loads from stack, safe after saveRegs)
   let printCode := p.observable.flatMap fun v =>
     let isFloat := p.tyCtx v == .float
@@ -1423,7 +1480,7 @@ def generateAsm (p : Prog) : Except String String := do
       "  bl _printf" ::
       "  add sp, sp, #16" :: List.nil
   -- Pretty-print halt-save instructions
-  let saveLines := ppInstrs lbl r.haltSaveInstrs.toList
+  let saveLines := ppInstrs lbl libSave libRestore r.haltSaveInstrs.toList
   let footer := [
     "",
     ".Lhalt:",
