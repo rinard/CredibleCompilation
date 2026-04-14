@@ -284,7 +284,7 @@ def CmpOp.eval : CmpOp → BitVec 64 → BitVec 64 → Bool
 -- § 2a'. Float binary operators
 -- ============================================================
 
-inductive FloatBinOp | fadd | fsub | fmul | fdiv deriving Repr, DecidableEq
+inductive FloatBinOp | fadd | fsub | fmul | fdiv | fpow | fmin | fmax deriving Repr, DecidableEq
 
 /-- Evaluate a float binary operation. Opaque in proofs — FP operations
     are uninterpreted functions over BitVec 64. -/
@@ -309,17 +309,15 @@ opaque intToFloatBv : BitVec 64 → BitVec 64
 opaque floatToIntBv : BitVec 64 → BitVec 64
 
 /-- Float unary intrinsic operations. Each is opaque in proofs. -/
-inductive FloatUnaryOp | exp | sqrt deriving Repr, DecidableEq
+inductive FloatUnaryOp
+  | exp | sqrt
+  | sin | cos | tan
+  | log | log2 | log10
+  | abs | neg | round
+  deriving Repr, DecidableEq
 
-/-- Compute e^x for a float (BitVec 64). Opaque — ARM64 `bl _exp`. -/
-opaque floatExpBv : BitVec 64 → BitVec 64
-/-- Compute sqrt(x) for a float (BitVec 64). Opaque — ARM64 `fsqrt`. -/
-opaque floatSqrtBv : BitVec 64 → BitVec 64
-
-/-- Evaluate a float unary op. Dispatches to the per-op opaques. -/
-def FloatUnaryOp.eval : FloatUnaryOp → BitVec 64 → BitVec 64
-  | .exp,  x => floatExpBv x
-  | .sqrt, x => floatSqrtBv x
+/-- Evaluate a float unary op. Opaque — each is an uninterpreted function over BitVec 64. -/
+opaque FloatUnaryOp.eval : FloatUnaryOp → BitVec 64 → BitVec 64
 
 /-- Convert a Lean Float to its IEEE 754 bit representation as BitVec 64.
     Uses `Float.toBits` for proper bit reinterpretation (not truncation). -/

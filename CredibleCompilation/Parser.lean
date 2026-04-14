@@ -36,7 +36,8 @@ inductive Token where
 
 private def keywords : List String :=
   ["var", "array", "int", "bool", "float", "if", "else", "while", "skip", "true", "false",
-   "intToFloat", "floatToInt", "exp", "sqrt", "goto"]
+   "intToFloat", "floatToInt", "exp", "sqrt", "sin", "cos", "tan",
+   "log", "log2", "log10", "abs", "neg", "round", "pow", "fmin", "fmax", "goto"]
 
 private def spanDigits : List Char → List Char × List Char
   | c :: rest => if c.isDigit then let (d, r) := spanDigits rest; (c :: d, r) else ([], c :: rest)
@@ -154,6 +155,78 @@ partial def parseAtom (toks : List Token) : Except String (SExpr × List Token) 
     match rest' with
     | Token.rparen :: rest'' => .ok (.floatUnary .sqrt e, rest'')
     | _ => .error "expected ')' after sqrt argument"
+  | Token.kw "sin" :: Token.lparen :: rest => do
+    let (e, rest') ← parseExpr rest
+    match rest' with
+    | Token.rparen :: rest'' => .ok (.floatUnary .sin e, rest'')
+    | _ => .error "expected ')' after sin argument"
+  | Token.kw "cos" :: Token.lparen :: rest => do
+    let (e, rest') ← parseExpr rest
+    match rest' with
+    | Token.rparen :: rest'' => .ok (.floatUnary .cos e, rest'')
+    | _ => .error "expected ')' after cos argument"
+  | Token.kw "tan" :: Token.lparen :: rest => do
+    let (e, rest') ← parseExpr rest
+    match rest' with
+    | Token.rparen :: rest'' => .ok (.floatUnary .tan e, rest'')
+    | _ => .error "expected ')' after tan argument"
+  | Token.kw "log" :: Token.lparen :: rest => do
+    let (e, rest') ← parseExpr rest
+    match rest' with
+    | Token.rparen :: rest'' => .ok (.floatUnary .log e, rest'')
+    | _ => .error "expected ')' after log argument"
+  | Token.kw "log2" :: Token.lparen :: rest => do
+    let (e, rest') ← parseExpr rest
+    match rest' with
+    | Token.rparen :: rest'' => .ok (.floatUnary .log2 e, rest'')
+    | _ => .error "expected ')' after log2 argument"
+  | Token.kw "log10" :: Token.lparen :: rest => do
+    let (e, rest') ← parseExpr rest
+    match rest' with
+    | Token.rparen :: rest'' => .ok (.floatUnary .log10 e, rest'')
+    | _ => .error "expected ')' after log10 argument"
+  | Token.kw "abs" :: Token.lparen :: rest => do
+    let (e, rest') ← parseExpr rest
+    match rest' with
+    | Token.rparen :: rest'' => .ok (.floatUnary .abs e, rest'')
+    | _ => .error "expected ')' after abs argument"
+  | Token.kw "neg" :: Token.lparen :: rest => do
+    let (e, rest') ← parseExpr rest
+    match rest' with
+    | Token.rparen :: rest'' => .ok (.floatUnary .neg e, rest'')
+    | _ => .error "expected ')' after neg argument"
+  | Token.kw "round" :: Token.lparen :: rest => do
+    let (e, rest') ← parseExpr rest
+    match rest' with
+    | Token.rparen :: rest'' => .ok (.floatUnary .round e, rest'')
+    | _ => .error "expected ')' after round argument"
+  | Token.kw "pow" :: Token.lparen :: rest => do
+    let (a, rest') ← parseExpr rest
+    match rest' with
+    | Token.comma :: rest'' => do
+      let (b, rest''') ← parseExpr rest''
+      match rest''' with
+      | Token.rparen :: rest'''' => .ok (.fbin .fpow a b, rest'''')
+      | _ => .error "expected ')' after pow arguments"
+    | _ => .error "expected ',' after first pow argument"
+  | Token.kw "fmin" :: Token.lparen :: rest => do
+    let (a, rest') ← parseExpr rest
+    match rest' with
+    | Token.comma :: rest'' => do
+      let (b, rest''') ← parseExpr rest''
+      match rest''' with
+      | Token.rparen :: rest'''' => .ok (.fbin .fmin a b, rest'''')
+      | _ => .error "expected ')' after fmin arguments"
+    | _ => .error "expected ',' after first fmin argument"
+  | Token.kw "fmax" :: Token.lparen :: rest => do
+    let (a, rest') ← parseExpr rest
+    match rest' with
+    | Token.comma :: rest'' => do
+      let (b, rest''') ← parseExpr rest''
+      match rest''' with
+      | Token.rparen :: rest'''' => .ok (.fbin .fmax a b, rest'''')
+      | _ => .error "expected ')' after fmax arguments"
+    | _ => .error "expected ',' after first fmax argument"
   | Token.ident x :: Token.lbracket :: rest => do
     let (idx, rest') ← parseExpr rest
     match rest' with

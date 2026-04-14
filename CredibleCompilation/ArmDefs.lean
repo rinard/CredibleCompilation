@@ -176,6 +176,12 @@ inductive ArmInstr where
   | fmulR    : ArmFReg → ArmFReg → ArmFReg → ArmInstr
   /-- `fdiv Dd, Dn, Dm` — FP division. -/
   | fdivR    : ArmFReg → ArmFReg → ArmFReg → ArmInstr
+  /-- `fminnm Dd, Dn, Dm` — FP minimum (IEEE 754-2008). -/
+  | fminR    : ArmFReg → ArmFReg → ArmFReg → ArmInstr
+  /-- `fmaxnm Dd, Dn, Dm` — FP maximum (IEEE 754-2008). -/
+  | fmaxR    : ArmFReg → ArmFReg → ArmFReg → ArmInstr
+  /-- Binary FP library call: `d0 ← op(d0, d1)`. For pow, etc. -/
+  | callBinF : FloatBinOp → ArmFReg → ArmFReg → ArmFReg → ArmInstr
   /-- `fcmp Dn, Dm` — FP compare (sets flags). -/
   | fcmpR    : ArmFReg → ArmFReg → ArmInstr
   /-- `scvtf Dd, Xn` — signed int → FP conversion. -/
@@ -186,12 +192,9 @@ inductive ArmInstr where
   | farrLd   : ArmFReg → ArrayName → ArmReg → ArmInstr
   /-- Store to FP array: `arrayMem[arr][idxReg] ← valFReg`. -/
   | farrSt   : ArrayName → ArmReg → ArmFReg → ArmInstr
-  /-- `stp x29, x30, [sp, #-16]!; bl _exp; ldp x29, x30, [sp], #16`
-      Abstract: `d0 ← floatExpBv(d0)`, preserves everything else. -/
-  | callExp  : ArmFReg → ArmFReg → ArmInstr
-  /-- `fsqrt Dd, Dn` — FP square root.
-      Abstract: `d ← floatSqrtBv(n)`, preserves everything else. -/
-  | fsqrtD   : ArmFReg → ArmFReg → ArmInstr
+  /-- Float unary intrinsic: library call or native instruction.
+      Abstract: `fd ← op.eval(fn)`, preserves everything else. -/
+  | floatUnaryInstr : FloatUnaryOp → ArmFReg → ArmFReg → ArmInstr
   deriving Repr, DecidableEq
 
 /-- An ARM64 program is an array of instructions. -/

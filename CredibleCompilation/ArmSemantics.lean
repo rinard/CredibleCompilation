@@ -191,13 +191,21 @@ inductive ArmStep (prog : ArmProg) : ArmState → ArmState → Prop where
     prog[s.pc]? = some (.farrSt arr idxReg valFReg) →
     ArmStep prog s (s.setArrayMem arr (s.regs idxReg) (s.fregs valFReg) |>.nextPC)
 
-  | callExp (fd fn : ArmFReg) :
-    prog[s.pc]? = some (.callExp fd fn) →
-    ArmStep prog s (s.setFReg fd (floatExpBv (s.fregs fn)) |>.nextPC)
+  | fminR (fd fn fm : ArmFReg) :
+    prog[s.pc]? = some (.fminR fd fn fm) →
+    ArmStep prog s (s.setFReg fd (FloatBinOp.eval .fmin (s.fregs fn) (s.fregs fm)) |>.nextPC)
 
-  | fsqrtD (fd fn : ArmFReg) :
-    prog[s.pc]? = some (.fsqrtD fd fn) →
-    ArmStep prog s (s.setFReg fd (floatSqrtBv (s.fregs fn)) |>.nextPC)
+  | fmaxR (fd fn fm : ArmFReg) :
+    prog[s.pc]? = some (.fmaxR fd fn fm) →
+    ArmStep prog s (s.setFReg fd (FloatBinOp.eval .fmax (s.fregs fn) (s.fregs fm)) |>.nextPC)
+
+  | callBinF (fop : FloatBinOp) (fd fn fm : ArmFReg) :
+    prog[s.pc]? = some (.callBinF fop fd fn fm) →
+    ArmStep prog s (s.setFReg fd (FloatBinOp.eval fop (s.fregs fn) (s.fregs fm)) |>.nextPC)
+
+  | floatUnaryInstr (op : FloatUnaryOp) (fd fn : ArmFReg) :
+    prog[s.pc]? = some (.floatUnaryInstr op fd fn) →
+    ArmStep prog s (s.setFReg fd (op.eval (s.fregs fn)) |>.nextPC)
 
 /-- Multi-step closure. -/
 inductive ArmSteps (prog : ArmProg) : ArmState → ArmState → Prop where
@@ -704,6 +712,9 @@ def formalGenInstr (vm : VarMap) (pcMap : Nat → Nat) (instr : TAC)
       | .fsub => .fsubR .d0 .d1 .d2
       | .fmul => .fmulR .d0 .d1 .d2
       | .fdiv => .fdivR .d0 .d1 .d2
+      | .fmin => .fminR .d0 .d1 .d2
+      | .fmax => .fmaxR .d0 .d1 .d2
+      | .fpow => .callBinF .fpow .d0 .d1 .d2
     match vm.lookup lv, vm.lookup rv, vm.lookup dst with
     | some offL, some offR, some offD =>
       [.fldr .d1 offL, .fldr .d2 offR, fpInstr, .fstr .d0 offD]
@@ -721,9 +732,7 @@ def formalGenInstr (vm : VarMap) (pcMap : Nat → Nat) (instr : TAC)
   | .floatUnary dst op src =>
     match vm.lookup src, vm.lookup dst with
     | some offS, some offD =>
-      match op with
-      | .exp  => [.fldr .d0 offS, .callExp .d0 .d0, .fstr .d0 offD]
-      | .sqrt => [.fldr .d0 offS, .fsqrtD .d0 .d0, .fstr .d0 offD]
+      [.fldr .d0 offS, .floatUnaryInstr op .d0 .d0, .fstr .d0 offD]
     | _, _ => []
 
 -- ============================================================
@@ -892,6 +901,9 @@ def verifiedGenInstr (layout : VarLayout) (pcMap : Nat → Nat) (instr : TAC)
         | .fsub => .fsubR dst_reg lv_reg rv_reg
         | .fmul => .fmulR dst_reg lv_reg rv_reg
         | .fdiv => .fdivR dst_reg lv_reg rv_reg
+        | .fmin => .fminR dst_reg lv_reg rv_reg
+        | .fmax => .fmaxR dst_reg lv_reg rv_reg
+        | .fpow => .callBinF .fpow dst_reg lv_reg rv_reg
       some (vLoadVarFP layout lv lv_reg ++ vLoadVarFP layout rv rv_reg ++ [fpInstr] ++ vStoreVarFP layout dst dst_reg)
   | .intToFloat dst src =>
     match layout src, layout dst with
@@ -914,8 +926,7 @@ def verifiedGenInstr (layout : VarLayout) (pcMap : Nat → Nat) (instr : TAC)
     | _, _ =>
       let src_reg := match layout src with | some (.freg r) => r | _ => .d0
       let dst_reg := match layout dst with | some (.freg r) => r | _ => .d0
-      let armOp := match op with | .exp => ArmInstr.callExp dst_reg src_reg | .sqrt => ArmInstr.fsqrtD dst_reg src_reg
-      some (vLoadVarFP layout src src_reg ++ [armOp] ++ vStoreVarFP layout dst dst_reg)
+      some (vLoadVarFP layout src src_reg ++ [.floatUnaryInstr op dst_reg src_reg] ++ vStoreVarFP layout dst dst_reg)
 
 -- ============================================================
 -- § 9. CodeAt and helper lemmas

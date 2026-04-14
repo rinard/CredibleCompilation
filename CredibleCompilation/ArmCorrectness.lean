@@ -1325,6 +1325,9 @@ theorem genInstr_correct (prog : ArmProg) (vm : VarMap) (pcMap : Nat → Nat)
       · exact fun _ h => .fsubR .d0 .d1 .d2 h
       · exact fun _ h => .fmulR .d0 .d1 .d2 h
       · exact fun _ h => .fdivR .d0 .d1 .d2 h
+      · exact fun _ h => .callBinF .fpow .d0 .d1 .d2 h
+      · exact fun _ h => .fminR .d0 .d1 .d2 h
+      · exact fun _ h => .fmaxR .d0 .d1 .d2 h
     intro fpArmInstr hformal hFpStep
     rw [hformal] at hCodeInstr hPcNext
     have h0 := hCodeInstr.head; have h1 := hCodeInstr.tail.head
@@ -1411,19 +1414,15 @@ theorem genInstr_correct (prog : ArmProg) (vm : VarMap) (pcMap : Nat → Nat)
     rename_i x op y f
     have heq : instr = .floatUnary x op y := Option.some.inj (hInstr.symm.trans hinstr)
     obtain ⟨offS, hS⟩ := hVarMap y; obtain ⟨offD, hD⟩ := hVarMap x
-    have hformal : ∃ armOp, formalGenInstr vm pcMap (.floatUnary x op y) haltLabel divLabel =
-        [.fldr .d0 offS, armOp, .fstr .d0 offD] ∧
-        ∀ (prog : ArmProg) (s : ArmState), prog[s.pc]? = some armOp →
-          ArmStep prog s (s.setFReg .d0 (op.eval (s.fregs .d0)) |>.nextPC) := by
-      cases op with
-      | exp => exact ⟨.callExp .d0 .d0, by show (match vm.lookup y, vm.lookup x with | some _, some _ => _ | _, _ => _) = _; rw [hS, hD], fun _ _ h => .callExp .d0 .d0 h⟩
-      | sqrt => exact ⟨.fsqrtD .d0 .d0, by show (match vm.lookup y, vm.lookup x with | some _, some _ => _ | _, _ => _) = _; rw [hS, hD], fun _ _ h => .fsqrtD .d0 .d0 h⟩
-    obtain ⟨armOp, hformal, hArmStep⟩ := hformal
+    have hformal : formalGenInstr vm pcMap (.floatUnary x op y) haltLabel divLabel =
+        [.fldr .d0 offS, .floatUnaryInstr op .d0 .d0, .fstr .d0 offD] := by
+      show (match vm.lookup y, vm.lookup x with | some _, some _ => _ | _, _ => _) = _
+      rw [hS, hD]
     rw [heq, hformal] at hCodeInstr hPcNext
     have h0 := hCodeInstr.head; have h1 := hCodeInstr.tail.head; have h2 := hCodeInstr.tail.tail.head
     rw [← hPcRel] at h0 h1 h2
     have hStackS := hStateRel y offS hS; rw [hy] at hStackS; simp [Value.encode] at hStackS
-    refine ⟨_, .step (.fldr .d0 offS h0) (.step (hArmStep _ _ h1) (.single (.fstr .d0 offD h2))),
+    refine ⟨_, .step (.fldr .d0 offS h0) (.step (.floatUnaryInstr op .d0 .d0 h1) (.single (.fstr .d0 offD h2))),
       ?_, ?_, ?_⟩
     · intro v off hv
       simp only [ArmState.setStack, ArmState.setFReg, ArmState.nextPC]
@@ -3245,6 +3244,18 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
         apply hSimple
         · have := hSome; simp [verifiedGenInstr, hSS, hII] at this; exact this.symm
         · exact fun _ h => .fdivR dst_reg lv_reg rv_reg h
+      | fpow =>
+        apply hSimple
+        · have := hSome; simp [verifiedGenInstr, hSS, hII] at this; exact this.symm
+        · exact fun _ h => .callBinF .fpow dst_reg lv_reg rv_reg h
+      | fmin =>
+        apply hSimple
+        · have := hSome; simp [verifiedGenInstr, hSS, hII] at this; exact this.symm
+        · exact fun _ h => .fminR dst_reg lv_reg rv_reg h
+      | fmax =>
+        apply hSimple
+        · have := hSome; simp [verifiedGenInstr, hSS, hII] at this; exact this.symm
+        · exact fun _ h => .fmaxR dst_reg lv_reg rv_reg h
     -- Proof of hSimple
     intro fpOp hInstrs hArmStep
     rw [hInstrs] at hCodeInstr hPcNext
@@ -3527,8 +3538,8 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
     -- Effective FP registers
     let src_reg := match layout y with | some (.freg r) => r | _ => ArmFReg.d0
     let dst_reg := match layout x with | some (.freg r) => r | _ => ArmFReg.d0
-    -- The ARM instruction depends on which float unary op
-    let armOp := match op with | .exp => ArmInstr.callExp dst_reg src_reg | .sqrt => ArmInstr.fsqrtD dst_reg src_reg
+    -- The ARM instruction for float unary ops
+    let armOp := ArmInstr.floatUnaryInstr op dst_reg src_reg
     have hInstrs : instrs =
       vLoadVarFP layout y src_reg ++ [armOp] ++ vStoreVarFP layout x dst_reg := by
       simp only [verifiedGenInstr, hSS, hII, Bool.not_true, Bool.false_or] at hSome
@@ -3547,10 +3558,8 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
     -- Step 2: apply float unary op to src_reg, writes dst_reg
     have hCall := hCodeM.head; rw [← hPC1] at hCall
     let s2 := s1.setFReg dst_reg (op.eval (s1.fregs src_reg)) |>.nextPC
-    have hSteps2 : ArmSteps prog s1 s2 := by
-      cases op with
-      | exp => exact ArmSteps.single (.callExp dst_reg src_reg hCall)
-      | sqrt => exact ArmSteps.single (.fsqrtD dst_reg src_reg hCall)
+    have hSteps2 : ArmSteps prog s1 s2 :=
+      ArmSteps.single (.floatUnaryInstr op dst_reg src_reg hCall)
     have hDR_2 : s2.fregs dst_reg = (Value.float (op.eval f)).encode := by
       simp [s2, ArmState.setFReg, ArmState.nextPC, Value.encode]
       rw [hSR_1, hy]; rfl

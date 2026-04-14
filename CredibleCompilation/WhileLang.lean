@@ -529,11 +529,21 @@ def SExpr.toString : SExpr → String
   | .arrRead arr idx => s!"{arr}[{idx.toString}]"
   | .flit f => s!"{f}"
   | .fbin op a b =>
-    let opStr := match op with | .fadd => "+" | .fsub => "-" | .fmul => "*" | .fdiv => "/"
-    s!"({a.toString} {opStr} {b.toString})"
+    match op with
+    | .fadd | .fsub | .fmul | .fdiv =>
+      let opStr := match op with | .fadd => "+" | .fsub => "-" | .fmul => "*" | .fdiv => "/" | _ => "?"
+      s!"({a.toString} {opStr} {b.toString})"
+    | .fpow => s!"pow({a.toString}, {b.toString})"
+    | .fmin => s!"fmin({a.toString}, {b.toString})"
+    | .fmax => s!"fmax({a.toString}, {b.toString})"
   | .intToFloat e => s!"intToFloat({e.toString})"
   | .floatToInt e => s!"floatToInt({e.toString})"
-  | .floatUnary op e => match op with | .exp => s!"exp({e.toString})" | .sqrt => s!"sqrt({e.toString})"
+  | .floatUnary op e =>
+    let name := match op with
+      | .exp => "exp" | .sqrt => "sqrt" | .sin => "sin" | .cos => "cos" | .tan => "tan"
+      | .log => "log" | .log2 => "log2" | .log10 => "log10"
+      | .abs => "abs" | .neg => "neg" | .round => "round"
+    s!"{name}({e.toString})"
   | .farrRead arr idx => s!"{arr}[{idx.toString}]"
 
 def SBool.toString : SBool → String

@@ -223,6 +223,18 @@ private def ppInstr (lbl : Nat → String) (afterFcmp : Bool) (instr : ArmInstr)
     [s!"  fmul {ppFReg fd}, {ppFReg fn}, {ppFReg fm}"]
   | .fdivR fd fn fm =>
     [s!"  fdiv {ppFReg fd}, {ppFReg fn}, {ppFReg fm}"]
+  | .fminR fd fn fm =>
+    [s!"  fminnm {ppFReg fd}, {ppFReg fn}, {ppFReg fm}"]
+  | .fmaxR fd fn fm =>
+    [s!"  fmaxnm {ppFReg fd}, {ppFReg fn}, {ppFReg fm}"]
+  | .callBinF fop fd fn fm =>
+    let name := match fop with
+      | .fpow => "_pow" | _ => "_unknown_binop"
+    let load0 := if fn == .d0 then [] else [s!"  fmov d0, {ppFReg fn}"]
+    let load1 := if fm == .d1 then [] else [s!"  fmov d1, {ppFReg fm}"]
+    let store := if fd == .d0 then [] else [s!"  fmov {ppFReg fd}, d0"]
+    load0 ++ load1 ++ [s!"  stp x29, x30, [sp, #-16]!", s!"  bl {name}",
+             "  ldp x29, x30, [sp], #16"] ++ store
   | .fcmpR fn fm =>
     [s!"  fcmp {ppFReg fn}, {ppFReg fm}"]
   | .scvtf fd rn =>
@@ -237,13 +249,20 @@ private def ppInstr (lbl : Nat → String) (afterFcmp : Bool) (instr : ArmInstr)
     [s!"  adrp x8, _arr_{arr}@PAGE",
      s!"  add x8, x8, _arr_{arr}@PAGEOFF",
      s!"  str {ppFReg fs}, [x8, {ppReg idxReg}, lsl #3]"]
-  | .callExp fd fn =>
-    let load := if fn == .d0 then [] else [s!"  fmov d0, {ppFReg fn}"]
-    let store := if fd == .d0 then [] else [s!"  fmov {ppFReg fd}, d0"]
-    load ++ ["  stp x29, x30, [sp, #-16]!", "  bl _exp",
-             "  ldp x29, x30, [sp], #16"] ++ store
-  | .fsqrtD fd fn =>
-    [s!"  fsqrt {ppFReg fd}, {ppFReg fn}"]
+  | .floatUnaryInstr op fd fn =>
+    match op with
+    | .sqrt => [s!"  fsqrt {ppFReg fd}, {ppFReg fn}"]
+    | .abs  => [s!"  fabs {ppFReg fd}, {ppFReg fn}"]
+    | .neg  => [s!"  fneg {ppFReg fd}, {ppFReg fn}"]
+    | _ =>  -- library call intrinsics
+      let name := match op with
+        | .exp => "_exp" | .sin => "_sin" | .cos => "_cos" | .tan => "_tan"
+        | .log => "_log" | .log2 => "_log2" | .log10 => "_log10" | .round => "_round"
+        | .sqrt | .abs | .neg => unreachable!
+      let load := if fn == .d0 then [] else [s!"  fmov d0, {ppFReg fn}"]
+      let store := if fd == .d0 then [] else [s!"  fmov {ppFReg fd}, d0"]
+      load ++ [s!"  stp x29, x30, [sp, #-16]!", s!"  bl {name}",
+               "  ldp x29, x30, [sp], #16"] ++ store
 
 /-- Pretty-print a list of ArmInstr, tracking fcmp state for cset. -/
 private def ppInstrs (lbl : Nat → String) : List ArmInstr → List String
