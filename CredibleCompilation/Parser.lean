@@ -170,6 +170,9 @@ partial def parseAtom (toks : List Token) : Except String (SExpr × List Token) 
     .ok (.bin .bxor e (.lit (-1)), rest')
   | Token.op "-" :: Token.num n :: rest => .ok (.lit (-n), rest)
   | Token.op "-" :: Token.fnum f :: rest => .ok (.flit (-f), rest)
+  | Token.op "-" :: rest => do
+    let (e, rest') ← parseAtom rest
+    .ok (.bin .sub (.lit 0) e, rest')
   | tok :: _ => .error s!"expected expression, got {repr tok}"
   | [] => .error "expected expression, got end of input"
 
