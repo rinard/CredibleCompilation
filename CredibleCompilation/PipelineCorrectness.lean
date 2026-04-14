@@ -1,5 +1,6 @@
 import CredibleCompilation.CodeGen
 import CredibleCompilation.SoundnessBridge
+import CredibleCompilation.RefCompiler.Refinement
 
 /-!
 # Pipeline Correctness
@@ -448,3 +449,88 @@ theorem end_to_end_correctness {p p_opt : Prog} {r : VerifiedAsmResult}
       (Store.typedInit p.tyCtx) hts (.halts σ_opt) hbeh
   · -- (2) ARM simulation: direct from tacToArm_correctness
     exact tacToArm_correctness hGen hHalt
+
+-- ============================================================
+-- § 6. Full end-to-end: While source → ARM
+-- ============================================================
+
+/-- **Full end-to-end correctness: While source → optimized TAC → ARM.**
+
+    If a well-typed While program is compiled to TAC, optimized, and
+    code-generated to ARM, and the optimized TAC halts with store `σ_opt`,
+    then:
+    1. The source program terminates (at some fuel) with store `σ_src`
+    2. Observable variables agree: `σ_opt v = σ_src v` for non-temp `v`
+    3. The ARM program simulates the TAC halt
+
+    This composes `whileToTAC_refinement` (source → TAC),
+    `optimizePipeline_preserves_behavior` (TAC → optimized TAC), and
+    `tacToArm_correctness` (optimized TAC → ARM).
+
+    **Propagated sorrys:** SoundnessBridge (5), ArmCorrectness (2). -/
+theorem while_to_arm_correctness
+    (prog : Program) (htcs : prog.typeCheckStrict = true)
+    {p_opt : Prog} {r : VerifiedAsmResult}
+    (hOpt : optimizePipeline prog.compileToTAC = .ok p_opt)
+    (hGen : verifiedGenerateAsm p_opt = .ok r)
+    -- tyCtx preservation hypotheses (hold by construction for all passes)
+    (hty_dce : ∀ q, (DCEOpt.optimize q).orig.tyCtx = (DCEOpt.optimize q).trans.tyCtx)
+    (hty_licm : ∀ q, (LICMOpt.optimize q).orig.tyCtx = (LICMOpt.optimize q).trans.tyCtx)
+    (hty_cp : ∀ q, (ConstPropOpt.optimize q).orig.tyCtx = (ConstPropOpt.optimize q).trans.tyCtx)
+    (hty_dae : ∀ q, (DAEOpt.optimize q).orig.tyCtx = (DAEOpt.optimize q).trans.tyCtx)
+    (hty_cse : ∀ q, (CSEOpt.optimize q).orig.tyCtx = (CSEOpt.optimize q).trans.tyCtx)
+    (hty_ch : ∀ q, (ConstHoistOpt.optimize q).orig.tyCtx = (ConstHoistOpt.optimize q).trans.tyCtx)
+    (hty_ph : ∀ q, (PeepholeOpt.optimize q).orig.tyCtx = (PeepholeOpt.optimize q).trans.tyCtx)
+    (hty_ra : ∀ q, (RegAllocOpt.optimize q).orig.tyCtx = (RegAllocOpt.optimize q).trans.tyCtx)
+    (htyO_dce : ∀ q, (DCEOpt.optimize q).orig.tyCtx = q.tyCtx)
+    (htyO_licm : ∀ q, (LICMOpt.optimize q).orig.tyCtx = q.tyCtx)
+    (htyO_cp : ∀ q, (ConstPropOpt.optimize q).orig.tyCtx = q.tyCtx)
+    (htyO_dae : ∀ q, (DAEOpt.optimize q).orig.tyCtx = q.tyCtx)
+    (htyO_cse : ∀ q, (CSEOpt.optimize q).orig.tyCtx = q.tyCtx)
+    (htyO_ch : ∀ q, (ConstHoistOpt.optimize q).orig.tyCtx = q.tyCtx)
+    (htyO_ph : ∀ q, (PeepholeOpt.optimize q).orig.tyCtx = q.tyCtx)
+    (htyO_ra : ∀ q, (RegAllocOpt.optimize q).orig.tyCtx = q.tyCtx)
+    -- Optimized TAC halts
+    {σ_opt : Store} {am_opt : ArrayMem}
+    (hHalt : haltsWithResult p_opt 0 (Store.typedInit p_opt.tyCtx) σ_opt ArrayMem.init am_opt) :
+    -- Then: source program terminates with matching observables
+    (∃ fuel σ_src am_src,
+      prog.interp fuel = some (σ_src, am_src) ∧
+      ∀ v, v.isTmp = false → v.isFTmp = false → σ_opt v = σ_src v) ∧
+    -- And: ARM simulates the halt
+    (∃ s', ArmSteps r.bodyFlat
+      { regs := fun _ => 0, fregs := fun _ => 0, stack := fun _ => 0,
+        pc := r.pcMap 0, flags := ⟨0, 0⟩ } s' ∧
+      ExtSimRel r.layout r.pcMap (.halt σ_opt am_opt) s') := by
+  -- Part 2: ARM simulation (independent of source)
+  refine ⟨?_, tacToArm_correctness hGen hHalt⟩
+  -- Part 1: Source terminates with matching observables
+  -- Step A: optimized TAC halts → original TAC halts with same observables
+  -- Bridge: Store.typedInit (used by end_to_end_correctness) vs prog.initStore (used by whileToTAC)
+  -- These agree for well-typed programs: both zero-initialize each variable by type.
+  have hInitEq : Store.typedInit prog.compileToTAC.tyCtx = prog.initStore := by
+    sorry -- requires: compileToTAC.tyCtx matches declaration-based initStore
+  have ⟨σ_tac, _, ⟨am_tac, hHalt_tac⟩, hobs_tac⟩ :=
+    (end_to_end_correctness hOpt hGen
+      hty_dce hty_licm hty_cp hty_dae hty_cse hty_ch hty_ph hty_ra
+      htyO_dce htyO_licm htyO_cp htyO_dae htyO_cse htyO_ch htyO_ph htyO_ra
+      hHalt).1
+  -- Step B: TAC halts → source terminates (whileToTAC_refinement)
+  -- Bridge 1: the existential am in hHalt_tac must be ArrayMem.init
+  -- (credible_compilation_soundness preserves initial array memory via cert checker)
+  have hHalt_init : ∃ am', haltsWithResult prog.compileToTAC 0 prog.initStore σ_tac ArrayMem.init am' := by
+    sorry -- requires: initial AM is ArrayMem.init (preserved by cert checker)
+  obtain ⟨am_init', hHalt_init⟩ := hHalt_init
+  have hbeh_tac : program_behavior_init prog.compileToTAC prog.initStore (.halts σ_tac) :=
+    ⟨am_init', hHalt_init⟩
+  have hsrc := whileToTAC_refinement prog htcs (.halts σ_tac) hbeh_tac
+  simp only at hsrc
+  obtain ⟨fuel, σ_src, am_h, am_src, hinterp, _, _, hobs_src⟩ := hsrc
+  -- Chain: σ_opt v = σ_tac v (from pipeline) and σ_tac v = σ_src v (from whileToTAC)
+  -- Bridge 2: non-tmp user variables are in prog.compileToTAC.observable
+  have hObsMem : ∀ v, v.isTmp = false → v.isFTmp = false →
+      v ∈ prog.compileToTAC.observable := by
+    sorry -- requires: compileToTAC.observable = prog.decls (user variables)
+  exact ⟨fuel, σ_src, am_src, hinterp, fun v hntmp hnftmp => by
+    rw [hobs_tac v (hObsMem v hntmp hnftmp)]
+    exact hobs_src v hntmp hnftmp⟩
