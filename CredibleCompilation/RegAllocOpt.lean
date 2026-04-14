@@ -90,42 +90,6 @@ private def lowestAvailable (used : List Nat) : Nat :=
     | fuel + 1 => if used.contains n then go (n + 1) fuel else n
   go 0 (used.length + 1)
 
-/-- Find the lowest available color, preferring callee-saved (colors ≥ calleeSavedStart).
-    For variables live across library calls, this avoids caller-saved registers
-    that would need save/restore around each bl. -/
-private def lowestAvailableCalleePref (used : List Nat) (K : Nat)
-    (calleeSavedStart : Nat) : Nat :=
-  -- First try callee-saved colors (calleeSavedStart .. K-1)
-  let rec goCallee (n : Nat) (fuel : Nat) : Option Nat :=
-    match fuel with
-    | 0 => none
-    | fuel + 1 =>
-      if n >= K then none
-      else if used.contains n then goCallee (n + 1) fuel
-      else some n
-  match goCallee calleeSavedStart (K - calleeSavedStart + 1) with
-  | some c => c
-  | none => K  -- no callee-saved color available → force spill to stack
-
-/-- Is a FloatUnaryOp a library call (bl) rather than a native instruction? -/
-private def isLibraryCall : FloatUnaryOp → Bool
-  | .sqrt | .abs | .neg => false
-  | _ => true
-
-/-- Collect variables that are live across a library call instruction.
-    These benefit from callee-saved register allocation. -/
-private def varsLiveAcrossCall (prog : Prog) (liveOut : Array (List Var)) : List Var :=
-  let callPCs := (List.range prog.size).filter fun pc =>
-    match prog.code[pc]? with
-    | some (TAC.floatUnary _ op _) => isLibraryCall op
-    | _ => false
-  let liveVars := callPCs.foldl (fun acc pc =>
-    match liveOut[pc]? with
-    | some vars => acc ++ vars
-    | none => acc
-  ) ([] : List Var)
-  liveVars.eraseDups
-
 /-- Select the best variable to spill: longest live range (most likely to
     free other nodes by reducing degree). -/
 private def selectSpill (graph : List (Var × List Var)) (liveRanges : List (Var × Nat)) : Var :=
@@ -142,12 +106,11 @@ private def selectSpill (graph : List (Var × List Var)) (liveRanges : List (Var
     ) v
 
 /-- Graph coloring with spill selection.
-    `calleePrefVars`: variables that prefer callee-saved registers (live across library calls).
-    `calleeSavedStart`: first color index that maps to a callee-saved register.
-    Returns (coloring: var → color index, spilled: list of spilled vars). -/
+    Returns (coloring: var → color index, spilled: list of spilled vars).
+    Caller-saved registers are listed first in intRegNums/floatRegNums,
+    so `lowestAvailable` naturally prioritizes them. -/
 partial def graphColor (graph : List (Var × List Var)) (K : Nat)
     (liveRanges : List (Var × Nat))
-    (calleePrefVars : List Var := []) (calleeSavedStart : Nat := K)
     : List (Var × Nat) × List Var :=
   if graph.isEmpty then ([], [])
   else
@@ -156,20 +119,17 @@ partial def graphColor (graph : List (Var × List Var)) (K : Nat)
     | some (v, _) =>
       let nbrs_v := neighbors graph v
       let graph' := removeNode graph v
-      let (coloring, spilled) := graphColor graph' K liveRanges calleePrefVars calleeSavedStart
+      let (coloring, spilled) := graphColor graph' K liveRanges
       -- Assign lowest color not used by colored neighbors
       let usedColors := coloring.filterMap fun (w, c) =>
         if nbrs_v.contains w then some c else none
-      let color :=
-        if calleePrefVars.contains v then
-          lowestAvailableCalleePref usedColors K calleeSavedStart
-        else lowestAvailable usedColors
+      let color := lowestAvailable usedColors
       ((v, color) :: coloring, spilled)
     | none =>
       -- All nodes have degree ≥ K → spill the longest-lived variable
       let spillVar := selectSpill graph liveRanges
       let graph' := removeNode graph spillVar
-      let (coloring, spilled) := graphColor graph' K liveRanges calleePrefVars calleeSavedStart
+      let (coloring, spilled) := graphColor graph' K liveRanges
       (coloring, spillVar :: spilled)
 
 -- ============================================================
@@ -183,9 +143,6 @@ partial def graphColor (graph : List (Var × List Var)) (K : Nat)
 def intRegNums : Array Nat :=
   #[3, 4, 5, 6, 7, 9, 10, 11, 12, 13, 14, 15,   -- caller-saved (12)
     19, 20, 21, 22, 23, 24, 25, 26, 27, 28]       -- callee-saved (10)
-
-/-- Number of caller-saved integer registers (indices 0..11 in intRegNums). -/
-def numCallerSavedIntRegs : Nat := 12
 
 /-- Float allocatable registers: d3-d15 (13 total).
     d0-d2 reserved as scratch (d2 used by fcmp/fbinop fallback). -/
@@ -216,22 +173,11 @@ def computeColoring (prog : Prog) : List (Var × String) :=
           v != w && prog.tyCtx v != prog.tyCtx w && !nbrs.contains w
         (v, nbrs ++ extraNbrs)
       let floatGraph := buildInterference floatVars liveOut
-      -- Detect library calls. When present, ALL vars must use callee-saved
-      -- registers (or stack) to preserve ExtStateRel across havocCallerSaved.
-      let hasLibCall := prog.code.any fun instr =>
-        match instr with | .floatUnary _ op _ => isLibraryCall op | _ => false
-      let callLiveVars := varsLiveAcrossCall prog liveOut
-      -- When library calls exist, force ALL vars to prefer callee-saved.
-      -- Otherwise, only vars live across calls get the preference.
-      let calleePrefVars := if hasLibCall then allVars else callLiveVars
-      let intCallLive := calleePrefVars.filter fun v => prog.tyCtx v != .float
-      let floatCallLive := calleePrefVars.filter fun v => prog.tyCtx v == .float
-      -- Color each graph. numCallerSavedIntRegs = 12 is where callee-saved colors start.
-      -- For floats: d3-d7 are caller-saved (colors 0-4), d8-d15 callee-saved (colors 5-12).
+      -- Color each graph. Caller-saved registers are listed first in
+      -- intRegNums/floatRegNums, so lowestAvailable naturally prioritizes them.
+      -- CodeGen inserts save/restore around call sites for live caller-saved regs.
       let (intBoolColoring, _) := graphColor intBoolGraph intRegNums.size liveRanges
-            intCallLive numCallerSavedIntRegs
       let (floatColoring, _) := graphColor floatGraph floatRegNums.size liveRanges
-            floatCallLive 5  -- d3-d7 = colors 0-4 (caller-saved), d8-d15 = colors 5-12
       -- Determine the type of each color from the first variable that uses it
       let colorTypes := intBoolColoring.foldl (fun (acc : List (Nat × VarTy)) (v, c) =>
         if acc.any (fun (c', _) => c' == c) then acc

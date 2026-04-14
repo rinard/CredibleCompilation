@@ -1535,17 +1535,20 @@ theorem genInstr_correct (prog : ArmProg) (vm : VarMap) (pcMap : Nat → Nat)
         (∀ s', prog[s'.pc]? = some fpArmInstr →
           ArmStep prog s' (s'.setFReg .d0 (fop.eval (s'.fregs .d1) (s'.fregs .d2)) |>.nextPC)) →
         ∃ s', ArmSteps prog s s' ∧ SimRel vm pcMap (.run (pc + 1) (σ[x ↦ .float (fop.eval a b)]) am) s' by
-      cases fop
-      all_goals (
-        apply this
-        · rw [heq]; simp only [formalGenInstr]; rw [hL, hR, hD])
-      · exact fun _ h => .faddR .d0 .d1 .d2 h
-      · exact fun _ h => .fsubR .d0 .d1 .d2 h
-      · exact fun _ h => .fmulR .d0 .d1 .d2 h
-      · exact fun _ h => .fdivR .d0 .d1 .d2 h
-      · exact fun _ h => .callBinF .fpow .d0 .d1 .d2 h
-      · exact fun _ h => .fminR .d0 .d1 .d2 h
-      · exact fun _ h => .fmaxR .d0 .d1 .d2 h
+      cases fop with
+      | fadd => apply this; · rw [heq]; simp only [formalGenInstr]; rw [hL, hR, hD]
+                · exact fun _ h => .faddR .d0 .d1 .d2 h
+      | fsub => apply this; · rw [heq]; simp only [formalGenInstr]; rw [hL, hR, hD]
+                · exact fun _ h => .fsubR .d0 .d1 .d2 h
+      | fmul => apply this; · rw [heq]; simp only [formalGenInstr]; rw [hL, hR, hD]
+                · exact fun _ h => .fmulR .d0 .d1 .d2 h
+      | fdiv => apply this; · rw [heq]; simp only [formalGenInstr]; rw [hL, hR, hD]
+                · exact fun _ h => .fdivR .d0 .d1 .d2 h
+      | fpow => sorry -- TODO: callBinF now havocs caller-saved; needs save/restore proof
+      | fmin => apply this; · rw [heq]; simp only [formalGenInstr]; rw [hL, hR, hD]
+                · exact fun _ h => .fminR .d0 .d1 .d2 h
+      | fmax => apply this; · rw [heq]; simp only [formalGenInstr]; rw [hL, hR, hD]
+                · exact fun _ h => .fmaxR .d0 .d1 .d2 h
     intro fpArmInstr hformal hFpStep
     rw [hformal] at hCodeInstr hPcNext
     have h0 := hCodeInstr.head; have h1 := hCodeInstr.tail.head
@@ -3404,9 +3407,7 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
         · have := hSome; simp [verifiedGenInstr, hSS, hII] at this; exact this.symm
         · exact fun _ h => .fdivR dst_reg lv_reg rv_reg h
       | fpow =>
-        apply hSimple
-        · have := hSome; simp [verifiedGenInstr, hSS, hII] at this; exact this.symm
-        · exact fun _ h => .callBinF .fpow dst_reg lv_reg rv_reg h
+        sorry -- TODO: callBinF now havocs caller-saved; needs save/restore proof strategy
       | fmin =>
         apply hSimple
         · have := hSome; simp [verifiedGenInstr, hSS, hII] at this; exact this.symm

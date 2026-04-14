@@ -28,12 +28,50 @@ inductive ArmReg where
 -- sp is implicit (stack is addressed by offset)
 -- x29/x30 are only used in prologue/epilogue (not modeled)
 
+/-- Convert a register number to an ArmReg. -/
+def ArmReg.fromRegNum : Nat → ArmReg
+  | 0 => .x0 | 1 => .x1 | 2 => .x2 | 3 => .x3
+  | 4 => .x4 | 5 => .x5 | 6 => .x6 | 7 => .x7
+  | 8 => .x8 | 9 => .x9 | 10 => .x10 | 11 => .x11
+  | 12 => .x12 | 13 => .x13 | 14 => .x14 | 15 => .x15
+  | 16 => .x16 | 17 => .x17 | 18 => .x18
+  | 19 => .x19 | 20 => .x20 | 21 => .x21 | 22 => .x22
+  | 23 => .x23 | 24 => .x24 | 25 => .x25 | 26 => .x26
+  | 27 => .x27 | 28 => .x28
+  | _ => .x0  -- fallback
+
+/-- Convert an ArmReg to its register number. -/
+def ArmReg.toNat : ArmReg → Nat
+  | .x0 => 0 | .x1 => 1 | .x2 => 2 | .x3 => 3
+  | .x4 => 4 | .x5 => 5 | .x6 => 6 | .x7 => 7
+  | .x8 => 8 | .x9 => 9 | .x10 => 10 | .x11 => 11
+  | .x12 => 12 | .x13 => 13 | .x14 => 14 | .x15 => 15
+  | .x16 => 16 | .x17 => 17 | .x18 => 18
+  | .x19 => 19 | .x20 => 20 | .x21 => 21 | .x22 => 22
+  | .x23 => 23 | .x24 => 24 | .x25 => 25 | .x26 => 26
+  | .x27 => 27 | .x28 => 28
+
 /-- ARM64 floating-point registers used by the code generator.
     d0-d1: scratch, d2-d15: allocatable. -/
 inductive ArmFReg where
   | d0  | d1  | d2  | d3  | d4  | d5  | d6  | d7
   | d8  | d9  | d10 | d11 | d12 | d13 | d14 | d15
   deriving Repr, DecidableEq
+
+/-- Convert a register number to an ArmFReg. -/
+def ArmFReg.fromRegNum : Nat → ArmFReg
+  | 0 => .d0 | 1 => .d1 | 2 => .d2 | 3 => .d3
+  | 4 => .d4 | 5 => .d5 | 6 => .d6 | 7 => .d7
+  | 8 => .d8 | 9 => .d9 | 10 => .d10 | 11 => .d11
+  | 12 => .d12 | 13 => .d13 | 14 => .d14 | 15 => .d15
+  | _ => .d0  -- fallback
+
+/-- Convert an ArmFReg to its register number. -/
+def ArmFReg.toNat : ArmFReg → Nat
+  | .d0 => 0 | .d1 => 1 | .d2 => 2 | .d3 => 3
+  | .d4 => 4 | .d5 => 5 | .d6 => 6 | .d7 => 7
+  | .d8 => 8 | .d9 => 9 | .d10 => 10 | .d11 => 11
+  | .d12 => 12 | .d13 => 13 | .d14 => 14 | .d15 => 15
 
 -- ============================================================
 -- § 2. Condition codes and flags

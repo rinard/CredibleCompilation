@@ -199,9 +199,11 @@ inductive ArmStep (prog : ArmProg) : ArmState → ArmState → Prop where
     prog[s.pc]? = some (.fmaxR fd fn fm) →
     ArmStep prog s (s.setFReg fd (FloatBinOp.eval .fmax (s.fregs fn) (s.fregs fm)) |>.nextPC)
 
+  /-- Binary float library call (pow): havocs all caller-saved registers,
+      then sets fd to result (models `bl _pow; fmov fd, d0`). -/
   | callBinF (fop : FloatBinOp) (fd fn fm : ArmFReg) :
     prog[s.pc]? = some (.callBinF fop fd fn fm) →
-    ArmStep prog s (s.setFReg fd (FloatBinOp.eval fop (s.fregs fn) (s.fregs fm)) |>.nextPC)
+    ArmStep prog s (s.havocCallerSaved |>.setFReg fd (FloatBinOp.eval fop (s.fregs fn) (s.fregs fm)) |>.nextPC)
 
   /-- Native float unary (fsqrt, fabs, fneg): pure, only modifies fd. -/
   | floatUnaryNative (op : FloatUnaryOp) (fd fn : ArmFReg) :
