@@ -1477,8 +1477,6 @@ def applyPass (name : String) (pass : Prog → ECertificate) (p : Prog) : Except
   if cert.orig.code != p.code || cert.orig.observable != p.observable ||
      cert.orig.arrayDecls != p.arrayDecls then
     .error s!"optimization certificate orig mismatch for {name} (code={cert.orig.code == p.code} obs={cert.orig.observable == p.observable} arr={cert.orig.arrayDecls == p.arrayDecls})"
-  else if cert.trans.code == p.code && cert.trans.observable == p.observable &&
-     cert.trans.arrayDecls == p.arrayDecls then .ok p  -- identity transform, skip check
   else if checkCertificateExec cert then .ok cert.trans
   else
     let checks := checkCertificateVerboseExec cert
