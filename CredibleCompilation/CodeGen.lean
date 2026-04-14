@@ -1419,7 +1419,24 @@ def generateAsm (p : Prog) : Except String String := do
   checkRegConvention vars
   -- Detect callee-saved registers that need saving
   let (csIntRegs, csFloatRegs) := detectCalleeSaved vars
-  -- Compute caller-saved register save/restore for library calls (exp, sin, etc.)
+  -- Check: no caller-saved register holds a live variable at any library call site.
+  let liveOut := DAEOpt.analyzeLiveness p
+  let callerSavedViolation := (List.range p.code.size).any fun pc =>
+    match p.code[pc]? with
+    | some (.floatUnary _ op _) => match op with
+      | .sqrt | .abs | .neg => false
+      | _ =>  -- library call: check no live var is in a caller-saved register
+        match liveOut[pc]? with
+        | some live => live.any fun v =>
+          (v.startsWith "__x" && match (v.drop 3).toNat? with
+            | some n => callerSavedIntRegs.contains n | none => false) ||
+          (v.startsWith "__d" && match (v.drop 3).toNat? with
+            | some n => n != 0 && callerSavedFloatRegs.contains n | none => false)
+        | none => false
+    | _ => false
+  if callerSavedViolation then
+    .error "register allocator bug: caller-saved register live across library call"
+  -- Compute caller-saved register save/restore for library calls (safety net)
   let (csrInt, csrFloat) := detectCallerSaved vars
   let (libSave, libRestore) := libcallSaveRestore csrInt csrFloat
   -- Stack frame: 16-byte aligned
