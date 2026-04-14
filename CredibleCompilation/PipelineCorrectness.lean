@@ -339,9 +339,7 @@ theorem optimizePipeline_preserves_behavior {p p' : Prog}
 -- § 4. End-to-end: TAC → optimized TAC → ARM
 -- ============================================================
 
-/-- End-to-end correctness: if the optimization pipeline and ARM code
-    generation both succeed, then every reachable TAC configuration
-    of the *optimized* program is simulated by ARM execution.
+/-- ARM codegen correctness: optimized TAC steps are simulated by ARM steps.
 
     **Propagated sorrys:** 2 from ArmCorrectness (arrLoad, arrStore). -/
 theorem pipeline_to_arm_correctness {p : Prog} {r : VerifiedAsmResult}
@@ -355,3 +353,98 @@ theorem pipeline_to_arm_correctness {p : Prog} {r : VerifiedAsmResult}
         pc := r.pcMap 0, flags := ⟨0, 0⟩ } s' ∧
       ExtSimRel r.layout r.pcMap cfg' s' :=
   tacToArm_correctness hGen hSteps
+
+-- ============================================================
+-- § 5. Top-level: original TAC → ARM preserves observables
+-- ============================================================
+
+/-- **Top-level correctness theorem.** If:
+    1. The optimization pipeline succeeds: `optimizePipeline p = .ok p_opt`
+    2. ARM code generation succeeds: `verifiedGenerateAsm p_opt = .ok r`
+    3. The optimized TAC halts: `p_opt ⊩ run 0 σ₀ am₀ ⟶* halt σ_opt am_opt`
+
+    Then the original TAC program also halts, and the observable variables
+    have the same values in both the original and optimized executions.
+
+    This composes `optimizePipeline_preserves_behavior` (TAC → optimized TAC)
+    with `tacToArm_correctness` (optimized TAC → ARM simulation).
+
+    **Hypotheses on passes:** all passes preserve tyCtx (hty_*, htyO_*).
+    These hold by construction (every pass sets tyCtx := prog.tyCtx).
+
+    **Propagated sorrys:** SoundnessBridge (5), ArmCorrectness (2). -/
+theorem end_to_end_correctness {p p_opt : Prog} {r : VerifiedAsmResult}
+    (hOpt : optimizePipeline p = .ok p_opt)
+    (hGen : verifiedGenerateAsm p_opt = .ok r)
+    -- tyCtx preservation (holds for all passes by construction)
+    (hty_dce : ∀ q, (DCEOpt.optimize q).orig.tyCtx = (DCEOpt.optimize q).trans.tyCtx)
+    (hty_licm : ∀ q, (LICMOpt.optimize q).orig.tyCtx = (LICMOpt.optimize q).trans.tyCtx)
+    (hty_cp : ∀ q, (ConstPropOpt.optimize q).orig.tyCtx = (ConstPropOpt.optimize q).trans.tyCtx)
+    (hty_dae : ∀ q, (DAEOpt.optimize q).orig.tyCtx = (DAEOpt.optimize q).trans.tyCtx)
+    (hty_cse : ∀ q, (CSEOpt.optimize q).orig.tyCtx = (CSEOpt.optimize q).trans.tyCtx)
+    (hty_ch : ∀ q, (ConstHoistOpt.optimize q).orig.tyCtx = (ConstHoistOpt.optimize q).trans.tyCtx)
+    (hty_ph : ∀ q, (PeepholeOpt.optimize q).orig.tyCtx = (PeepholeOpt.optimize q).trans.tyCtx)
+    (hty_ra : ∀ q, (RegAllocOpt.optimize q).orig.tyCtx = (RegAllocOpt.optimize q).trans.tyCtx)
+    (htyO_dce : ∀ q, (DCEOpt.optimize q).orig.tyCtx = q.tyCtx)
+    (htyO_licm : ∀ q, (LICMOpt.optimize q).orig.tyCtx = q.tyCtx)
+    (htyO_cp : ∀ q, (ConstPropOpt.optimize q).orig.tyCtx = q.tyCtx)
+    (htyO_dae : ∀ q, (DAEOpt.optimize q).orig.tyCtx = q.tyCtx)
+    (htyO_cse : ∀ q, (CSEOpt.optimize q).orig.tyCtx = q.tyCtx)
+    (htyO_ch : ∀ q, (ConstHoistOpt.optimize q).orig.tyCtx = q.tyCtx)
+    (htyO_ph : ∀ q, (PeepholeOpt.optimize q).orig.tyCtx = q.tyCtx)
+    (htyO_ra : ∀ q, (RegAllocOpt.optimize q).orig.tyCtx = q.tyCtx)
+    -- Optimized program halts
+    {σ_opt : Store} {am_opt : ArrayMem}
+    (hHalt : haltsWithResult p_opt 0 (Store.typedInit p_opt.tyCtx) σ_opt ArrayMem.init am_opt) :
+    -- Then: (1) original TAC halts with same observables
+    (∃ σ_orig am_f,
+      (∃ am, haltsWithResult p 0 (Store.typedInit p.tyCtx) σ_orig am am_f) ∧
+      ∀ v ∈ p.observable, σ_opt v = σ_orig v) ∧
+    -- (2) ARM simulates the optimized TAC halt
+    (∃ s', ArmSteps r.bodyFlat
+      { regs := fun _ => 0, fregs := fun _ => 0, stack := fun _ => 0,
+        pc := r.pcMap 0, flags := ⟨0, 0⟩ } s' ∧
+      ExtSimRel r.layout r.pcMap (.halt σ_opt am_opt) s') := by
+  constructor
+  · -- (1) Pipeline preserves behavior: optimized halt → original halt with same observables
+    -- Need: TypedStore p.tyCtx (Store.typedInit p.tyCtx)
+    have hts : TypedStore p.tyCtx (Store.typedInit p.tyCtx) := TypedStore.typedInit p.tyCtx
+    -- Need: TypedStore p.tyCtx (Store.typedInit p_opt.tyCtx) — but p_opt.tyCtx may differ
+    -- Actually optimizePipeline preserves tyCtx, so p_opt.tyCtx = p.tyCtx
+    -- Derive from the pipeline decomposition
+    have hTyOpt : p_opt.tyCtx = p.tyCtx := by
+      have bind_ok' : ∀ {α β : Type} {x : Except String α} {f : α → Except String β} {b : β},
+          Except.bind x f = .ok b → ∃ a, x = .ok a ∧ f a = .ok b := by
+        intro α β x f b h; cases x with | error e => simp [Except.bind] at h | ok a => exact ⟨a, rfl, h⟩
+      unfold optimizePipeline at hOpt; simp only [bind] at hOpt
+      obtain ⟨q1, hq1, hOpt⟩ := bind_ok' hOpt
+      obtain ⟨q2, hq2, hOpt⟩ := bind_ok' hOpt
+      obtain ⟨q3, hq3, hOpt⟩ := bind_ok' hOpt
+      obtain ⟨q4, hq4, hOpt⟩ := bind_ok' hOpt
+      obtain ⟨q5, hq5, hOpt⟩ := bind_ok' hOpt
+      obtain ⟨q6, hq6, hOpt⟩ := bind_ok' hOpt
+      obtain ⟨q7, hq7, hOpt⟩ := bind_ok' hOpt
+      obtain ⟨q8, hq8, hOpt⟩ := bind_ok' hOpt
+      obtain ⟨q9, hq9, hq10⟩ := bind_ok' hOpt
+      have hT := fun {n pass q q'} (h : applyPass n pass q = .ok q') => (applyPass_sound h).2.1
+      calc p_opt.tyCtx
+          = (RegAllocOpt.optimize q9).trans.tyCtx := by rw [← hT hq10]
+        _ = q9.tyCtx := by rw [← htyO_ra q9, hty_ra q9]
+        _ = q8.tyCtx := by rw [← hT hq9, ← hty_dce q8, htyO_dce q8]
+        _ = q7.tyCtx := by rw [← hT hq8, ← hty_ph q7, htyO_ph q7]
+        _ = q6.tyCtx := by rw [← hT hq7, ← hty_ch q6, htyO_ch q6]
+        _ = q5.tyCtx := by rw [← hT hq6, ← hty_cse q5, htyO_cse q5]
+        _ = q4.tyCtx := by rw [← hT hq5, ← hty_dae q4, htyO_dae q4]
+        _ = q3.tyCtx := by rw [← hT hq4, ← hty_dce q3, htyO_dce q3]
+        _ = q2.tyCtx := by rw [← hT hq3, ← hty_cp q2, htyO_cp q2]
+        _ = q1.tyCtx := by rw [← hT hq2, ← hty_licm q1, htyO_licm q1]
+        _ = p.tyCtx := by rw [← hT hq1, ← hty_dce p, htyO_dce p]
+    have hbeh : program_behavior p_opt (Store.typedInit p_opt.tyCtx) (.halts σ_opt) :=
+      ⟨ArrayMem.init, am_opt, hHalt⟩
+    rw [hTyOpt] at hbeh
+    exact optimizePipeline_preserves_behavior hOpt
+      hty_dce hty_licm hty_cp hty_dae hty_cse hty_ch hty_ph hty_ra
+      htyO_dce htyO_licm htyO_cp htyO_dae htyO_cse htyO_ch htyO_ph htyO_ra
+      (Store.typedInit p.tyCtx) hts (.halts σ_opt) hbeh
+  · -- (2) ARM simulation: direct from tacToArm_correctness
+    exact tacToArm_correctness hGen hHalt
