@@ -529,14 +529,8 @@ def checkInvariantsPreservedExec (cert : ECertificate) : Bool :=
     (List.range prog.size).all fun pc =>
       match prog[pc]? with
       | some instr =>
-        let (ss, _) := execSymbolic ([] : SymStore) ([] : SymArrayMem) instr
-        let ssMap := FastVarMap.ofList ss
-        let invMap := FastVarMap.ofList (inv.getD pc ([] : EInv))
         (successors instr pc).all fun pc' =>
-          (inv.getD pc' ([] : EInv)).all fun (x, e) =>
-            let lhs := (ssMap.getD x (.var x)).simplifyFast invMap
-            let rhs := e.substSymFast ssMap |>.simplifyFast invMap
-            lhs == rhs
+          (inv.getD pc' ([] : EInv)).all (checkInvAtom (inv.getD pc ([] : EInv)) instr)
       | none => true
   checkProg cert.orig cert.inv_orig &&
   checkProg cert.trans cert.inv_trans
