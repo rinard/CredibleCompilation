@@ -183,7 +183,11 @@ def BoolExpr.normalize (ss : SymStore) (inv : EInv) : BoolExpr → BoolExpr
     match (ssGet ss x).simplify inv, (ssGet ss y).simplify inv with
     | .lit a, .lit b => .lit (op.eval a b)
     | _, .lit n => .cmpLit op x n
-    | .lit _, _ => .cmp op x y  -- left-literal: leave unchanged (no sound flip without .gt/.ge)
+    | .lit n, _ => match op with  -- left-literal: flip comparison
+      | .eq => .cmpLit .eq y n       -- n == y ↔ y == n
+      | .ne => .cmpLit .ne y n       -- n != y ↔ y != n
+      | .lt => .not (.cmpLit .le y n) -- n < y ↔ ¬(y ≤ n)
+      | .le => .not (.cmpLit .lt y n) -- n ≤ y ↔ ¬(y < n)
     | _, _ => .cmp op x y
   | .cmpLit op x n =>
     match (ssGet ss x).simplify inv with
@@ -191,6 +195,7 @@ def BoolExpr.normalize (ss : SymStore) (inv : EInv) : BoolExpr → BoolExpr
     | _ => .cmpLit op x n
   | .not e => match e.normalize ss inv with
     | .lit b => .lit (!b)
+    | .not inner => inner  -- double negation elimination
     | e' => .not e'
   | .fcmp op x y => .fcmp op x y
 
@@ -315,7 +320,9 @@ def relFindOrigExpr (rel : EExprRel) (v : Var) : Option Expr :=
 /-- Map variables in a BoolExpr through the expression relation.
     Resolves each variable to its original-side expression. For `(.var v', .var x)`
     maps to the original variable. For `(lit c, .var x)` (e.g., hoisted constants)
-    folds the constant into the condition as `.cmpLit`. -/
+    folds the constant into the condition as `.cmpLit`. When the literal is on the
+    left of a comparison (`lit n cmp var y`), flips the comparison using
+    `.not (.cmpLit ...)` for lt/le (since we lack gt/ge operators). -/
 def BoolExpr.mapVarsRel (rel : EExprRel) : BoolExpr → Option BoolExpr
   | .lit b => some (.lit b)
   | .bvar x => do
@@ -327,11 +334,18 @@ def BoolExpr.mapVarsRel (rel : EExprRel) : BoolExpr → Option BoolExpr
     match ex, ey with
     | .var x', .var y' => return .cmp op x' y'
     | .var x', .lit n  => return .cmpLit op x' n
-    | _, _ => none  -- non-var left operand: reject ((.var,.var) and (.var,.lit) cover all practical cases)
+    | .lit n, .var y'  => match op with  -- hoisted constant on left: flip comparison
+      | .eq => return .cmpLit .eq y' n       -- n == y ↔ y == n
+      | .ne => return .cmpLit .ne y' n       -- n != y ↔ y != n
+      | .lt => return .not (.cmpLit .le y' n) -- n < y ↔ ¬(y ≤ n)
+      | .le => return .not (.cmpLit .lt y' n) -- n ≤ y ↔ ¬(y < n)
+    | _, _ => none
   | .cmpLit op x n => do
     let e ← relFindOrigExpr rel x
     match e with | .var v => return .cmpLit op v n | _ => none
-  | .not e => e.mapVarsRel rel |>.map .not
+  | .not e => e.mapVarsRel rel |>.map fun
+    | .not inner => inner  -- double negation elimination: ¬¬p = p
+    | e' => .not e'
   | .fcmp op x y => do
     let ex ← relFindOrigExpr rel x
     let ey ← relFindOrigExpr rel y
@@ -886,8 +900,15 @@ def checkDivPreservationExec (cert : ECertificate) : Bool :=
         -- add/sub/mul are always safe so operand mapping is not required.
         match op with
         | .div | .mod =>
-          relFindOrigVar ic.rel y == some y' &&
-          relFindOrigVar ic.rel z == some z'
+          -- If the original divisor is a known non-zero constant from the invariant
+          -- (e.g., a hoisted loop-invariant constant), both error preservation and
+          -- transition safety hold: the divisor can never be zero.
+          let inv := cert.inv_orig.getD ic.pc_orig ([] : EInv)
+          (match inv.find? (fun (v, _) => v == z') with
+           | some (_, .lit c) => c != (0 : BitVec 64)
+           | _ => false) ||
+          (relFindOrigVar ic.rel y == some y' &&
+           relFindOrigVar ic.rel z == some z')
         | _ => true
       | _ => false
     | _ =>

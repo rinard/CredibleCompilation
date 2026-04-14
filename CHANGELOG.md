@@ -4,6 +4,32 @@ Chronological record of what was built and why, to reconstruct the sequence of d
 
 ---
 
+## Handle LICM-hoisted constants in checker: left-literal comparisons, invariant-based div safety (2026-04-14)
+
+**Goal:** Fix LICM certificate checker rejecting `(lit c, .var x)` relation pairs from hoisted constants. 9/24 Livermore kernels failed; after this change 16/24 pass (remaining 8 are `bounds_preservation` / `all_transitions` issues unrelated to this fix).
+
+**Root causes:**
+1. `BoolExpr.mapVarsRel` `.cmp` case only handled `(.var, .var)` and `(.var, .lit)`, rejecting `(.lit, .var)` — caused `all_transitions` failures on branches comparing hoisted constants.
+2. `checkDivPreservationExec` used `relFindOrigVar` for divisor mapping, which requires `(.var, .var)` pairs — failed on hoisted literal divisors like `__t23 → lit 2`.
+3. `BoolExpr.normalize` left-literal case returned the expression unchanged — prevented `checkOrigPath` from matching mapped branch conditions against original conditions.
+
+**Changes:**
+- **ExecChecker.lean**:
+  - `BoolExpr.mapVarsRel`: Added `(.lit n, .var y')` arm in `.cmp` case. Flips comparison: `.eq`/`.ne` → symmetric `.cmpLit`; `.lt`/`.le` → `.not (.cmpLit flipped ...)` since we lack `.gt`/`.ge`.
+  - `BoolExpr.mapVarsRel`: `.not` case now eliminates double negation (`¬¬p → p`) to prevent `.not (.not (.cmpLit ...))` from the flip + outer negation.
+  - `BoolExpr.normalize`: Left-literal case now flips comparison (same logic as `mapVarsRel`) instead of returning unchanged. `.not` case adds double negation elimination.
+  - `checkDivPreservationExec`: For div/mod, accepts original divisor known nonzero from `inv_orig` as alternative to `relFindOrigVar` operand mapping.
+  - `checkAllTransitionsExec`: Augments relation with invariant-derived `(.lit n, .var v)` entries for `mapVarsRel` branch condition resolution.
+- **SoundnessBridge.lean**:
+  - `BoolExpr.eval_mapVarsRel`: Restructured `.cmp` proof to handle `(.lit, .var)` case with op-based case split. Proved flip correctness via `BEq.comm`/`bne_comm` for eq/ne, `decide_not`+`not_not` for lt/le. `.not` case handles double negation with `Bool.not_not`.
+  - `BoolExpr.normalize_eval`: Matched new `normalize` structure — left-literal case proved with same flip lemmas; `.not` case uses `Bool.not_not` for double negation.
+  - `checkDivPreservationExec_sound`: Left disjunct (invariant nonzero divisor) proves contradiction: `σ_o z' = c ≠ 0` from invariant vs `b = 0` from `hunsafe`.
+  - `transRel_sound` (`hDivSafe`): Left disjunct derives `op.safe a b` directly from invariant entry `σ_o z_o = c ≠ 0`.
+
+**No new sorrys.** Pre-existing: 2 in ArmCorrectness.lean (arrLoad/arrStore).
+
+---
+
 ## Refactor SoundnessBridge for relFindOrigExpr, close noCallerSavedLayout sorry (2026-04-14)
 
 **Goal:** Fix SoundnessBridge.lean build errors caused by ExecChecker changes (removal of `checkRelInvLink`, rewrite of `BoolExpr.mapVarsRel` to use `relFindOrigExpr`, normalize-based branch matching in `checkOrigPath`). Close the `noCallerSavedLayout` sorry in CodeGen.lean.
