@@ -172,6 +172,22 @@ theorem applyPass_preserves_behavior {name : String} {pass : Prog → ECertifica
 -- § 3. Pipeline behavior preservation
 -- ============================================================
 
+/-- Extract same_observable from checkCertificateExec. -/
+private theorem same_obs_of_check (cert : ECertificate)
+    (h : checkCertificateExec cert = true) :
+    cert.orig.observable = cert.trans.observable := by
+  unfold checkCertificateExec at h
+  simp only [Bool.and_eq_true] at h
+  exact beq_iff_eq.mp h.1.1.1.1.1.1.1.1.1.1.1.1.1.1.1.1.2
+
+/-- Each optimization pass preserves the observable variable list. -/
+private theorem obs_preserved_by_pass (n : String) (pass : Prog → ECertificate) (q q' : Prog)
+    (hap : applyPass n pass q = .ok q') : q'.observable = q.observable := by
+  obtain ⟨hcheck, hTrans, _, hOrigObs, _⟩ := applyPass_sound hap
+  rw [← hTrans]
+  have hSameObs := same_obs_of_check (pass q) hcheck
+  rw [← hSameObs, hOrigObs]
+
 /-- The full optimization pipeline preserves observable behavior.
     The tyCtx hypotheses hold for all passes (they set tyCtx := prog.tyCtx).
 
@@ -203,13 +219,121 @@ theorem optimizePipeline_preserves_behavior {p p' : Prog}
     | .errors _ => ∃ σ_o am_o am_o', p ⊩ Cfg.run 0 σ₀ am_o ⟶* Cfg.error σ_o am_o'
     | .typeErrors _ => False
     | .diverges => ∃ f, IsInfiniteExec p f ∧ f 0 = Cfg.run 0 σ₀ ArrayMem.init := by
-  -- Mechanical: unfold optimizePipeline, extract 10 intermediate programs from
-  -- nested Except.bind, then apply applyPass_preserves_behavior 10 times backward.
-  -- Each step requires tyCtx preservation (hty_* hypotheses) and TypedStore transfer.
-  -- The errors/typeErrors/diverges cases compose directly.
-  -- The halts case additionally chains observable equivalence across passes.
-  -- All mathematical content is in applyPass_preserves_behavior; this is just plumbing.
-  sorry
+  -- Decompose pipeline: extract each intermediate program from nested Except.bind
+  have bind_ok : ∀ {α β : Type} {x : Except String α} {f : α → Except String β} {b : β},
+      Except.bind x f = .ok b → ∃ a, x = .ok a ∧ f a = .ok b := by
+    intro α β x f b h; cases x with | error e => simp [Except.bind] at h | ok a => exact ⟨a, rfl, h⟩
+  unfold optimizePipeline at h; simp only [bind] at h
+  obtain ⟨p1, h1, h⟩ := bind_ok h
+  obtain ⟨p2, h2, h⟩ := bind_ok h
+  obtain ⟨p3, h3, h⟩ := bind_ok h
+  obtain ⟨p4, h4, h⟩ := bind_ok h
+  obtain ⟨p5, h5, h⟩ := bind_ok h
+  obtain ⟨p6, h6, h⟩ := bind_ok h
+  obtain ⟨p7, h7, h⟩ := bind_ok h
+  obtain ⟨p8, h8, h⟩ := bind_ok h
+  obtain ⟨p9, h9, h10⟩ := bind_ok h
+  -- Derive tyCtx chain: all intermediate programs have same tyCtx as p
+  have hT := fun {n pass q q'} (h : applyPass n pass q = .ok q') =>
+    (applyPass_sound h).2.1
+  have htyp1 : p1.tyCtx = p.tyCtx := by rw [← hT h1, ← hty_dce p, htyO_dce p]
+  have htyp2 : p2.tyCtx = p.tyCtx := by rw [← hT h2, ← hty_licm p1, htyO_licm p1, htyp1]
+  have htyp3 : p3.tyCtx = p.tyCtx := by rw [← hT h3, ← hty_cp p2, htyO_cp p2, htyp2]
+  have htyp4 : p4.tyCtx = p.tyCtx := by rw [← hT h4, ← hty_dce p3, htyO_dce p3, htyp3]
+  have htyp5 : p5.tyCtx = p.tyCtx := by rw [← hT h5, ← hty_dae p4, htyO_dae p4, htyp4]
+  have htyp6 : p6.tyCtx = p.tyCtx := by rw [← hT h6, ← hty_cse p5, htyO_cse p5, htyp5]
+  have htyp7 : p7.tyCtx = p.tyCtx := by rw [← hT h7, ← hty_ch p6, htyO_ch p6, htyp6]
+  have htyp8 : p8.tyCtx = p.tyCtx := by rw [← hT h8, ← hty_ph p7, htyO_ph p7, htyp7]
+  have htyp9 : p9.tyCtx = p.tyCtx := by rw [← hT h9, ← hty_dce p8, htyO_dce p8, htyp8]
+  -- Observable chain: all intermediate programs have same observable as p
+  have hobsp1 : p1.observable = p.observable := obs_preserved_by_pass _ _ _ _ h1
+  have hobsp2 : p2.observable = p.observable := by rw [obs_preserved_by_pass _ _ _ _ h2, hobsp1]
+  have hobsp3 : p3.observable = p.observable := by rw [obs_preserved_by_pass _ _ _ _ h3, hobsp2]
+  have hobsp4 : p4.observable = p.observable := by rw [obs_preserved_by_pass _ _ _ _ h4, hobsp3]
+  have hobsp5 : p5.observable = p.observable := by rw [obs_preserved_by_pass _ _ _ _ h5, hobsp4]
+  have hobsp6 : p6.observable = p.observable := by rw [obs_preserved_by_pass _ _ _ _ h6, hobsp5]
+  have hobsp7 : p7.observable = p.observable := by rw [obs_preserved_by_pass _ _ _ _ h7, hobsp6]
+  have hobsp8 : p8.observable = p.observable := by rw [obs_preserved_by_pass _ _ _ _ h8, hobsp7]
+  have hobsp9 : p9.observable = p.observable := by rw [obs_preserved_by_pass _ _ _ _ h9, hobsp8]
+  -- Helper: TypedStore transfer
+  have tsAt : ∀ (pass : Prog → ECertificate) (q : Prog),
+      (pass q).orig.tyCtx = q.tyCtx → q.tyCtx = p.tyCtx →
+      TypedStore (pass q).orig.tyCtx σ₀ := fun _ q hO hq => hO ▸ hq ▸ hts
+  -- Chain backward: apply applyPass_preserves_behavior for each pass
+  -- For each behavior case, chain the results
+  cases b with
+  | halts σ' =>
+    simp only at hbeh ⊢
+    -- Step 10: p' halts → p9 halts with σ₉, obs eq on p9.observable
+    have beh10 := applyPass_preserves_behavior h10 (hty_ra _) σ₀ (tsAt _ _ (htyO_ra _) htyp9) (.halts σ') hbeh
+    simp only at beh10
+    obtain ⟨σ₉, am₉, ⟨a₉, halt₉⟩, obs₉⟩ := beh10
+    -- Step 9-1: chain backward
+    have mk_beh : ∀ {q σ am am'}, haltsWithResult q 0 σ₀ σ am am' →
+        program_behavior q σ₀ (.halts σ) := fun h => ⟨_, _, h⟩
+    have beh9 := applyPass_preserves_behavior h9 (hty_dce _) σ₀ (tsAt _ _ (htyO_dce _) htyp8) (.halts σ₉) (mk_beh halt₉)
+    simp only at beh9; obtain ⟨σ₈, am₈, ⟨a₈, halt₈⟩, obs₈⟩ := beh9
+    have beh8 := applyPass_preserves_behavior h8 (hty_ph _) σ₀ (tsAt _ _ (htyO_ph _) htyp7) (.halts σ₈) (mk_beh halt₈)
+    simp only at beh8; obtain ⟨σ₇, am₇, ⟨a₇, halt₇⟩, obs₇⟩ := beh8
+    have beh7 := applyPass_preserves_behavior h7 (hty_ch _) σ₀ (tsAt _ _ (htyO_ch _) htyp6) (.halts σ₇) (mk_beh halt₇)
+    simp only at beh7; obtain ⟨σ₆, am₆, ⟨a₆, halt₆⟩, obs₆⟩ := beh7
+    have beh6 := applyPass_preserves_behavior h6 (hty_cse _) σ₀ (tsAt _ _ (htyO_cse _) htyp5) (.halts σ₆) (mk_beh halt₆)
+    simp only at beh6; obtain ⟨σ₅, am₅, ⟨a₅, halt₅⟩, obs₅⟩ := beh6
+    have beh5 := applyPass_preserves_behavior h5 (hty_dae _) σ₀ (tsAt _ _ (htyO_dae _) htyp4) (.halts σ₅) (mk_beh halt₅)
+    simp only at beh5; obtain ⟨σ₄, am₄, ⟨a₄, halt₄⟩, obs₄⟩ := beh5
+    have beh4 := applyPass_preserves_behavior h4 (hty_dce _) σ₀ (tsAt _ _ (htyO_dce _) htyp3) (.halts σ₄) (mk_beh halt₄)
+    simp only at beh4; obtain ⟨σ₃, am₃, ⟨a₃, halt₃⟩, obs₃⟩ := beh4
+    have beh3 := applyPass_preserves_behavior h3 (hty_cp _) σ₀ (tsAt _ _ (htyO_cp _) htyp2) (.halts σ₃) (mk_beh halt₃)
+    simp only at beh3; obtain ⟨σ₂, am₂, ⟨a₂, halt₂⟩, obs₂⟩ := beh3
+    have beh2 := applyPass_preserves_behavior h2 (hty_licm _) σ₀ (tsAt _ _ (htyO_licm _) htyp1) (.halts σ₂) (mk_beh halt₂)
+    simp only at beh2; obtain ⟨σ₁, am₁, ⟨a₁, halt₁⟩, obs₁⟩ := beh2
+    have beh1 := applyPass_preserves_behavior h1 (hty_dce _) σ₀ (tsAt _ _ (htyO_dce _) rfl) (.halts σ₁) (mk_beh halt₁)
+    simp only at beh1; obtain ⟨σ₀', am₀, halt₀, obs₀⟩ := beh1
+    -- Chain observables: σ' v = σ₉ v = σ₈ v = ... = σ₀' v for v ∈ p.observable
+    exact ⟨σ₀', am₀, halt₀, fun v hv => by
+      calc σ' v = σ₉ v := obs₉ v (hobsp9 ▸ hv)
+        _ = σ₈ v := obs₈ v (hobsp8 ▸ hv)
+        _ = σ₇ v := obs₇ v (hobsp7 ▸ hv)
+        _ = σ₆ v := obs₆ v (hobsp6 ▸ hv)
+        _ = σ₅ v := obs₅ v (hobsp5 ▸ hv)
+        _ = σ₄ v := obs₄ v (hobsp4 ▸ hv)
+        _ = σ₃ v := obs₃ v (hobsp3 ▸ hv)
+        _ = σ₂ v := obs₂ v (hobsp2 ▸ hv)
+        _ = σ₁ v := obs₁ v (hobsp1 ▸ hv)
+        _ = σ₀' v := obs₀ v hv⟩
+  | errors σ' =>
+    simp only at hbeh ⊢
+    -- Each step: p_{i+1} errors → p_i errors
+    have mk_beh : ∀ {q σ am am'}, (q ⊩ Cfg.run 0 σ₀ am ⟶* Cfg.error σ am') →
+        program_behavior q σ₀ (.errors σ) := fun h => ⟨_, _, h⟩
+    obtain ⟨σ₉, a₉, a₉', s₉⟩ := applyPass_preserves_behavior h10 (hty_ra _) σ₀ (tsAt _ _ (htyO_ra _) htyp9) (.errors σ') hbeh
+    obtain ⟨σ₈, a₈, a₈', s₈⟩ := applyPass_preserves_behavior h9 (hty_dce _) σ₀ (tsAt _ _ (htyO_dce _) htyp8) (.errors σ₉) (mk_beh s₉)
+    obtain ⟨σ₇, a₇, a₇', s₇⟩ := applyPass_preserves_behavior h8 (hty_ph _) σ₀ (tsAt _ _ (htyO_ph _) htyp7) (.errors σ₈) (mk_beh s₈)
+    obtain ⟨σ₆, a₆, a₆', s₆⟩ := applyPass_preserves_behavior h7 (hty_ch _) σ₀ (tsAt _ _ (htyO_ch _) htyp6) (.errors σ₇) (mk_beh s₇)
+    obtain ⟨σ₅, a₅, a₅', s₅⟩ := applyPass_preserves_behavior h6 (hty_cse _) σ₀ (tsAt _ _ (htyO_cse _) htyp5) (.errors σ₆) (mk_beh s₆)
+    obtain ⟨σ₄, a₄, a₄', s₄⟩ := applyPass_preserves_behavior h5 (hty_dae _) σ₀ (tsAt _ _ (htyO_dae _) htyp4) (.errors σ₅) (mk_beh s₅)
+    obtain ⟨σ₃, a₃, a₃', s₃⟩ := applyPass_preserves_behavior h4 (hty_dce _) σ₀ (tsAt _ _ (htyO_dce _) htyp3) (.errors σ₄) (mk_beh s₄)
+    obtain ⟨σ₂, a₂, a₂', s₂⟩ := applyPass_preserves_behavior h3 (hty_cp _) σ₀ (tsAt _ _ (htyO_cp _) htyp2) (.errors σ₃) (mk_beh s₃)
+    obtain ⟨σ₁, a₁, a₁', s₁⟩ := applyPass_preserves_behavior h2 (hty_licm _) σ₀ (tsAt _ _ (htyO_licm _) htyp1) (.errors σ₂) (mk_beh s₂)
+    obtain ⟨σ₀', a₀, a₀', s₀⟩ := applyPass_preserves_behavior h1 (hty_dce _) σ₀ (tsAt _ _ (htyO_dce _) rfl) (.errors σ₁) (mk_beh s₁)
+    exact ⟨σ₀', a₀, a₀', s₀⟩
+  | typeErrors σ' =>
+    exact applyPass_preserves_behavior h10 (hty_ra _) σ₀ (tsAt _ _ (htyO_ra _) htyp9) (.typeErrors σ') hbeh
+  | diverges =>
+    simp only at hbeh ⊢
+    have mk_beh : ∀ {q f}, IsInfiniteExec q f → f 0 = Cfg.run 0 σ₀ ArrayMem.init →
+        program_behavior q σ₀ .diverges := fun h hf => ⟨_, h, hf⟩
+    obtain ⟨f₉, i₉, e₉⟩ := applyPass_preserves_behavior h10 (hty_ra _) σ₀ (tsAt _ _ (htyO_ra _) htyp9) .diverges hbeh
+    obtain ⟨f₈, i₈, e₈⟩ := applyPass_preserves_behavior h9 (hty_dce _) σ₀ (tsAt _ _ (htyO_dce _) htyp8) .diverges (mk_beh i₉ e₉)
+    obtain ⟨f₇, i₇, e₇⟩ := applyPass_preserves_behavior h8 (hty_ph _) σ₀ (tsAt _ _ (htyO_ph _) htyp7) .diverges (mk_beh i₈ e₈)
+    obtain ⟨f₆, i₆, e₆⟩ := applyPass_preserves_behavior h7 (hty_ch _) σ₀ (tsAt _ _ (htyO_ch _) htyp6) .diverges (mk_beh i₇ e₇)
+    obtain ⟨f₅, i₅, e₅⟩ := applyPass_preserves_behavior h6 (hty_cse _) σ₀ (tsAt _ _ (htyO_cse _) htyp5) .diverges (mk_beh i₆ e₆)
+    obtain ⟨f₄, i₄, e₄⟩ := applyPass_preserves_behavior h5 (hty_dae _) σ₀ (tsAt _ _ (htyO_dae _) htyp4) .diverges (mk_beh i₅ e₅)
+    obtain ⟨f₃, i₃, e₃⟩ := applyPass_preserves_behavior h4 (hty_dce _) σ₀ (tsAt _ _ (htyO_dce _) htyp3) .diverges (mk_beh i₄ e₄)
+    obtain ⟨f₂, i₂, e₂⟩ := applyPass_preserves_behavior h3 (hty_cp _) σ₀ (tsAt _ _ (htyO_cp _) htyp2) .diverges (mk_beh i₃ e₃)
+    obtain ⟨f₁, i₁, e₁⟩ := applyPass_preserves_behavior h2 (hty_licm _) σ₀ (tsAt _ _ (htyO_licm _) htyp1) .diverges (mk_beh i₂ e₂)
+    obtain ⟨f₀, i₀, e₀⟩ := applyPass_preserves_behavior h1 (hty_dce _) σ₀ (tsAt _ _ (htyO_dce _) rfl) .diverges (mk_beh i₁ e₁)
+    exact ⟨f₀, i₀, e₀⟩
 
 -- ============================================================
 -- § 4. End-to-end: TAC → optimized TAC → ARM
