@@ -933,20 +933,28 @@ def checkDivPreservationExec (cert : ECertificate) : Bool :=
     the original side. -/
 def checkBoundsPreservationExec (cert : ECertificate) : Bool :=
   (List.range cert.trans.size).all fun pc_t =>
+    let ic := cert.instrCerts.getD pc_t default
+    let inv := cert.inv_orig.getD ic.pc_orig ([] : EInv)
+    -- Check index mapping: either via relFindOrigVar or both indices are
+    -- the same known constant from the original invariant (hoisted by LICM).
+    let idxOk (idx idx' : Var) :=
+      relFindOrigVar ic.rel idx == some idx' ||
+      (match inv.find? (fun (v, _) => v == idx') with
+       | some (_, .lit c) =>
+         match relFindOrigExpr ic.rel idx with
+         | some (.lit c') => c == c'
+         | _ => false
+       | _ => false)
     match cert.trans[pc_t]? with
     | some (.arrLoad _ arr idx _) =>
-      let ic := cert.instrCerts.getD pc_t default
       match cert.orig[ic.pc_orig]? with
       | some (.arrLoad _ arr' idx' _) =>
-        arr == arr' &&
-        relFindOrigVar ic.rel idx == some idx'
+        arr == arr' && idxOk idx idx'
       | _ => false
     | some (.arrStore arr idx _ _) =>
-      let ic := cert.instrCerts.getD pc_t default
       match cert.orig[ic.pc_orig]? with
       | some (.arrStore arr' idx' _ _) =>
-        arr == arr' &&
-        relFindOrigVar ic.rel idx == some idx'
+        arr == arr' && idxOk idx idx'
       | _ => false
     | _ => true
 

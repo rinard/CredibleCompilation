@@ -2258,6 +2258,49 @@ set_option maxHeartbeats 6400000 in
     Given: checkOrigPath and checkRelConsistency both pass, the original path
     produces steps reaching the target with store relation preserved.
     Supports non-trivial expression relations with pair-based store relations. -/
+
+/-- Transfer index equality `σ_t idx_t = σ_o idx_o` when both map to the same
+    literal constant: the invariant says `σ_o idx_o = c` and the relation says
+    `σ_t idx_t = c'` with `c = c'`. -/
+private theorem idx_transfer_via_inv
+    {dc : ECertificate} {idx_t idx_o : Var} {σ_t σ_o : Store} {am_o : ArrayMem}
+    {dic : EInstrCert} {pc_t : Nat}
+    (hinv_case : (match (dc.inv_orig.getD dic.pc_orig ([] : EInv)).find? (fun (v, _) => v == idx_o) with
+       | some (_, .lit c) =>
+         match relFindOrigExpr dic.rel idx_t with
+         | some (.lit c') => c == c'
+         | _ => false
+       | _ => false) = true)
+    (hcons : ∀ e_o v, (e_o, .var v) ∈ dic.rel → σ_t v = e_o.eval σ_o am_o)
+    (hinv_o : EInv.toProp (dc.inv_orig.getD dic.pc_orig ([] : EInv)) σ_o am_o)
+    (hic_def : dic = dc.instrCerts.getD pc_t default) :
+    σ_t idx_t = σ_o idx_o := by
+  generalize hfi : (dc.inv_orig.getD dic.pc_orig ([] : EInv)).find? (fun (v, _) => v == idx_o) = fi at hinv_case
+  cases fi with
+  | none => simp at hinv_case
+  | some p =>
+    obtain ⟨v, e⟩ := p
+    cases e with
+    | lit c =>
+      generalize hfr : relFindOrigExpr dic.rel idx_t = fr at hinv_case
+      cases fr with
+      | none => simp at hinv_case
+      | some e'  =>
+        cases e' with
+        | lit c' =>
+          simp at hinv_case
+          have hceq : c = c' := beq_iff_eq.mp hinv_case
+          have hpred := List.find?_some hfi; simp at hpred; subst hpred
+          have hmem := List.mem_of_find?_eq_some hfi
+          have hinv_entry := hinv_o (idx_o, .lit c) hmem
+          simp [Expr.eval] at hinv_entry
+          have hmem_rel := relFindOrigExpr_mem hfr
+          have hσt := hcons _ _ hmem_rel
+          simp [Expr.eval] at hσt
+          rw [hσt, hinv_entry, hceq]
+        | _ => simp at hinv_case
+    | _ => simp at hinv_case
+
 private theorem transRel_sound (dc : ECertificate)
     (hwtp : WellTypedProg dc.tyCtx dc.orig)
     (hnoarr_orig : checkNoArrReadInInvs dc.inv_orig = true)
@@ -2438,15 +2481,17 @@ private theorem transRel_sound (dc : ECertificate)
           obtain ⟨x_o, horig⟩ := h; rw [horig] at hpc_check
           rw [Bool.and_eq_true] at hpc_check; obtain ⟨harr_eq, hidx_eq⟩ := hpc_check
           have harr : arr_t = arr_o := beq_iff_eq.mp harr_eq
-          have hidx_find : relFindOrigVar dic.rel idx_t = some idx_o := beq_iff_eq.mp hidx_eq
+          rw [Bool.or_eq_true] at hidx_eq
           -- From the step, extract the index value and bounds
           have ⟨idxVal_t, hidx_t, hbnd_t⟩ : ∃ iv : BitVec 64,
               σ_t idx_t = .int iv ∧ iv < dc.trans.arraySizeBv arr_t := by
             cases hstep <;> simp_all
-          -- Transfer via store relation
+          -- Transfer index via store relation or invariant
           have hσt_idx : σ_t idx_t = σ_o idx_o := by
-            rw [← hrel_eq] at hidx_find
-            exact store_eq_of_relFindOrigVar hidx_find hcons
+            rcases hidx_eq with hvar | hinv
+            · have hf := beq_iff_eq.mp hvar; rw [← hrel_eq] at hf
+              exact store_eq_of_relFindOrigVar hf hcons
+            · exact idx_transfer_via_inv hinv (hrel_eq ▸ hcons) hinv_o hic_def
           have : idxVal_o = idxVal_t := Value.int.inj (hidxVal_o.symm.trans (hσt_idx ▸ hidx_t))
           subst this
           rw [← harr]; simp [Prog.arraySizeBv, harrsize]; exact hbnd_t
@@ -2462,13 +2507,15 @@ private theorem transRel_sound (dc : ECertificate)
           obtain ⟨val_o, horig⟩ := h; rw [horig] at hpc_check
           rw [Bool.and_eq_true] at hpc_check; obtain ⟨harr_eq, hidx_eq⟩ := hpc_check
           have harr : arr_t = arr_o := beq_iff_eq.mp harr_eq
-          have hidx_find : relFindOrigVar dic.rel idx_t = some idx_o := beq_iff_eq.mp hidx_eq
+          rw [Bool.or_eq_true] at hidx_eq
           have ⟨idxVal_t, hidx_t, _, hbnd_t⟩ : ∃ iv : BitVec 64,
               σ_t idx_t = .int iv ∧ (σ_t val_t).typeOf = ty_t ∧ iv < dc.trans.arraySizeBv arr_t := by
             cases hstep <;> simp_all
           have hσt_idx : σ_t idx_t = σ_o idx_o := by
-            rw [← hrel_eq] at hidx_find
-            exact store_eq_of_relFindOrigVar hidx_find hcons
+            rcases hidx_eq with hvar | hinv
+            · have hf := beq_iff_eq.mp hvar; rw [← hrel_eq] at hf
+              exact store_eq_of_relFindOrigVar hf hcons
+            · exact idx_transfer_via_inv hinv (hrel_eq ▸ hcons) hinv_o hic_def
           have : idxVal_o = idxVal_t := Value.int.inj (hidxVal_o.symm.trans (hσt_idx ▸ hidx_t))
           subst this
           rw [← harr]; simp [Prog.arraySizeBv, harrsize]; exact hbnd_t
@@ -3057,10 +3104,46 @@ theorem checkDivPreservationExec_sound (dc : ECertificate)
       | arrLoad x' arr' idx' ty' =>
         rw [Bool.and_eq_true] at hpc; obtain ⟨harr_eq, hidx_eq⟩ := hpc
         have harr : arr = arr' := beq_iff_eq.mp harr_eq
-        have hidx_find : relFindOrigVar ic.rel idx = some idx' := beq_iff_eq.mp hidx_eq
-        -- Transfer index value via store_eq_of_relFindOrigVar
-        have hσt_idx := store_eq_of_relFindOrigVar hidx_find hrel
-        have hidx' : σ_o idx' = .int idxVal := by rw [← hσt_idx]; exact hidx_val
+        -- Index mapping: either relFindOrigVar or invariant-based constant match
+        rw [Bool.or_eq_true] at hidx_eq
+        have hidx' : σ_o idx' = .int idxVal := by
+          rcases hidx_eq with hvar | hinv_case
+          · have hidx_find : relFindOrigVar ic.rel idx = some idx' := beq_iff_eq.mp hvar
+            have hσt_idx := store_eq_of_relFindOrigVar hidx_find hrel
+            rw [← hσt_idx]; exact hidx_val
+          · -- Both indices are the same constant from invariant and relation
+            generalize hfind_inv : (dc.inv_orig.getD ic.pc_orig ([] : EInv)).find?
+              (fun (v, _) => v == idx') = fi at hinv_case
+            cases fi with
+            | none => simp at hinv_case
+            | some p =>
+              obtain ⟨v, e⟩ := p
+              cases e with
+              | lit c =>
+                generalize hfind_rel : relFindOrigExpr ic.rel idx = fr at hinv_case
+                cases fr with
+                | none => simp at hinv_case
+                | some e' =>
+                  cases e' with
+                  | lit c' =>
+                    simp at hinv_case  -- hinv_case : c == c'
+                    have hceq : c = c' := beq_iff_eq.mp hinv_case
+                    -- From invariant: σ_o idx' = .int c
+                    have hpred := List.find?_some hfind_inv
+                    simp at hpred; subst hpred
+                    have hmem := List.mem_of_find?_eq_some hfind_inv
+                    simp only [toPCertificate, hic_def] at hinv_o
+                    have hinv_entry := hinv_o (idx', .lit c) hmem
+                    simp [Expr.eval] at hinv_entry
+                    -- From relation: σ_t idx = .int c'
+                    have hmem_rel := relFindOrigExpr_mem hfind_rel
+                    have hσt := hrel _ _ hmem_rel
+                    simp [Expr.eval] at hσt  -- hσt : σ_t idx = .int c'
+                    -- Combine: idxVal = c' = c, σ_o idx' = .int c
+                    have : idxVal = c' := Value.int.inj (hidx_val.symm.trans hσt)
+                    rw [hinv_entry, this, hceq]
+                  | _ => simp at hinv_case
+              | _ => simp at hinv_case
         -- Transfer bounds failure via equal array sizes
         simp only [checkArraySizesExec, beq_iff_eq] at harrsize
         have hsize_eq : dc.orig.arraySizeBv arr' = dc.trans.arraySizeBv arr := by
@@ -3081,10 +3164,42 @@ theorem checkDivPreservationExec_sound (dc : ECertificate)
       | arrStore arr' idx' val' ty' =>
         rw [Bool.and_eq_true] at hpc; obtain ⟨harr_eq, hidx_eq⟩ := hpc
         have harr : arr = arr' := beq_iff_eq.mp harr_eq
-        have hidx_find : relFindOrigVar ic.rel idx = some idx' := beq_iff_eq.mp hidx_eq
-        -- Transfer index value via store_eq_of_relFindOrigVar
-        have hσt_idx := store_eq_of_relFindOrigVar hidx_find hrel
-        have hidx' : σ_o idx' = .int idxVal := by rw [← hσt_idx]; exact hidx_val
+        -- Index mapping: either relFindOrigVar or invariant-based constant match
+        rw [Bool.or_eq_true] at hidx_eq
+        have hidx' : σ_o idx' = .int idxVal := by
+          rcases hidx_eq with hvar | hinv_case
+          · have hidx_find : relFindOrigVar ic.rel idx = some idx' := beq_iff_eq.mp hvar
+            have hσt_idx := store_eq_of_relFindOrigVar hidx_find hrel
+            rw [← hσt_idx]; exact hidx_val
+          · generalize hfind_inv : (dc.inv_orig.getD ic.pc_orig ([] : EInv)).find?
+              (fun (v, _) => v == idx') = fi at hinv_case
+            cases fi with
+            | none => simp at hinv_case
+            | some p =>
+              obtain ⟨v, e⟩ := p
+              cases e with
+              | lit c =>
+                generalize hfind_rel : relFindOrigExpr ic.rel idx = fr at hinv_case
+                cases fr with
+                | none => simp at hinv_case
+                | some e' =>
+                  cases e' with
+                  | lit c' =>
+                    simp at hinv_case
+                    have hceq : c = c' := beq_iff_eq.mp hinv_case
+                    have hpred := List.find?_some hfind_inv
+                    simp at hpred; subst hpred
+                    have hmem := List.mem_of_find?_eq_some hfind_inv
+                    simp only [toPCertificate, hic_def] at hinv_o
+                    have hinv_entry := hinv_o (idx', .lit c) hmem
+                    simp [Expr.eval] at hinv_entry
+                    have hmem_rel := relFindOrigExpr_mem hfind_rel
+                    have hσt := hrel _ _ hmem_rel
+                    simp [Expr.eval] at hσt
+                    have : idxVal = c' := Value.int.inj (hidx_val.symm.trans hσt)
+                    rw [hinv_entry, this, hceq]
+                  | _ => simp at hinv_case
+              | _ => simp at hinv_case
         -- Transfer bounds failure via equal array sizes
         simp only [checkArraySizesExec, beq_iff_eq] at harrsize
         have hsize_eq : dc.orig.arraySizeBv arr' = dc.trans.arraySizeBv arr := by
