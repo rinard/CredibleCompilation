@@ -735,6 +735,68 @@ private def buildTyCtx (base : TyCtx) (code : Array TAC) : TyCtx :=
     | none => ctx
   ) base
 
+/-- For well-typed instructions, `instrDefType` agrees with the type context. -/
+private theorem instrDefType_matches_tyCtx {Γ : TyCtx}
+    {decls : List (ArrayName × Nat × VarTy)} {instr : TAC}
+    (hwt : WellTypedInstr Γ decls instr) {x : Var} {ty : VarTy}
+    (hdef : instrDefType instr = some (x, ty)) : ty = Γ x := by
+  cases hwt with
+  | const h =>
+    simp only [instrDefType, Option.some.injEq, Prod.mk.injEq] at hdef
+    obtain ⟨rfl, rfl⟩ := hdef; exact h
+  | copy _ => simp [instrDefType] at hdef
+  | binop hx _ _ =>
+    simp only [instrDefType, Option.some.injEq, Prod.mk.injEq] at hdef
+    obtain ⟨rfl, rfl⟩ := hdef; exact hx.symm
+  | boolop hx _ =>
+    simp only [instrDefType, Option.some.injEq, Prod.mk.injEq] at hdef
+    obtain ⟨rfl, rfl⟩ := hdef; exact hx.symm
+  | goto => simp [instrDefType] at hdef
+  | ifgoto _ => simp [instrDefType] at hdef
+  | halt => simp [instrDefType] at hdef
+  | arrLoad hx _ _ =>
+    simp only [instrDefType, Option.some.injEq, Prod.mk.injEq] at hdef
+    obtain ⟨rfl, rfl⟩ := hdef; exact hx.symm
+  | arrStore _ _ _ => simp [instrDefType] at hdef
+  | fbinop hx _ _ =>
+    simp only [instrDefType, Option.some.injEq, Prod.mk.injEq] at hdef
+    obtain ⟨rfl, rfl⟩ := hdef; exact hx.symm
+  | intToFloat hx _ =>
+    simp only [instrDefType, Option.some.injEq, Prod.mk.injEq] at hdef
+    obtain ⟨rfl, rfl⟩ := hdef; exact hx.symm
+  | floatToInt hx _ =>
+    simp only [instrDefType, Option.some.injEq, Prod.mk.injEq] at hdef
+    obtain ⟨rfl, rfl⟩ := hdef; exact hx.symm
+  | floatUnary hx _ =>
+    simp only [instrDefType, Option.some.injEq, Prod.mk.injEq] at hdef
+    obtain ⟨rfl, rfl⟩ := hdef; exact hx.symm
+
+/-- `buildTyCtx` is the identity when every instruction defines variables
+    at their existing type in the base context. -/
+private theorem buildTyCtx_eq_of_wt (base : TyCtx) (code : List TAC)
+    (h : ∀ instr, instr ∈ code → ∀ x ty, instrDefType instr = some (x, ty) → ty = base x) :
+    code.foldl (fun ctx instr =>
+      match instrDefType instr with
+      | some (x, ty) => fun v => if v == x then ty else ctx v
+      | none => ctx) base = base := by
+  induction code with
+  | nil => rfl
+  | cons hd rest ih =>
+    simp only [List.foldl]
+    have h_hd := h hd (.head _)
+    have h_rest : ∀ instr, instr ∈ rest → ∀ x ty,
+        instrDefType instr = some (x, ty) → ty = base x :=
+      fun i hi => h i (.tail _ hi)
+    match hq : instrDefType hd with
+    | none => exact ih h_rest
+    | some (x, ty) =>
+      have hty := h_hd x ty hq
+      suffices hsuff : (fun v => if v == x then ty else base v) = base by
+        simp only [hsuff]; exact ih h_rest
+      funext v; simp only [beq_iff_eq]; split
+      · next heq => rw [hty, heq]
+      · rfl
+
 /-- Compile a typed program: initialize declared variables, then compile body.
     Appends `halt` at the end. -/
 def compileToTAC (prog : Program) : Prog :=
@@ -1623,6 +1685,70 @@ theorem compileToTAC_wellTyped (prog : Program) (h : prog.typeCheck = true) :
   exact allWTI_toArray' this rfl (allWTI_append3 (initCode_wt prog hnd)
     (compileStmt_wt prog hnt prog.body hchk _ _
       (collectLabels prog.body (initCode prog.decls).length)) (allWTI_one .halt))
+
+/-- For well-typed programs, `compileToTAC.tyCtx = prog.tyCtx`.
+    Every instruction in the compiled code defines variables at their existing
+    type in `prog.tyCtx`, so `buildTyCtx` is the identity. -/
+theorem compileToTAC_tyCtx_eq (prog : Program) (htc : prog.typeCheck = true) :
+    prog.compileToTAC.tyCtx = prog.tyCtx := by
+  show buildTyCtx prog.tyCtx _ = prog.tyCtx
+  unfold buildTyCtx
+  rw [← Array.foldl_toList]
+  apply buildTyCtx_eq_of_wt
+  intro instr hmem x ty hdef
+  have hwtp := compileToTAC_wellTyped prog htc
+  have hmem' : instr ∈ prog.compileToTAC.code.toList := by
+    simp only [Program.compileToTAC]; exact hmem
+  obtain ⟨i, hi, heq⟩ := List.getElem_of_mem hmem'
+  have hi' : i < prog.compileToTAC.size := by
+    simp only [Prog.size]; rw [Array.length_toList] at hi; exact hi
+  have hwti := hwtp i hi'
+  have hconv : prog.compileToTAC.code[i] = instr := by
+    have : prog.compileToTAC.code.toList[i] = prog.compileToTAC.code[i] := by
+      simp [Array.getElem_toList]
+    rw [← this]; exact heq
+  rw [show (prog.compileToTAC[i] : TAC) = prog.compileToTAC.code[i] from rfl, hconv] at hwti
+  exact instrDefType_matches_tyCtx hwti hdef
+
+/-- `Value.ofBitVec ty 0 = ty.defaultVal` -/
+private theorem ofBitVec_zero_eq_defaultVal (ty : VarTy) :
+    Value.ofBitVec ty 0 = ty.defaultVal := by
+  cases ty <;> simp [Value.ofBitVec, VarTy.defaultVal]
+
+/-- For well-typed programs, `Store.typedInit prog.tyCtx = prog.initStore`.
+    Both zero-initialize each variable by type: declared variables get their
+    type-appropriate default, and undeclared variables get int zero (or float
+    zero for float temporaries). -/
+theorem typedInit_eq_initStore (prog : Program) (htc : prog.typeCheck = true) :
+    Store.typedInit prog.tyCtx = prog.initStore := by
+  have hnd := typeCheck_noDups prog htc
+  funext v
+  simp only [Store.typedInit, initStore, Program.tyCtx, Program.lookupTy]
+  cases hlook : prog.decls.lookup v with
+  | none =>
+    -- v not found in decls: both sides give initStoreBase v
+    simp only [Option.getD]
+    have hmem : v ∉ prog.decls.map Prod.fst := by
+      intro hmem; obtain ⟨⟨w, ty⟩, hp, hw⟩ := List.exists_of_mem_map hmem
+      simp only at hw; subst hw
+      -- w ∈ decls so lookup w ≠ none, contradicting hlook
+      have : prog.decls.lookup w ≠ none := by
+        intro habs
+        rw [List.lookup_eq_none_iff] at habs
+        have := habs ⟨w, ty⟩ hp
+        simp [bne] at this
+      exact this hlook
+    rw [initFold_notMem prog.decls initStoreBase v hmem]
+    simp only [initStoreBase]; split <;> simp [Value.ofBitVec]
+  | some ty =>
+    -- v found with type ty: both sides give ty.defaultVal
+    simp only [Option.getD]
+    have hmem : (v, ty) ∈ prog.decls := by
+      rw [List.lookup_eq_some_iff] at hlook
+      obtain ⟨l₁, l₂, heq, _⟩ := hlook
+      rw [heq]; exact List.mem_append_right _ (.head _)
+    rw [initFold_declared prog.decls initStoreBase v ty hmem hnd,
+        ofBitVec_zero_eq_defaultVal]
 
 /-- **Corollary**: A type-checked program with a well-typed initial store
     always makes progress. The next configuration may be `run`, `halt`, or

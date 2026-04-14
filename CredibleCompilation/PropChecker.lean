@@ -618,7 +618,7 @@ theorem simulation_trace {cert : PCertificate} (hvalid : PCertificateValid cert)
     {σ₀ : Store} (hts₀ : TypedStore cert.tyCtx σ₀)
     {pc_t : Label} {σ_t : Store} {am₀ am_t : ArrayMem}
     (hreach : cert.trans ⊩ Cfg.run 0 σ₀ am₀ ⟶* Cfg.run pc_t σ_t am_t) :
-    ∃ pc_o σ_o am_o am_o', (cert.orig ⊩ Cfg.run 0 σ₀ am_o ⟶* Cfg.run pc_o σ_o am_o') ∧
+    ∃ pc_o σ_o am_o', (cert.orig ⊩ Cfg.run 0 σ₀ am₀ ⟶* Cfg.run pc_o σ_o am_o') ∧
       PSimRel cert pc_t σ_t am_t pc_o σ_o am_o' := by
   have hsim₀ : PSimRel cert 0 σ₀ am₀ 0 σ₀ am₀ :=
     ⟨hvalid.start_corr.1, hvalid.start_corr.2 σ₀ am₀, rfl,
@@ -626,28 +626,27 @@ theorem simulation_trace {cert : PCertificate} (hvalid : PCertificateValid cert)
   obtain ⟨n, hn⟩ := Steps_to_StepsN hreach
   obtain ⟨pc_o, σ_o, am_o_end, hpath, hsim⟩ :=
     simulation_trace_stepsN hvalid hn am₀ hsim₀
-  exact ⟨pc_o, σ_o, am₀, am_o_end, hpath, hsim⟩
+  exact ⟨pc_o, σ_o, am_o_end, hpath, hsim⟩
 
 theorem soundness_halt (cert : PCertificate) (hvalid : PCertificateValid cert)
     (σ₀ σ_t' : Store) (hts₀ : TypedStore cert.tyCtx σ₀)
-    (hexec : ∃ am am', haltsWithResult cert.trans 0 σ₀ σ_t' am am') :
-    ∃ σ_o' am_f, (∃ am, haltsWithResult cert.orig 0 σ₀ σ_o' am am_f) ∧
-      (∃ am, haltsWithResult cert.trans 0 σ₀ σ_t' am am_f) ∧
+    {am₀ : ArrayMem} (hexec : ∃ am', haltsWithResult cert.trans 0 σ₀ σ_t' am₀ am') :
+    ∃ σ_o' am_f, haltsWithResult cert.orig 0 σ₀ σ_o' am₀ am_f ∧
+      haltsWithResult cert.trans 0 σ₀ σ_t' am₀ am_f ∧
       ∀ v ∈ cert.observable, σ_t' v = σ_o' v := by
-  obtain ⟨am, am', hhalt⟩ := hexec
+  obtain ⟨am', hhalt⟩ := hexec
   -- Decompose the halt execution into a run-to-run prefix + halt step
   obtain ⟨pc_t, σ_t, am_t, hrun, hhalt_instr, rfl, rfl⟩ := steps_to_halt_decompose hhalt
   -- Use simulation_trace on the run-to-run prefix
-  obtain ⟨pc_o, σ_o, a1, a2, horig, hpc_eq, hrel, ham_eq, _hinv_t, _hinv_o, _hts⟩ :=
+  obtain ⟨pc_o, σ_o, am_o', horig, hpc_eq, hrel, ham_eq, _hinv_t, _hinv_o, _hts⟩ :=
     simulation_trace hvalid hts₀ hrun
   -- The original program must also halt at pc_o
   have horig_halt : cert.orig[pc_o]? = some TAC.halt := by
     rw [← hpc_eq]; exact hvalid.halt_corr pc_t hhalt_instr
-  -- Both programs halt with the same final array memory
-  refine ⟨σ_o, a2, ⟨a1, Steps.trans horig (Steps.step (Step.halt horig_halt) .refl)⟩,
-    ⟨am, ham_eq ▸ hhalt⟩, ?_⟩
-  -- Observable equivalence
-  exact fun v hv => hvalid.halt_obs pc_t σ_t σ_o am_t a2 hhalt_instr hrel v hv
+  -- Both programs halt with the same final array memory, same initial AM
+  exact ⟨σ_o, am_o', Steps.trans horig (Steps.step (Step.halt horig_halt) .refl),
+    ham_eq ▸ hhalt,
+    fun v hv => hvalid.halt_obs pc_t σ_t σ_o am_t am_o' hhalt_instr hrel v hv⟩
 
 -- ============================================================
 -- § Observation helpers
@@ -734,9 +733,9 @@ theorem halt_preservation (cert : PCertificate) (hvalid : PCertificateValid cert
   obtain ⟨am₀, hreach⟩ := hreach
   cases c_t with
   | halt σ_t am_h =>
-    obtain ⟨σ_o, am_f, ⟨amo1, horig'⟩, _, hobs_eq⟩ := soundness_halt cert hvalid σ₀ σ_t hts₀ ⟨am₀, am_h, hreach⟩
+    obtain ⟨σ_o, am_f, horig', _, hobs_eq⟩ := soundness_halt cert hvalid σ₀ σ_t hts₀ (am₀ := am₀) ⟨am_h, hreach⟩
     simp only [observe] at hobs; rw [Observation.halt.injEq] at hobs; subst hobs
-    exact ⟨Cfg.halt σ_o am_f, ⟨amo1, horig'⟩,
+    exact ⟨Cfg.halt σ_o am_f, ⟨am₀, horig'⟩,
       congrArg Observation.halt (obs_map_eq (fun v hv => (hobs_eq v hv).symm))⟩
   | run pc_t σ_t am_t =>
     have hpc := steps_run_in_bounds hvalid.step_closed hvalid.step_closed.1 hreach
@@ -744,14 +743,14 @@ theorem halt_preservation (cert : PCertificate) (hvalid : PCertificateValid cert
       ⟨cert.trans[pc_t], getElem?_eq_some_iff.mpr ⟨hpc, rfl⟩⟩
     cases instr with
     | halt =>
-      obtain ⟨pc_o, σ_o, a1, a2, ho, hpc_eq, hrel, _, _, _⟩ := simulation_trace hvalid hts₀ hreach
+      obtain ⟨pc_o, σ_o, a2, ho, hpc_eq, hrel, _, _, _⟩ := simulation_trace hvalid hts₀ hreach
       have horig_halt : cert.orig[pc_o]? = some TAC.halt := by rw [← hpc_eq]; exact hvalid.halt_corr pc_t hinstr
       have htobs : observe cert.trans cert.observable (Cfg.run pc_t σ_t am_t) =
           Observation.halt (cert.observable.map fun v => (v, σ_t v)) := by simp only [observe, hinstr]
       have hoobs : observe cert.orig cert.observable (Cfg.run pc_o σ_o a2) =
           Observation.halt (cert.observable.map fun v => (v, σ_o v)) := by simp only [observe, horig_halt]
       rw [htobs] at hobs; rw [Observation.halt.injEq] at hobs; subst hobs
-      exact ⟨Cfg.run pc_o σ_o a2, ⟨a1, ho⟩, hoobs ▸
+      exact ⟨Cfg.run pc_o σ_o a2, ⟨am₀, ho⟩, hoobs ▸
         congrArg Observation.halt (obs_map_eq (fun v hv => (hvalid.halt_obs pc_t σ_t σ_o am_t a2 hinstr hrel v hv).symm))⟩
     | _ => simp only [observe, hinstr] at hobs; exact Observation.noConfusion hobs
   | error σ_t am_t => simp [observe] at hobs
@@ -842,11 +841,11 @@ theorem error_preservation (cert : PCertificate) (hvalid : PCertificateValid cer
     (hreach : cert.trans ⊩ Cfg.run 0 σ₀ am₀ ⟶* Cfg.error σ_e am_e) :
     ∃ σ_o am_o am_o', cert.orig ⊩ Cfg.run 0 σ₀ am_o ⟶* Cfg.error σ_o am_o' := by
   obtain ⟨pc_t, σ_t, am_t, hrun, herr, rfl⟩ := steps_to_error_decompose hreach
-  obtain ⟨pc_o, σ_o, a1, a2, horig_prefix, hpc_eq, hrel, _, hinv_t, hinv_o, hts_o⟩ := simulation_trace hvalid hts₀ hrun
+  obtain ⟨pc_o, σ_o, a2, horig_prefix, hpc_eq, hrel, _, hinv_t, hinv_o, hts_o⟩ := simulation_trace hvalid hts₀ hrun
   have hpc := steps_run_in_bounds hvalid.step_closed hvalid.step_closed.1 hrun
   rw [← hpc_eq] at horig_prefix
   obtain ⟨σ_o', am_o', horig_err⟩ := hvalid.error_pres pc_t σ_t σ_o am_t a2 hpc hrel hinv_t (hpc_eq ▸ hinv_o) hts_o herr
-  exact ⟨σ_o', a1, am_o', Steps.trans horig_prefix horig_err⟩
+  exact ⟨σ_o', am₀, am_o', Steps.trans horig_prefix horig_err⟩
 
 -- ============================================================
 -- § Divergence preservation
@@ -866,14 +865,16 @@ theorem credible_compilation_soundness (cert : PCertificate) (hvalid : PCertific
     (σ₀ : Store) (hts₀ : TypedStore cert.tyCtx σ₀) (b : Behavior)
     (htrans : program_behavior cert.trans σ₀ b) :
     match b with
-    | .halts σ_t => ∃ σ_o am_f, (∃ am, haltsWithResult cert.orig 0 σ₀ σ_o am am_f) ∧
-        (∃ am, haltsWithResult cert.trans 0 σ₀ σ_t am am_f) ∧
+    | .halts σ_t => ∃ σ_o am_o am_f, haltsWithResult cert.orig 0 σ₀ σ_o am_o am_f ∧
         ∀ v ∈ cert.observable, σ_t v = σ_o v
     | .errors _ => ∃ σ_o am_o am_o', cert.orig ⊩ Cfg.run 0 σ₀ am_o ⟶* Cfg.error σ_o am_o'
     | .typeErrors _ => False
     | .diverges => ∃ f, IsInfiniteExec cert.orig f ∧ f 0 = Cfg.run 0 σ₀ ArrayMem.init := by
   cases b with
-  | halts σ_t' => obtain ⟨am, am', h⟩ := htrans; exact soundness_halt cert hvalid σ₀ σ_t' hts₀ ⟨am, am', h⟩
+  | halts σ_t' =>
+    obtain ⟨am, am', h⟩ := htrans
+    obtain ⟨σ_o, am_f, hhalt, _, hobs⟩ := soundness_halt cert hvalid σ₀ σ_t' hts₀ (am₀ := am) ⟨am', h⟩
+    exact ⟨σ_o, am, am_f, hhalt, hobs⟩
   | errors σ_e => obtain ⟨am, am', h⟩ := htrans; exact error_preservation cert hvalid σ₀ hts₀ h
   | typeErrors σ_e =>
     obtain ⟨am, am', h⟩ := htrans
@@ -886,8 +887,7 @@ theorem credible_compilation_total (cert : PCertificate) (hvalid : PCertificateV
     (σ₀ : Store) (hts₀ : TypedStore cert.tyCtx σ₀) :
     ∃ b, program_behavior cert.trans σ₀ b ∧
       match b with
-      | .halts σ_t => ∃ σ_o am_f, (∃ am, haltsWithResult cert.orig 0 σ₀ σ_o am am_f) ∧
-          (∃ am, haltsWithResult cert.trans 0 σ₀ σ_t am am_f) ∧
+      | .halts σ_t => ∃ σ_o am_o am_f, haltsWithResult cert.orig 0 σ₀ σ_o am_o am_f ∧
           ∀ v ∈ cert.observable, σ_t v = σ_o v
       | .errors _ => ∃ σ_o am_o am_o', cert.orig ⊩ Cfg.run 0 σ₀ am_o ⟶* Cfg.error σ_o am_o'
       | .typeErrors _ => False
@@ -897,7 +897,8 @@ theorem credible_compilation_total (cert : PCertificate) (hvalid : PCertificateV
   cases b with
   | halts σ_t =>
     obtain ⟨am, am', h⟩ := hb
-    exact soundness_halt cert hvalid σ₀ σ_t hts₀ ⟨am, am', h⟩
+    obtain ⟨σ_o, am_f, hhalt, _, hobs⟩ := soundness_halt cert hvalid σ₀ σ_t hts₀ (am₀ := am) ⟨am', h⟩
+    exact ⟨σ_o, am, am_f, hhalt, hobs⟩
   | errors σ_e =>
     obtain ⟨am, am', h⟩ := hb
     exact error_preservation cert hvalid σ₀ hts₀ h

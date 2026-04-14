@@ -3112,9 +3112,14 @@ theorem exec_checker_correct
   have hvalid := soundness_bridge dc h htyctx
   cases b with
   | halts σ_t' =>
-    obtain ⟨σ_o', am_f, ⟨am_o, ho⟩, ht, hobs⟩ := soundness_halt
-      (toPCertificate dc) hvalid σ₀ σ_t' hts₀ htrans
-    exact ⟨.halts σ_o', ⟨am_o, am_f, ho⟩, ⟨am_f, ⟨am_o, ho⟩, ht⟩, hobs⟩
+    obtain ⟨am₀, am', htrans'⟩ := htrans
+    have hsound := soundness_halt
+      (toPCertificate dc) hvalid σ₀ σ_t' hts₀ (am₀ := am₀) ⟨am', htrans'⟩
+    obtain ⟨σ_o', am_f, hconj⟩ := hsound
+    have ho := hconj.1
+    have ht := hconj.2.1
+    have hobs := hconj.2.2
+    exact ⟨.halts σ_o', ⟨am₀, am_f, ho⟩, ⟨am_f, ⟨am₀, ho⟩, am₀, ht⟩, hobs⟩
   | errors σ_e =>
     obtain ⟨am₀, am_e, hreach⟩ := htrans
     obtain ⟨σ_o, am_o, am_o', ho⟩ := error_preservation
@@ -3152,9 +3157,11 @@ theorem exec_checker_total
   have hvalid := soundness_bridge dc h htyctx
   cases b with
   | halts σ_t =>
-    obtain ⟨σ_o', am_f, ⟨am_o, ho⟩, ht, hobs⟩ := soundness_halt
-      (toPCertificate dc) hvalid σ₀ σ_t hts₀ hb
-    exact ⟨.halts σ_t, hb, .halts σ_o', ⟨am_o, am_f, ho⟩, ⟨am_f, ⟨am_o, ho⟩, ht⟩, hobs⟩
+    obtain ⟨am₀, am', hb'⟩ := hb
+    have hsound := soundness_halt (toPCertificate dc) hvalid σ₀ σ_t hts₀ (am₀ := am₀) ⟨am', hb'⟩
+    obtain ⟨σ_o', am_f, hconj⟩ := hsound
+    have ho := hconj.1; have ht := hconj.2.1; have hobs := hconj.2.2
+    exact ⟨.halts σ_t, ⟨am₀, am', hb'⟩, .halts σ_o', ⟨am₀, am_f, ho⟩, ⟨am_f, ⟨am₀, ho⟩, am₀, ht⟩, hobs⟩
   | errors σ_e =>
     obtain ⟨am₀, am_e, hreach⟩ := hb
     obtain ⟨σ_o, am_o, am_o', ho⟩ := error_preservation
@@ -3182,9 +3189,9 @@ theorem exec_halt_preservation
     (dc : ECertificate) (h : checkCertificateExec dc = true)
     (htyctx : dc.orig.tyCtx = dc.trans.tyCtx)
     (σ₀ σ_t' : Store) (hts₀ : TypedStore dc.tyCtx σ₀)
-    (hexec : ∃ am am', haltsWithResult dc.trans 0 σ₀ σ_t' am am') :
-    ∃ σ_o' am_f, (∃ am, haltsWithResult dc.orig 0 σ₀ σ_o' am am_f) ∧
-      (∃ am, haltsWithResult dc.trans 0 σ₀ σ_t' am am_f) ∧
+    {am₀ : ArrayMem} (hexec : ∃ am', haltsWithResult dc.trans 0 σ₀ σ_t' am₀ am') :
+    ∃ σ_o' am_f, haltsWithResult dc.orig 0 σ₀ σ_o' am₀ am_f ∧
+      haltsWithResult dc.trans 0 σ₀ σ_t' am₀ am_f ∧
       ∀ v ∈ dc.observable, σ_t' v = σ_o' v :=
   soundness_halt (toPCertificate dc) (soundness_bridge dc h htyctx) σ₀ σ_t' hts₀ hexec
 
