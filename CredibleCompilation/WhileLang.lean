@@ -535,7 +535,9 @@ def SExpr.toString : SExpr → String
   | .lit n => s!"{n}"
   | .var x => x
   | .bin op a b =>
-    let opStr := match op with | .add => "+" | .sub => "-" | .mul => "*" | .div => "/" | .mod => "%"
+    let opStr := match op with
+      | .add => "+" | .sub => "-" | .mul => "*" | .div => "/" | .mod => "%"
+      | .band => "&" | .bor => ("|" : String) | .bxor => "^" | .shl => "<<" | .shr => ">>"
     s!"({a.toString} {opStr} {b.toString})"
   | .arrRead arr idx => s!"{arr}[{idx.toString}]"
   | .flit f => s!"{f}"

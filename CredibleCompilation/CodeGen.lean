@@ -193,6 +193,12 @@ private def ppInstr (lbl : Nat → String) (afterFcmp : Bool) (instr : ArmInstr)
     [s!"  eor w0, w0, #{imm.toInt}"]
   | .orrR rd rn rm =>
     [s!"  orr {ppReg rd}, {ppReg rn}, {ppReg rm}"]
+  | .eorR rd rn rm =>
+    [s!"  eor {ppReg rd}, {ppReg rn}, {ppReg rm}"]
+  | .lslR rd rn rm =>
+    [s!"  lsl {ppReg rd}, {ppReg rn}, {ppReg rm}"]
+  | .asrR rd rn rm =>
+    [s!"  asr {ppReg rd}, {ppReg rn}, {ppReg rm}"]
   | .b target =>
     [s!"  b {lbl target}"]
   | .arrLd dst arr idxReg =>

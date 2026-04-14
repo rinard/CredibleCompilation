@@ -147,6 +147,12 @@ inductive ArmInstr where
   | eorImm   : ArmReg → ArmReg → BitVec 64 → ArmInstr
   /-- `orr Wd, Wn, Wm` — bitwise OR registers. -/
   | orrR     : ArmReg → ArmReg → ArmReg → ArmInstr
+  /-- `eor Xd, Xn, Xm` — bitwise XOR registers. -/
+  | eorR     : ArmReg → ArmReg → ArmReg → ArmInstr
+  /-- `lsl Xd, Xn, Xm` — logical shift left (register). -/
+  | lslR     : ArmReg → ArmReg → ArmReg → ArmInstr
+  /-- `asr Xd, Xn, Xm` — arithmetic shift right (register). -/
+  | asrR     : ArmReg → ArmReg → ArmReg → ArmInstr
   /-- `b label` — unconditional branch. -/
   | b        : Nat → ArmInstr
   /-- Load from global array: `dst ← arrayMem[arr][idxReg]`. -/

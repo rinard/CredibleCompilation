@@ -74,10 +74,12 @@ where
         | _ => go rest (.colon :: acc)
       else if c == '<' then
         match rest with
+        | '<' :: rest' => go rest' (.op "<<" :: acc)
         | '=' :: rest' => go rest' (.op "<=" :: acc)
         | _ => go rest (.op "<" :: acc)
       else if c == '>' then
         match rest with
+        | '>' :: rest' => go rest' (.op ">>" :: acc)
         | '=' :: rest' => go rest' (.op ">=" :: acc)
         | _ => go rest (.op ">" :: acc)
       else if c == '=' then
@@ -91,11 +93,13 @@ where
       else if c == '&' then
         match rest with
         | '&' :: rest' => go rest' (.op "&&" :: acc)
-        | _ => .error "unexpected '&', did you mean '&&'?"
+        | _ => go rest (.op "&" :: acc)
       else if c == '|' then
         match rest with
         | '|' :: rest' => go rest' (.op "||" :: acc)
-        | _ => .error "unexpected '|', did you mean '||'?"
+        | _ => go rest (.op "|" :: acc)
+      else if c == '^' then go rest (.op "^" :: acc)
+      else if c == '~' then go rest (.op "~" :: acc)
       else if c.isDigit then
         let (digits, rest') := spanDigits (c :: rest)
         -- Check if this is a float literal (digits followed by '.')
@@ -161,6 +165,9 @@ partial def parseAtom (toks : List Token) : Except String (SExpr × List Token) 
     match rest' with
     | Token.rparen :: rest'' => .ok (e, rest'')
     | _ => .error "expected ')'"
+  | Token.op "~" :: rest => do
+    let (e, rest') ← parseAtom rest
+    .ok (.bin .bxor e (.lit (-1)), rest')
   | Token.op "-" :: Token.num n :: rest => .ok (.lit (-n), rest)
   | Token.op "-" :: Token.fnum f :: rest => .ok (.flit (-f), rest)
   | tok :: _ => .error s!"expected expression, got {repr tok}"
@@ -177,14 +184,51 @@ partial def parseTerm' (lhs : SExpr) (toks : List Token) : Except String (SExpr 
   | Token.op "%" :: rest => do let (rhs, rest') ← parseAtom rest; parseTerm' (.bin .mod lhs rhs) rest'
   | _ => .ok (lhs, toks)
 
-partial def parseExpr (toks : List Token) : Except String (SExpr × List Token) := do
+partial def parseAddSub (toks : List Token) : Except String (SExpr × List Token) := do
   let (e, rest) ← parseTerm toks
+  parseAddSub' e rest
+
+partial def parseAddSub' (lhs : SExpr) (toks : List Token) : Except String (SExpr × List Token) :=
+  match toks with
+  | Token.op "+" :: rest => do let (rhs, rest') ← parseTerm rest; parseAddSub' (.bin .add lhs rhs) rest'
+  | Token.op "-" :: rest => do let (rhs, rest') ← parseTerm rest; parseAddSub' (.bin .sub lhs rhs) rest'
+  | _ => .ok (lhs, toks)
+
+partial def parseShift (toks : List Token) : Except String (SExpr × List Token) := do
+  let (e, rest) ← parseAddSub toks
+  parseShift' e rest
+
+partial def parseShift' (lhs : SExpr) (toks : List Token) : Except String (SExpr × List Token) :=
+  match toks with
+  | Token.op "<<" :: rest => do let (rhs, rest') ← parseAddSub rest; parseShift' (.bin .shl lhs rhs) rest'
+  | Token.op ">>" :: rest => do let (rhs, rest') ← parseAddSub rest; parseShift' (.bin .shr lhs rhs) rest'
+  | _ => .ok (lhs, toks)
+
+partial def parseBitAnd (toks : List Token) : Except String (SExpr × List Token) := do
+  let (e, rest) ← parseShift toks
+  parseBitAnd' e rest
+
+partial def parseBitAnd' (lhs : SExpr) (toks : List Token) : Except String (SExpr × List Token) :=
+  match toks with
+  | Token.op "&" :: rest => do let (rhs, rest') ← parseShift rest; parseBitAnd' (.bin .band lhs rhs) rest'
+  | _ => .ok (lhs, toks)
+
+partial def parseBitXor (toks : List Token) : Except String (SExpr × List Token) := do
+  let (e, rest) ← parseBitAnd toks
+  parseBitXor' e rest
+
+partial def parseBitXor' (lhs : SExpr) (toks : List Token) : Except String (SExpr × List Token) :=
+  match toks with
+  | Token.op "^" :: rest => do let (rhs, rest') ← parseBitAnd rest; parseBitXor' (.bin .bxor lhs rhs) rest'
+  | _ => .ok (lhs, toks)
+
+partial def parseExpr (toks : List Token) : Except String (SExpr × List Token) := do
+  let (e, rest) ← parseBitXor toks
   parseExpr' e rest
 
 partial def parseExpr' (lhs : SExpr) (toks : List Token) : Except String (SExpr × List Token) :=
   match toks with
-  | Token.op "+" :: rest => do let (rhs, rest') ← parseTerm rest; parseExpr' (.bin .add lhs rhs) rest'
-  | Token.op "-" :: rest => do let (rhs, rest') ← parseTerm rest; parseExpr' (.bin .sub lhs rhs) rest'
+  | Token.op "|" :: rest => do let (rhs, rest') ← parseBitXor rest; parseExpr' (.bin .bor lhs rhs) rest'
   | _ => .ok (lhs, toks)
 
 partial def parseBAtom (toks : List Token) : Except String (SBool × List Token) :=

@@ -1646,7 +1646,7 @@ private theorem execPath_sound_gen (orig : Prog) (ss : SymStore) (sam : SymArray
           | cons _ _ => simp [List.dropLast]
         have ⟨hnd, hnm⟩ := hRestNoDivMod nextPC hmem x_l y_l z_l
         cases op_l with
-        | add | sub | mul => exact True.intro
+        | add | sub | mul | band | bor | bxor | shl | shr => exact True.intro
         | div => exact absurd horig_l hnd
         | mod => exact absurd horig_l hnm
       -- Derive hRestNoDivMod₁ for the recursive call
@@ -2233,7 +2233,7 @@ private theorem transRel_sound (dc : ECertificate)
       σ_o y_o = .int a → σ_o z_o = .int b → op.safe a b := by
     intro _hne x_o op_o y_o z_o a_o b_o horig hya hzb
     cases op_o with
-    | add | sub | mul => exact True.intro
+    | add | sub | mul | band | bor | bxor | shl | shr => exact True.intro
     | div | mod =>
       -- Extract div-preservation info for pc_t
       simp only [checkDivPreservationExec, List.all_eq_true, List.mem_range] at hdivpres
@@ -2903,7 +2903,7 @@ theorem checkDivPreservationExec_sound (dc : ECertificate)
         have hop : op = op' := beq_iff_eq.mp hop_eq
         have : op = .div ∨ op = .mod := by
           cases op with
-          | add | sub | mul => exact absurd True.intro hunsafe
+          | add | sub | mul | band | bor | bxor | shl | shr => exact absurd True.intro hunsafe
           | div => exact Or.inl rfl
           | mod => exact Or.inr rfl
         rcases this with rfl | rfl <;> (

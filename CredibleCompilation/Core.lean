@@ -243,14 +243,20 @@ def arrayElemTy (decls : List (ArrayName × Nat × VarTy)) (arr : ArrayName) : V
 -- § 2. Binary operators
 -- ============================================================
 
-inductive BinOp | add | sub | mul | div | mod deriving Repr, DecidableEq
+inductive BinOp | add | sub | mul | div | mod | band | bor | bxor | shl | shr
+  deriving Repr, DecidableEq
 
 def BinOp.eval : BinOp → BitVec 64 → BitVec 64 → BitVec 64
-  | .add, a, b => a + b
-  | .sub, a, b => a - b
-  | .mul, a, b => a * b
-  | .div, a, b => BitVec.sdiv a b
-  | .mod, a, b => BitVec.srem a b
+  | .add,  a, b => a + b
+  | .sub,  a, b => a - b
+  | .mul,  a, b => a * b
+  | .div,  a, b => BitVec.sdiv a b
+  | .mod,  a, b => BitVec.srem a b
+  | .band, a, b => a &&& b
+  | .bor,  a, b => a ||| b
+  | .bxor, a, b => a ^^^ b
+  | .shl,  a, b => a <<< b
+  | .shr,  a, b => BitVec.sshiftRight a b.toNat
 
 /-- An operation is safe if it will not cause the program to get stuck.
     Only `div` and `mod` can fault — when the divisor is zero. -/
@@ -321,7 +327,7 @@ def BinOp.toFloat? : BinOp → Option FloatBinOp
   | .sub => some .fsub
   | .mul => some .fmul
   | .div => some .fdiv
-  | .mod => none
+  | .mod | .band | .bor | .bxor | .shl | .shr => none
 
 /-- Convert a CmpOp to the corresponding FloatCmpOp. -/
 def CmpOp.toFloat : CmpOp → FloatCmpOp

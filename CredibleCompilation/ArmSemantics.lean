@@ -113,6 +113,18 @@ inductive ArmStep (prog : ArmProg) : ArmState → ArmState → Prop where
     prog[s.pc]? = some (.orrR rd rn rm) →
     ArmStep prog s (s.setReg rd (s.regs rn ||| s.regs rm) |>.nextPC)
 
+  | eorR (rd rn rm : ArmReg) :
+    prog[s.pc]? = some (.eorR rd rn rm) →
+    ArmStep prog s (s.setReg rd (s.regs rn ^^^ s.regs rm) |>.nextPC)
+
+  | lslR (rd rn rm : ArmReg) :
+    prog[s.pc]? = some (.lslR rd rn rm) →
+    ArmStep prog s (s.setReg rd (s.regs rn <<< s.regs rm) |>.nextPC)
+
+  | asrR (rd rn rm : ArmReg) :
+    prog[s.pc]? = some (.asrR rd rn rm) →
+    ArmStep prog s (s.setReg rd (BitVec.sshiftRight (s.regs rn) (s.regs rm).toNat) |>.nextPC)
+
   | branch (lbl : Nat) :
     prog[s.pc]? = some (.b lbl) →
     ArmStep prog s { s with pc := lbl }
@@ -646,11 +658,16 @@ def formalGenInstr (vm : VarMap) (pcMap : Nat → Nat) (instr : TAC)
     match vm.lookup lv, vm.lookup rv, vm.lookup dst with
     | some offL, some offR, some offD =>
       let opInstr := match op with
-        | .add => [ArmInstr.addR .x0 .x1 .x2]
-        | .sub => [.subR .x0 .x1 .x2]
-        | .mul => [.mulR .x0 .x1 .x2]
-        | .div => [.sdivR .x0 .x1 .x2]
-        | .mod => [.sdivR .x0 .x1 .x2, .mulR .x0 .x0 .x2, .subR .x0 .x1 .x0]
+        | .add  => [ArmInstr.addR .x0 .x1 .x2]
+        | .sub  => [.subR .x0 .x1 .x2]
+        | .mul  => [.mulR .x0 .x1 .x2]
+        | .div  => [.sdivR .x0 .x1 .x2]
+        | .mod  => [.sdivR .x0 .x1 .x2, .mulR .x0 .x0 .x2, .subR .x0 .x1 .x0]
+        | .band => [.andR .x0 .x1 .x2]
+        | .bor  => [.orrR .x0 .x1 .x2]
+        | .bxor => [.eorR .x0 .x1 .x2]
+        | .shl  => [.lslR .x0 .x1 .x2]
+        | .shr  => [.asrR .x0 .x1 .x2]
       if op == .div || op == .mod then
         [.ldr .x2 offR, .cbz .x2 divLabel,
          .ldr .x1 offL, .ldr .x2 offR] ++ opInstr ++ [.str .x0 offD]
@@ -821,11 +838,16 @@ def verifiedGenInstr (layout : VarLayout) (pcMap : Nat → Nat) (instr : TAC)
     let rv_reg := match layout rv with | some (.ireg r) => r | _ => .x2
     let dst_reg := match layout dst with | some (.ireg r) => r | _ => .x0
     let opInstr := match op with
-      | .add => [ArmInstr.addR dst_reg lv_reg rv_reg]
-      | .sub => [.subR dst_reg lv_reg rv_reg]
-      | .mul => [.mulR dst_reg lv_reg rv_reg]
-      | .div => [.sdivR dst_reg lv_reg rv_reg]
-      | .mod => [.sdivR .x0 lv_reg rv_reg, .mulR .x0 .x0 rv_reg, .subR dst_reg lv_reg .x0]
+      | .add  => [ArmInstr.addR dst_reg lv_reg rv_reg]
+      | .sub  => [.subR dst_reg lv_reg rv_reg]
+      | .mul  => [.mulR dst_reg lv_reg rv_reg]
+      | .div  => [.sdivR dst_reg lv_reg rv_reg]
+      | .mod  => [.sdivR .x0 lv_reg rv_reg, .mulR .x0 .x0 rv_reg, .subR dst_reg lv_reg .x0]
+      | .band => [.andR dst_reg lv_reg rv_reg]
+      | .bor  => [.orrR dst_reg lv_reg rv_reg]
+      | .bxor => [.eorR dst_reg lv_reg rv_reg]
+      | .shl  => [.lslR dst_reg lv_reg rv_reg]
+      | .shr  => [.asrR dst_reg lv_reg rv_reg]
     if op == .div || op == .mod then
       some (vLoadVar layout lv lv_reg ++ vLoadVar layout rv rv_reg ++
       [.cbz rv_reg divLabel] ++ opInstr ++ vStoreVar layout dst dst_reg)
