@@ -325,6 +325,10 @@ structure ECertificate where
   /-- Well-founded measure for non-termination (per transformed label). -/
   measure    : Array Nat
 
+instance : Inhabited ECertificate where
+  default := { orig := ⟨#[], fun _ => .int, [], []⟩, trans := ⟨#[], fun _ => .int, [], []⟩,
+               inv_orig := #[], inv_trans := #[], instrCerts := #[], haltCerts := #[], measure := #[] }
+
 /-- The type context for the certificate, derived from the original program. -/
 abbrev ECertificate.tyCtx (cert : ECertificate) : TyCtx := cert.orig.tyCtx
 

@@ -54,6 +54,16 @@ def findOutermostHeader (prog : Prog) (pc : Nat) : Option Nat :=
   -- Return the SMALLEST (outermost) header
   candidates.foldl (fun best h => match best with | none => some h | some b => some (min b h)) none
 
+/-- A loop [header, tail] is reducible iff the header is the only entry from outside. -/
+def isReducibleLoop (prog : Prog) (header tail : Nat) : Bool :=
+  (List.range prog.size).all fun pc =>
+    if pc >= header && pc <= tail then true  -- inside loop: ok
+    else match prog[pc]? with
+    | some instr =>
+      (successors instr pc).all fun target =>
+        target < header || target > tail || target == header  -- only enter at header
+    | none => true
+
 -- ============================================================
 -- § 2. Hoistable detection (single header only)
 -- ============================================================
@@ -72,6 +82,15 @@ def findHoistable (prog : Prog) (inLoop : Array Bool) : List (Nat × Nat × Var 
       else match findOutermostHeader prog pc with
       | none => none
       | some header =>
+        -- Find the back-edge tail for this header and check reducibility
+        let backEdgeTail := (List.range prog.size).foldl (fun best spc =>
+          match prog[spc]? with
+          | some instr =>
+            if (successors instr spc).any (· == header) && header ≤ spc then
+              match best with | none => some spc | some b => some (max b spc)
+            else best
+          | none => best) (none : Option Nat)
+        if !(backEdgeTail.any (isReducibleLoop prog header ·)) then none else
         let usedBefore := (List.range (pc - header)).any fun offset =>
           match prog[header + offset]? with
           | some instr => (DAEOpt.instrUse instr).contains x
@@ -242,6 +261,17 @@ def numHoistable (prog : Prog) : Nat :=
 def optimize (prog : Prog) : ECertificate :=
   let inLoop := findLoopPCs prog
   let hoistable := findHoistable prog inLoop
+  if hoistable.isEmpty then
+    -- Nothing to hoist: valid identity certificate
+    let allVars := _root_.collectAllVars prog prog
+    let instrCerts := _root_.buildInstrCerts1to1 prog allVars
+    let haltCerts := _root_.buildHaltCerts instrCerts prog
+    { orig := prog, trans := prog,
+      inv_orig := Array.replicate prog.size ([] : EInv),
+      inv_trans := Array.replicate prog.size ([] : EInv),
+      instrCerts := instrCerts, haltCerts := haltCerts,
+      measure := Array.replicate prog.size 0 }
+  else
   let trans := buildTrans prog hoistable
   let pcMap := computePCMap prog.size hoistable
   let origPCMap := buildOrigPCMap prog.size pcMap trans.size hoistable

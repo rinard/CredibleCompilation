@@ -26,7 +26,7 @@ inductive Value where
 /-- Variable types. -/
 inductive VarTy where
   | int | bool | float
-  deriving Repr, DecidableEq
+  deriving Repr, DecidableEq, Inhabited
 
 namespace VarTy
 
