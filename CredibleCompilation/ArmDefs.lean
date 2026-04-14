@@ -155,12 +155,14 @@ def ArmFReg.isCallerSaved : ArmFReg → Bool
   | .d0 | .d1 | .d2 | .d3 | .d4 | .d5 | .d6 | .d7 => true
   | .d8 | .d9 | .d10 | .d11 | .d12 | .d13 | .d14 | .d15 => false
 
-/-- Havoc all caller-saved registers (set to 0).
-    Models the effect of a library call on registers not preserved by the callee. -/
-def ArmState.havocCallerSaved (s : ArmState) : ArmState :=
+/-- Havoc all caller-saved registers to arbitrary values.
+    Models the effect of a library call on registers not preserved by the callee.
+    `newRegs`/`newFregs` represent the arbitrary values left by the callee. -/
+def ArmState.havocCallerSaved (s : ArmState)
+    (newRegs : ArmReg → BitVec 64) (newFregs : ArmFReg → BitVec 64) : ArmState :=
   { s with
-    regs := fun r => if r.isCallerSaved then 0 else s.regs r
-    fregs := fun r => if r.isCallerSaved then 0 else s.fregs r }
+    regs := fun r => if r.isCallerSaved then newRegs r else s.regs r
+    fregs := fun r => if r.isCallerSaved then newFregs r else s.fregs r }
 
 -- ============================================================
 -- § 4. ARM64 instructions

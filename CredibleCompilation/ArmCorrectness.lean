@@ -1662,7 +1662,8 @@ theorem genInstr_correct (prog : ArmProg) (vm : VarMap) (pcMap : Nat → Nat)
       · simp [ArmState.setStack, ArmState.setFReg, ArmState.nextPC, hArrayMem]
     · -- Library call (exp, sin, cos, …): havocs caller-saved regs, but stack preserved
       have hNotNat : op.isNative = false := by cases op <;> simp_all [FloatUnaryOp.isNative]
-      refine ⟨_, .step (.fldr .d0 offS h0) (.step (.floatUnaryLibCall op .d0 .d0 h1 hNotNat) (.single (.fstr .d0 offD h2))),
+      -- Havoc with arbitrary values; stack-based SimRel is unaffected
+      refine ⟨_, .step (.fldr .d0 offS h0) (.step (.floatUnaryLibCall op .d0 .d0 (fun _ => 0) (fun _ => 0) h1 hNotNat) (.single (.fstr .d0 offD h2))),
         ?_, ?_, ?_⟩
       · intro v off hv
         simp only [ArmState.setStack, ArmState.setFReg, ArmState.nextPC, ArmState.havocCallerSaved]
@@ -3773,11 +3774,14 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
           have := hPcNext _ _ rfl; rw [show dst_reg = ArmFReg.d0 from hDR] at this; simp at this
           omega
         · simp [hAM3, hAM2, hAM1, hArrayMem]
-    · -- Library call (exp, sin, cos, …): havocs caller-saved, then sets fd
+    · -- Library call (exp, sin, cos, …): havocs caller-saved to arbitrary values, then sets fd
       have hNotNat : op.isNative = false := by cases op <;> simp_all [FloatUnaryOp.isNative]
-      let s2 := s1.havocCallerSaved |>.setFReg dst_reg (op.eval (s1.fregs src_reg)) |>.nextPC
+      -- Pick arbitrary replacement values for havoc (proof works for any choice)
+      let newRegs : ArmReg → BitVec 64 := fun _ => 0
+      let newFregs : ArmFReg → BitVec 64 := fun _ => 0
+      let s2 := (s1.havocCallerSaved newRegs newFregs) |>.setFReg dst_reg (op.eval (s1.fregs src_reg)) |>.nextPC
       have hSteps2 : ArmSteps prog s1 s2 :=
-        ArmSteps.single (.floatUnaryLibCall op dst_reg src_reg hCall hNotNat)
+        ArmSteps.single (.floatUnaryLibCall op dst_reg src_reg newRegs newFregs hCall hNotNat)
       have hDR_2 : s2.fregs dst_reg = (Value.float (op.eval f)).encode := by
         simp [s2, ArmState.setFReg, ArmState.nextPC, ArmState.havocCallerSaved, Value.encode]
         rw [hSR_1, hy]; rfl
@@ -3785,7 +3789,7 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
         simp only [s2, ArmState.nextPC, ArmState.setFReg, ArmState.havocCallerSaved, src_reg] at hPC1 ⊢; omega
       have hAM2 : s2.arrayMem = s1.arrayMem := by simp [s2, ArmState.havocCallerSaved]
       -- ExtStateRel preserved: havocCallerSaved is safe because NoCallerSavedLayout
-      have hRelHavoc : ExtStateRel layout σ s1.havocCallerSaved :=
+      have hRelHavoc : ExtStateRel layout σ (s1.havocCallerSaved newRegs newFregs) :=
         ExtStateRel.havocCallerSaved_preserved hRel1 (hNCSL x op y heq hNotNat)
       -- Step 3: store — case split on whether dst is in freg
       by_cases hXFR : ∃ r, layout x = some (.freg r)
@@ -3795,7 +3799,7 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
         have hStore : vStoreVarFP layout x dst_reg = [] := by simp [vStoreVarFP, hDst, hDR]
         have hRel3 : ExtStateRel layout (σ[x ↦ .float (op.eval f)]) s2 := by
           show ExtStateRel layout (σ[x ↦ .float (op.eval f)])
-            (s1.havocCallerSaved |>.setFReg dst_reg (op.eval (s1.fregs src_reg))).nextPC
+            ((s1.havocCallerSaved newRegs newFregs) |>.setFReg dst_reg (op.eval (s1.fregs src_reg))).nextPC
           rw [hDR]
           have hval : op.eval (s1.fregs src_reg) = (Value.float (op.eval f)).encode := by
             simp [Value.encode]; rw [hSR_1, hy]; rfl
@@ -3812,7 +3816,7 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
           · rfl
         have hRel2 : ExtStateRel layout σ s2 := by
           show ExtStateRel layout σ
-            (s1.havocCallerSaved |>.setFReg dst_reg (op.eval (s1.fregs src_reg))).nextPC
+            ((s1.havocCallerSaved newRegs newFregs) |>.setFReg dst_reg (op.eval (s1.fregs src_reg))).nextPC
           rw [hDR]; exact (ExtStateRel.setFReg_preserved hRelHavoc (fun v => hScratch.not_d0 v)).nextPC
         have hD0 : s2.fregs .d0 = (Value.float (op.eval f)).encode := by
           rw [← hDR]; exact hDR_2

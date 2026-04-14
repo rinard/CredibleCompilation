@@ -199,11 +199,12 @@ inductive ArmStep (prog : ArmProg) : ArmState → ArmState → Prop where
     prog[s.pc]? = some (.fmaxR fd fn fm) →
     ArmStep prog s (s.setFReg fd (FloatBinOp.eval .fmax (s.fregs fn) (s.fregs fm)) |>.nextPC)
 
-  /-- Binary float library call (pow): havocs all caller-saved registers,
-      then sets fd to result (models `bl _pow; fmov fd, d0`). -/
-  | callBinF (fop : FloatBinOp) (fd fn fm : ArmFReg) :
+  /-- Binary float library call (pow): havocs all caller-saved registers
+      to arbitrary values, then sets fd to result (models `bl _pow`). -/
+  | callBinF (fop : FloatBinOp) (fd fn fm : ArmFReg)
+    (newRegs : ArmReg → BitVec 64) (newFregs : ArmFReg → BitVec 64) :
     prog[s.pc]? = some (.callBinF fop fd fn fm) →
-    ArmStep prog s (s.havocCallerSaved |>.setFReg fd (FloatBinOp.eval fop (s.fregs fn) (s.fregs fm)) |>.nextPC)
+    ArmStep prog s (s.havocCallerSaved newRegs newFregs |>.setFReg fd (FloatBinOp.eval fop (s.fregs fn) (s.fregs fm)) |>.nextPC)
 
   /-- Native float unary (fsqrt, fabs, fneg): pure, only modifies fd. -/
   | floatUnaryNative (op : FloatUnaryOp) (fd fn : ArmFReg) :
@@ -212,11 +213,12 @@ inductive ArmStep (prog : ArmProg) : ArmState → ArmState → Prop where
     ArmStep prog s (s.setFReg fd (op.eval (s.fregs fn)) |>.nextPC)
 
   /-- Library float unary (exp, sin, cos, …): havocs all caller-saved
-      registers, then sets fd to result (models `bl _exp; fmov fd, d0`). -/
-  | floatUnaryLibCall (op : FloatUnaryOp) (fd fn : ArmFReg) :
+      registers to arbitrary values, then sets fd to result (models `bl _exp`). -/
+  | floatUnaryLibCall (op : FloatUnaryOp) (fd fn : ArmFReg)
+    (newRegs : ArmReg → BitVec 64) (newFregs : ArmFReg → BitVec 64) :
     prog[s.pc]? = some (.floatUnaryInstr op fd fn) →
     op.isNative = false →
-    ArmStep prog s (s.havocCallerSaved |>.setFReg fd (op.eval (s.fregs fn)) |>.nextPC)
+    ArmStep prog s (s.havocCallerSaved newRegs newFregs |>.setFReg fd (op.eval (s.fregs fn)) |>.nextPC)
 
 /-- Multi-step closure. -/
 inductive ArmSteps (prog : ArmProg) : ArmState → ArmState → Prop where
@@ -644,12 +646,13 @@ theorem checkNoCallerSavedLayout_spec (layout : VarLayout)
          fun v r hloc => checkNoCallerSavedLayout_freg h hloc⟩
 
 /-- `havocCallerSaved` preserves `ExtStateRel` when no mapped variable is
-    in a caller-saved register. -/
+    in a caller-saved register (for any choice of replacement values). -/
 theorem ExtStateRel.havocCallerSaved_preserved
     {layout : VarLayout} {σ : Store} {s : ArmState}
+    {newRegs : ArmReg → BitVec 64} {newFregs : ArmFReg → BitVec 64}
     (hRel : ExtStateRel layout σ s)
     (hNCS : NoCallerSavedLayout layout) :
-    ExtStateRel layout σ s.havocCallerSaved := by
+    ExtStateRel layout σ (s.havocCallerSaved newRegs newFregs) := by
   intro v loc hloc
   match loc with
   | .stack off => simp [ArmState.havocCallerSaved]; exact hRel v (.stack off) hloc
