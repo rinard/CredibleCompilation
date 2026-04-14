@@ -67,7 +67,7 @@ C
 C
 C     Kernel 14: 1-D PIC
 C
-      DO 500 IREP = 1, 10000
+      DO 500 IREP = 1, 1867000
 C
 C        Reset RH
          DO 110 I = 1, 2049

@@ -13,7 +13,7 @@
 #define JD    101
 #define KD    7
 #define NTOT  (JD * KD)
-#define NREPS 100000
+#define NREPS 8581000
 
 /* 1-based column-major: arr(k,j) with first dim 101 */
 #define ZA(k,j) za[((j)-1)*101 + (k)]

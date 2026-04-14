@@ -50,7 +50,7 @@ C     C: px[i][0] = ... px[i][12] ... px[i][2]
 C     F: PX(I,1) = ... PX(I,13) ... PX(I,3)
 C
       N = 101
-      DO 200 REP = 1, 10000
+      DO 200 REP = 1, 60639000
           DO 90 I = 1, N
               PX(I,1) = DM28*PX(I,13) + DM27*PX(I,12)
      &                + DM26*PX(I,11) + DM25*PX(I,10)

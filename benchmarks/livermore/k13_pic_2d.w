@@ -1,7 +1,7 @@
 var ip : int, rep : int, i1 : int, j1 : int, i2 : int, j2 : int,
     ds : float, dw : float, fuzz : float, buzz : float, fizz : float,
     i : int, j : int, k : int;
-array p[257] : float, b[4097] : float, c[4097] : float, h[4097] : float,
+array p[257] : float, b[4097] : float, c[4097] : float, h[6177] : float,
       y[1002] : float, z[1002] : float, e[97] : int, f[97] : int;
 
 ds := 1.0;
@@ -87,7 +87,7 @@ while (i <= 96) {
 };
 
 rep := 1;
-while (rep <= 10000) {
+while (rep <= 2570000) {
   ds := 1.0;
   dw := 0.5;
   j := 1;
@@ -113,16 +113,16 @@ while (rep <= 10000) {
   while (ip <= 64) {
     i1 := floatToInt(p[(1 - 1) * 64 + ip]);
     j1 := floatToInt(p[(2 - 1) * 64 + ip]);
-    i1 := i1 % 64;
-    j1 := j1 % 64;
+    i1 := i1 & 63;
+    j1 := j1 & 63;
     p[(3 - 1) * 64 + ip] := p[(3 - 1) * 64 + ip] + b[(j1 + 1 - 1) * 64 + (i1 + 1)];
     p[(4 - 1) * 64 + ip] := p[(4 - 1) * 64 + ip] + c[(j1 + 1 - 1) * 64 + (i1 + 1)];
     p[(1 - 1) * 64 + ip] := p[(1 - 1) * 64 + ip] + p[(3 - 1) * 64 + ip];
     p[(2 - 1) * 64 + ip] := p[(2 - 1) * 64 + ip] + p[(4 - 1) * 64 + ip];
     i2 := floatToInt(p[(1 - 1) * 64 + ip]);
     j2 := floatToInt(p[(2 - 1) * 64 + ip]);
-    i2 := (i2 % 64) - 1;
-    j2 := (j2 % 64) - 1;
+    i2 := (i2 & 63) - 1;
+    j2 := (j2 & 63) - 1;
     p[(1 - 1) * 64 + ip] := p[(1 - 1) * 64 + ip] + y[i2 + 32];
     p[(2 - 1) * 64 + ip] := p[(2 - 1) * 64 + ip] + z[j2 + 32];
     i2 := i2 + e[i2 + 32];

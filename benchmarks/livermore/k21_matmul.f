@@ -48,7 +48,7 @@ C     C code: px[j][i] += vy[k][i] * cx[j][k]
 C     In Fortran (column-major): PX(I,J) += VY(K,I) * CX(K,J)
 C     where I=1..25, J=1..N, K=1..25
 C
-      DO 500 IREP = 1, 10000
+      DO 500 IREP = 1, 2476000
 C
 C        Reset PX
          DO 106 J = 1, 101

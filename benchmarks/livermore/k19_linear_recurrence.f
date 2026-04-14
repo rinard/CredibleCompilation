@@ -39,7 +39,7 @@ C
 C     Kernel 19: General Linear Recurrence Equations
 C     Forward and backward sweeps with recurrence
 C
-      DO 500 IREP = 1, 10000
+      DO 500 IREP = 1, 30088000
          STB5 = 0.5D0
          KB5I = 0
 C

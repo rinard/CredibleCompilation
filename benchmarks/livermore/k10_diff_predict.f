@@ -38,7 +38,7 @@ C     C 0-based col indices -> Fortran 1-based: col+1
 C     C: cx[i][4]->CX(I,5), px[i][4]->PX(I,5), etc.
 C
       N = 101
-      DO 200 REP = 1, 10000
+      DO 200 REP = 1, 48656000
           DO 90 I = 1, N
               AR       =     CX(I,5)
               BR       = AR - PX(I,5)

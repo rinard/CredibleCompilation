@@ -11,7 +11,7 @@
 
 #define NJ    101
 #define NK    25
-#define NREPS 10000
+#define NREPS 2476000
 
 /* 1-based column-major flat access */
 #define PX(i,j) px[((j)-1)*25 + (i)]

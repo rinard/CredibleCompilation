@@ -82,7 +82,7 @@ while (k3 <= 5) {
 };
 
 rep := 1;
-while (rep <= 10000) {
+while (rep <= 10535000) {
   nl1 := 1;
   nl2 := 2;
   kx := 2;

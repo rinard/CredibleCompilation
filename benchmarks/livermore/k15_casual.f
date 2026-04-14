@@ -79,7 +79,7 @@ C     and second is "zone". In Fortran original, VY(k,j) with k=zone, j=group.
 C     The C ref loops j=1..ng-1, k=1..nz-1 (0-based).
 C     In Fortran 1-based: j=2..NG, k=2..NZ
 C
-      DO 500 IREP = 1, 10000
+      DO 500 IREP = 1, 4249000
          NG = 7
          NZ = 101
          AR = 0.053D0

@@ -21,7 +21,7 @@ C
    15 CONTINUE
 C
       N = 64
-      DO 200 REP = 1, 1000
+      DO 200 REP = 1, 2781000
 C         Reset W each rep
           DO 20 J = 1, 1001
               W(J) = 0.0D0

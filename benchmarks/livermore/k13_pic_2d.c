@@ -4,7 +4,7 @@
 
 #define NPART 64
 #define NGRID 64
-#define NREPS 10000
+#define NREPS 2570000
 
 /* P(K,J) 1-based, column-major (64,4) */
 #define P(k,j) p[((j)-1)*64 + (k)]
@@ -14,7 +14,7 @@
 #define H(i,j) h[((j)-1)*64 + (i)]
 
 int main(void) {
-    double p[257], b[4097], cc[4097], h[4097];
+    double p[257], b[4097], cc[4097], h[6177];
     double y[1002], z[1002];
     long e[97], f[97];
 

@@ -28,7 +28,7 @@ C     Initialize arrays (simplified SIGNEL)
          VLIN(K) = (BUZZ - FIZZ)*0.1D0
    10 CONTINUE
 
-      DO 500 IREP = 1, 10000
+      DO 500 IREP = 1, 23048000
          I   = N - 1
          J   = 0
          INK = -1

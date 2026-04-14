@@ -65,7 +65,7 @@ while (i <= 2049) {
 };
 
 rep := 1;
-while (rep <= 10000) {
+while (rep <= 1867000) {
   i := 1;
   while (i <= 2049) {
     rh[i] := 0.0;
@@ -87,7 +87,7 @@ while (rep <= 10000) {
     xx[k] := xx[k] + vx[k] + flx;
     ir[k] := floatToInt(xx[k]);
     rx[k] := xx[k] - intToFloat(ir[k]);
-    ir[k] := (ir[k] % 2048) + 1;
+    ir[k] := (ir[k] & 2047) + 1;
     xx[k] := rx[k] + intToFloat(ir[k]);
     k := k + 1
   };

@@ -25,7 +25,7 @@ C
 C     Kernel loop
 C
       N = 1000
-      DO 200 REP = 1, 10000
+      DO 200 REP = 1, 35622000
           DO 90 K = 1, N
               X(K) = Y(K+1) - Y(K)
    90     CONTINUE

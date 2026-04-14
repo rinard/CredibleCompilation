@@ -113,7 +113,7 @@ C
 C
 C     Kernel 20: Discrete Ordinates Transport
 C
-      DO 500 IREP = 1, 10000
+      DO 500 IREP = 1, 1570000
 C
 C        Re-init XX to avoid drift
          FUZZ = 1.2345D-3

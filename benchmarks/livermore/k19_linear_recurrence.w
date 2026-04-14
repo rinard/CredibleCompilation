@@ -31,7 +31,7 @@ while (k <= 1001) {
 };
 
 rep := 1;
-while (rep <= 10000) {
+while (rep <= 30088000) {
   stb5 := 0.5;
   kb5i := 0;
   k := 1;

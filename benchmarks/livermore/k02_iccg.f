@@ -23,7 +23,7 @@ C
    10 CONTINUE
 C
       N = 101
-      DO 200 REP = 1, 10000
+      DO 200 REP = 1, 11495000
 C         Reset X each rep
           FUZZ  = 1.2345D-3
           BUZZ  = 1.0D0 + FUZZ

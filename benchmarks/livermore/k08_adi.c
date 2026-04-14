@@ -11,7 +11,7 @@
 #define NDIM  101
 #define N     100
 #define KXD   5
-#define NREPS 10000
+#define NREPS 10535000
 
 /* 1-based Fortran column-major access for U(k1,k2,k3) with dims (2,101,5) */
 #define U(arr,k1,k2,k3) arr[((k3)-1)*202 + ((k2)-1)*2 + (k1)]

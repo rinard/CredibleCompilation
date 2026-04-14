@@ -31,7 +31,7 @@ C
 C     Kernel loop
 C
       N = 1001
-      DO 100 REP = 1, 10000
+      DO 100 REP = 1, 31726000
           Q = 0.0D0
           DO 90 K = 1, N
               Q = Q + Z(K) * X(K)

@@ -80,7 +80,7 @@ C     C: kx=1..2 (0-based) -> Fortran: KX=2..3 (1-based)
 C     C: ky=1..n-2 (0-based) -> Fortran: KY=2..N-1 (1-based)
 C
       N = 100
-      DO 200 REP = 1, 10000
+      DO 200 REP = 1, 10535000
           NL1 = 1
           NL2 = 2
           DO 110 KX = 2, 3

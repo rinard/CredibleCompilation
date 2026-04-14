@@ -7,7 +7,7 @@
 #include "signel.h"
 
 #define N     101
-#define NREPS 10000
+#define NREPS 23048000
 
 int main(void) {
     static double vsp[102], vstp[102], vxne[102], vxnd[102];

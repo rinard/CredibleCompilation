@@ -10,7 +10,7 @@
 #define KN  6
 #define JD  101
 #define KD  7
-#define NREPS 10000
+#define NREPS 1382000
 
 /* 1-based column-major: arr(j,k) with first dim 101 */
 #define ZA(j,k) za[((k)-1)*101 + (j)]

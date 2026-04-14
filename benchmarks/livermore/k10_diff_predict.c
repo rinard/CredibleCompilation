@@ -7,7 +7,7 @@
 
 #define N     101
 #define NCOL  25
-#define NREPS 10000
+#define NREPS 48656000
 
 /* 1-based Fortran column-major: arr(i,j) with dims (101,25) */
 #define PX(i,j) px[((j)-1)*101 + (i)]

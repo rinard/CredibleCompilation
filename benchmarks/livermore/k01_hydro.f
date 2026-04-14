@@ -43,7 +43,7 @@ C
 C     Kernel loop
 C
       N = 1001
-      DO 100 REP = 1, 10000
+      DO 100 REP = 1, 26147000
           DO 90 K = 1, N
               X(K) = Q + Y(K) * (R * Z(K+10) + T * Z(K+11))
    90     CONTINUE

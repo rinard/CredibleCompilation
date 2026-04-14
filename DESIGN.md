@@ -37,3 +37,7 @@ Record of key design decisions for CredibleCompilation.
 16) Think about adding a nondeterministic choice, something like choose bexpr1 : l1 bexpr2: l2; where bexpr1 and bexpr2 can both be true and implementation can choose one nondeterministically. 
 
 17) Be sure register allocator respects register usage conventions - for example, can't use x16-x18, x19-x28 are callee save, x3-x15 caller save. Code was allocating x17. Note - usage convention is architecture specific so must change if change machines. 
+
+18) Looks like difficult to support goto at source level but not TAC level. For now rewrite benchmarks to use only structured flow of control. 
+
+19) LICM does not support irreducible CFGs. Initially showed up as certificate failure for program with irreducible CFG. Added an explicit check for irreducible CFG to LICM. Initial fix - identity transform if irreducible, added explicit pass not applicable to interface with driver checking. 

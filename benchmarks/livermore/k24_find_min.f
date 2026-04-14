@@ -21,7 +21,7 @@ C
 C
 C     Kernel 24: Find Location of First Minimum
 C
-      DO 500 IREP = 1, 10000
+      DO 500 IREP = 1, 30595000
          X(N/2+1) = -1.0D+10
          M = 1
          DO 200 K = 2, N

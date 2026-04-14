@@ -3,7 +3,7 @@
 #include "signel.h"
 
 #define N     1001
-#define NREPS 10000
+#define NREPS 1867000
 
 int main(void) {
     double grd[1002], dex[1002], xi[1002];

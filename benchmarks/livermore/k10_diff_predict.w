@@ -25,7 +25,7 @@ while (i <= 2525) {
 };
 
 rep := 1;
-while (rep <= 10000) {
+while (rep <= 48656000) {
   i := 1;
   while (i <= 101) {
     ar := cx[4 * 101 + i];

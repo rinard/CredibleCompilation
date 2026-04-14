@@ -34,7 +34,7 @@ C     Spacer init for r,s,t (simplified)
       S = 0.1D0
       T = 0.1D0
 
-      DO 500 IREP = 1, 10000
+      DO 500 IREP = 1, 694000
          I1 = 1
          M  = 1
          K2 = 0

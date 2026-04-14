@@ -7,7 +7,7 @@
 #include "signel.h"
 
 #define NW    64
-#define NREPS 1000
+#define NREPS 2781000
 
 int main(void) {
     double w[1002];

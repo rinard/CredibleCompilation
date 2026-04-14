@@ -94,7 +94,7 @@ while (j <= 7) {
 };
 
 rep := 1;
-while (rep <= 100000) {
+while (rep <= 8581000) {
   j := 2;
   while (j <= 6) {
     k := 2;

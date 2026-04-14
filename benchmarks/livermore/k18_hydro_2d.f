@@ -87,7 +87,7 @@ C     Kernel 18: 2-D Explicit Hydrodynamics
 C     C code uses 0-based [k][j] with k=row, j=col.
 C     In Fortran 1-based: ZA(J,K) etc. with J=col=2..JN, K=row=2..KN
 C
-      DO 500 IREP = 1, 10000
+      DO 500 IREP = 1, 1382000
          T  = 0.0037D0
          S  = 0.0041D0
          KN = 6

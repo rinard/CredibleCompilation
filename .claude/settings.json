@@ -105,7 +105,10 @@
       "Bash(grep -v \"-- \")",
       "Bash(ls /Users/mr/CredibleCompilation/tests/programs/55_*.while /Users/mr/CredibleCompilation/tests/programs/55_*.c)",
       "Bash(ls /Users/mr/CredibleCompilation/tests/programs/65_*.while /Users/mr/CredibleCompilation/tests/programs/66_*.while)",
-      "Bash(grep -rc \"sorry\" CredibleCompilation/*.lean CredibleCompilation/**/*.lean)"
+      "Bash(grep -rc \"sorry\" CredibleCompilation/*.lean CredibleCompilation/**/*.lean)",
+      "Bash(tee /tmp/build2.txt)",
+      "Bash(find /Users/mr/CredibleCompilation -name \"*.lean\" -exec grep -l \"def verifiedGenInstr\" {} \\\\;)",
+      "Bash(grep -rn \"floatSqrt\" /Users/mr/CredibleCompilation/CredibleCompilation/*.lean)"
     ],
     "additionalDirectories": [
       "/Users/mr/CredibleCompilation/tests/programs"

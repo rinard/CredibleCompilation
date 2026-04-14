@@ -9,7 +9,7 @@
 
 #define NZ    101
 #define NG    7
-#define NREPS 10000
+#define NREPS 4249000
 
 /* 1-based column-major access with first dim 101 */
 #define VY(k,j) vy[((j)-1)*101 + (k)]

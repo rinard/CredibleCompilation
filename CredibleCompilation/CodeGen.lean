@@ -1305,42 +1305,40 @@ private def detectCalleeSaved (vars : List Var) : List Nat × List Nat :=
 
 /-- Generate stp/ldp pairs for callee-saved registers.
     Registers are saved in pairs for 16-byte alignment. -/
+private def pairUpSameClass (regs : List String) : List (String × Option String) :=
+  match regs with
+  | [] => []
+  | [r] => [(r, none)]
+  | r1 :: r2 :: rest => (r1, some r2) :: pairUpSameClass rest
+
 private def calleeSavePrologue (intRegs : List Nat) (floatRegs : List Nat)
     (baseOffset : Nat) : List String × Nat :=
-  -- Pair up registers, padding with a dummy if odd count
-  let allRegs : List (String × Option String) :=
-    let ints := intRegs.map fun n => s!"x{n}"
-    let floats := floatRegs.map fun n => s!"d{n}"
-    let all := ints ++ floats
-    let rec pairUp : List String → List (String × Option String)
-      | [] => []
-      | [r] => [(r, none)]
-      | r1 :: r2 :: rest => (r1, some r2) :: pairUp rest
-    pairUp all
-  let (lines, offset) := allRegs.foldl (fun (acc : List String × Nat) (r1, r2opt) =>
+  -- Pair int regs and float regs separately to avoid mixed stp
+  let intPairs := pairUpSameClass (intRegs.map fun n => s!"x{n}")
+  let floatPairs := pairUpSameClass (floatRegs.map fun n => s!"d{n}")
+  let allPairs := intPairs ++ floatPairs
+  let (lines, offset) := allPairs.foldl (fun (acc : List String × Nat) (r1, r2opt) =>
     let off := acc.2
     match r2opt with
-    | some r2 => (acc.1 ++ [s!"  stp {r1}, {r2}, [sp, #{off}]"], off + 16)
-    | none    => (acc.1 ++ [s!"  str {r1}, [sp, #{off}]"], off + 16)
+    | some r2 =>
+      if off >= 0 && off <= 504 then (acc.1 ++ [s!"  stp {r1}, {r2}, [sp, #{off}]"], off + 16)
+      else (acc.1 ++ [s!"  str {r1}, [sp, #{off}]", s!"  str {r2}, [sp, #{off + 8}]"], off + 16)
+    | none => (acc.1 ++ [s!"  str {r1}, [sp, #{off}]"], off + 16)
   ) ([], baseOffset)
   (lines, offset)
 
 private def calleeSaveEpilogue (intRegs : List Nat) (floatRegs : List Nat)
     (baseOffset : Nat) : List String :=
-  let allRegs : List (String × Option String) :=
-    let ints := intRegs.map fun n => s!"x{n}"
-    let floats := floatRegs.map fun n => s!"d{n}"
-    let all := ints ++ floats
-    let rec pairUp : List String → List (String × Option String)
-      | [] => []
-      | [r] => [(r, none)]
-      | r1 :: r2 :: rest => (r1, some r2) :: pairUp rest
-    pairUp all
-  let (lines, _) := allRegs.foldl (fun (acc : List String × Nat) (r1, r2opt) =>
+  let intPairs := pairUpSameClass (intRegs.map fun n => s!"x{n}")
+  let floatPairs := pairUpSameClass (floatRegs.map fun n => s!"d{n}")
+  let allPairs := intPairs ++ floatPairs
+  let (lines, _) := allPairs.foldl (fun (acc : List String × Nat) (r1, r2opt) =>
     let off := acc.2
     match r2opt with
-    | some r2 => (acc.1 ++ [s!"  ldp {r1}, {r2}, [sp, #{off}]"], off + 16)
-    | none    => (acc.1 ++ [s!"  ldr {r1}, [sp, #{off}]"], off + 16)
+    | some r2 =>
+      if off >= 0 && off <= 504 then (acc.1 ++ [s!"  ldp {r1}, {r2}, [sp, #{off}]"], off + 16)
+      else (acc.1 ++ [s!"  ldr {r1}, [sp, #{off}]", s!"  ldr {r2}, [sp, #{off + 8}]"], off + 16)
+    | none => (acc.1 ++ [s!"  ldr {r1}, [sp, #{off}]"], off + 16)
   ) ([], baseOffset)
   lines
 

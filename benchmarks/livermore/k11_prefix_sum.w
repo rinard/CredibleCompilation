@@ -14,7 +14,7 @@ while (k <= 1001) {
 };
 
 rep := 1;
-while (rep <= 10000) {
+while (rep <= 35249000) {
   x[1] := y[1];
   k := 2;
   while (k <= 1001) {

@@ -25,7 +25,7 @@ while (k <= 1001) {
 };
 
 rep := 1;
-while (rep <= 10000) {
+while (rep <= 31726000) {
   q := 0.0;
   k := 1;
   while (k <= 1001) {

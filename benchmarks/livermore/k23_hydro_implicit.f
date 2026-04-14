@@ -91,7 +91,7 @@ C     Kernel 23: 2-D Implicit Hydrodynamics (Jacobi relaxation)
 C     C code loops j=1..5, k=1..n-1 (0-based).
 C     In Fortran 1-based: J=2..6, K=2..N
 C
-      DO 500 IREP = 1, 100000
+      DO 500 IREP = 1, 8581000
          DO 300 J = 2, 6
             DO 200 K = 2, N
                QA = ZA(K,J+1)*ZR(K,J) + ZA(K,J-1)*ZB(K,J)
