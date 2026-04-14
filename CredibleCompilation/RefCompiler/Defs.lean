@@ -366,6 +366,9 @@ theorem BoolExpr.eval_agree' (cond : BoolExpr) (σ τ : Store)
   | fcmp op x y =>
     simp only [BoolExpr.eval]
     rw [h x (by simp [BoolExpr.vars]), h y (by simp [BoolExpr.vars])]
+  | fcmpLit op x n =>
+    simp only [BoolExpr.eval]
+    rw [h x (by simp [BoolExpr.vars])]
 
 -- ============================================================
 -- § 6. Division safety helpers

@@ -448,6 +448,9 @@ private theorem BoolExpr.toSymExpr_sound (be : BoolExpr) (ss : SymStore) (σ₀ 
   | fcmp op x y =>
     simp only [BoolExpr.toSymExpr, Expr.eval, BoolExpr.eval]
     rw [hrepr x, hrepr y]
+  | fcmpLit op x n =>
+    simp only [BoolExpr.toSymExpr, Expr.eval, BoolExpr.eval, Value.toFloat]
+    rw [hrepr x]
 
 /-- Symbolic execution soundness: if the symbolic store `ss` correctly represents
     the relationship between an initial store `σ₀` and a current store `σ`,
@@ -1162,6 +1165,9 @@ private theorem BoolExpr.symEval_sound (b : BoolExpr) (ss : SymStore) (inv : EIn
   | fcmp op x y =>
     simp only [BoolExpr.symEval] at heval
     exact absurd heval (by simp)
+  | fcmpLit op x n =>
+    simp only [BoolExpr.symEval] at heval
+    exact absurd heval (by simp)
 
 /-- From checkInstrAliasOk for arrLoad, derive the no-alias condition for samGet_sound. -/
 private theorem checkInstrAliasOk_arrLoad_noalias
@@ -1213,13 +1219,23 @@ private theorem simplify_blit_val {ss : SymStore} {inv : EInv} {v : Var} {b : Bo
   rw [hsx, Expr.eval] at h
   rw [hrepr v] at h; rw [← h]; rfl
 
+/-- If `simplify` returns `.flit f`, then the variable's runtime toFloat is `f`. -/
+private theorem simplify_flit_val {ss : SymStore} {inv : EInv} {v : Var} {f : BitVec 64}
+    {σ₀ σ : Store} {am₀ : ArrayMem}
+    (hsx : (ssGet ss v).simplify inv = .flit f)
+    (hrepr : ∀ w, (ssGet ss w).eval σ₀ am₀ = σ w)
+    (hinv : EInv.toProp inv σ₀ am₀) : (σ v).toFloat = f := by
+  have h := Expr.simplify_sound inv (ssGet ss v) σ₀ am₀ hinv
+  rw [hsx, Expr.eval] at h
+  rw [hrepr v] at h; rw [← h]; rfl
+
 private theorem BoolExpr.normalize_eval (b : BoolExpr) (ss : SymStore) (inv : EInv)
     (σ₀ σ : Store) (am₀ : ArrayMem)
     (hrepr : ∀ v, (ssGet ss v).eval σ₀ am₀ = σ v)
     (hinv : EInv.toProp inv σ₀ am₀) :
     (b.normalize ss inv).eval σ = b.eval σ := by
   induction b with
-  | lit | fcmp => rfl
+  | lit => rfl
   | bvar x =>
     simp only [BoolExpr.normalize]
     generalize hsx : (ssGet ss x).simplify inv = sx
@@ -1256,6 +1272,23 @@ private theorem BoolExpr.normalize_eval (b : BoolExpr) (ss : SymStore) (inv : EI
     simp only [BoolExpr.normalize]
     generalize hn : e.normalize ss inv = en
     cases en <;> simp [BoolExpr.eval, ← ih, hn, Bool.not_not]
+  | fcmp op x y =>
+    simp only [BoolExpr.normalize]
+    generalize hsx : (ssGet ss x).simplify inv = sx
+    generalize hsy : (ssGet ss y).simplify inv = sy
+    cases sx with
+    | flit a =>
+      cases sy with
+      | flit b => simp [BoolExpr.eval]; rw [simplify_flit_val hsx hrepr hinv, simplify_flit_val hsy hrepr hinv]
+      | _ => simp [BoolExpr.eval]
+    | _ =>
+      cases sy <;> (first | rfl | skip) <;> simp [BoolExpr.eval]
+      all_goals (first | rw [simplify_flit_val hsy hrepr hinv] | rfl)
+  | fcmpLit op x n =>
+    simp only [BoolExpr.normalize]
+    generalize hsx : (ssGet ss x).simplify inv = sx
+    cases sx <;> simp [BoolExpr.eval]
+    case flit a => rw [simplify_flit_val hsx hrepr hinv]
 
 /-- Generalized path execution soundness with arbitrary initial symbolic store.
     `hDivSafe` provides div-safety for the first binop on the path.
@@ -1962,6 +1995,14 @@ private theorem BoolExpr.eval_mapVarsRel (b origCond : BoolExpr)
       revert hmap; cases ex <;> cases ey <;> intro hmap <;> simp at hmap <;> (
         subst hmap; simp [BoolExpr.eval];
         rw [hcons _ _ hmem_x, hcons _ _ hmem_y]; simp [Expr.eval])
+  | fcmpLit op x n =>
+    simp only [BoolExpr.mapVarsRel, bind, Option.bind] at hmap
+    cases hex : relFindOrigExpr rel x <;> simp [hex] at hmap
+    case some ex =>
+      have hmem := relFindOrigExpr_mem hex
+      cases ex with
+      | var v => simp at hmap; rw [← hmap]; simp [BoolExpr.eval]; rw [hcons _ _ hmem]; simp [Expr.eval]
+      | _ => simp at hmap
 
 /-- Branch direction info from the transformed program's ifgoto instruction.
     For `ifgoto b l` with `l ≠ pc + 1`, returns `some (b, pc' == l)` indicating
@@ -2098,6 +2139,7 @@ private theorem BoolExpr.toSymExpr_nil_noArrRead (be : BoolExpr) :
   | cmpLit _ x _ => simp [BoolExpr.toSymExpr, Expr.hasArrRead, ssGet_nil_var]
   | not _ ih => simp [BoolExpr.toSymExpr, Expr.hasArrRead, ih]
   | fcmp _ x y => simp [BoolExpr.toSymExpr, Expr.hasArrRead, ssGet_nil_var]
+  | fcmpLit _ x _ => simp [BoolExpr.toSymExpr, Expr.hasArrRead, ssGet_nil_var]
 
 /-- ssGet from ssSet on [] is arrRead-free when the stored expression is. -/
 private theorem ssGet_ssSet_nil_noArrRead (x : Var) (e : Expr) (v : Var)
