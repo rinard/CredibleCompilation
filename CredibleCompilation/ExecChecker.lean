@@ -280,6 +280,9 @@ def relGetOrigExpr (rel : EExprRel) (v : Var) : Expr :=
 def relFindOrigVar (rel : EExprRel) (v : Var) : Option Var :=
   match rel.find? (fun p => p.2 == .var v) with
   | some (.var v', _) => some v'
+  -- For non-renaming transforms (e.g., LICM): a literal-valued pair (lit c, var x)
+  -- means x maps to itself (same variable, known constant value).
+  | some (_, .var v') => some v'
   | _ => none
 
 /-- Map variables in a BoolExpr through the expression relation.
