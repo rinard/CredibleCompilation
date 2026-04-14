@@ -1781,10 +1781,7 @@ private theorem relFindOrigVar_mem {rel : EExprRel} {x x' : Var}
       simp at hp; subst hp
       cases e_o with
       | var v => simp at h; subst h; exact List.Mem.head _
-      -- Non-var first component: relFindOrigVar fallback (LICM).
-      -- The conclusion (.var x', .var x) ∈ rel is too strong for this case;
-      -- the actual pair is (non-var, .var x). TODO: fix theorem statement.
-      | _ => sorry
+      | _ => simp at h
     · simp [hp] at h; exact List.Mem.tail _ (ih h)
 
 /-- If `b.mapVarsRel rel = some origCond`, then `b.eval σ_t = origCond.eval σ_o`
