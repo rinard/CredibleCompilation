@@ -2271,7 +2271,7 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
     (hPcNext : ∀ σ' am', cfg' = .run (pc + 1) σ' am' →
       pcMap (pc + 1) = pcMap pc + instrs.length)
     (hAD : arrayDecls = p.arrayDecls)
-    (hNCSL : NoCallerSavedLayout layout) :
+    (hNCSL : ∀ x op y, instr = .floatUnary x op y → op.isNative = false → NoCallerSavedLayout layout) :
     ∃ s', ArmSteps prog s s' ∧ ExtSimRel layout pcMap cfg' s' := by
   -- Derive scratchSafe and injective from hSome (the if-guard passed)
   have hSS : layout.scratchSafe = true := by
@@ -3647,7 +3647,7 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
       have hAM2 : s2.arrayMem = s1.arrayMem := by simp [s2, ArmState.havocCallerSaved]
       -- ExtStateRel preserved: havocCallerSaved is safe because NoCallerSavedLayout
       have hRelHavoc : ExtStateRel layout σ s1.havocCallerSaved :=
-        ExtStateRel.havocCallerSaved_preserved hRel1 hNCSL
+        ExtStateRel.havocCallerSaved_preserved hRel1 (hNCSL x op y heq hNotNat)
       -- Step 3: store — case split on whether dst is in freg
       by_cases hXFR : ∃ r, layout x = some (.freg r)
       · obtain ⟨r_dst, hDst⟩ := hXFR
@@ -3716,7 +3716,7 @@ theorem ext_backward_simulation (p : Prog) (armProg : ArmProg)
       pcMap (pc + 1) = pcMap pc + instrs.length)
     (hMapped : ∀ v, v ∈ instr.vars → layout v ≠ none)
     (hAD : arrayDecls = p.arrayDecls)
-    (hNCSL : NoCallerSavedLayout layout) :
+    (hNCSL : ∀ x op y, instr = .floatUnary x op y → op.isNative = false → NoCallerSavedLayout layout) :
     ∃ s', ArmSteps armProg s s' ∧ ExtSimRel layout pcMap cfg' s' :=
   verifiedGenInstr_correct armProg layout pcMap p pc σ am s haltLabel divLabel boundsLabel
     arrayDecls boundsSafe instr hInstr hRel instrs hSome hPC hWT hTS hWTL hMapped cfg' hStep hCode hPcNext hAD hNCSL

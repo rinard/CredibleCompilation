@@ -476,8 +476,10 @@ def verifiedGenerateAsm (p : Prog) : Except String VerifiedAsmResult := do
     match checkWellTypedLayout p.tyCtx layout p.code with
     | some err => .error s!"well-typed layout check failed: {err}"
     | none =>
-    -- Check NoCallerSavedLayout (no mapped variable in caller-saved register)
-    if !checkNoCallerSavedLayout layout then
+    -- Check NoCallerSavedLayout when library calls are present
+    let hasLibCall := p.code.any fun instr =>
+      match instr with | .floatUnary _ op _ => !op.isNative | _ => false
+    if hasLibCall && !checkNoCallerSavedLayout layout then
       .error "layout contains caller-saved registers (library calls require callee-saved only)"
     else
     -- Check branch targets in bounds (hPC_bound on successors)
@@ -576,8 +578,9 @@ structure GenAsmSpec (p : Prog) (r : VerifiedAsmResult) : Prop where
       lengths[i] = (r.bodyPerPC[i]).length
   /-- Every variable referenced by an instruction has a layout entry. -/
   layoutComplete : ∀ pc (hpc : pc < p.size), ∀ v, v ∈ (p[pc]).vars → r.layout v ≠ none
-  /-- No variable is mapped to a caller-saved register. -/
-  noCallerSavedLayout : NoCallerSavedLayout r.layout
+  /-- No variable is mapped to a caller-saved register (when library calls exist). -/
+  noCallerSavedLayout : ∀ pc (hpc : pc < p.size),
+    ∀ x op y, p[pc] = .floatUnary x op y → op.isNative = false → NoCallerSavedLayout r.layout
 
 /-- If lookup returns some, the key-value pair is in the list. -/
 private theorem lookup_mem {v : String} {loc : VarLoc}
@@ -826,8 +829,6 @@ theorem verifiedGenerateAsm_spec {p : Prog} {r : VerifiedAsmResult}
             have hgetD : ∀ pc (h : pc < p.size), p.code.getD pc .halt = p[pc] := by
               intro pc hpc; simp [Prog.size_eq] at hpc
               simp [Array.getD, dif_pos hpc, Prog.getElem_eq]
-            have hNCSL : checkNoCallerSavedLayout (buildVarLayout (collectVars p) (buildVarMap (collectVars p))) = true := by
-              simpa using hNCSL_guard
             exact {
               wellTypedProg := checkWellTypedProg_sound hWT
               wellTypedLayout := checkWellTypedLayout_wellTyped hWTL_check
@@ -854,7 +855,23 @@ theorem verifiedGenerateAsm_spec {p : Prog} {r : VerifiedAsmResult}
               layoutComplete := fun pc hpc v hv => by
                 simp [Prog.size_eq] at hpc
                 exact checkWellTypedLayout_instrMapped hWTL_check hpc hv
-              noCallerSavedLayout := checkNoCallerSavedLayout_spec _ hNCSL
+              noCallerSavedLayout := fun pc hpc x op y heq hnotnat => by
+                -- The if-guard ensures: ¬(hasLibCall ∧ ¬checkNoCallerSavedLayout).
+                -- p[pc] = .floatUnary x op y with ¬op.isNative proves hasLibCall.
+                -- Therefore checkNoCallerSavedLayout = true.
+                have hpc' : pc < p.code.size := by simp [Prog.size_eq] at hpc; exact hpc
+                have hasLib : (p.code.any fun instr =>
+                    match instr with | .floatUnary _ op _ => !op.isNative | _ => false) = true := by
+                  rw [Array.any_eq_true]
+                  have heq' : p.code[pc] = .floatUnary x op y := heq
+                  exact ⟨pc, hpc', by simp [heq', hnotnat]⟩
+                have hNCSL : checkNoCallerSavedLayout
+                    (buildVarLayout (collectVars p) (buildVarMap (collectVars p))) = true := by
+                  cases hc : checkNoCallerSavedLayout
+                      (buildVarLayout (collectVars p) (buildVarMap (collectVars p)))
+                  · exfalso; exact hNCSL_guard (by rw [hasLib, hc]; decide)
+                  · rfl
+                exact checkNoCallerSavedLayout_spec _ hNCSL
             }
 
 -- ──────────────────────────────────────────────────────────────
@@ -1113,7 +1130,8 @@ private theorem step_simulation {p : Prog} {r : VerifiedAsmResult}
     hStep hRel hPC spec.wellTypedProg hTS spec.wellTypedLayout
     p[pc] hInstr
     (r.bodyPerPC[pc]'hBodySz) hSome
-    hCodeAt hPcNext (spec.layoutComplete pc hPC) rfl spec.noCallerSavedLayout
+    hCodeAt hPcNext (spec.layoutComplete pc hPC) rfl
+    (fun x op y heq hnotnat => spec.noCallerSavedLayout pc hPC x op y heq hnotnat)
 
 -- ──────────────────────────────────────────────────────────────
 -- Multi-step simulation (main theorem)

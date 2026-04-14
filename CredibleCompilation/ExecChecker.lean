@@ -171,6 +171,29 @@ def Expr.isNonZeroLit : Expr → Bool
   | .tobool _ | .cmpE _ _ _ | .cmpLitE _ _ _ | .notE _ | .andE _ _ | .orE _ _ | .arrRead _ _ => false
   | .flit _ | .fbin _ _ _ | .fcmpE _ _ _ | .intToFloat _ | .floatToInt _ | .floatUnary _ _ | .farrRead _ _ => false
 
+/-- Normalize a BoolExpr under a symbolic store and invariant: replace variables
+    with known literal values and canonicalize `cmp` to `cmpLit` when possible. -/
+def BoolExpr.normalize (ss : SymStore) (inv : EInv) : BoolExpr → BoolExpr
+  | .lit b => .lit b
+  | .bvar x =>
+    match (ssGet ss x).simplify inv with
+    | .blit b => .lit b
+    | _ => .bvar x
+  | .cmp op x y =>
+    match (ssGet ss x).simplify inv, (ssGet ss y).simplify inv with
+    | .lit a, .lit b => .lit (op.eval a b)
+    | _, .lit n => .cmpLit op x n
+    | .lit _, _ => .cmp op x y  -- left-literal: leave unchanged (no sound flip without .gt/.ge)
+    | _, _ => .cmp op x y
+  | .cmpLit op x n =>
+    match (ssGet ss x).simplify inv with
+    | .lit a => .lit (op.eval a n)
+    | _ => .cmpLit op x n
+  | .not e => match e.normalize ss inv with
+    | .lit b => .lit (!b)
+    | e' => .not e'
+  | .fcmp op x y => .fcmp op x y
+
 /-- Symbolically evaluate a BoolExpr under a symbolic store and invariant.
     Returns `some true`/`some false` if the result can be determined, `none` otherwise. -/
 def BoolExpr.symEval (ss : SymStore) (inv : EInv) : BoolExpr → Option Bool
@@ -280,27 +303,41 @@ def relGetOrigExpr (rel : EExprRel) (v : Var) : Expr :=
 def relFindOrigVar (rel : EExprRel) (v : Var) : Option Var :=
   match rel.find? (fun p => p.2 == .var v) with
   | some (.var v', _) => some v'
-  -- For non-renaming transforms (e.g., LICM): a literal-valued pair (lit c, var x)
-  -- means x maps to itself (same variable, known constant value).
-  | some (_, .var v') => some v'
+  | _ => none
+
+/-- Find the original-side expression for a transformed variable.
+    For `(.var v', .var x)` returns `.var v'`; for `(lit c, .var x)` returns `lit c`. -/
+def relFindOrigExpr (rel : EExprRel) (v : Var) : Option Expr :=
+  match rel.find? (fun p => p.2 == .var v) with
+  | some (e_o, _) => some e_o
   | _ => none
 
 /-- Map variables in a BoolExpr through the expression relation.
-    Only succeeds if every variable has an explicit pair in `rel`
-    mapping to a single variable (`.var v`). -/
+    Resolves each variable to its original-side expression. For `(.var v', .var x)`
+    maps to the original variable. For `(lit c, .var x)` (e.g., hoisted constants)
+    folds the constant into the condition as `.cmpLit`. -/
 def BoolExpr.mapVarsRel (rel : EExprRel) : BoolExpr → Option BoolExpr
   | .lit b => some (.lit b)
-  | .bvar x => (relFindOrigVar rel x).map (.bvar ·)
+  | .bvar x => do
+    let e ← relFindOrigExpr rel x
+    match e with | .var v => return .bvar v | _ => none
   | .cmp op x y => do
-    let x' ← relFindOrigVar rel x
-    let y' ← relFindOrigVar rel y
-    return .cmp op x' y'
-  | .cmpLit op x n => (relFindOrigVar rel x).map (.cmpLit op · n)
+    let ex ← relFindOrigExpr rel x
+    let ey ← relFindOrigExpr rel y
+    match ex, ey with
+    | .var x', .var y' => return .cmp op x' y'
+    | .var x', .lit n  => return .cmpLit op x' n
+    | _, _ => none  -- non-var left operand: reject ((.var,.var) and (.var,.lit) cover all practical cases)
+  | .cmpLit op x n => do
+    let e ← relFindOrigExpr rel x
+    match e with | .var v => return .cmpLit op v n | _ => none
   | .not e => e.mapVarsRel rel |>.map .not
   | .fcmp op x y => do
-    let x' ← relFindOrigVar rel x
-    let y' ← relFindOrigVar rel y
-    return .fcmp op x' y'
+    let ex ← relFindOrigExpr rel x
+    let ey ← relFindOrigExpr rel y
+    match ex, ey with
+    | .var x', .var y' => return .fcmp op x' y'
+    | _, _ => none  -- non-var operands in fcmp: reject
 
 /-- Build a substitution map from pre-relation pairs of the form `(e_o, .var v)`.
     Maps transformed variable `v` to original expression `e_o`. -/
@@ -724,8 +761,10 @@ def checkOrigPath (orig : Prog) (ss : SymStore) (sam : SymArrayMem) (inv : EInv)
         | some pc' => pc' == nextPC
         | none =>
           match branchInfo, instr with
-          | some (origCond, true),  .ifgoto b l => b == origCond && nextPC == l
-          | some (origCond, false), .ifgoto b _ => b == origCond && nextPC == pc + 1
+          | some (origCond, true),  .ifgoto b l =>
+            b.normalize ss inv == origCond.normalize ss inv && nextPC == l
+          | some (origCond, false), .ifgoto b _ =>
+            b.normalize ss inv == origCond.normalize ss inv && nextPC == pc + 1
           | _, _ => false
       let aliasOk := checkInstrAliasOk instr ss sam inv
       let (ss', sam') := execSymbolic ss sam instr
@@ -990,23 +1029,6 @@ theorem AllArrayOpsInt.arrStore_int {p : Prog} {pc : Nat} {arr : ArrayName}
   have heq := Option.some.inj ((Prog.getElem?_eq_getElem hlt).symm.trans hinstr)
   simp [heq] at hmatch; exact hmatch
 
-/-- **Condition 14 (rel–inv link)**: for every non-variable original-side
-    expression `(e_o, .var v)` in a relation, the original invariant at the
-    mapped PC contains `(v, e_o)`.  This lets the soundness proof derive
-    `e_o.eval σ_o am = σ_o v` from the invariant, which is needed when
-    `relFindOrigVar` maps a variable to itself via the LICM fallback. -/
-def checkRelInvLink (cert : ECertificate) : Bool :=
-  (List.range cert.trans.size).all fun pc_t =>
-    match cert.instrCerts[pc_t]? with
-    | some ic =>
-      let inv := cert.inv_orig.getD ic.pc_orig ([] : EInv)
-      ic.rel.all fun (e_o, e_t) =>
-        match e_o, e_t with
-        | .var _, _ => true
-        | _, .var v => inv.any fun (w, e) => w == v && e == e_o
-        | _, _ => true
-    | none => true
-
 /-- Check all certificate conditions. Returns `true` iff the certificate is valid. -/
 def checkCertificateExec (cert : ECertificate) : Bool :=
   checkWellTypedProg cert.orig.tyCtx cert.orig &&
@@ -1027,8 +1049,7 @@ def checkCertificateExec (cert : ECertificate) : Bool :=
   checkBoundsPreservationExec cert &&
   checkArraySizesExec cert &&
   checkOrigPathBoundsOk cert &&
-  checkSuccessorsInBounds cert &&
-  checkRelInvLink cert
+  checkSuccessorsInBounds cert
 
 /-- Verbose check: returns the result of each individual condition. -/
 def checkCertificateVerboseExec (cert : ECertificate) : List (String × Bool) :=
@@ -1050,8 +1071,7 @@ def checkCertificateVerboseExec (cert : ECertificate) : List (String × Bool) :=
     ("bounds_preservation",   checkBoundsPreservationExec cert),
     ("array_sizes_equal",     checkArraySizesExec cert),
     ("orig_path_bounds_ok",   checkOrigPathBoundsOk cert),
-    ("successors_in_bounds",  checkSuccessorsInBounds cert),
-    ("rel_inv_link",          checkRelInvLink cert) ]
+    ("successors_in_bounds",  checkSuccessorsInBounds cert) ]
 
 /-- Observable output of a configuration with respect to an executable certificate.
     - If the current instruction is `halt`, returns `halt` with observable variable–value pairs.

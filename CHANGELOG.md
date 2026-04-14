@@ -4,6 +4,38 @@ Chronological record of what was built and why, to reconstruct the sequence of d
 
 ---
 
+## Refactor SoundnessBridge for relFindOrigExpr, close noCallerSavedLayout sorry (2026-04-14)
+
+**Goal:** Fix SoundnessBridge.lean build errors caused by ExecChecker changes (removal of `checkRelInvLink`, rewrite of `BoolExpr.mapVarsRel` to use `relFindOrigExpr`, normalize-based branch matching in `checkOrigPath`). Close the `noCallerSavedLayout` sorry in CodeGen.lean.
+
+**Context:** ExecChecker was changed to:
+1. Remove `checkRelInvLink` condition (no longer needed since `relFindOrigVar` no longer has the LICM fallback for `(lit c, .var x)` pairs).
+2. Rewrite `BoolExpr.mapVarsRel` to use `relFindOrigExpr` instead of `relFindOrigVar`, folding literals into branch conditions as `.cmpLit`.
+3. Use `BoolExpr.normalize` for semantic matching of branch conditions in `checkOrigPath` (instead of syntactic `b == origCond`).
+
+**Changes:**
+- **SoundnessBridge.lean**:
+  - Added `relFindOrigExpr_mem`: if `relFindOrigExpr rel x = some e`, then `(e, .var x) ∈ rel`.
+  - Rewrote `BoolExpr.eval_mapVarsRel` to match the new `relFindOrigExpr`-based `mapVarsRel`. Removed `hinvrel` parameter. Proved `.bvar`/`.cmpLit`/`.not` cases and the `.cmp (.var, .var)`, `.cmp (.var, .lit)` cases. Catchall cases (non-var left-side operands) marked sorry pending re-introduction of a checker condition.
+  - Removed `hinvrel` parameter from `branchInfo_of_step_with_rel` and `eRelToStoreRel_of_relFindOrigVar`.
+  - Removed `hrelinvlink` parameter from `transRel_sound`, `checkAllTransitionsExec_sound`, and `checkDivPreservationExec_sound`. Deleted `checkRelInvLink_pair` theorem and `hrelinvlink_dtc`/`hinvrel` derivations.
+  - Fixed `soundness_bridge` decomposition: 19 conjuncts (was 20 with `checkRelInvLink`).
+  - Updated `execPath_sound` branch-info proof for normalize-based matching (`b.normalize ss inv == origCond.normalize ss inv`). Added sorry pending `BoolExpr.normalize_eval` lemma.
+- **CodeGen.lean**:
+  - Closed `noCallerSavedLayout` sorry in `verifiedGenerateAsm_spec`. Proof: the `if hasLibCall && !checkNoCallerSavedLayout` guard ensures that when a non-native `floatUnary` exists (proving `hasLibCall = true`), `checkNoCallerSavedLayout` must be true. Used `Array.any_eq_true` to witness the instruction, `checkNoCallerSavedLayout_spec` to derive the Prop.
+
+**Additional ExecChecker fixes:**
+- Fixed `BoolExpr.normalize`: replaced approximate flip (`(.lt → .le, .le → .lt)`) for left-literal case with identity (leave unchanged). The approximate flip was unsound and prevented proving `normalize_eval`.
+- Fixed `BoolExpr.mapVarsRel`: replaced catchall case (using transform variable names) with `none` for non-var left operands. The `(.var, .var)` and `(.var, .lit)` arms cover all practical LICM cases.
+- Fixed `.fcmp` case: now requires both operands to be `.var`, returning `none` otherwise.
+
+**Sorry status:**
+- CodeGen.lean: 0 sorrys (was 1).
+- SoundnessBridge.lean: 5 sorrys. 1 for `normalize_eval` body (case analysis on `Expr.simplify` results — proof outline exists with `simplify_lit_val`/`simplify_blit_val` helpers, needs interactive tactic session). 4 for `eval_mapVarsRel` catchall `none`-elimination (Lean can't reduce nested match on abstract `Expr` in `| _ =>` wildcard; needs `cases ey <;>` enumeration within interactive session).
+- ArmCorrectness.lean: 2 pre-existing (arrLoad/arrStore simulation).
+
+---
+
 ## Close verifiedGenerateAsm_spec sorry, refactor WellTypedLayout completeness (2026-04-12)
 
 **Goal:** Prove `verifiedGenerateAsm_spec`: a successful `verifiedGenerateAsm p = .ok r` satisfies `GenAsmSpec p r` (well-typedness, layout consistency, bodyPerPC size/content, pcMap prefix-sum, layout completeness for instruction variables).
