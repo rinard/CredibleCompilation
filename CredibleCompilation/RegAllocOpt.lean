@@ -285,6 +285,7 @@ where
     | .cmpLit op x n => .cmpLit op (r x) n
     | .not e       => .not (renameBoolExpr coloring e)
     | .fcmp op x y => .fcmp op (r x) (r y)
+    | .fcmpLit op x n => .fcmpLit op (r x) n
 
 /-- Generate copy-back instructions for observable variables that were renamed.
     Returns `copy origName regName` for each observable that has a coloring entry. -/

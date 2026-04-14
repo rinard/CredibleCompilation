@@ -20,7 +20,8 @@ inductive WellTypedBoolExpr (Γ : TyCtx) : BoolExpr → Prop where
   | cmp    : Γ x = .int → Γ y = .int → WellTypedBoolExpr Γ (.cmp op x y)
   | cmpLit : Γ x = .int → 0 ≤ n.toInt → n.toInt < 2 ^ 63 → WellTypedBoolExpr Γ (.cmpLit op x n)
   | not    : WellTypedBoolExpr Γ b → WellTypedBoolExpr Γ (.not b)
-  | fcmp   : Γ x = .float → Γ y = .float → WellTypedBoolExpr Γ (.fcmp op x y)
+  | fcmp    : Γ x = .float → Γ y = .float → WellTypedBoolExpr Γ (.fcmp op x y)
+  | fcmpLit : Γ x = .float → WellTypedBoolExpr Γ (.fcmpLit op x n)
 
 /-- Well-typedness for a single TAC instruction.
     Array instructions additionally require the element type to match the
@@ -258,7 +259,8 @@ def checkWellTypedBoolExpr (Γ : TyCtx) : BoolExpr → Bool
   | .cmp _ x y    => decide (Γ x = .int) && decide (Γ y = .int)
   | .cmpLit _ x n => decide (Γ x = .int) && decide (0 ≤ n.toInt) && decide (n.toInt < 2 ^ 63)
   | .not e        => checkWellTypedBoolExpr Γ e
-  | .fcmp _ x y   => decide (Γ x = .float) && decide (Γ y = .float)
+  | .fcmp _ x y      => decide (Γ x = .float) && decide (Γ y = .float)
+  | .fcmpLit _ x _   => decide (Γ x = .float)
 
 def checkWellTypedInstr (Γ : TyCtx) (decls : List (ArrayName × Nat × VarTy)) : TAC → Bool
   | .const x v     => decide (v.typeOf = Γ x)
@@ -293,6 +295,9 @@ theorem checkWellTypedBoolExpr_sound {Γ : TyCtx} {b : BoolExpr}
   | fcmp op x y =>
     simp [checkWellTypedBoolExpr, Bool.and_eq_true, decide_eq_true_eq] at h
     exact .fcmp h.1 h.2
+  | fcmpLit op x n =>
+    simp [checkWellTypedBoolExpr, decide_eq_true_eq] at h
+    exact .fcmpLit h
 
 theorem checkWellTypedInstr_sound {Γ : TyCtx} {decls : List (ArrayName × Nat × VarTy)} {instr : TAC}
     (h : checkWellTypedInstr Γ decls instr = true) : WellTypedInstr Γ decls instr := by

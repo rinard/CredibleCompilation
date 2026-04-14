@@ -482,7 +482,8 @@ inductive BoolExpr where
   | cmp    : CmpOp → Var → Var → BoolExpr     -- x op y (integer comparison)
   | cmpLit : CmpOp → Var → BitVec 64 → BoolExpr     -- x op n (variable vs literal)
   | not    : BoolExpr → BoolExpr
-  | fcmp   : FloatCmpOp → Var → Var → BoolExpr      -- float comparison
+  | fcmp    : FloatCmpOp → Var → Var → BoolExpr      -- float comparison
+  | fcmpLit : FloatCmpOp → Var → BitVec 64 → BoolExpr  -- x fop n (variable vs float literal)
   deriving Repr, DecidableEq
 
 /-- Evaluate a boolean expression. Uses `.toInt`/`.toBool` extractors;
@@ -493,7 +494,8 @@ def BoolExpr.eval (σ : Store) : BoolExpr → Bool
   | .cmp op x y    => op.eval (σ x).toInt (σ y).toInt
   | .cmpLit op x n => op.eval (σ x).toInt n
   | .not e         => !e.eval σ
-  | .fcmp op x y   => FloatCmpOp.eval op (σ x).toFloat (σ y).toFloat
+  | .fcmp op x y      => FloatCmpOp.eval op (σ x).toFloat (σ y).toFloat
+  | .fcmpLit op x n   => FloatCmpOp.eval op (σ x).toFloat n
 
 theorem BoolExpr.eval_congr (cond : BoolExpr) (σ τ : Store)
     (hagree : ∀ y, σ y = τ y) : cond.eval σ = cond.eval τ := by
@@ -504,12 +506,14 @@ theorem BoolExpr.eval_congr (cond : BoolExpr) (σ τ : Store)
   | cmpLit op x n => simp [BoolExpr.eval, hagree]
   | not e ih => simp [BoolExpr.eval, ih]
   | fcmp op x y => simp [BoolExpr.eval, hagree]
+  | fcmpLit op x n => simp [BoolExpr.eval, hagree]
 
 /-- Collect all variable names from a boolean expression. -/
 def BoolExpr.vars : BoolExpr → List Var
-  | .lit _        => []
-  | .bvar x       => [x]
-  | .cmp _ x y    => [x, y]
-  | .cmpLit _ x _ => [x]
-  | .not e        => e.vars
-  | .fcmp _ x y   => [x, y]
+  | .lit _          => []
+  | .bvar x         => [x]
+  | .cmp _ x y      => [x, y]
+  | .cmpLit _ x _   => [x]
+  | .not e          => e.vars
+  | .fcmp _ x y     => [x, y]
+  | .fcmpLit _ x _  => [x]

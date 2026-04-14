@@ -711,6 +711,12 @@ def formalGenBoolExpr (vm : VarMap) (be : BoolExpr) : List ArmInstr :=
     | some offL, some offR =>
       [.fldr .d1 offL, .fldr .d2 offR, .fcmpR .d1 .d2, .cset .x0 cond]
     | _, _ => []
+  | .fcmpLit fop v n =>
+    let cond := match fop with | .feq => Cond.eq | .fne => .ne | .flt => .lt | .fle => .le
+    match vm.lookup v with
+    | some off =>
+      [.fldr .d1 off] ++ formalLoadImm64 .x0 n ++ [.fmovToFP .d2 .x0, .fcmpR .d1 .d2, .cset .x0 cond]
+    | none => []
 
 /-- Generate formal ARM64 instructions for a TAC instruction.
     Mirrors `genInstr` in CodeGen.lean (without the label string).
@@ -870,6 +876,9 @@ def verifiedGenBoolExpr (layout : VarLayout) (be : BoolExpr) : List ArmInstr :=
     let cond := match fop with | .feq => Cond.eq | .fne => .ne | .flt => .lt | .fle => .le
     vLoadVarFP layout lv .d1 ++ vLoadVarFP layout rv .d2 ++
     [.fcmpR .d1 .d2, .cset .x0 cond]
+  | .fcmpLit fop v n =>
+    let cond := match fop with | .feq => Cond.eq | .fne => .ne | .flt => .lt | .fle => .le
+    vLoadVarFP layout v .d1 ++ formalLoadImm64 .x0 n ++ [.fmovToFP .d2 .x0, .fcmpR .d1 .d2, .cset .x0 cond]
 
 -- ============================================================
 -- § 8d. Verified instruction codegen

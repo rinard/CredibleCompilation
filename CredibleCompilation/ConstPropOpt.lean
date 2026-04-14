@@ -61,6 +61,7 @@ def evalBoolConst (cm : ConstMap) : BoolExpr → Option Bool
     | some (.int a) => some (op.eval a n)
     | _ => none
   | .fcmp _op _x _y => none
+  | .fcmpLit _op _x _n => none
   | .not e => evalBoolConst cm e |>.map (!·)
 
 -- ============================================================

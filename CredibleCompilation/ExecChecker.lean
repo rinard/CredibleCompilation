@@ -99,7 +99,8 @@ def BoolExpr.toSymExpr (ss : SymStore) : BoolExpr → Expr
   | .cmp op x y    => .cmpE op (ssGet ss x) (ssGet ss y)
   | .cmpLit op x n => .cmpLitE op (ssGet ss x) n
   | .not e         => .notE (e.toSymExpr ss)
-  | .fcmp op x y   => .fcmpE op (ssGet ss x) (ssGet ss y)
+  | .fcmp op x y      => .fcmpE op (ssGet ss x) (ssGet ss y)
+  | .fcmpLit op x n   => .fcmpE op (ssGet ss x) (.flit n)
 
 /-- Symbolic array memory: tracks array writes as a list of (array, index, value) triples.
     Most recent writes are at the head. -/
@@ -197,7 +198,15 @@ def BoolExpr.normalize (ss : SymStore) (inv : EInv) : BoolExpr → BoolExpr
     | .lit b => .lit (!b)
     | .not inner => inner  -- double negation elimination
     | e' => .not e'
-  | .fcmp op x y => .fcmp op x y
+  | .fcmp op x y =>
+    match (ssGet ss x).simplify inv, (ssGet ss y).simplify inv with
+    | .flit a, .flit b => .lit (FloatCmpOp.eval op a b)
+    | _, .flit n => .fcmpLit op x n
+    | _, _ => .fcmp op x y
+  | .fcmpLit op x n =>
+    match (ssGet ss x).simplify inv with
+    | .flit a => .lit (FloatCmpOp.eval op a n)
+    | _ => .fcmpLit op x n
 
 /-- Symbolically evaluate a BoolExpr under a symbolic store and invariant.
     Returns `some true`/`some false` if the result can be determined, `none` otherwise. -/
@@ -216,11 +225,8 @@ def BoolExpr.symEval (ss : SymStore) (inv : EInv) : BoolExpr → Option Bool
     | .lit a => some (op.eval a n)
     | _ => none
   | .not e => e.symEval ss inv |>.map (!·)
-  | .fcmp _op _x _y =>
-    -- FloatCmpOp.eval is opaque with no runtime implementation;
-    -- evaluating it returns Inhabited.default (false), which is wrong.
-    -- Return none so the checker falls back to branchInfo-based path validation.
-    none
+  | .fcmp _op _x _y => none  -- FloatCmpOp.eval is opaque; fall back to branchInfo
+  | .fcmpLit _op _x _n => none  -- same
 
 /-- Like `canReach`, but for `ifgoto` also verifies the branch direction
     via symbolic evaluation of the boolean condition under the invariant.
@@ -350,8 +356,12 @@ def BoolExpr.mapVarsRel (rel : EExprRel) : BoolExpr → Option BoolExpr
     let ex ← relFindOrigExpr rel x
     let ey ← relFindOrigExpr rel y
     match ex, ey with
-    | .var x', .var y' => return .fcmp op x' y'
-    | _, _ => none  -- non-var operands in fcmp: reject
+    | .var x', .var y'   => return .fcmp op x' y'
+    | .var x', .flit n   => return .fcmpLit op x' n
+    | _, _ => none  -- left-flit would need a flip, but FloatCmpOp.eval is opaque
+  | .fcmpLit op x n => do
+    let e ← relFindOrigExpr rel x
+    match e with | .var v => return .fcmpLit op v n | _ => none
 
 /-- Build a substitution map from pre-relation pairs of the form `(e_o, .var v)`.
     Maps transformed variable `v` to original expression `e_o`. -/

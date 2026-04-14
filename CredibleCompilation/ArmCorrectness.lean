@@ -283,6 +283,212 @@ private theorem genBoolExpr_fcmp_correct (prog : ArmProg) (vm : VarMap)
   · -- arrayMem preserved
     simp [ArmState.setReg, ArmState.setFReg, ArmState.nextPC]
 
+-- ============================================================
+-- § fregs preservation for integer-only instruction sequences
+-- ============================================================
+
+/-- optional_movk_step extended with fregs preservation. -/
+private theorem optional_movk_step' (prog : ArmProg) (rd : ArmReg) (w : UInt64) (shift : Nat)
+    (s : ArmState) (pc0 : Nat) (hPC : s.pc = pc0)
+    (hCode : CodeAt prog pc0 (if (w != 0) = true then [ArmInstr.movk rd w shift] else [])) :
+    ∃ s', ArmSteps prog s s' ∧
+      s'.regs rd = (if (w != 0) = true then insertBits (s.regs rd) w shift else s.regs rd) ∧
+      s'.stack = s.stack ∧ s'.fregs = s.fregs ∧
+      s'.pc = pc0 + (if (w != 0) = true then [ArmInstr.movk rd w shift] else []).length ∧
+      (∀ r, r ≠ rd → s'.regs r = s.regs r) ∧
+      s'.arrayMem = s.arrayMem := by
+  by_cases hw : (w != 0) = true
+  · simp only [hw, ite_true] at hCode ⊢
+    have hInstr := hCode.head; rw [← hPC] at hInstr
+    exact ⟨s.setReg rd (insertBits (s.regs rd) w shift) |>.nextPC,
+      .single (.movk rd w shift hInstr),
+      by simp, by simp, by simp, by simp [hPC],
+      fun r hr => ArmState.setReg_regs_other _ _ _ _ hr, by simp⟩
+  · simp only [hw] at hCode ⊢; simp only [Bool.false_eq_true, ite_false]
+    exact ⟨s, .refl, rfl, rfl, rfl, by simp [hPC], fun _ _ => rfl, rfl⟩
+
+/-- Re-execute formalLoadImm64 tracking fregs. Since mov/movz/movk only use
+    setReg+nextPC (which preserve fregs), the resulting state has s'.fregs = s.fregs.
+    This is a standalone re-derivation — it doesn't depend on loadImm64_correct's witness. -/
+theorem loadImm64_fregs_preserved (prog : ArmProg) (rd : ArmReg) (n : BitVec 64)
+    (s : ArmState) (startPC : Nat)
+    (hCode : CodeAt prog startPC (formalLoadImm64 rd n))
+    (hPC : s.pc = startPC) :
+    ∃ s', ArmSteps prog s s' ∧ s'.fregs = s.fregs ∧
+      s'.regs rd = n ∧ s'.stack = s.stack ∧
+      s'.pc = startPC + (formalLoadImm64 rd n).length ∧
+      (∀ r, r ≠ rd → s'.regs r = s.regs r) ∧
+      s'.arrayMem = s.arrayMem := by
+  -- Use the existing loadImm64_correct for everything except fregs,
+  -- then observe fregs is preserved because the witness state only differs
+  -- from s by setReg/nextPC operations (which preserve fregs by simp).
+  unfold formalLoadImm64 at hCode
+  split at hCode
+  case isTrue hSmall =>
+    have hMov := hCode.head; rw [← hPC] at hMov
+    exact ⟨s.setReg rd n |>.nextPC, .single (.mov rd n hMov), by simp, by simp, by simp,
+      by simp [hPC, formalLoadImm64, hSmall],
+      fun r hr => ArmState.setReg_regs_other _ _ _ _ hr, by simp⟩
+  case isFalse hLarge =>
+    dsimp only at hCode
+    let bits : UInt64 := n.toNat.toUInt64
+    let w0 := bits &&& 65535
+    let w1 := bits >>> 16 &&& 65535
+    let w2 := bits >>> 32 &&& 65535
+    let w3 := bits >>> 48 &&& 65535
+    have hCodeBase := hCode.append_left.append_left.append_left
+    have hCodeK1rest := hCode.append_left.append_left.append_right
+    have hCodeK1K2 := hCode.append_left
+    have hCodeK2rest := hCodeK1K2.append_right
+    have hCodeK3rest := hCode.append_right
+    -- movz
+    have hMovz := hCodeBase.head; rw [← hPC] at hMovz
+    let s0 := s.setReg rd (BitVec.ofNat 64 (w0 <<< (0 : UInt64)).toNat) |>.nextPC
+    have hs0f : s0.fregs = s.fregs := by simp [s0]
+    have hPC0 : s0.pc = startPC + 1 := by simp [s0, hPC]
+    -- k1
+    have hw0_shift : (w0 <<< (0 : UInt64)) = w0 := uint64_shl_zero w0
+    have hRd0 : s0.regs rd = BitVec.ofNat 64 w0.toNat := by
+      simp [s0, ArmState.setReg, ArmState.nextPC, hw0_shift]
+    obtain ⟨s1, hS1, hRd1, hs1s, hs1f, hPC1, hs1r, hs1a⟩ :=
+      optional_movk_step' prog rd w1 16 s0 _ hPC0 hCodeK1rest
+    -- k2
+    have hPC_k2 : startPC + ([ArmInstr.movz rd w0 0] ++
+        (if (w1 != 0) = true then [ArmInstr.movk rd w1 16] else [])).length =
+        startPC + 1 + (if (w1 != 0) = true then [ArmInstr.movk rd w1 16] else []).length := by
+      simp; omega
+    rw [hPC_k2] at hCodeK2rest
+    obtain ⟨s2, hS2, hRd2, hs2s, hs2f, hPC2, hs2r, hs2a⟩ :=
+      optional_movk_step' prog rd w2 32 s1 _ hPC1 hCodeK2rest
+    -- k3
+    have hPC_k3 : startPC + (([ArmInstr.movz rd w0 0] ++
+        (if (w1 != 0) = true then [ArmInstr.movk rd w1 16] else [])) ++
+        (if (w2 != 0) = true then [ArmInstr.movk rd w2 32] else [])).length =
+        startPC + 1 +
+        (if (w1 != 0) = true then [ArmInstr.movk rd w1 16] else []).length +
+        (if (w2 != 0) = true then [ArmInstr.movk rd w2 32] else []).length := by
+      simp; omega
+    rw [hPC_k3] at hCodeK3rest
+    obtain ⟨s3, hS3, hRd3, hs3s, hs3f, hPC3, hs3r, hs3a⟩ :=
+      optional_movk_step' prog rd w3 48 s2 _ hPC2 hCodeK3rest
+    refine ⟨s3, (.step (.movz rd w0 0 hMovz) (hS1.trans (hS2.trans hS3))),
+      ?_, ?_, ?_, ?_, ?_, ?_⟩
+    · -- fregs
+      rw [hs3f, hs2f, hs1f, hs0f]
+    · -- regs rd = n
+      have hbits_bv : bits.toBitVec = n := by
+        show n.toNat.toUInt64.toBitVec = n
+        rw [UInt64.toBitVec]
+        apply BitVec.eq_of_toNat_eq
+        simp [Nat.toUInt64]
+      have hc0 : w0.toBitVec = bits.toBitVec &&& 0xFFFF#64 := uint64_toBitVec_chunk0 bits
+      have hc1 : w1.toBitVec = (bits.toBitVec >>> 16) &&& 0xFFFF#64 := uint64_toBitVec_chunk16 bits
+      have hc2 : w2.toBitVec = (bits.toBitVec >>> 32) &&& 0xFFFF#64 := uint64_toBitVec_chunk32 bits
+      have hc3 : w3.toBitVec = (bits.toBitVec >>> 48) &&& 0xFFFF#64 := uint64_toBitVec_chunk48 bits
+      by_cases hw1z : w1 = 0 <;> by_cases hw2z : w2 = 0 <;> by_cases hw3z : w3 = 0
+      all_goals simp only [show (w1 != 0) = true ↔ w1 ≠ 0 from by simp [bne, beq_iff_eq]] at hRd1
+      all_goals simp only [show (w2 != 0) = true ↔ w2 ≠ 0 from by simp [bne, beq_iff_eq]] at hRd2
+      all_goals simp only [show (w3 != 0) = true ↔ w3 ≠ 0 from by simp [bne, beq_iff_eq]] at hRd3
+      all_goals (try simp only [hw1z, ne_eq, not_true_eq_false, ite_false, not_false_eq_true, ite_true] at hRd1)
+      all_goals (try simp only [hw2z, ne_eq, not_true_eq_false, ite_false, not_false_eq_true, ite_true] at hRd2)
+      all_goals (try simp only [hw3z, ne_eq, not_true_eq_false, ite_false, not_false_eq_true, ite_true] at hRd3)
+      all_goals rw [hRd3]
+      all_goals (try rw [insertBits_unfold])
+      all_goals rw [hRd2]
+      all_goals (try rw [insertBits_unfold])
+      all_goals rw [hRd1]
+      all_goals (try rw [insertBits_unfold])
+      all_goals rw [hRd0]
+      all_goals simp only [BitVec_ofNat_UInt64_toNat]
+      all_goals rw [hc0]
+      all_goals try rw [hc1]
+      all_goals try rw [hc2]
+      all_goals try rw [hc3]
+      all_goals rw [← hbits_bv]
+      · exact bv_reassemble_000 bits.toBitVec (by rw [← hc1]; exact uint64_eq_zero_toBitVec w1 hw1z) (by rw [← hc2]; exact uint64_eq_zero_toBitVec w2 hw2z) (by rw [← hc3]; exact uint64_eq_zero_toBitVec w3 hw3z)
+      · exact bv_reassemble_001 bits.toBitVec (by rw [← hc1]; exact uint64_eq_zero_toBitVec w1 hw1z) (by rw [← hc2]; exact uint64_eq_zero_toBitVec w2 hw2z)
+      · exact bv_reassemble_010 bits.toBitVec (by rw [← hc1]; exact uint64_eq_zero_toBitVec w1 hw1z) (by rw [← hc3]; exact uint64_eq_zero_toBitVec w3 hw3z)
+      · exact bv_reassemble_011 bits.toBitVec (by rw [← hc1]; exact uint64_eq_zero_toBitVec w1 hw1z)
+      · exact bv_reassemble_100 bits.toBitVec (by rw [← hc2]; exact uint64_eq_zero_toBitVec w2 hw2z) (by rw [← hc3]; exact uint64_eq_zero_toBitVec w3 hw3z)
+      · exact bv_reassemble_101 bits.toBitVec (by rw [← hc2]; exact uint64_eq_zero_toBitVec w2 hw2z)
+      · exact bv_reassemble_110 bits.toBitVec (by rw [← hc3]; exact uint64_eq_zero_toBitVec w3 hw3z)
+      · exact bv_reassemble bits.toBitVec
+    · -- stack
+      rw [hs3s, hs2s, hs1s]; simp [s0]
+    · -- pc
+      rw [hPC3]; unfold formalLoadImm64; simp only [hLarge, ite_false]
+      simp only [List.length_append, List.length_cons, List.length_nil]
+      split <;> split <;> split <;> simp <;> omega
+    · -- other regs
+      intro r hr; rw [hs3r r hr, hs2r r hr, hs1r r hr]
+      simp [s0, ArmState.setReg, ArmState.nextPC, hr]
+    · -- arrayMem
+      rw [hs3a, hs2a, hs1a]; simp [s0]
+
+/-- Helper: executing fldr/loadImm64/fmovToFP/fcmp/cset for a `.fcmpLit` boolean expression. -/
+private theorem genBoolExpr_fcmpLit_correct (prog : ArmProg) (vm : VarMap)
+    (op : FloatCmpOp) (v : Var) (n : BitVec 64) (σ : Store) (s : ArmState) (startPC : Nat)
+    (offV : Nat)
+    (hV : vm.lookup v = some offV)
+    (hRel : StateRel vm σ s)
+    (hFloat : ∃ f, σ v = .float f)
+    (hCode : CodeAt prog startPC
+      ([ArmInstr.fldr .d1 offV] ++ formalLoadImm64 .x0 n ++
+       [.fmovToFP .d2 .x0, .fcmpR .d1 .d2,
+        .cset .x0 (match op with | .feq => .eq | .fne => .ne | .flt => .lt | .fle => .le)]))
+    (hPC : s.pc = startPC) :
+    ∃ s', ArmSteps prog s s' ∧
+      s'.regs .x0 = (if FloatCmpOp.eval op (σ v).toFloat n then (1 : BitVec 64) else 0) ∧
+      (∀ w off, vm.lookup w = some off → s'.stack off = s.stack off) ∧
+      s'.pc = startPC + ([ArmInstr.fldr .d1 offV] ++ formalLoadImm64 .x0 n ++
+        [ArmInstr.fmovToFP .d2 .x0, .fcmpR .d1 .d2,
+         .cset .x0 (match op with | .feq => .eq | .fne => .ne | .flt => .lt | .fle => .le)]).length ∧
+      s'.arrayMem = s.arrayMem := by
+  obtain ⟨fV, hfV⟩ := hFloat
+  have hCodeLeft := hCode.append_left
+  have hCodeRight := hCode.append_right
+  have hCodeFldr := hCodeLeft.append_left
+  have hCodeLoad := hCodeLeft.append_right
+  have hFldr := hCodeFldr.head; rw [← hPC] at hFldr
+  have hStackV := hRel v offV hV; rw [hfV] at hStackV
+  simp [Value.encode] at hStackV
+  let s1 := s.setFReg .d1 (s.stack offV) |>.nextPC
+  have hLenEq : startPC + [ArmInstr.fldr .d1 offV].length = startPC + 1 := by simp
+  rw [hLenEq] at hCodeLoad
+  have hPC1 : s1.pc = startPC + 1 := by simp [s1, ArmState.setFReg, ArmState.nextPC, hPC]
+  obtain ⟨s2, hSteps2, hFregs2, hx0, hStack2, hPC2, _, hAM2⟩ :=
+    loadImm64_fregs_preserved prog .x0 n s1 (startPC + 1) hCodeLoad hPC1
+  have hd1_s2 : s2.fregs .d1 = s1.fregs .d1 := by rw [hFregs2]
+  have hd1_val : s1.fregs .d1 = s.stack offV := by simp [s1, ArmState.setFReg, ArmState.nextPC]
+  have hLenEq2 : startPC + ([ArmInstr.fldr .d1 offV] ++ formalLoadImm64 .x0 n).length
+      = startPC + 1 + (formalLoadImm64 .x0 n).length := by simp; omega
+  rw [hLenEq2] at hCodeRight
+  have hFmov := hCodeRight.head; rw [← hPC2] at hFmov
+  have hFcmp := hCodeRight.tail.head
+  rw [show startPC + 1 + (formalLoadImm64 .x0 n).length + 1 = s2.pc + 1 from by rw [← hPC2]] at hFcmp
+  have hCset := hCodeRight.tail.tail.head
+  rw [show startPC + 1 + (formalLoadImm64 .x0 n).length + 2 = s2.pc + 2 from by rw [← hPC2]] at hCset
+  let cond := match op with | .feq => Cond.eq | .fne => .ne | .flt => .lt | .fle => .le
+  let s3 := s2.setFReg .d2 (s2.regs .x0) |>.nextPC
+  let s4 := { s3 with flags := Flags.mk (s3.fregs .d1) (s3.fregs .d2), pc := s3.pc + 1 }
+  let s5 := s4.setReg .x0 (if s4.flags.condHolds cond then (1 : BitVec 64) else 0) |>.nextPC
+  refine ⟨s5,
+    (.step (.fldr .d1 offV hFldr) (hSteps2.trans
+      (.step (.fmovToFP .d2 .x0 hFmov) (.step (.fcmpRR .d1 .d2 hFcmp) (.single (.cset .x0 cond hCset)))))),
+    ?_, ?_, ?_, ?_⟩
+  · have hd1_eq : s2.fregs .d1 = fV := by rw [hd1_s2, hd1_val, hStackV]
+    simp [s5, s4, s3, ArmState.setReg, ArmState.setFReg, ArmState.nextPC,
+          hd1_eq, hx0, hfV, Value.toFloat]
+    rw [Flags.condHolds_float_correct]
+  · intro w off hv
+    simp only [s5, s4, s3, ArmState.setReg, ArmState.setFReg, ArmState.nextPC, ArmState.setStack]
+    rw [hStack2]; simp [s1, ArmState.setFReg, ArmState.nextPC]
+  · simp only [s5, s4, s3, ArmState.setReg, ArmState.setFReg, ArmState.nextPC,
+               List.length_append, List.length_cons, List.length_nil]
+    rw [hPC2]; omega
+  · simp only [s5, s4, s3, ArmState.setReg, ArmState.setFReg, ArmState.nextPC]
+    rw [hAM2]; simp [s1, ArmState.setFReg, ArmState.nextPC]
+
 /-- Helper: executing ldr/ldr/cmp/cset for a `.cmp` boolean expression. -/
 private theorem genBoolExpr_cmp_correct (prog : ArmProg) (vm : VarMap)
     (op : CmpOp) (lv rv : Var) (σ : Store) (s : ArmState) (startPC : Nat)
@@ -388,6 +594,18 @@ theorem genBoolExpr_correct (prog : ArmProg) (vm : VarMap)
       ⟨fL, hfL⟩ ⟨fR, hfR⟩ hCode hPC
     simp only [BoolExpr.eval, formalGenBoolExpr, hL, hR] at this ⊢
     exact this
+  | fcmpLit hty =>
+    rename_i v fop n
+    obtain ⟨offV, hV⟩ := hVarMap v
+    simp only [formalGenBoolExpr, hV] at hCode
+    have hTyV := hTS v; rw [hty] at hTyV
+    obtain ⟨fV, hfV⟩ := Value.float_of_typeOf_float hTyV
+    obtain ⟨s', hSteps, hx0, hStack, hPC', hAM⟩ :=
+      genBoolExpr_fcmpLit_correct prog vm fop v n σ s startPC offV hV hRel ⟨fV, hfV⟩ hCode hPC
+    refine ⟨s', hSteps, ?_, hStack, ?_, hAM⟩
+    · simp [BoolExpr.eval]; exact hx0
+    · simp only [formalGenBoolExpr, hV, List.length_append, List.length_cons, List.length_nil] at hPC' ⊢
+      exact hPC'
   | cmpLit hty hnn hlt =>
     -- be = .cmpLit op v n
     -- formalGenBoolExpr = [ldr x1 off] ++ formalLoadImm64 x2 n ++ [cmp x1 x2, cset x0 cond]
@@ -1534,148 +1752,6 @@ theorem vStoreVarFP_stack (layout : VarLayout) (v : Var) (tmp : ArmFReg) (off : 
   simp [vStoreVarFP, hv]
 
 -- ============================================================
--- § fregs preservation for integer-only instruction sequences
--- ============================================================
-
-/-- optional_movk_step extended with fregs preservation. -/
-private theorem optional_movk_step' (prog : ArmProg) (rd : ArmReg) (w : UInt64) (shift : Nat)
-    (s : ArmState) (pc0 : Nat) (hPC : s.pc = pc0)
-    (hCode : CodeAt prog pc0 (if (w != 0) = true then [ArmInstr.movk rd w shift] else [])) :
-    ∃ s', ArmSteps prog s s' ∧
-      s'.regs rd = (if (w != 0) = true then insertBits (s.regs rd) w shift else s.regs rd) ∧
-      s'.stack = s.stack ∧ s'.fregs = s.fregs ∧
-      s'.pc = pc0 + (if (w != 0) = true then [ArmInstr.movk rd w shift] else []).length ∧
-      (∀ r, r ≠ rd → s'.regs r = s.regs r) ∧
-      s'.arrayMem = s.arrayMem := by
-  by_cases hw : (w != 0) = true
-  · simp only [hw, ite_true] at hCode ⊢
-    have hInstr := hCode.head; rw [← hPC] at hInstr
-    exact ⟨s.setReg rd (insertBits (s.regs rd) w shift) |>.nextPC,
-      .single (.movk rd w shift hInstr),
-      by simp, by simp, by simp, by simp [hPC],
-      fun r hr => ArmState.setReg_regs_other _ _ _ _ hr, by simp⟩
-  · simp only [hw] at hCode ⊢; simp only [Bool.false_eq_true, ite_false]
-    exact ⟨s, .refl, rfl, rfl, rfl, by simp [hPC], fun _ _ => rfl, rfl⟩
-
-/-- Re-execute formalLoadImm64 tracking fregs. Since mov/movz/movk only use
-    setReg+nextPC (which preserve fregs), the resulting state has s'.fregs = s.fregs.
-    This is a standalone re-derivation — it doesn't depend on loadImm64_correct's witness. -/
-theorem loadImm64_fregs_preserved (prog : ArmProg) (rd : ArmReg) (n : BitVec 64)
-    (s : ArmState) (startPC : Nat)
-    (hCode : CodeAt prog startPC (formalLoadImm64 rd n))
-    (hPC : s.pc = startPC) :
-    ∃ s', ArmSteps prog s s' ∧ s'.fregs = s.fregs ∧
-      s'.regs rd = n ∧ s'.stack = s.stack ∧
-      s'.pc = startPC + (formalLoadImm64 rd n).length ∧
-      (∀ r, r ≠ rd → s'.regs r = s.regs r) ∧
-      s'.arrayMem = s.arrayMem := by
-  -- Use the existing loadImm64_correct for everything except fregs,
-  -- then observe fregs is preserved because the witness state only differs
-  -- from s by setReg/nextPC operations (which preserve fregs by simp).
-  unfold formalLoadImm64 at hCode
-  split at hCode
-  case isTrue hSmall =>
-    have hMov := hCode.head; rw [← hPC] at hMov
-    exact ⟨s.setReg rd n |>.nextPC, .single (.mov rd n hMov), by simp, by simp, by simp,
-      by simp [hPC, formalLoadImm64, hSmall],
-      fun r hr => ArmState.setReg_regs_other _ _ _ _ hr, by simp⟩
-  case isFalse hLarge =>
-    dsimp only at hCode
-    let bits : UInt64 := n.toNat.toUInt64
-    let w0 := bits &&& 65535
-    let w1 := bits >>> 16 &&& 65535
-    let w2 := bits >>> 32 &&& 65535
-    let w3 := bits >>> 48 &&& 65535
-    have hCodeBase := hCode.append_left.append_left.append_left
-    have hCodeK1rest := hCode.append_left.append_left.append_right
-    have hCodeK1K2 := hCode.append_left
-    have hCodeK2rest := hCodeK1K2.append_right
-    have hCodeK3rest := hCode.append_right
-    -- movz
-    have hMovz := hCodeBase.head; rw [← hPC] at hMovz
-    let s0 := s.setReg rd (BitVec.ofNat 64 (w0 <<< (0 : UInt64)).toNat) |>.nextPC
-    have hs0f : s0.fregs = s.fregs := by simp [s0]
-    have hPC0 : s0.pc = startPC + 1 := by simp [s0, hPC]
-    -- k1
-    have hw0_shift : (w0 <<< (0 : UInt64)) = w0 := uint64_shl_zero w0
-    have hRd0 : s0.regs rd = BitVec.ofNat 64 w0.toNat := by
-      simp [s0, ArmState.setReg, ArmState.nextPC, hw0_shift]
-    obtain ⟨s1, hS1, hRd1, hs1s, hs1f, hPC1, hs1r, hs1a⟩ :=
-      optional_movk_step' prog rd w1 16 s0 _ hPC0 hCodeK1rest
-    -- k2
-    have hPC_k2 : startPC + ([ArmInstr.movz rd w0 0] ++
-        (if (w1 != 0) = true then [ArmInstr.movk rd w1 16] else [])).length =
-        startPC + 1 + (if (w1 != 0) = true then [ArmInstr.movk rd w1 16] else []).length := by
-      simp; omega
-    rw [hPC_k2] at hCodeK2rest
-    obtain ⟨s2, hS2, hRd2, hs2s, hs2f, hPC2, hs2r, hs2a⟩ :=
-      optional_movk_step' prog rd w2 32 s1 _ hPC1 hCodeK2rest
-    -- k3
-    have hPC_k3 : startPC + (([ArmInstr.movz rd w0 0] ++
-        (if (w1 != 0) = true then [ArmInstr.movk rd w1 16] else [])) ++
-        (if (w2 != 0) = true then [ArmInstr.movk rd w2 32] else [])).length =
-        startPC + 1 +
-        (if (w1 != 0) = true then [ArmInstr.movk rd w1 16] else []).length +
-        (if (w2 != 0) = true then [ArmInstr.movk rd w2 32] else []).length := by
-      simp; omega
-    rw [hPC_k3] at hCodeK3rest
-    obtain ⟨s3, hS3, hRd3, hs3s, hs3f, hPC3, hs3r, hs3a⟩ :=
-      optional_movk_step' prog rd w3 48 s2 _ hPC2 hCodeK3rest
-    refine ⟨s3, (.step (.movz rd w0 0 hMovz) (hS1.trans (hS2.trans hS3))),
-      ?_, ?_, ?_, ?_, ?_, ?_⟩
-    · -- fregs
-      rw [hs3f, hs2f, hs1f, hs0f]
-    · -- regs rd = n
-      have hbits_bv : bits.toBitVec = n := by
-        show n.toNat.toUInt64.toBitVec = n
-        rw [UInt64.toBitVec]
-        apply BitVec.eq_of_toNat_eq
-        simp [Nat.toUInt64]
-      have hc0 : w0.toBitVec = bits.toBitVec &&& 0xFFFF#64 := uint64_toBitVec_chunk0 bits
-      have hc1 : w1.toBitVec = (bits.toBitVec >>> 16) &&& 0xFFFF#64 := uint64_toBitVec_chunk16 bits
-      have hc2 : w2.toBitVec = (bits.toBitVec >>> 32) &&& 0xFFFF#64 := uint64_toBitVec_chunk32 bits
-      have hc3 : w3.toBitVec = (bits.toBitVec >>> 48) &&& 0xFFFF#64 := uint64_toBitVec_chunk48 bits
-      by_cases hw1z : w1 = 0 <;> by_cases hw2z : w2 = 0 <;> by_cases hw3z : w3 = 0
-      all_goals simp only [show (w1 != 0) = true ↔ w1 ≠ 0 from by simp [bne, beq_iff_eq]] at hRd1
-      all_goals simp only [show (w2 != 0) = true ↔ w2 ≠ 0 from by simp [bne, beq_iff_eq]] at hRd2
-      all_goals simp only [show (w3 != 0) = true ↔ w3 ≠ 0 from by simp [bne, beq_iff_eq]] at hRd3
-      all_goals (try simp only [hw1z, ne_eq, not_true_eq_false, ite_false, not_false_eq_true, ite_true] at hRd1)
-      all_goals (try simp only [hw2z, ne_eq, not_true_eq_false, ite_false, not_false_eq_true, ite_true] at hRd2)
-      all_goals (try simp only [hw3z, ne_eq, not_true_eq_false, ite_false, not_false_eq_true, ite_true] at hRd3)
-      all_goals rw [hRd3]
-      all_goals (try rw [insertBits_unfold])
-      all_goals rw [hRd2]
-      all_goals (try rw [insertBits_unfold])
-      all_goals rw [hRd1]
-      all_goals (try rw [insertBits_unfold])
-      all_goals rw [hRd0]
-      all_goals simp only [BitVec_ofNat_UInt64_toNat]
-      all_goals rw [hc0]
-      all_goals try rw [hc1]
-      all_goals try rw [hc2]
-      all_goals try rw [hc3]
-      all_goals rw [← hbits_bv]
-      · exact bv_reassemble_000 bits.toBitVec (by rw [← hc1]; exact uint64_eq_zero_toBitVec w1 hw1z) (by rw [← hc2]; exact uint64_eq_zero_toBitVec w2 hw2z) (by rw [← hc3]; exact uint64_eq_zero_toBitVec w3 hw3z)
-      · exact bv_reassemble_001 bits.toBitVec (by rw [← hc1]; exact uint64_eq_zero_toBitVec w1 hw1z) (by rw [← hc2]; exact uint64_eq_zero_toBitVec w2 hw2z)
-      · exact bv_reassemble_010 bits.toBitVec (by rw [← hc1]; exact uint64_eq_zero_toBitVec w1 hw1z) (by rw [← hc3]; exact uint64_eq_zero_toBitVec w3 hw3z)
-      · exact bv_reassemble_011 bits.toBitVec (by rw [← hc1]; exact uint64_eq_zero_toBitVec w1 hw1z)
-      · exact bv_reassemble_100 bits.toBitVec (by rw [← hc2]; exact uint64_eq_zero_toBitVec w2 hw2z) (by rw [← hc3]; exact uint64_eq_zero_toBitVec w3 hw3z)
-      · exact bv_reassemble_101 bits.toBitVec (by rw [← hc2]; exact uint64_eq_zero_toBitVec w2 hw2z)
-      · exact bv_reassemble_110 bits.toBitVec (by rw [← hc3]; exact uint64_eq_zero_toBitVec w3 hw3z)
-      · exact bv_reassemble bits.toBitVec
-    · -- stack
-      rw [hs3s, hs2s, hs1s]; simp [s0]
-    · -- pc
-      rw [hPC3]; unfold formalLoadImm64; simp only [hLarge, ite_false]
-      simp only [List.length_append, List.length_cons, List.length_nil]
-      split <;> split <;> split <;> simp <;> omega
-    · -- other regs
-      intro r hr; rw [hs3r r hr, hs2r r hr, hs1r r hr]
-      simp [s0, ArmState.setReg, ArmState.nextPC, hr]
-    · -- arrayMem
-      rw [hs3a, hs2a, hs1a]; simp [s0]
-
--- ============================================================
 -- § ExtStateRel preservation helpers for verifiedGenInstr
 -- ============================================================
 
@@ -2246,6 +2322,68 @@ theorem verifiedGenBoolExpr_correct (prog : ArmProg) (layout : VarLayout)
       simp [ArmState.setReg, ArmState.nextPC, verifiedGenBoolExpr]; omega
     · -- arrayMem preserved
       simp [ArmState.setReg, ArmState.nextPC, hAM2, hAM1]
+  | fcmpLit hty =>
+    rename_i v fop n
+    simp only [verifiedGenBoolExpr] at hCode
+    -- Split: (vLoadVarFP v .d1 ++ formalLoadImm64 .x0 n) ++ [fmovToFP .d2 .x0, fcmpR .d1 .d2, cset .x0 cond]
+    have hCodeLoadImm := hCode.append_left
+    have hCodeFmovFcmpCset := hCode.append_right
+    have hCodeLV := hCodeLoadImm.append_left
+    have hCodeImm := hCodeLoadImm.append_right
+    -- Type info
+    have hTyV := hTS v; rw [hty] at hTyV
+    obtain ⟨fV, hfV⟩ := Value.float_of_typeOf_float hTyV
+    -- NotIreg from WellTypedLayout
+    have hNotIregV : ∀ r, layout v ≠ some (.ireg r) := hWTL.float_not_ireg hty
+    -- Step 1: vLoadVarFP v into d1
+    obtain ⟨s1, hSteps1, hD1, hRel1, hRegsI1, hPC1, hAM1, hFregs1, _⟩ :=
+      vLoadVarFP_exec prog layout v .d1 σ s startPC hRel hScratch hPC hCodeLV
+        (Or.inr (Or.inl rfl)) hNotIregV (hMapped v (by simp [BoolExpr.vars]))
+    -- Step 2: loadImm64 n into x0 (preserves fregs)
+    obtain ⟨s2, hSteps2, hFregs2, hX0, hStack2, hPC2, hRegs2, hAM2⟩ :=
+      loadImm64_fregs_preserved prog .x0 n s1 _ hCodeImm hPC1
+    -- d1 preserved through loadImm64 (loadImm64 preserves fregs)
+    have hD1_s2 : s2.fregs .d1 = (σ v).encode := by
+      rw [hFregs2]; exact hD1
+    -- ExtStateRel preserved through loadImm64
+    have hRel2 : ExtStateRel layout σ s2 :=
+      loadImm64_preserves_ExtStateRel prog layout .x0 n σ s1 s2
+        hRel1 hScratch hStack2 hFregs2 hRegs2 hAM2 (Or.inl rfl)
+    -- Step 3: fmovToFP d2 x0
+    have hFmov := hCodeFmovFcmpCset.head
+    rw [show startPC + (vLoadVarFP layout v .d1 ++ formalLoadImm64 .x0 n).length
+        = s2.pc from by rw [List.length_append]; omega] at hFmov
+    let s3 := s2.setFReg .d2 (s2.regs .x0) |>.nextPC
+    have hRel3 : ExtStateRel layout σ s3 :=
+      (ExtStateRel.setFReg_preserved hRel2 (fun w => hScratch.not_d2 w)).nextPC
+    -- d1 preserved through fmovToFP (d2 ≠ d1)
+    have hD1_s3 : s3.fregs .d1 = (σ v).encode := by
+      simp [s3, ArmState.setFReg, ArmState.nextPC]; exact hD1_s2
+    -- Step 4: fcmpR d1 d2 — sets flags
+    have hFcmp := hCodeFmovFcmpCset.tail.head
+    rw [show startPC + (vLoadVarFP layout v .d1 ++ formalLoadImm64 .x0 n).length + 1
+        = s3.pc from by simp [s3, ArmState.setFReg, ArmState.nextPC]; omega] at hFcmp
+    let s4 := { s3 with flags := Flags.mk (s3.fregs .d1) (s3.fregs .d2), pc := s3.pc + 1 }
+    have hRel4 : ExtStateRel layout σ s4 := fun v loc hv => hRel3 v loc hv
+    -- Step 5: cset x0 cond
+    have hCset := hCodeFmovFcmpCset.tail.tail.head
+    rw [show startPC + (vLoadVarFP layout v .d1 ++ formalLoadImm64 .x0 n).length + 2
+        = s4.pc from by simp [s4, s3, ArmState.setFReg, ArmState.nextPC]; omega] at hCset
+    refine ⟨_, (hSteps1.trans hSteps2).trans
+      (.step (.fmovToFP .d2 .x0 hFmov) (.step (.fcmpRR .d1 .d2 hFcmp) (.single (.cset .x0 _ hCset)))),
+      ?_, ?_, ?_, ?_⟩
+    · -- x0 = correct value
+      have hD1_s2 : s2.fregs .d1 = (σ v).encode := by rw [hFregs2]; exact hD1
+      simp [s4, s3, ArmState.setReg, ArmState.setFReg, ArmState.nextPC,
+            hD1_s2, hX0, hfV, Value.encode, BoolExpr.eval, Value.toFloat]
+      exact congrArg (fun b => if b = true then (1 : BitVec 64) else 0)
+        (Flags.condHolds_float_correct fop fV n)
+    · -- ExtStateRel preserved
+      exact (ExtStateRel.setReg_preserved hRel4 (fun w => hScratch.not_x0 w)).nextPC
+    · -- pc advanced
+      simp [ArmState.setReg, ArmState.setFReg, ArmState.nextPC, verifiedGenBoolExpr]; omega
+    · -- arrayMem preserved
+      simp [ArmState.setReg, ArmState.setFReg, ArmState.nextPC, hAM2, hAM1]
 
 -- § verifiedGenInstr_correct
 -- ============================================================
