@@ -2164,6 +2164,26 @@ private theorem samCoherent_singleton {σ : Store} {am am' : ArrayMem}
   next h_eval h_coh h_am =>
     exact ⟨_, h_eval, (samCoherent_nil_am_eq h_coh) ▸ h_am⟩
 
+/-- Extract operand values from a binop step producing Cfg.run. -/
+private theorem binop_step_values {p : Prog} {pc pc' : Nat} {σ σ' : Store} {am am' : ArrayMem}
+    {x : Var} {op : BinOp} {y z : Var}
+    (hinstr : p[pc]? = some (.binop x op y z))
+    (hstep : Step p (Cfg.run pc σ am) (Cfg.run pc' σ' am')) :
+    ∃ a b : BitVec 64, σ y = .int a ∧ σ z = .int b ∧ op.safe a b := by
+  cases hstep with
+  | binop h => rw [hinstr] at h; cases h; exact ⟨_, _, ‹_›, ‹_›, ‹_›⟩
+  | _ => all_goals simp_all
+
+/-- Extract index value and bounds from an arrLoad step producing Cfg.run. -/
+private theorem arrLoad_step_values {p : Prog} {pc pc' : Nat} {σ σ' : Store} {am am' : ArrayMem}
+    {x : Var} {arr : ArrayName} {idx : Var} {ty : VarTy}
+    (hinstr : p[pc]? = some (.arrLoad x arr idx ty))
+    (hstep : Step p (Cfg.run pc σ am) (Cfg.run pc' σ' am')) :
+    ∃ iv : BitVec 64, σ idx = .int iv ∧ iv < p.arraySizeBv arr := by
+  cases hstep with
+  | arrLoad h => rw [hinstr] at h; cases h; exact ⟨_, ‹_›, ‹_›⟩
+  | _ => all_goals simp_all
+
 /-- Extract index/value types from an arrStore step that produces Cfg.run. -/
 private theorem arrStore_step_values {p : Prog} {pc pc' : Nat} {σ σ' : Store} {am am' : ArrayMem}
     {arr : ArrayName} {idx val : Var}
@@ -2176,6 +2196,17 @@ private theorem arrStore_step_values {p : Prog} {pc pc' : Nat} {σ σ' : Store} 
     rw [hinstr] at h; cases h; exact ⟨_, hidx, rfl, rfl⟩
   | _ => all_goals simp_all
 
+/-- Extract index value, type check, and bounds from an arrStore step producing Cfg.run. -/
+private theorem arrStore_step_full {p : Prog} {pc pc' : Nat} {σ σ' : Store} {am am' : ArrayMem}
+    {arr : ArrayName} {idx val : Var} {ty : VarTy}
+    (hinstr : p[pc]? = some (.arrStore arr idx val ty))
+    (hstep : Step p (Cfg.run pc σ am) (Cfg.run pc' σ' am')) :
+    ∃ iv : BitVec 64, σ idx = .int iv ∧ (σ val).typeOf = ty ∧ iv < p.arraySizeBv arr := by
+  cases hstep with
+  | arrStore h hidx hty hbnd =>
+    rw [hinstr] at h; cases h; exact ⟨_, hidx, hty, hbnd⟩
+  | _ => all_goals simp_all
+
 /-- A non-arrStore step preserves array memory. -/
 private theorem step_am_preserved {p : Prog} {pc pc' : Nat} {σ σ' : Store} {am am' : ArrayMem}
     (hstep : Step p (Cfg.run pc σ am) (Cfg.run pc' σ' am'))
@@ -2183,6 +2214,13 @@ private theorem step_am_preserved {p : Prog} {pc pc' : Nat} {σ σ' : Store} {am
   cases hstep with
   | arrStore hinstr _ _ _ => exact absurd hinstr (h _ _ _ _)
   | _ => rfl
+
+/-- Convert Array.getElem? = some to Array.getD equality. -/
+private theorem getElem?_to_getD {a : Array α} {i : Nat} {v : α} {d : α}
+    (h : a[i]? = some v) : a.getD i d = v := by
+  simp only [Array.getD]; split
+  · simp_all
+  · exfalso; simp_all
 
 /-- If every pair `(e_o, .var v)` in `rel` satisfies `f e_o` and `f (.var v)` holds
     when no pair targets `v`, then `f (ssGet (buildSubstMap rel) v)` holds. -/
@@ -2337,7 +2375,6 @@ private theorem idx_transfer_via_inv
         | _ => simp at hinv_case
     | _ => simp at hinv_case
 
-set_option maxHeartbeats 6400000 in
 /-- Soundness of checkTransitionRelProp from the Bool checks.
     Given: checkOrigPath and checkRelConsistency both pass, the original path
     produces steps reaching the target with store relation preserved.
@@ -2400,9 +2437,7 @@ private theorem transRel_sound (dc : ECertificate)
       | binop x_t op_t y_t z_t =>
         intro hstep hpc_check
         rw [hinstr] at hpc_check
-        have hgetD : dc.instrCerts.getD pc_t default = dic := by
-          simp [Array.getD, dif_pos (bound_of_getElem? hdic)]
-          exact (Array.getElem?_eq_some_iff.mp hdic).2
+        have hgetD : dc.instrCerts.getD pc_t default = dic := getElem?_to_getD hdic
         rw [hgetD] at hpc_check; rw [horig] at hpc_check
         -- Extract op == op' (checked for all binops)
         rw [Bool.and_eq_true] at hpc_check; obtain ⟨hop_eq, hrest⟩ := hpc_check
@@ -2411,9 +2446,7 @@ private theorem transRel_sound (dc : ECertificate)
         rw [hop] at hrest
         rw [Bool.or_eq_true] at hrest
         -- From the step: extract a_t, b_t and op_t.safe a_t b_t
-        have ⟨a_t, b_t, hya_t, hzb_t, hsafe_t⟩ : ∃ a_t b_t : BitVec 64,
-            σ_t y_t = .int a_t ∧ σ_t z_t = .int b_t ∧ op_t.safe a_t b_t := by
-          cases hstep <;> simp_all
+        have ⟨a_t, b_t, hya_t, hzb_t, hsafe_t⟩ := binop_step_values hinstr hstep
         rcases hrest with hinv_case | hvar_case
         · -- Original divisor is known nonzero from invariant: safety follows directly
           generalize hfind : (dc.inv_orig.getD dic.pc_orig ([] : EInv)).find?
@@ -2451,9 +2484,7 @@ private theorem transRel_sound (dc : ECertificate)
       | _ =>
         intro hstep hpc_check
         rw [hinstr] at hpc_check
-        have hgetD : dc.instrCerts.getD pc_t default = dic := by
-          simp [Array.getD, dif_pos (bound_of_getElem? hdic)]
-          exact (Array.getElem?_eq_some_iff.mp hdic).2
+        have hgetD : dc.instrCerts.getD pc_t default = dic := getElem?_to_getD hdic
         rw [hgetD] at hpc_check; rw [horig] at hpc_check
         simp only at hpc_check
         set inv := dc.inv_orig.getD dic.pc_orig ([] : EInv) with hinv_def
@@ -2505,9 +2536,7 @@ private theorem transRel_sound (dc : ECertificate)
       simp only [checkBoundsPreservationExec, List.all_eq_true, List.mem_range] at hbndpres
       have hpc_bound := bound_of_getElem? hinstr
       have hpc_check := hbndpres pc_t hpc_bound; rw [hinstr] at hpc_check
-      have hgetD : dc.instrCerts.getD pc_t default = dic := by
-        simp [Array.getD, dif_pos (bound_of_getElem? hdic)]
-        exact (Array.getElem?_eq_some_iff.mp hdic).2
+      have hgetD : dc.instrCerts.getD pc_t default = dic := getElem?_to_getD hdic
       rw [hgetD] at hpc_check
       simp only [checkArraySizesExec, beq_iff_eq] at harrsize
       -- Case-split on whether trans is arrLoad or arrStore
@@ -2523,20 +2552,13 @@ private theorem transRel_sound (dc : ECertificate)
           have harr : arr_t = arr_o := beq_iff_eq.mp harr_eq
           rw [Bool.or_eq_true] at hidx_eq
           -- From the step, extract the index value and bounds
-          have ⟨idxVal_t, hidx_t, hbnd_t⟩ : ∃ iv : BitVec 64,
-              σ_t idx_t = .int iv ∧ iv < dc.trans.arraySizeBv arr_t := by
-            cases hstep <;> simp_all
+          have ⟨idxVal_t, hidx_t, hbnd_t⟩ := arrLoad_step_values hinstr hstep
           -- Transfer index via store relation or invariant
           have hσt_idx : σ_t idx_t = σ_o idx_o := by
             rcases hidx_eq with hvar | hinv
             · have hf := beq_iff_eq.mp hvar; rw [← hrel_eq] at hf
               exact store_eq_of_relFindOrigVar hf hcons
-            · have hic_def : dic = dc.instrCerts.getD pc_t default := by
-                simp only [Array.getD]
-                split
-                · simp_all
-                · exfalso; simp_all
-              exact idx_transfer_via_inv hinv (hrel_eq ▸ hcons) hinv_o hic_def
+            · exact idx_transfer_via_inv hinv (hrel_eq ▸ hcons) hinv_o (getElem?_to_getD hdic).symm
           have : idxVal_o = idxVal_t := Value.int.inj (hidxVal_o.symm.trans (hσt_idx ▸ hidx_t))
           subst this
           rw [← harr]; simp [Prog.arraySizeBv, harrsize]; exact hbnd_t
@@ -2553,19 +2575,12 @@ private theorem transRel_sound (dc : ECertificate)
           rw [Bool.and_eq_true] at hpc_check; obtain ⟨harr_eq, hidx_eq⟩ := hpc_check
           have harr : arr_t = arr_o := beq_iff_eq.mp harr_eq
           rw [Bool.or_eq_true] at hidx_eq
-          have ⟨idxVal_t, hidx_t, _, hbnd_t⟩ : ∃ iv : BitVec 64,
-              σ_t idx_t = .int iv ∧ (σ_t val_t).typeOf = ty_t ∧ iv < dc.trans.arraySizeBv arr_t := by
-            cases hstep <;> simp_all
+          have ⟨idxVal_t, hidx_t, _, hbnd_t⟩ := arrStore_step_full hinstr hstep
           have hσt_idx : σ_t idx_t = σ_o idx_o := by
             rcases hidx_eq with hvar | hinv
             · have hf := beq_iff_eq.mp hvar; rw [← hrel_eq] at hf
               exact store_eq_of_relFindOrigVar hf hcons
-            · have hic_def : dic = dc.instrCerts.getD pc_t default := by
-                simp only [Array.getD]
-                split
-                · simp_all
-                · exfalso; simp_all
-              exact idx_transfer_via_inv hinv (hrel_eq ▸ hcons) hinv_o hic_def
+            · exact idx_transfer_via_inv hinv (hrel_eq ▸ hcons) hinv_o (getElem?_to_getD hdic).symm
           have : idxVal_o = idxVal_t := Value.int.inj (hidxVal_o.symm.trans (hσt_idx ▸ hidx_t))
           subst this
           rw [← harr]; simp [Prog.arraySizeBv, harrsize]; exact hbnd_t
@@ -2598,12 +2613,7 @@ private theorem transRel_sound (dc : ECertificate)
           have step_det : ∀ c, Step dc.trans (Cfg.run pc_t σ_t am_t) c →
               c = Cfg.run pc_t' σ_t' am_t' :=
             fun c hc => Step.deterministic hc hstep
-          obtain ⟨idxVal, hv⟩ : ∃ idxVal : BitVec 64, σ_t idx = .int idxVal := by
-            revert hstep; intro hstep; cases hstep <;> simp_all
-          have hty : (σ_t val).typeOf = ty := by
-            revert hstep; intro hstep; cases hstep <;> simp_all
-          have hbnd : idxVal < dc.trans.arraySizeBv arr := by
-            revert hstep; intro hstep; cases hstep <;> simp_all
+          obtain ⟨idxVal, hv, hty, hbnd⟩ := arrStore_step_full hinstr hstep
           have := step_det _ (Step.arrStore hinstr hv hty hbnd)
           have hσ' : σ_t' = σ_t := (Cfg.run.inj this).2.1.symm
           rw [hσ']; exact ssGet_nil σ_t am_t
@@ -2614,10 +2624,7 @@ private theorem transRel_sound (dc : ECertificate)
           have step_det : ∀ c, Step dc.trans (Cfg.run pc_t σ_t am_t) c →
               c = Cfg.run pc_t' σ_t' am_t' :=
             fun c hc => Step.deterministic hc hstep
-          obtain ⟨idxVal, hidx⟩ : ∃ idxVal : BitVec 64, σ_t idx = .int idxVal := by
-            revert hstep; intro hstep; cases hstep <;> simp_all
-          have hbnd : idxVal < dc.trans.arraySizeBv arr := by
-            revert hstep; intro hstep; cases hstep <;> simp_all
+          obtain ⟨idxVal, hidx, hbnd⟩ := arrLoad_step_values hinstr hstep
           have := step_det _ (Step.arrLoad hinstr hidx hbnd)
           have hσ' : σ_t' = σ_t[dest ↦ Value.ofBitVec ty (am_t.read arr idxVal)] :=
             (Cfg.run.inj this).2.1.symm
