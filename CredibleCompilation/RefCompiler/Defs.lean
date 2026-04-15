@@ -346,13 +346,6 @@ theorem FragExec.single_arrLoad_float {p : Prog} {pc : Nat} {σ : Store} {am : A
   simp [Value.ofBitVec] at this
   exact this
 
--- ============================================================
--- § 5. BoolExpr evaluation congruence (pointwise)
--- ============================================================
-
-theorem BoolExpr.eval_agree' (cond : BoolExpr) (σ τ : Store) (am : ArrayMem)
-    (h : ∀ v ∈ cond.vars, σ v = τ v) : cond.eval σ am = cond.eval τ am := by
-  sorry
 
 -- ============================================================
 -- § 6. Division safety helpers

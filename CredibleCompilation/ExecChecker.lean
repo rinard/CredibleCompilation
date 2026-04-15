@@ -589,6 +589,26 @@ def Expr.substSym (ss : SymStore) : Expr → Expr
   | .ftern op a b c   => .ftern op (a.substSym ss) (b.substSym ss) (c.substSym ss)
   | .farrRead arr idx => .farrRead arr (idx.substSym ss)
 
+@[simp] theorem Expr.substSym'_eq_substSym (e : Expr) (ss : SymStore) :
+    e.substSym' ss = e.substSym ss := by
+  induction e with
+  | lit _ | blit _ | flit _ | var _ => simp [substSym', substSym]
+  | bin _ a b iha ihb => simp [substSym', substSym, iha, ihb]
+  | tobool e ih => simp [substSym', substSym, ih]
+  | cmpE _ a b iha ihb => simp [substSym', substSym, iha, ihb]
+  | cmpLitE _ a _ ih => simp [substSym', substSym, ih]
+  | notE e ih => simp [substSym', substSym, ih]
+  | andE a b iha ihb => simp [substSym', substSym, iha, ihb]
+  | orE a b iha ihb => simp [substSym', substSym, iha, ihb]
+  | arrRead _ idx ih => simp [substSym', substSym, ih]
+  | fbin _ a b iha ihb => simp [substSym', substSym, iha, ihb]
+  | fcmpE _ a b iha ihb => simp [substSym', substSym, iha, ihb]
+  | intToFloat e ih => simp [substSym', substSym, ih]
+  | floatToInt e ih => simp [substSym', substSym, ih]
+  | floatUnary _ e ih => simp [substSym', substSym, ih]
+  | ftern _ a b c iha ihb ihc => simp [substSym', substSym, iha, ihb, ihc]
+  | farrRead _ idx ih => simp [substSym', substSym, ih]
+
 /-- `substSymFast` with `FastVarMap.ofList` equals `substSym`. -/
 theorem Expr.substSymFast_eq_substSym (e : Expr) (ss : SymStore) :
     e.substSymFast (FastVarMap.ofList ss) = e.substSym ss := by
@@ -1015,6 +1035,31 @@ def checkNoArrReadInRels (certs : Array EInstrCert) : Bool :=
       tc.rel.all (fun (e, _) => !e.hasArrRead) &&
       tc.rel_next.all (fun (e, _) => !e.hasArrRead)
 
+/-- Check that all BoolExpr operands in a program's boolop/ifgoto instructions
+    are arrRead-free (no `.arrRead`/`.farrRead` sub-expressions). -/
+def checkBoolExprNoArrRead (p : Prog) : Bool :=
+  p.code.all fun instr =>
+    match instr with
+    | .boolop _ be | .ifgoto be _ => !be.hasArrRead
+    | _ => true
+
+/-- Soundness: `checkBoolExprNoArrRead` implies every BoolExpr in the program is arrRead-free. -/
+theorem checkBoolExprNoArrRead_sound (p : Prog)
+    (h : checkBoolExprNoArrRead p = true) :
+    ∀ (pc : Nat) (instr : TAC), p[pc]? = some instr →
+      (∀ x be, instr = TAC.boolop x be → be.hasArrRead = false) ∧
+      (∀ b l, instr = TAC.ifgoto b l → b.hasArrRead = false) := by
+  intro pc instr hinstr
+  unfold checkBoolExprNoArrRead at h
+  have hbound := bound_of_getElem? hinstr
+  have hget : p.code[pc] = instr :=
+    Option.some.inj ((Array.getElem?_eq_getElem hbound).symm.trans hinstr)
+  have hall := (Array.all_eq_true.mp h) pc hbound
+  rw [hget] at hall
+  constructor
+  · intro x be heq; subst heq; simp at hall; exact hall
+  · intro b l heq; subst heq; simp at hall; exact hall
+
 /-- All arrLoad/arrStore instructions in a program use element type `.int`. -/
 def AllArrayOpsInt (p : Prog) : Prop :=
   ∀ i (h : i < p.size), match p[i] with
@@ -1085,7 +1130,9 @@ def checkCertificateExec (cert : ECertificate) : Bool :=
   checkBoundsPreservationExec cert &&
   checkArraySizesExec cert &&
   checkOrigPathBoundsOk cert &&
-  checkSuccessorsInBounds cert
+  checkSuccessorsInBounds cert &&
+  checkBoolExprNoArrRead cert.orig &&
+  checkBoolExprNoArrRead cert.trans
 
 /-- Verbose check: returns the result of each individual condition. -/
 def checkCertificateVerboseExec (cert : ECertificate) : List (String × Bool) :=
@@ -1107,7 +1154,9 @@ def checkCertificateVerboseExec (cert : ECertificate) : List (String × Bool) :=
     ("bounds_preservation",   checkBoundsPreservationExec cert),
     ("array_sizes_equal",     checkArraySizesExec cert),
     ("orig_path_bounds_ok",   checkOrigPathBoundsOk cert),
-    ("successors_in_bounds",  checkSuccessorsInBounds cert) ]
+    ("successors_in_bounds",  checkSuccessorsInBounds cert),
+    ("bool_expr_no_arr_read_orig", checkBoolExprNoArrRead cert.orig),
+    ("bool_expr_no_arr_read_trans", checkBoolExprNoArrRead cert.trans) ]
 
 /-- Observable output of a configuration with respect to an executable certificate.
     - If the current instruction is `halt`, returns `halt` with observable variable–value pairs.

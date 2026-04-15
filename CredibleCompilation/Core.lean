@@ -547,6 +547,28 @@ theorem BoolExpr.eval_congr (cond : BoolExpr) (σ τ : Store) (am : ArrayMem)
   | not e ih => simp [BoolExpr.eval, ih]
   | fcmp op a b => simp [BoolExpr.eval, Expr.eval_congr a σ τ am hagree, Expr.eval_congr b σ τ am hagree]
 
+/-- Does a BoolExpr contain any arrRead/farrRead in its Expr operands? -/
+def BoolExpr.hasArrRead : BoolExpr → Bool
+  | .lit _       => false
+  | .bvar _      => false
+  | .cmp _ a b   => a.hasArrRead || b.hasArrRead
+  | .not e       => e.hasArrRead
+  | .fcmp _ a b  => a.hasArrRead || b.hasArrRead
+
+/-- For arrRead-free BoolExprs, evaluation is independent of the array memory. -/
+theorem BoolExpr.eval_noArrRead (be : BoolExpr) (σ : Store) (am₁ am₂ : ArrayMem)
+    (h : be.hasArrRead = false) : be.eval σ am₁ = be.eval σ am₂ := by
+  induction be with
+  | lit _ | bvar _ => rfl
+  | cmp op a b =>
+    simp only [hasArrRead, Bool.or_eq_false_iff] at h
+    simp only [BoolExpr.eval, Expr.eval_noArrRead a σ am₁ am₂ h.1, Expr.eval_noArrRead b σ am₁ am₂ h.2]
+  | not e ih =>
+    simp only [hasArrRead] at h; simp only [BoolExpr.eval, ih h]
+  | fcmp op a b =>
+    simp only [hasArrRead, Bool.or_eq_false_iff] at h
+    simp only [BoolExpr.eval, Expr.eval_noArrRead a σ am₁ am₂ h.1, Expr.eval_noArrRead b σ am₁ am₂ h.2]
+
 /-- Collect all variable names from a boolean expression. -/
 def BoolExpr.vars : BoolExpr → List Var
   | .lit _        => []

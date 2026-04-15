@@ -245,12 +245,6 @@ theorem compileExpr_result_ftmp_bound (e : SExpr) (offset nextTmp : Nat)
     obtain ⟨codeIdx, vIdx, tmp1⟩ := ri; simp at hge ⊢
     exact ⟨tmp1, hge, by omega, rfl⟩
 
-theorem compileBool_vars_bound (sb : SBool) (offset nextTmp : Nat)
-    (htf : ∀ v ∈ sb.freeVars, v.isTmp = false) :
-    let r := compileBool sb offset nextTmp
-    ∀ v ∈ r.2.1.vars,
-      (v.isTmp = false) ∨ (∃ k, nextTmp ≤ k ∧ k < r.2.2 ∧ v = tmpName k) := by
-  sorry
 
 -- ============================================================
 -- § 9. Expression compilation correctness

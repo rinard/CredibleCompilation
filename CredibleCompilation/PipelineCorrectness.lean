@@ -181,7 +181,7 @@ private theorem same_obs_of_check (cert : ECertificate)
     cert.orig.observable = cert.trans.observable := by
   unfold checkCertificateExec at h
   simp only [Bool.and_eq_true] at h
-  exact beq_iff_eq.mp h.1.1.1.1.1.1.1.1.1.1.1.1.1.1.1.1.2
+  exact beq_iff_eq.mp h.1.1.1.1.1.1.1.1.1.1.1.1.1.1.1.1.1.1.2
 
 /-- Each optimization pass preserves the observable variable list. -/
 private theorem obs_preserved_by_pass (n : String) (pass : Prog → ECertificate) (q q' : Prog)
