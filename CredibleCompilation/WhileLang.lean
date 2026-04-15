@@ -724,6 +724,7 @@ private def instrDefType : TAC → Option (Var × VarTy)
   | .intToFloat x _   => some (x, .float)
   | .floatToInt x _   => some (x, .int)
   | .floatUnary x _ _ => some (x, .float)
+  | .fternop x _ _ _ _ => some (x, .float)
   | _                  => none
 
 /-- Build a type context from declarations augmented with types inferred from
@@ -768,6 +769,9 @@ private theorem instrDefType_matches_tyCtx {Γ : TyCtx}
     simp only [instrDefType, Option.some.injEq, Prod.mk.injEq] at hdef
     obtain ⟨rfl, rfl⟩ := hdef; exact hx.symm
   | floatUnary hx _ =>
+    simp only [instrDefType, Option.some.injEq, Prod.mk.injEq] at hdef
+    obtain ⟨rfl, rfl⟩ := hdef; exact hx.symm
+  | fternop hx _ _ _ =>
     simp only [instrDefType, Option.some.injEq, Prod.mk.injEq] at hdef
     obtain ⟨rfl, rfl⟩ := hdef; exact hx.symm
 
@@ -2261,7 +2265,8 @@ private theorem stepClosed_of_allJumpsLe {code : List TAC} {p : Prog}
         simp [TAC.successors] at hmem; omega
       | arrLoad _ _ _ _ | arrStore _ _ _ _ =>
         simp [TAC.successors] at hmem; omega
-      | fbinop _ _ _ _ | intToFloat _ _ | floatToInt _ _ | floatUnary _ _ _ =>
+      | fbinop _ _ _ _ | intToFloat _ _ | floatToInt _ _ | floatUnary _ _ _
+      | fternop _ _ _ _ _ =>
         simp [TAC.successors] at hmem; omega
       | goto l => simp [TAC.successors] at hmem; subst hmem; exact Nat.lt_of_le_of_lt hj (by omega)
       | ifgoto _ l =>

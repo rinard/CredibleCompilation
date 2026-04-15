@@ -325,6 +325,16 @@ def FloatUnaryOp.isNative : FloatUnaryOp → Bool
 /-- Evaluate a float unary op. Opaque — each is an uninterpreted function over BitVec 64. -/
 opaque FloatUnaryOp.eval : FloatUnaryOp → BitVec 64 → BitVec 64
 
+/-- Ternary floating-point operations (fused multiply-add / multiply-subtract). -/
+inductive FloatTernOp | fmadd | fmsub deriving Repr, DecidableEq
+
+/-- Evaluate a float ternary op using the two-rounding model.
+    fmadd: a + b*c,  fmsub: a - b*c  (each sub-op rounds separately).
+    NOT opaque — proofs need to unfold this to match ARM step rules. -/
+def FloatTernOp.eval : FloatTernOp → BitVec 64 → BitVec 64 → BitVec 64 → BitVec 64
+  | .fmadd, a, b, c => FloatBinOp.eval .fadd a (FloatBinOp.eval .fmul b c)
+  | .fmsub, a, b, c => FloatBinOp.eval .fsub a (FloatBinOp.eval .fmul b c)
+
 /-- Convert a Lean Float to its IEEE 754 bit representation as BitVec 64.
     Uses `Float.toBits` for proper bit reinterpretation (not truncation). -/
 def floatToBits (f : Float) : BitVec 64 :=
@@ -372,6 +382,7 @@ inductive Expr where
   | intToFloat : Expr → Expr                           -- .float (intToFloat (e.toInt))
   | floatToInt : Expr → Expr                           -- .int (floatToInt (e.toFloat))
   | floatUnary : FloatUnaryOp → Expr → Expr             -- .float (op.eval(e.toFloat))
+  | ftern     : FloatTernOp → Expr → Expr → Expr → Expr -- .float (op.eval a b c)
   | farrRead : ArrayName → Expr → Expr                -- .float (am.read arr idx)
   deriving Repr, DecidableEq
 
@@ -393,6 +404,7 @@ def Expr.eval (σ : Store) (am : ArrayMem) : Expr → Value
   | .intToFloat e      => .float (intToFloatBv (e.eval σ am).toInt)
   | .floatToInt e      => .int (floatToIntBv (e.eval σ am).toFloat)
   | .floatUnary op e   => .float (op.eval (e.eval σ am).toFloat)
+  | .ftern op a b c    => .float (FloatTernOp.eval op (a.eval σ am).toFloat (b.eval σ am).toFloat (c.eval σ am).toFloat)
   | .farrRead arr idx  => .float (am.read arr (idx.eval σ am).toInt)
 
 /-- Does an expression contain any `arrRead` or `farrRead` sub-expression? -/
@@ -411,6 +423,7 @@ def Expr.hasArrRead : Expr → Bool
   | .intToFloat e  => e.hasArrRead
   | .floatToInt e  => e.hasArrRead
   | .floatUnary _ e => e.hasArrRead
+  | .ftern _ a b c => a.hasArrRead || b.hasArrRead || c.hasArrRead
   | .farrRead _ _  => true
 
 /-- Collect all variable names appearing in an expression (with possible duplicates). -/
@@ -430,6 +443,7 @@ def Expr.freeVars : Expr → List Var
   | .intToFloat e   => e.freeVars
   | .floatToInt e   => e.freeVars
   | .floatUnary _ e => e.freeVars
+  | .ftern _ a b c => a.freeVars ++ b.freeVars ++ c.freeVars
   | .farrRead _ idx => idx.freeVars
 
 /-- For arrRead-free expressions, evaluation is independent of the array memory. -/
@@ -469,6 +483,9 @@ theorem Expr.eval_noArrRead (e : Expr) (σ : Store) (am₁ am₂ : ArrayMem)
     simp only [hasArrRead] at h; simp only [Expr.eval]; rw [ih h]
   | floatUnary _ e ih =>
     simp only [hasArrRead] at h; simp only [Expr.eval]; rw [ih h]
+  | ftern _ a b c iha ihb ihc =>
+    simp only [hasArrRead, Bool.or_eq_false_iff] at h
+    simp only [Expr.eval]; rw [iha h.1.1, ihb h.1.2, ihc h.2]
   | farrRead _ _ => simp [hasArrRead] at h
 
 -- ============================================================

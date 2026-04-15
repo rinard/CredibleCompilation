@@ -218,6 +218,7 @@ def renameInstr (coloring : List (Var × String)) (instr : TAC) : TAC :=
   | .intToFloat x y  => .intToFloat (r x) (r y)
   | .floatToInt x y  => .floatToInt (r x) (r y)
   | .floatUnary x op y => .floatUnary (r x) op (r y)
+  | .fternop x op a b c => .fternop (r x) op (r a) (r b) (r c)
   | .goto l          => .goto l
   | .ifgoto be l     => .ifgoto (renameBoolExpr coloring be) l
   | .halt            => .halt
@@ -290,6 +291,7 @@ def renameProg (prog : Prog) (coloring : List (Var × String)) : Prog :=
     | .intToFloat x _   => fun w => if w == x then .float else ctx w
     | .floatToInt x _   => fun w => if w == x then .int else ctx w
     | .floatUnary x _ _  => fun w => if w == x then .float else ctx w
+    | .fternop x _ _ _ _ => fun w => if w == x then .float else ctx w
     | .arrLoad x _ _ ty => fun w => if w == x then ty else ctx w
     | _                  => ctx
   ) prog.tyCtx

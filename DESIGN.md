@@ -47,3 +47,97 @@ Record of key design decisions for CredibleCompilation.
 21) Generated code sometimes calls procedures like exp() and sqrt(). Codegen needs to save caller save registers around call. 
 
 22) fmadd different rounding than fadd fmul. ignore in semantics - just say has same semantics
+
+23) implementation of fmadd detail:
+  Starting situation: fmadd in ARM semantics and TAC operation (added in less than two hours to existing infrastructure)
+
+  a) Initial prompt issued at 12:58. 
+     right now the compiler generates fmul followed by fadd instead of fmadd. plan the implementation of a tac optimization pass that converts fmul+fadd to fmadd.
+  b) Plan generated at 1:02, saved into fma-fusion-opt.md
+  c) Accept this plan? Yes, and auto-accept issued at 1:06
+  d) Plan completed at 1:14. 
+  e) Summary is:
+    All done. Here's a summary of what was implemented:
+
+FMA Fusion Optimization Pass
+New file: FMAFusionOpt.lean — fuses adjacent fmul + fadd/fsub pairs into single fmadd/fmsub ternary instructions.
+
+Patterns fused
+t := fmul(b, c); x := fadd(a, t) → x := fmadd(a, b, c)
+t := fmul(b, c); x := fadd(t, a) → x := fmadd(a, b, c) (commutative)
+t := fmul(b, c); x := fsub(a, t) → x := fmsub(a, b, c)
+Safety constraints
+Instructions must be adjacent with no incoming jumps to the second
+Temp t must be dead after the fadd/fsub (verified via liveness analysis)
+t != a to prevent clobbering
+Architecture
+Reuses DAEOpt.analyzeLiveness and DAEOpt.buildPredecessors for analysis
+Reuses buildOrigMap/buildRevMap/PeepholeOpt.buildSkipArr for compaction
+Identity expression relations (semantics are definitionally equal via FloatTernOp.eval)
+Zero sorrys — no new proof obligations
+Modified files
+CodeGen.lean — import + pipeline insertion after DAE, before CSE
+PipelineCorrectness.lean — added hty_fma/htyO_fma hypotheses to all three correctness theorems
+ f) Certificate does not check for simple fmadd programs at 1:18.
+ g) Claude Code automatically launches debug session, finds problem
+    Now I see the symbolic representations:
+
+fbinop x fmul y z → x := .fbin .fmul y z
+fbinop x fadd a t → x := .fbin .fadd a (.fbin .fmul y z) (after substituting t)
+fternop x fmadd a b c → x := .ftern .fmadd a b c
+These are structurally different symbolic expressions! .fbin .fadd a (.fbin .fmul b c) ≠ .ftern .fmadd a b c. The checkRelConsistency comparison will fail because the checker doesn't know the algebraic identity.
+
+This means I can't use a simple compacting pass with identity relations. I need a different approach — either:
+
+Keep both instructions (don't compact) and use a non-identity expression relation, or
+Add a simplification rule that normalizes .ftern .fmadd a b c to .fbin .fadd a (.fbin .fmul b c), or
+Do the fusion at the code generation level (in verifiedGenInstr) rather than as a TAC optimization pass
+
+...
+
+I need to normalize ftern to expanded binop form in both simplify and simplifyFast. Let me also fix the origLabels bug in FMAFusionOpt. Two changes needed:
+
+ExecChecker.lean: Expand ftern to binops in simplify/simplifyFast
+FMAFusionOpt.lean: Fix origLabels to include the fadd PC
+  h) Certificate is still failing at 1:23, new debug session initiated. Claude Code conclusion is:
+     I need to precompute the pc_orig for each trans instruction, then use those when computing paths. The key insight: each instruction's origLabels must end at the next instruction's pc_orig, not at origMap[i+1].
+  i) Certificate is still failing at 1:27. Claude Code conclusion is:
+     The identity relation claims (.var "__ft0", .var "__ft0") — asserting orig __ft0 == trans __ft0. But in orig, __ft0 was written by the fmul, while in trans, __ft0 is never written (the fused fternop writes to x directly).
+
+The fix: I can't use a pure identity relation. I need to exclude __ft0 (the temp variable killed by fusion) from the post-relation, or use a non-identity relation that accounts for it.
+
+The simplest approach: for fused instructions, filter the dead temp out of the relation at the fusion point.
+  j) FMA certificate for simple test case checks at 1:29. But ConstProp certificate fails - ConstProp transfer function does not handle fmadd. Claude Code correctly diagnoses problem and fixes it at 1:30. 
+
+  k) FMA certificate fails on Livermore Loops benchmark at 1:31. Claude Code diagnoses problem as follows:
+     Since FloatBinOp.eval .fadd is opaque, the checker can't prove commutativity. I need to ensure the operand order matches. When the temp is in the lhs of fadd, the fmadd should put the mul result first: fmadd(rhs, mulL, mulR) is wrong because fmadd semantics is a + b*c, so the expanded form is fadd(a, fmul(b,c)). If the original is fadd(temp, rhs), I need the expanded fmadd to also be fadd(temp, rhs) = fadd(fmul(b,c), rhs). But fmadd is a + b*c = fadd(a, fmul(b,c)), so this would require a = fmul(b,c) and the addend on the "wrong" side.
+
+I can't match this case with fmadd because fmadd is always a + b*c. When the original is fmul(b,c) + a (temp first), the expansion is fadd(fmul(b,c), a), but fmadd gives fadd(a, fmul(b,c)). These differ symbolically even though IEEE addition commutes.
+
+The simplest fix: only fuse when the temp is in the second position of fadd (i.e., fadd(a, temp)), not the first.
+  l) RegAlloc fails at 1:35 (does some but not all Livermore benchmarks). Does not handle fternop correctly. Diagnosis:
+     I see — RegAlloc uses DAEOpt.instrDef for determining the defined variable. Let me check that instrDef handles fternop.
+
+Read DAEOpt.lean (lines 48-62)
+instrDef doesn't handle fternop! The _ => none catch-all returns none for fternop. This means RegAlloc's relTransfer treats fternop as a no-op (doesn't update the relation for the defined variable), which corrupts the expression relation
+  m) Fixed at 1:43. Livermore benchmarks tested at 1:44, compile correctly. 
+  n) Prompt at 2:04 - what about fmadd not dealing with commutativity and only working for some temp patterns.
+     Response: 
+Right — currently we only fuse fadd(a, t) (temp in second position) but not fadd(t, a) (temp first), because the checker can't prove fadd commutativity symbolically.
+
+The fix: when the temp is in the first position, emit the fternop with swapped addend order so the symbolic expansion matches. Concretely:
+
+t := fmul(b, c); x := fadd(t, a) — orig symbolic: fadd(fmul(b,c), a)
+We need the fternop to expand to the same thing: fadd(fmul(b,c), a)
+But fmadd(a, b, c) expands to fadd(a, fmul(b,c)) — wrong order
+The solution: use fmadd with a = the mul result's position. Since FloatTernOp.eval .fmadd a b c = fadd(a, fmul(b,c)), to get fadd(fmul(b,c), a) we'd need a "reverse fmadd" — but that doesn't exist in the IR.
+
+Two options:
+
+Add fmaddRev to FloatTernOp with semantics fmul(b,c) + a — invasive, touches many files
+Normalize the fadd operand order in the source before fusion — swap fadd(t, a) to fadd(a, t) as a pre-step, then fuse. But this also has the commutativity problem for the checker.
+Actually, the simplest correct approach: teach Expr.simplifyFast to canonicalize fbin fadd operand order (e.g., sort by structural ordering). Then both fadd(a, fmul(b,c)) and fadd(fmul(b,c), a) normalize to the same form, and the checker accepts both patterns.
+
+Want me to implement that canonicalization approach? It would let us fuse both fadd(a, t) and fadd(t, a), and also handle the fsub case where only fsub(a, t) is valid (subtraction isn't commutative, so that one's already correct).
+
+ o) I suggest to add an axiom that fadd commutes. Claude says not worth it for now. 

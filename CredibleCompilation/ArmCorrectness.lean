@@ -1707,6 +1707,59 @@ theorem genInstr_correct (prog : ArmProg) (vm : VarMap) (pcMap : Nat → Nat)
       · simp [ArmState.setStack, ArmState.setFReg, ArmState.nextPC, ArmState.havocCallerSaved, hArrayMem]
   | floatUnary_typeError hinstr hne =>
     exact absurd (Step.floatUnary_typeError (am := am) hinstr hne) (Step.no_typeError_of_wellTyped hPC_bound hWT hTS)
+  | fternop hinstr ha hb hc =>
+    rename_i dst op a b c va vb vc
+    have heq : instr = .fternop dst op a b c := Option.some.inj (hInstr.symm.trans hinstr)
+    obtain ⟨offA, hA⟩ := hVarMap a; obtain ⟨offB, hB⟩ := hVarMap b
+    obtain ⟨offC, hC⟩ := hVarMap c; obtain ⟨offD, hD⟩ := hVarMap dst
+    have hStackA := hStateRel a offA hA; rw [ha] at hStackA; simp [Value.encode] at hStackA
+    have hStackB := hStateRel b offB hB; rw [hb] at hStackB; simp [Value.encode] at hStackB
+    have hStackC := hStateRel c offC hC; rw [hc] at hStackC; simp [Value.encode] at hStackC
+    cases op with
+    | fmadd =>
+      have hformal : formalGenInstr vm pcMap instr haltLabel divLabel =
+          [.fldr .d3 offA, .fldr .d1 offB, .fldr .d2 offC, .fmaddR .d0 .d1 .d2 .d3, .fstr .d0 offD] := by
+        rw [heq]; simp only [formalGenInstr]; rw [hA, hB, hC, hD]
+      rw [hformal] at hCodeInstr hPcNext
+      have h0 := hCodeInstr.head; have h1 := hCodeInstr.tail.head
+      have h2 := hCodeInstr.tail.tail.head; have h3 := hCodeInstr.tail.tail.tail.head
+      have h4 := hCodeInstr.tail.tail.tail.tail.head
+      rw [← hPcRel] at h0 h1 h2 h3 h4
+      refine ⟨_, .step (.fldr .d3 offA h0) (.step (.fldr .d1 offB h1) (.step (.fldr .d2 offC h2)
+        (.step (.fmaddR .d0 .d1 .d2 .d3 h3) (.single (.fstr .d0 offD h4))))),
+        ?_, ?_, ?_⟩
+      · intro v off hv; simp only [ArmState.setStack, ArmState.setFReg, ArmState.nextPC]
+        by_cases hoff : off = offD
+        · subst hoff; simp; have := hInjective v dst off hv hD; subst this
+          rw [Store.update_self]; simp [Value.encode, FloatTernOp.eval, hStackA, hStackB, hStackC]
+        · simp [hoff]; have hne : v ≠ dst := fun h => hoff (Option.some.inj ((h ▸ hv).symm.trans hD))
+          rw [Store.update_other _ _ _ _ hne]; exact hStateRel v off hv
+      · show s.pc + 1 + 1 + 1 + 1 + 1 = pcMap (pc + 1)
+        have := hPcNext _ _ rfl; simp at this; rw [this, hPcRel]
+      · simp [ArmState.setStack, ArmState.setFReg, ArmState.nextPC, hArrayMem]
+    | fmsub =>
+      have hformal : formalGenInstr vm pcMap instr haltLabel divLabel =
+          [.fldr .d3 offA, .fldr .d1 offB, .fldr .d2 offC, .fmsubR .d0 .d1 .d2 .d3, .fstr .d0 offD] := by
+        rw [heq]; simp only [formalGenInstr]; rw [hA, hB, hC, hD]
+      rw [hformal] at hCodeInstr hPcNext
+      have h0 := hCodeInstr.head; have h1 := hCodeInstr.tail.head
+      have h2 := hCodeInstr.tail.tail.head; have h3 := hCodeInstr.tail.tail.tail.head
+      have h4 := hCodeInstr.tail.tail.tail.tail.head
+      rw [← hPcRel] at h0 h1 h2 h3 h4
+      refine ⟨_, .step (.fldr .d3 offA h0) (.step (.fldr .d1 offB h1) (.step (.fldr .d2 offC h2)
+        (.step (.fmsubR .d0 .d1 .d2 .d3 h3) (.single (.fstr .d0 offD h4))))),
+        ?_, ?_, ?_⟩
+      · intro v off hv; simp only [ArmState.setStack, ArmState.setFReg, ArmState.nextPC]
+        by_cases hoff : off = offD
+        · subst hoff; simp; have := hInjective v dst off hv hD; subst this
+          rw [Store.update_self]; simp [Value.encode, FloatTernOp.eval, hStackA, hStackB, hStackC]
+        · simp [hoff]; have hne : v ≠ dst := fun h => hoff (Option.some.inj ((h ▸ hv).symm.trans hD))
+          rw [Store.update_other _ _ _ _ hne]; exact hStateRel v off hv
+      · show s.pc + 1 + 1 + 1 + 1 + 1 = pcMap (pc + 1)
+        have := hPcNext _ _ rfl; simp at this; rw [this, hPcRel]
+      · simp [ArmState.setStack, ArmState.setFReg, ArmState.nextPC, hArrayMem]
+  | fternop_typeError hinstr hne =>
+    exact absurd (Step.fternop_typeError (am := am) hinstr hne) (Step.no_typeError_of_wellTyped hPC_bound hWT hTS)
 
 /-- Main backward simulation: every TAC step is matched by ARM64 steps.
     Directly delegates to `genInstr_correct`. -/
@@ -2041,6 +2094,67 @@ theorem vStoreVarFP_exec (prog : ArmProg) (layout : VarLayout) (v : Var)
     intro w loc hw
     have hwv : w ≠ v := fun h => by subst h; simp [hv] at hw
     rw [Store.update_other σ v w val hwv]; exact hRel w loc hw
+
+/-- Execute one FP instruction and store the result into a variable's location.
+    Abstracts the common "op + store" pattern shared by fbinop, fternop, and
+    floatUnary proofs. -/
+theorem fp_exec_and_store (prog : ArmProg) (layout : VarLayout) (pcMap : Nat → Nat)
+    (pc : Nat) (σ : Store) (am : ArrayMem) (x : Var)
+    (dst_reg : ArmFReg)
+    (resultBv : BitVec 64) (resultVal : Value)
+    (hResultEnc : resultBv = resultVal.encode)
+    (s_pre : ArmState) (prePC : Nat)
+    (hRelPre : ExtStateRel layout σ s_pre)
+    (hInjective : VarLayoutInjective layout)
+    (hScratch : ExtScratchSafe layout)
+    (hPC_pre : s_pre.pc = prePC)
+    (hAM_pre : s_pre.arrayMem = am)
+    (hDstReg : dst_reg = match layout x with | some (.freg r) => r | _ => .d0)
+    (hNotIregX : ∀ r, layout x ≠ some (.ireg r))
+    (fpOp : ArmInstr)
+    (hCodeOpStore : CodeAt prog prePC (fpOp :: vStoreVarFP layout x dst_reg))
+    (hArmStep : ArmStep prog s_pre (s_pre.setFReg dst_reg resultBv |>.nextPC))
+    (prefixLen : Nat)
+    (hPrePC_eq : prePC = pcMap pc + prefixLen)
+    (hPcNext : pcMap (pc + 1) = pcMap pc + prefixLen + 1 +
+      (vStoreVarFP layout x dst_reg).length) :
+    ∃ s', ArmSteps prog s_pre s' ∧
+      ExtSimRel layout pcMap (.run (pc + 1) (σ[x ↦ resultVal]) am) s' := by
+  let s_op := (s_pre.setFReg dst_reg resultBv).nextPC
+  have hStepsOp : ArmSteps prog s_pre s_op := .single hArmStep
+  have hPC_op : s_op.pc = prePC + 1 := by simp [s_op, ArmState.nextPC, ArmState.setFReg, hPC_pre]
+  have hAM_op : s_op.arrayMem = am := by simp [s_op, hAM_pre]
+  by_cases hXFR : ∃ r, layout x = some (.freg r)
+  · obtain ⟨r_dst, hDst⟩ := hXFR
+    have hDR : dst_reg = r_dst := by rw [hDstReg]; simp [hDst]
+    have hStore : vStoreVarFP layout x dst_reg = [] := by simp [vStoreVarFP, hDst, hDR]
+    have hRelPost : ExtStateRel layout (σ[x ↦ resultVal]) s_op := by
+      show ExtStateRel layout (σ[x ↦ resultVal])
+        (s_pre.setFReg dst_reg resultBv).nextPC
+      rw [hDR, hResultEnc]
+      exact (ExtStateRel.update_freg hRelPre hInjective hDst).nextPC
+    refine ⟨s_op, hStepsOp, ⟨hRelPost, ?_, hAM_op⟩⟩
+    show s_op.pc = pcMap (pc + 1)
+    simp [hStore] at hPcNext; simp [s_op, ArmState.nextPC, ArmState.setFReg, hPC_pre, hPrePC_eq]; omega
+  · have hDR : dst_reg = .d0 := by
+      rw [hDstReg]; split
+      · next r h => exact absurd ⟨r, h⟩ hXFR
+      · rfl
+    have hRelOp : ExtStateRel layout σ s_op := by
+      show ExtStateRel layout σ (s_pre.setFReg dst_reg resultBv).nextPC
+      rw [hDR]; exact (ExtStateRel.setFReg_preserved hRelPre (fun v => hScratch.not_d0 v)).nextPC
+    have hD0 : s_op.fregs .d0 = resultVal.encode := by
+      simp [s_op, hDR, ArmState.setFReg, ArmState.nextPC, hResultEnc]
+    have hCodeStore : CodeAt prog (prePC + 1) (vStoreVarFP layout x .d0) := by
+      rw [← hDR]; exact hCodeOpStore.tail
+    obtain ⟨s_fin, hStepsFin, hRelFin, hPC_fin, hAM_fin⟩ :=
+      vStoreVarFP_exec prog layout x resultVal σ s_op (prePC + 1)
+        hRelOp hInjective hScratch hPC_op hD0 hCodeStore hNotIregX
+        (fun r h => absurd ⟨r, h⟩ hXFR)
+    refine ⟨s_fin, hStepsOp.trans hStepsFin, ⟨hRelFin, ?_, by simp [hAM_fin, hAM_op]⟩⟩
+    show s_fin.pc = pcMap (pc + 1)
+    have : dst_reg = .d0 := hDR
+    simp [this] at hPcNext; omega
 
 /-- Execute vLoadVarFP: loads float variable v into scratch FP register tmp,
     preserving ExtStateRel. Case-splits on layout. -/
@@ -2488,6 +2602,8 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
   | floatToInt_typeError hinstr hne =>
     exact ⟨s, .refl, trivial⟩
   | floatUnary_typeError hinstr hne =>
+    exact ⟨s, .refl, trivial⟩
+  | fternop_typeError hinstr hne =>
     exact ⟨s, .refl, trivial⟩
   | arrLoad_boundsError hinstr hidx hbounds =>
     exact ⟨s, .refl, trivial⟩
@@ -3979,6 +4095,128 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
           have := hPcNext _ _ rfl; rw [show dst_reg = ArmFReg.d0 from hDR] at this; simp at this
           omega
         · simp [hAM3, hAM2, hAM1, hArrayMem]
+  | fternop hinstr ha hb hc =>
+    rename_i dst op a b c va vb vc
+    have heq : instr = .fternop dst op a b c := Option.some.inj (hInstr.symm.trans hinstr)
+    rw [heq] at hSome
+    -- Derive notIreg from verifiedGenInstr guard
+    have hNotIregA : ∀ r, layout a ≠ some (.ireg r) := by
+      intro r h; have := hSome; simp [verifiedGenInstr, hSS, hII, h] at this
+    have hNotIregB : ∀ r, layout b ≠ some (.ireg r) := by
+      intro r h; have := hSome; simp [verifiedGenInstr, hSS, hII, h] at this
+    have hNotIregC : ∀ r, layout c ≠ some (.ireg r) := by
+      intro r h; have := hSome; simp [verifiedGenInstr, hSS, hII, h] at this
+    have hNotIregD : ∀ r, layout dst ≠ some (.ireg r) := by
+      intro r h; have := hSome; simp [verifiedGenInstr, hSS, hII, h] at this
+    -- Effective FP registers
+    let a_reg := match layout a with | some (.freg r) => r | _ => ArmFReg.d0
+    let b_reg := match layout b with | some (.freg r) => r | _ => ArmFReg.d1
+    let c_reg := match layout c with | some (.freg r) => r | _ => ArmFReg.d2
+    let dst_reg := match layout dst with | some (.freg r) => r | _ => ArmFReg.d0
+    -- Determine the ARM instruction
+    let fpInstr := match op with
+      | .fmadd => ArmInstr.fmaddR dst_reg b_reg c_reg a_reg
+      | .fmsub => ArmInstr.fmsubR dst_reg b_reg c_reg a_reg
+    have hInstrs : instrs = vLoadVarFP layout a a_reg ++
+        (vLoadVarFP layout b b_reg ++
+          (vLoadVarFP layout c c_reg ++ (fpInstr :: vStoreVarFP layout dst dst_reg))) := by
+      have := hSome; simp [verifiedGenInstr, hSS, hII] at this; exact this.symm
+    rw [hInstrs] at hCodeInstr hPcNext
+    -- Split code-at
+    have hCodeA := hCodeInstr.append_left
+    have hCodeBCD := hCodeInstr.append_right
+    have hCodeB := hCodeBCD.append_left
+    have hCodeCD := hCodeBCD.append_right
+    have hCodeC := hCodeCD.append_left
+    have hCodeOpStore := hCodeCD.append_right
+    -- Step 1: load a into a_reg (fallback d0)
+    obtain ⟨s1, hSteps1, hA_1, hRel1, hRegs1, hPC1, hAM1, hFregs1, hStack1⟩ :=
+      vLoadVarFP_eff_exec prog layout a σ s (pcMap pc) .d0 hStateRel hScratch hPcRel
+        hNotIregA (Or.inl rfl) (hMapped a (by simp [heq, TAC.vars])) hCodeA
+    -- Step 2: load b into b_reg (fallback d1)
+    obtain ⟨s2, hSteps2, hB_2, hRel2, hRegs2, hPC2, hAM2, hFregs2, hStack2⟩ :=
+      vLoadVarFP_eff_exec prog layout b σ s1 _ .d1 hRel1 hScratch hPC1
+        hNotIregB (Or.inr (Or.inl rfl)) (hMapped b (by simp [heq, TAC.vars])) hCodeB
+    -- Step 3: load c into c_reg (fallback d2)
+    obtain ⟨s3, hSteps3, hC_3, hRel3, hRegs3, hPC3, hAM3, hFregs3, hStack3⟩ :=
+      vLoadVarFP_eff_exec prog layout c σ s2 _ .d2 hRel2 hScratch hPC2
+        hNotIregC (Or.inr (Or.inr rfl)) (hMapped c (by simp [heq, TAC.vars])) hCodeC
+    -- a_reg preserved through loads 2 and 3
+    have hA_3 : s3.fregs a_reg = va := by
+      match hLA : layout a with
+      | some (.freg ra) =>
+        have : a_reg = ra := by simp [a_reg, hLA]
+        rw [this, hRel3.read_freg hLA, ha]; rfl
+      | some (.stack _) | none =>
+        have : a_reg = .d0 := by simp [a_reg, hLA]
+        rw [this]
+        -- d0 ≠ b_reg and d0 ≠ c_reg (by scratchSafe)
+        have hne_b : ArmFReg.d0 ≠ b_reg := by
+          intro h; match hLB : layout b with
+          | some (.freg rb) => exact hScratch.not_d0 b (by simp [b_reg, hLB] at h; exact h ▸ hLB)
+          | some (.stack _) | none => simp [b_reg, hLB] at h
+          | some (.ireg r) => exact absurd hLB (hNotIregB r)
+        have hne_c : ArmFReg.d0 ≠ c_reg := by
+          intro h; match hLC : layout c with
+          | some (.freg rc) => exact hScratch.not_d0 c (by simp [c_reg, hLC] at h; exact h ▸ hLC)
+          | some (.stack _) | none => simp [c_reg, hLC] at h
+          | some (.ireg r) => exact absurd hLC (hNotIregC r)
+        rw [hFregs3 .d0 hne_c, hFregs2 .d0 hne_b, ← this, hA_1, ha]; rfl
+      | some (.ireg r) => exact absurd hLA (hNotIregA r)
+    -- b_reg preserved through load 3
+    have hB_3 : s3.fregs b_reg = vb := by
+      match hLB : layout b with
+      | some (.freg rb) =>
+        have : b_reg = rb := by simp [b_reg, hLB]
+        rw [this, hRel3.read_freg hLB, hb]; rfl
+      | some (.stack _) | none =>
+        have : b_reg = .d1 := by simp [b_reg, hLB]
+        rw [this]
+        have hne : ArmFReg.d1 ≠ c_reg := by
+          intro h; match hLC : layout c with
+          | some (.freg rc) => exact hScratch.not_d1 c (by simp [c_reg, hLC] at h; exact h ▸ hLC)
+          | some (.stack _) | none => simp [c_reg, hLC] at h
+          | some (.ireg r) => exact absurd hLC (hNotIregC r)
+        rw [hFregs3 .d1 hne, ← this, hB_2, hb]; rfl
+      | some (.ireg r) => exact absurd hLB (hNotIregB r)
+    have hC_eq : s3.fregs c_reg = vc := by rw [hC_3, hc]; rfl
+    -- Step 4+5: execute fmadd/fmsub and store via fp_exec_and_store
+    have hCodeOpStore' : CodeAt prog s3.pc (fpInstr :: vStoreVarFP layout dst dst_reg) := by
+      rwa [hPC3]
+    -- The ARM step for fmadd/fmsub
+    have hResultBv : FloatTernOp.eval op va vb vc =
+        (Value.float (FloatTernOp.eval op va vb vc)).encode := by simp [Value.encode]
+    have hArmStepReal : ArmStep prog s3
+        (s3.setFReg dst_reg (FloatTernOp.eval op va vb vc) |>.nextPC) := by
+      have hHead := hCodeOpStore'.head
+      simp only [fpInstr] at hHead
+      -- Rewrite to register-read form, then case-split to match ArmStep rules
+      have hEq : FloatTernOp.eval op va vb vc =
+          FloatTernOp.eval op (s3.fregs a_reg) (s3.fregs b_reg) (s3.fregs c_reg) := by
+        rw [hA_3, hB_3, hC_eq]
+      cases op
+      · -- fmadd
+        show ArmStep prog s3 (s3.setFReg dst_reg
+          (FloatBinOp.eval .fadd va (FloatBinOp.eval .fmul vb vc)) |>.nextPC)
+        have step := ArmStep.fmaddR dst_reg b_reg c_reg a_reg hHead
+        rw [hA_3, hB_3, hC_eq] at step; exact step
+      · -- fmsub
+        show ArmStep prog s3 (s3.setFReg dst_reg
+          (FloatBinOp.eval .fsub va (FloatBinOp.eval .fmul vb vc)) |>.nextPC)
+        have step := ArmStep.fmsubR dst_reg b_reg c_reg a_reg hHead
+        rw [hA_3, hB_3, hC_eq] at step; exact step
+    obtain ⟨s_fin, hSteps_fin, hSimRel⟩ := fp_exec_and_store prog layout pcMap pc σ am
+      dst dst_reg (FloatTernOp.eval op va vb vc) (.float (FloatTernOp.eval op va vb vc))
+      hResultBv s3 s3.pc hRel3 hInjective hScratch rfl
+      (by simp [hAM3, hAM2, hAM1, hArrayMem]) rfl hNotIregD
+      fpInstr hCodeOpStore' hArmStepReal
+      ((vLoadVarFP layout a a_reg).length + (vLoadVarFP layout b b_reg).length +
+        (vLoadVarFP layout c c_reg).length)
+      (by have hPC3' : s3.pc = pcMap pc + (vLoadVarFP layout a a_reg).length +
+            (vLoadVarFP layout b b_reg).length + (vLoadVarFP layout c c_reg).length := hPC3
+          omega)
+      (by have := hPcNext _ _ rfl; simp at this ⊢; omega)
+    exact ⟨s_fin, (hSteps1.trans hSteps2).trans (hSteps3.trans hSteps_fin), hSimRel⟩
 
 /-- Top-level backward simulation for verifiedGenInstr.
     Directly delegates to `verifiedGenInstr_correct`. -/

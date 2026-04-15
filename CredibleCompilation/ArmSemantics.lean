@@ -827,6 +827,14 @@ def formalGenInstr (vm : VarMap) (pcMap : Nat → Nat) (instr : TAC)
     | some offS, some offD =>
       [.fldr .d0 offS, .floatUnaryInstr op .d0 .d0, .fstr .d0 offD]
     | _, _ => []
+  | .fternop dst op a b c =>
+    let fpInstr := match op with
+      | .fmadd => ArmInstr.fmaddR .d0 .d1 .d2 .d3
+      | .fmsub => ArmInstr.fmsubR .d0 .d1 .d2 .d3
+    match vm.lookup a, vm.lookup b, vm.lookup c, vm.lookup dst with
+    | some offA, some offB, some offC, some offD =>
+      [.fldr .d3 offA, .fldr .d1 offB, .fldr .d2 offC, fpInstr, .fstr .d0 offD]
+    | _, _, _, _ => []
 
 -- ============================================================
 -- § 8b. Verified codegen helpers (register-allocation-aware)
@@ -1023,6 +1031,22 @@ def verifiedGenInstr (layout : VarLayout) (pcMap : Nat → Nat) (instr : TAC)
       let src_reg := match layout src with | some (.freg r) => r | _ => .d0
       let dst_reg := match layout dst with | some (.freg r) => r | _ => .d0
       some (vLoadVarFP layout src src_reg ++ [.floatUnaryInstr op dst_reg src_reg] ++ vStoreVarFP layout dst dst_reg)
+  | .fternop dst op a b c =>
+    match layout a, layout b, layout c, layout dst with
+    | some (.ireg _), _, _, _ => none
+    | _, some (.ireg _), _, _ => none
+    | _, _, some (.ireg _), _ => none
+    | _, _, _, some (.ireg _) => none
+    | _, _, _, _ =>
+      let a_reg := match layout a with | some (.freg r) => r | _ => .d0
+      let b_reg := match layout b with | some (.freg r) => r | _ => .d1
+      let c_reg := match layout c with | some (.freg r) => r | _ => .d2
+      let dst_reg := match layout dst with | some (.freg r) => r | _ => .d0
+      let fpInstr := match op with
+        | .fmadd => ArmInstr.fmaddR dst_reg b_reg c_reg a_reg
+        | .fmsub => ArmInstr.fmsubR dst_reg b_reg c_reg a_reg
+      some (vLoadVarFP layout a a_reg ++ vLoadVarFP layout b b_reg ++
+        vLoadVarFP layout c c_reg ++ [fpInstr] ++ vStoreVarFP layout dst dst_reg)
 
 -- ============================================================
 -- § 9. CodeAt and helper lemmas

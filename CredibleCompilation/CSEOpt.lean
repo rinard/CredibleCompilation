@@ -117,6 +117,7 @@ def transfer (avail : AvailSet) (instr : TAC) : AvailSet :=
   | .intToFloat x _    => killVar avail x
   | .floatToInt x _    => killVar avail x
   | .floatUnary x _ _  => killVar avail x
+  | .fternop x _ _ _ _ => killVar avail x
   | _ => avail
 
 -- ============================================================

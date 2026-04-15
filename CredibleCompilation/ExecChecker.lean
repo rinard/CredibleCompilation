@@ -73,6 +73,9 @@ def Expr.simplify (inv : EInv) : Expr → Expr
   | .intToFloat e   => .intToFloat (e.simplify inv)
   | .floatToInt e   => .floatToInt (e.simplify inv)
   | .floatUnary op e => .floatUnary op (e.simplify inv)
+  | .ftern op a b c => match op with
+    | .fmadd => .fbin .fadd (a.simplify inv) (.fbin .fmul (b.simplify inv) (c.simplify inv))
+    | .fmsub => .fbin .fsub (a.simplify inv) (.fbin .fmul (b.simplify inv) (c.simplify inv))
   | .farrRead arr idx => .farrRead arr (idx.simplify inv)
 
 -- ============================================================
@@ -131,6 +134,7 @@ def execSymbolic (ss : SymStore) (sam : SymArrayMem) (instr : TAC) : SymStore ×
   | .intToFloat x y => (ssSet ss x (.intToFloat (ssGet ss y)), sam)
   | .floatToInt x y => (ssSet ss x (.floatToInt (ssGet ss y)), sam)
   | .floatUnary x op y => (ssSet ss x (.floatUnary op (ssGet ss y)), sam)
+  | .fternop x op a b c => (ssSet ss x (.ftern op (ssGet ss a) (ssGet ss b) (ssGet ss c)), sam)
   | .arrLoad x arr idx ty => (ssSet ss x (samGet sam arr (ssGet ss idx) ty), sam)
   | .arrStore arr idx val _ => (ss, (arr, ssGet ss idx, ssGet ss val) :: sam)
   | _               => (ss, sam)
@@ -154,7 +158,7 @@ def execPath (orig : Prog) (ss : SymStore) (sam : SymArrayMem) (pc : Label) :
 def successors (instr : TAC) (pc : Label) : List Label :=
   match instr with
   | .const _ _ | .copy _ _ | .binop _ _ _ _ | .boolop _ _ => [pc + 1]
-  | .fbinop _ _ _ _ | .intToFloat _ _ | .floatToInt _ _ | .floatUnary _ _ _ => [pc + 1]
+  | .fbinop _ _ _ _ | .intToFloat _ _ | .floatToInt _ _ | .floatUnary _ _ _ | .fternop _ _ _ _ _ => [pc + 1]
   | .arrLoad _ _ _ _ | .arrStore _ _ _ _ => [pc + 1]
   | .goto l        => [l]
   | .ifgoto _ l    => [l, pc + 1]
@@ -170,7 +174,7 @@ def Expr.isNonZeroLit : Expr → Bool
   | .blit true => true
   | .blit false | .var _ | .bin _ _ _ => false
   | .tobool _ | .cmpE _ _ _ | .cmpLitE _ _ _ | .notE _ | .andE _ _ | .orE _ _ | .arrRead _ _ => false
-  | .flit _ | .fbin _ _ _ | .fcmpE _ _ _ | .intToFloat _ | .floatToInt _ | .floatUnary _ _ | .farrRead _ _ => false
+  | .flit _ | .fbin _ _ _ | .fcmpE _ _ _ | .intToFloat _ | .floatToInt _ | .floatUnary _ _ | .ftern _ _ _ _ | .farrRead _ _ => false
 
 /-- Normalize a BoolExpr under a symbolic store and invariant: replace variables
     with known literal values and canonicalize `cmp` to `cmpLit` when possible. -/
@@ -252,6 +256,7 @@ def collectAllVars (p1 p2 : Prog) : List Var :=
     | .intToFloat x y => [x, y]
     | .floatToInt x y => [x, y]
     | .floatUnary x _ y => [x, y]
+    | .fternop x _ a b c => [x, a, b, c]
     | .arrLoad x _ idx _ => [x, idx]
     | .arrStore _ idx val _ => [idx, val]
     | .ifgoto b _    => b.vars
@@ -408,6 +413,7 @@ def buildInstrCerts1to1 (trans : Prog) (allVars : List Var) : Array EInstrCert :
     | some .halt => { pc_orig := i, transitions := ([] : List ETransCorr), rel := idRel }
     | some (.const _ _) | some (.copy _ _) | some (.binop _ _ _ _) | some (.boolop _ _)
     | some (.fbinop _ _ _ _) | some (.intToFloat _ _) | some (.floatToInt _ _) | some (.floatUnary _ _ _)
+    | some (.fternop _ _ _ _ _)
     | some (.arrLoad _ _ _ _) | some (.arrStore _ _ _ _) =>
       { pc_orig := i, rel := idRel,
         transitions := [{ origLabels := [i + 1], rel := idRel, rel_next := idRel }] }
@@ -493,6 +499,7 @@ def Expr.substSymFast (m : FastVarMap) : Expr → Expr
   | .intToFloat e    => .intToFloat (e.substSymFast m)
   | .floatToInt e    => .floatToInt (e.substSymFast m)
   | .floatUnary op e  => .floatUnary op (e.substSymFast m)
+  | .ftern op a b c   => .ftern op (a.substSymFast m) (b.substSymFast m) (c.substSymFast m)
   | .farrRead arr idx => .farrRead arr (idx.substSymFast m)
 
 def Expr.simplifyFast (m : FastVarMap) : Expr → Expr
@@ -516,6 +523,9 @@ def Expr.simplifyFast (m : FastVarMap) : Expr → Expr
   | .intToFloat e   => .intToFloat (e.simplifyFast m)
   | .floatToInt e   => .floatToInt (e.simplifyFast m)
   | .floatUnary op e => .floatUnary op (e.simplifyFast m)
+  | .ftern op a b c => match op with
+    | .fmadd => .fbin .fadd (a.simplifyFast m) (.fbin .fmul (b.simplifyFast m) (c.simplifyFast m))
+    | .fmsub => .fbin .fsub (a.simplifyFast m) (.fbin .fmul (b.simplifyFast m) (c.simplifyFast m))
   | .farrRead arr idx => .farrRead arr (idx.simplifyFast m)
 
 -- ============================================================
@@ -586,6 +596,7 @@ def Expr.substSym (ss : SymStore) : Expr → Expr
   | .intToFloat e    => .intToFloat (e.substSym ss)
   | .floatToInt e    => .floatToInt (e.substSym ss)
   | .floatUnary op e  => .floatUnary op (e.substSym ss)
+  | .ftern op a b c   => .ftern op (a.substSym ss) (b.substSym ss) (c.substSym ss)
   | .farrRead arr idx => .farrRead arr (idx.substSym ss)
 
 /-- `substSymFast` with `FastVarMap.ofList` equals `substSym`. -/
@@ -607,6 +618,7 @@ theorem Expr.substSymFast_eq_substSym (e : Expr) (ss : SymStore) :
   | intToFloat e ih => simp only [substSymFast, substSym, ih]
   | floatToInt e ih => simp only [substSymFast, substSym, ih]
   | floatUnary op e ih => simp only [substSymFast, substSym, ih]
+  | ftern op a b c iha ihb ihc => simp only [substSymFast, substSym, iha, ihb, ihc]
   | farrRead arr idx ih => simp only [substSymFast, substSym, ih]
 
 /-- `simplifyFast` with `FastVarMap.ofList` equals `simplify`. -/
@@ -623,6 +635,7 @@ theorem Expr.simplifyFast_eq_simplify (e : Expr) (inv : EInv) :
   | intToFloat e ih => simp only [simplifyFast, simplify, ih]
   | floatToInt e ih => simp only [simplifyFast, simplify, ih]
   | floatUnary op e ih => simp only [simplifyFast, simplify, ih]
+  | ftern op a b c iha ihb ihc => cases op <;> simp only [simplifyFast, simplify, iha, ihb, ihc]
   | farrRead arr idx ih => simp only [simplifyFast, simplify, ih]
 
 /-- The HashMap-based variable set lookup used in `checkRelConsistency` is equivalent
@@ -727,7 +740,7 @@ def checkHaltObservableExec (cert : ECertificate) : Bool :=
 def computeNextPC (instr : TAC) (pc : Label) (ss : SymStore) (inv : EInv) : Option Label :=
   match instr with
   | .const _ _ | .copy _ _ | .binop _ _ _ _ | .boolop _ _ => some (pc + 1)
-  | .fbinop _ _ _ _ | .intToFloat _ _ | .floatToInt _ _ | .floatUnary _ _ _ => some (pc + 1)
+  | .fbinop _ _ _ _ | .intToFloat _ _ | .floatToInt _ _ | .floatUnary _ _ _ | .fternop _ _ _ _ _ => some (pc + 1)
   | .arrLoad _ _ _ _ | .arrStore _ _ _ _ => some (pc + 1)
   | .goto l => some l
   | .ifgoto b l =>

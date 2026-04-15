@@ -43,6 +43,7 @@ inductive TAC where
   | intToFloat : Var → Var → TAC                          -- x := intToFloat(y)
   | floatToInt : Var → Var → TAC                          -- x := floatToInt(y)
   | floatUnary : Var → FloatUnaryOp → Var → TAC            -- x := op(y) (float)
+  | fternop  : Var → FloatTernOp → Var → Var → Var → TAC -- x := op(a, b, c) (float ternary)
   deriving Repr, DecidableEq
 
 /-- Variables referenced by a TAC instruction (destination + operands). -/
@@ -57,6 +58,7 @@ def TAC.vars : TAC → List Var
   | .intToFloat x y     => [x, y]
   | .floatToInt x y     => [x, y]
   | .floatUnary x _ y   => [x, y]
+  | .fternop x _ a b c  => [x, a, b, c]
   | .goto _             => []
   | .ifgoto be _        => be.vars
   | .halt               => []
@@ -64,7 +66,7 @@ def TAC.vars : TAC → List Var
 /-- A scalar instruction is one that does not touch ArrayMem. -/
 def TAC.isScalar : TAC → Bool
   | .const .. | .copy .. | .binop .. | .boolop .. | .goto .. | .ifgoto .. | .halt => true
-  | .fbinop .. | .intToFloat .. | .floatToInt .. | .floatUnary .. => true
+  | .fbinop .. | .intToFloat .. | .floatToInt .. | .floatUnary .. | .fternop .. => true
   | .arrLoad .. | .arrStore .. => false
 
 /-- A program: TAC code together with its type context and observable variables. -/
@@ -263,6 +265,14 @@ inductive Step (p : Prog) : Cfg → Cfg → Prop where
       (σ y).typeOf ≠ .float →
       Step p (.run pc σ am) (.typeError σ am)
 
+  | fternop {fa fb fc : BitVec 64} : p[pc]? = some (.fternop x op a b c) →
+      σ a = .float fa → σ b = .float fb → σ c = .float fc →
+      Step p (.run pc σ am) (.run (pc + 1) (σ[x ↦ .float (FloatTernOp.eval op fa fb fc)]) am)
+
+  | fternop_typeError : p[pc]? = some (.fternop x op a b c) →
+      (σ a).typeOf ≠ .float ∨ (σ b).typeOf ≠ .float ∨ (σ c).typeOf ≠ .float →
+      Step p (.run pc σ am) (.typeError σ am)
+
 
 -- p ⊩ c ⟶ c'   (⊩ avoids conflict with Lean's reserved ⊢)
 notation:50 p " ⊩ " c " ⟶ " c' => Step p c c'
@@ -271,7 +281,7 @@ notation:50 p " ⊩ " c " ⟶ " c' => Step p c c'
 def TAC.successors (instr : TAC) (pc : Label) : List Label :=
   match instr with
   | .const _ _ | .copy _ _ | .binop _ _ _ _ | .boolop _ _ => [pc + 1]
-  | .fbinop _ _ _ _ | .intToFloat _ _ | .floatToInt _ _ | .floatUnary _ _ _ => [pc + 1]
+  | .fbinop _ _ _ _ | .intToFloat _ _ | .floatToInt _ _ | .floatUnary _ _ _ | .fternop _ _ _ _ _ => [pc + 1]
   | .arrLoad _ _ _ _ | .arrStore _ _ _ _ => [pc + 1]
   | .goto l        => [l]
   | .ifgoto _ l    => [l, pc + 1]
@@ -296,6 +306,7 @@ theorem Step.mem_successors {p : Prog} {pc pc' : Nat} {σ σ' : Store} {am am' :
   | intToFloat h _     => exact ⟨_, h, by simp [TAC.successors]⟩
   | floatToInt h _     => exact ⟨_, h, by simp [TAC.successors]⟩
   | floatUnary h _     => exact ⟨_, h, by simp [TAC.successors]⟩
+  | fternop h _ _ _    => exact ⟨_, h, by simp [TAC.successors]⟩
 
 /-- A step from an in-bounds PC to a run-config stays in-bounds.
     This is the Prop-level condition for totality. -/
@@ -469,6 +480,15 @@ theorem Step.store_congr {p : Prog} {pc : Nat} {σ τ : Store} {am : ArrayMem} {
     exact ⟨_, .floatUnary h (by rw [← hagree]; exact hy)⟩
   | floatUnary_typeError h hne =>
     exact ⟨_, .floatUnary_typeError h (by simp [Value.typeOf] at hne ⊢; rwa [← hagree])⟩
+  | fternop h ha hb hc =>
+    exact ⟨_, .fternop h (by rw [← hagree]; exact ha) (by rw [← hagree]; exact hb) (by rw [← hagree]; exact hc)⟩
+  | fternop_typeError h hne =>
+    refine ⟨_, .fternop_typeError h ?_⟩
+    rcases hne with hl | hr
+    · left; simp [Value.typeOf] at hl ⊢; rwa [← hagree]
+    · rcases hr with hm | hr
+      · right; left; simp [Value.typeOf] at hm ⊢; rwa [← hagree]
+      · right; right; simp [Value.typeOf] at hr ⊢; rwa [← hagree]
 
 -- ============================================================
 -- § 10. Observable output at a configuration

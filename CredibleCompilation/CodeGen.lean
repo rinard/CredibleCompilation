@@ -5,6 +5,7 @@ import CredibleCompilation.CSEOpt
 import CredibleCompilation.LICMOpt
 import CredibleCompilation.ConstHoistOpt
 import CredibleCompilation.DAEOpt
+import CredibleCompilation.FMAFusionOpt
 import CredibleCompilation.DCEOpt
 import CredibleCompilation.PeepholeOpt
 import CredibleCompilation.RegAllocOpt
@@ -57,6 +58,10 @@ private def collectVars (p : Prog) : List Var :=
                           if a.contains y then a else a ++ [y]
     | .floatUnary x _ y => let a := if acc.contains x then acc else acc ++ [x]
                           if a.contains y then a else a ++ [y]
+    | .fternop x _ a b c => let acc := if acc.contains x then acc else acc ++ [x]
+                            let acc := if acc.contains a then acc else acc ++ [a]
+                            let acc := if acc.contains b then acc else acc ++ [b]
+                            if acc.contains c then acc else acc ++ [c]
     | .goto _          => acc
     | .ifgoto _ _      => acc
     | .halt            => acc
@@ -909,7 +914,7 @@ private theorem verifiedGenInstr_length_pcMap_indep {layout : VarLayout}
     exact congrArg _ (Option.some.inj this)
   | copy _ _ | binop _ _ _ _ | boolop _ _ | halt
   | arrLoad _ _ _ _ | arrStore _ _ _ _ | fbinop _ _ _ _
-  | intToFloat _ _ | floatToInt _ _ | floatUnary _ _ _ =>
+  | intToFloat _ _ | floatToInt _ _ | floatUnary _ _ _ | fternop _ _ _ _ _ =>
     have : some l₁ = some l₂ := by rw [← h₁, ← h₂]; simp [verifiedGenInstr]
     exact congrArg _ (Option.some.inj this)
 
@@ -953,7 +958,7 @@ private theorem instrLength_eq_length {layout : VarLayout} {pcMap : Nat → Nat}
     rw [this] at h; exact ⟨_, h, rfl⟩
   | copy _ _ | binop _ _ _ _ | boolop _ _ | halt
   | arrLoad _ _ _ _ | arrStore _ _ _ _ | fbinop _ _ _ _
-  | intToFloat _ _ | floatToInt _ _ | floatUnary _ _ _ =>
+  | intToFloat _ _ | floatToInt _ _ | floatUnary _ _ _ | fternop _ _ _ _ _ =>
     -- pcMap unused: both pcMaps give the same result
     refine ⟨instrs, ?_, rfl⟩
     rw [← h]; simp [verifiedGenInstr]
@@ -1248,6 +1253,9 @@ private theorem step_run_or_terminal {p : Prog} {pc : Nat} {σ : Store}
   | floatUnary h h1 =>
     exact .inl ⟨_, _, _, rfl, type_preservation hwtp hts hpc
       (show Step p (.run pc σ am) _ from .floatUnary h h1)⟩
+  | fternop h h1 h2 h3 =>
+    exact .inl ⟨_, _, _, rfl, type_preservation hwtp hts hpc
+      (show Step p (.run pc σ am) _ from .fternop h h1 h2 h3)⟩
   | halt _ => exact .inr fun _ h => Step.no_step_from_halt h
   | error _ _ _ _ => exact .inr fun _ h => Step.no_step_from_error h
   | binop_typeError _ _ => exact .inr fun _ h => Step.no_step_from_typeError h
@@ -1259,6 +1267,7 @@ private theorem step_run_or_terminal {p : Prog} {pc : Nat} {σ : Store}
   | intToFloat_typeError _ _ => exact .inr fun _ h => Step.no_step_from_typeError h
   | floatToInt_typeError _ _ => exact .inr fun _ h => Step.no_step_from_typeError h
   | floatUnary_typeError _ _ => exact .inr fun _ h => Step.no_step_from_typeError h
+  | fternop_typeError _ _ => exact .inr fun _ h => Step.no_step_from_typeError h
 
 /-- Whole-program backward simulation for `verifiedGenerateAsm`.
 
@@ -1560,6 +1569,7 @@ def optimizePipeline (p : Prog) : Except String Prog := do
   let p ← applyPass "ConstProp" ConstPropOpt.optimize p
   let p ← applyPass "DCE" DCEOpt.optimize p
   let p ← applyPass "DAE" DAEOpt.optimize p
+  let p ← applyPass "FMAFusion" FMAFusionOpt.optimize p
   let p ← applyPass "CSE" CSEOpt.optimize p
   let p ← applyPass "ConstHoist" ConstHoistOpt.optimize p
   let p ← applyPass "Peephole" PeepholeOpt.optimize p
