@@ -1,10 +1,10 @@
-import CredibleCompilation.Examples.ExecExamples
-import CredibleCompilation.Examples.ConstPropOptExamples
-import CredibleCompilation.Examples.CSEOptExamples
-import CredibleCompilation.Examples.DCEOptExamples
-import CredibleCompilation.Examples.LICMOptExamples
-import CredibleCompilation.Examples.PeepholeOptExamples
-import CredibleCompilation.Examples.WhileExamples
+import CCTests.Examples.ExecExamples
+import CCTests.Examples.ConstPropOptExamples
+import CCTests.Examples.CSEOptExamples
+import CCTests.Examples.DCEOptExamples
+import CCTests.Examples.LICMOptExamples
+import CCTests.Examples.PeepholeOptExamples
+import CCTests.Examples.WhileExamples
 
 def main : IO Unit := do
   IO.println "=== Credible Compilation Certificate Checker ==="

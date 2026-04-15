@@ -11,6 +11,12 @@ rev = "8f9d9cff6bd728b17a24e163c9402775d9e6a365"
 name = "CredibleCompilation"
 globs = ["CredibleCompilation", "CredibleCompilation.+"]
 
+# Tests and examples — not in defaultTargets, build with `lake build CCTests`
+[[lean_lib]]
+name = "CCTests"
+srcDir = "."
+globs = ["CCTests", "CCTests.+"]
+
 [[lean_exe]]
 name = "checker"
 root = "Main"
