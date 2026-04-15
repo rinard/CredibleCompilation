@@ -110,7 +110,12 @@ def transfer (avail : AvailSet) (instr : TAC) : AvailSet :=
     let avail' := killVar avail x
     if x == y || x == z then avail'
     else
-      let invExpr := Expr.fbin fop (expandVar avail' y) (expandVar avail' z)
+      let a' := expandVar avail' y
+      let b' := expandVar avail' z
+      -- Normalize fadd with fmul on left: swap to match simplify's normalization
+      let invExpr := match fop, a' with
+        | .fadd, .fbin .fmul _ _ => Expr.fbin .fadd b' a'
+        | _, _ => Expr.fbin fop a' b'
       { op := .float fop, lhs := y, rhs := z, result := x, invExpr } :: avail'
   | .boolop x _        => killVar avail x
   | .arrLoad x _ _ _   => killVar avail x
