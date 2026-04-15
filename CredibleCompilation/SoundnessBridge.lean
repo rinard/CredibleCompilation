@@ -2103,30 +2103,42 @@ private theorem branchInfo_of_step {prog : Prog} {pc pc' : Label} {σ σ' : Stor
     · simp [hguard] at hbi
   | _ => simp [transBranchInfo] at hbi
 
-/-- When `branchInfoWithRel` returns `some (origCond, taken)`, a step on the
-    transformed program implies `origCond.eval σ_o = taken`
-    via the store relation and `eval_mapVarsRel`. -/
-private theorem branchInfo_of_step_with_rel {prog : Prog} {pc pc' : Label} {σ_t σ_t' : Store} {am_t am_t' : ArrayMem}
-    {instr : TAC} (hinstr : prog[pc]? = some instr)
-    (hstep : Step prog (Cfg.run pc σ_t am_t) (Cfg.run pc' σ_t' am_t'))
-    {rel : EExprRel} {σ_o : Store} {am_o : ArrayMem}
-    (hcons : ∀ e_o v, (e_o, .var v) ∈ rel → σ_t v = e_o.eval σ_o am_o)
-    {origCond : BoolExpr} {taken : Bool}
-    (hbi : branchInfoWithRel instr rel pc pc' = some (origCond, taken)) :
-    origCond.eval σ_o am_o = taken := by
-  cases instr with
-  | ifgoto b l =>
-    simp only [branchInfoWithRel] at hbi
-    cases hmap : b.mapVarsRel rel with
-    | none => simp [hmap] at hbi
-    | some origCond' =>
-      simp only [hmap] at hbi
-      by_cases hguard : (!(l == pc + 1))
-      · simp only [hguard, ↓reduceIte, Option.some.injEq, Prod.mk.injEq] at hbi
-        obtain ⟨rfl, rfl⟩ := hbi
-        sorry -- am_t vs am_o mismatch between branchInfo_of_step and eval_mapVarsRel
-      · simp [hguard] at hbi
-  | _ => simp [branchInfoWithRel] at hbi
+/-- Soundness of `checkBoolVarsCoveredExec`: for each ifgoto in the transformed program,
+    every free variable in the BoolExpr operands has a pair in the relation. -/
+private theorem checkBoolVarsCoveredExec_sound (cert : ECertificate)
+    (h : checkBoolVarsCoveredExec cert = true)
+    (pc : Nat) (b : BoolExpr) (l : Label)
+    (hinstr : cert.trans[pc]? = some (.ifgoto b l)) :
+    ∀ v, v ∈ b.exprFreeVars → ∃ e_o, (e_o, .var v) ∈ (cert.instrCerts.getD pc default).rel := by
+  intro v hv
+  unfold checkBoolVarsCoveredExec at h
+  have hbound : pc < cert.trans.code.size := bound_of_getElem? hinstr
+  rw [List.all_eq_true] at h
+  have hall := h pc (List.mem_range.mpr hbound)
+  simp only [Prog.getElem?_code] at hinstr
+  have hget : cert.trans.code[pc] = .ifgoto b l :=
+    Option.some.inj ((Array.getElem?_eq_getElem hbound).symm.trans hinstr)
+  -- Rewrite the match in hall with the concrete instruction and instrCerts lookup
+  rw [Array.getElem?_eq_getElem hbound, hget] at hall
+  -- Now hall matches on `(some (.ifgoto b l), cert.instrCerts[pc]?)`
+  cases hic : cert.instrCerts[pc]? with
+  | none => rw [hic] at hall; simp at hall
+  | some ic =>
+    rw [hic] at hall
+    simp only [Bool.and_eq_true] at hall
+    rw [List.all_eq_true] at hall
+    have hfv := hall v hv
+    rw [List.any_eq_true] at hfv
+    obtain ⟨⟨e_o, e_t⟩, hmem, hbeq⟩ := hfv
+    have htv : e_t = .var v := beq_iff_eq.mp hbeq
+    subst htv
+    have hpc_bound : pc < cert.instrCerts.size := by
+      rw [Array.getElem?_eq_some_iff] at hic; exact hic.1
+    have hgetD : cert.instrCerts.getD pc default = ic := by
+      simp only [Array.getD, hpc_bound, ↓reduceDIte]
+      exact Option.some.inj (Array.getElem?_eq_getElem hpc_bound ▸ hic)
+    rw [hgetD]
+    exact ⟨e_o, hmem⟩
 
 /-- ssGet from an arrRead-free SymStore returns arrRead-free expressions. -/
 private theorem ssGet_noArrRead_of_all (ss : SymStore) (v : Var)
@@ -2375,6 +2387,145 @@ private theorem ssGet_buildSubstMap_of_all_rel (rel : EExprRel) (v : Var)
           | tail _ htail => exact hnotin_rest e htail⟩
       · right; exact ⟨e_o', List.mem_cons_of_mem _ hmem_rest, hskip ▸ heq_rest⟩
 
+/-- Bridge: when all free vars of an Expr are mapped in the relation and `hcons` holds,
+    `substSym` produces an expression that evaluates equivalently. -/
+private theorem substSym_bridge (ss : SymStore) (e : Expr) (rel : EExprRel)
+    (σ_o σ_t : Store) (am : ArrayMem)
+    (hss_eq : ss = buildSubstMap rel)
+    (hcons : ∀ e_o v, (e_o, .var v) ∈ rel → σ_t v = e_o.eval σ_o am)
+    (hfv : ∀ v, v ∈ e.freeVars → ∃ e_o, (e_o, .var v) ∈ rel) :
+    (e.substSym ss).eval σ_o am = e.eval σ_t am := by
+  subst hss_eq
+  exact Expr.substSym_sound_fv (buildSubstMap rel) e σ_o σ_t am (fun v hv => by
+    obtain ⟨e_o, hmem⟩ := hfv v hv
+    exact (ssGet_buildSubstMap_of_all_rel rel v (fun e => e.eval σ_o am = σ_t v)
+      (fun hnotin => absurd hmem (hnotin e_o))
+      (fun e_o' he => (hcons e_o' v he).symm)))
+
+/-- Core bridge: `mapVarsRel` output evaluates at `(σ_o, am_o)` the same as
+    the original BoolExpr at `(σ_t, am_t)`, given the store relation,
+    arrRead-freeness, and free-variable coverage. -/
+private theorem eval_mapVarsRel (b : BoolExpr) (rel : EExprRel)
+    (origCond : BoolExpr) (hmap : b.mapVarsRel rel = some origCond)
+    (σ_o σ_t : Store) (am_o am_t : ArrayMem)
+    (hcons : ∀ e_o v, (e_o, .var v) ∈ rel → σ_t v = e_o.eval σ_o am_o)
+    (hnoarr : b.hasArrRead = false)
+    (hfv : ∀ v, v ∈ b.exprFreeVars → ∃ e_o, (e_o, .var v) ∈ rel) :
+    origCond.eval σ_o am_o = b.eval σ_t am_t := by
+  induction b generalizing origCond with
+  | lit b_val =>
+    simp only [BoolExpr.mapVarsRel] at hmap; cases hmap; simp [BoolExpr.eval]
+  | bvar x =>
+    simp only [BoolExpr.mapVarsRel, bind, Option.bind] at hmap
+    cases hfind : relFindOrigExpr rel x with
+    | none => simp [hfind] at hmap
+    | some e_found =>
+      simp [hfind] at hmap
+      cases e_found with
+      | var w =>
+        simp at hmap; subst hmap
+        simp only [BoolExpr.eval]
+        have hmem := relFindOrigExpr_mem hfind
+        have hcv := hcons (.var w) x hmem
+        simp [Expr.eval] at hcv; rw [hcv]
+      | _ => simp at hmap
+  | cmp op a b_e =>
+    simp only [BoolExpr.mapVarsRel] at hmap; cases hmap
+    simp only [BoolExpr.eval, Expr.substSym'_eq_substSym]
+    simp only [BoolExpr.hasArrRead, Bool.or_eq_false_iff] at hnoarr
+    simp only [BoolExpr.exprFreeVars] at hfv
+    rw [substSym_bridge _ a rel σ_o σ_t am_o rfl hcons
+          (fun v hv => hfv v (List.mem_append_left _ hv)),
+        substSym_bridge _ b_e rel σ_o σ_t am_o rfl hcons
+          (fun v hv => hfv v (List.mem_append_right _ hv)),
+        Expr.eval_noArrRead a σ_t am_o am_t hnoarr.1,
+        Expr.eval_noArrRead b_e σ_t am_o am_t hnoarr.2]
+  | not e ih =>
+    simp only [BoolExpr.mapVarsRel, Option.map] at hmap
+    cases hm : e.mapVarsRel rel with
+    | none => simp [hm] at hmap
+    | some e' =>
+      simp [hm] at hmap
+      simp only [BoolExpr.hasArrRead] at hnoarr
+      simp only [BoolExpr.exprFreeVars] at hfv
+      have ih_e := ih e' hm hnoarr hfv
+      -- origCond = match e' with | .not inner => inner | _ => .not e'
+      -- (.not e).eval σ_t am_t = !(e.eval σ_t am_t)
+      cases e' with
+      | not inner =>
+        -- double negation: origCond = inner
+        simp at hmap; subst hmap
+        simp only [BoolExpr.eval] at ih_e ⊢
+        rw [← ih_e, Bool.not_not]
+      | lit _ | bvar _ | cmp _ _ _ | fcmp _ _ _ =>
+        simp at hmap; subst hmap; exact congrArg (! ·) ih_e
+  | fcmp op a b_e =>
+    simp only [BoolExpr.mapVarsRel] at hmap; cases hmap
+    simp only [BoolExpr.eval, Expr.substSym'_eq_substSym]
+    simp only [BoolExpr.hasArrRead, Bool.or_eq_false_iff] at hnoarr
+    simp only [BoolExpr.exprFreeVars] at hfv
+    rw [substSym_bridge _ a rel σ_o σ_t am_o rfl hcons
+          (fun v hv => hfv v (List.mem_append_left _ hv)),
+        substSym_bridge _ b_e rel σ_o σ_t am_o rfl hcons
+          (fun v hv => hfv v (List.mem_append_right _ hv)),
+        Expr.eval_noArrRead a σ_t am_o am_t hnoarr.1,
+        Expr.eval_noArrRead b_e σ_t am_o am_t hnoarr.2]
+
+/-- When `branchInfoWithRel` returns `some (origCond, taken)`, a step on the
+    transformed program implies `origCond.eval σ_o = taken`
+    via the store relation and `eval_mapVarsRel`. -/
+private theorem branchInfo_of_step_with_rel {prog : Prog} {pc pc' : Label} {σ_t σ_t' : Store} {am_t am_t' : ArrayMem}
+    {instr : TAC} (hinstr : prog[pc]? = some instr)
+    (hstep : Step prog (Cfg.run pc σ_t am_t) (Cfg.run pc' σ_t' am_t'))
+    {rel : EExprRel} {σ_o : Store} {am_o : ArrayMem}
+    (hcons : ∀ e_o v, (e_o, .var v) ∈ rel → σ_t v = e_o.eval σ_o am_o)
+    (hnoarr_b : ∀ b l, instr = .ifgoto b l → b.hasArrRead = false)
+    (hfvCov : ∀ b l, instr = .ifgoto b l → ∀ v, v ∈ b.exprFreeVars → ∃ e_o, (e_o, .var v) ∈ rel)
+    {origCond : BoolExpr} {taken : Bool}
+    (hbi : branchInfoWithRel instr rel pc pc' = some (origCond, taken)) :
+    origCond.eval σ_o am_o = taken := by
+  cases instr with
+  | ifgoto b l =>
+    simp only [branchInfoWithRel] at hbi
+    cases hmap : b.mapVarsRel rel with
+    | none => simp [hmap] at hbi
+    | some origCond' =>
+      simp only [hmap] at hbi
+      by_cases hguard : (!(l == pc + 1))
+      · simp only [hguard, ↓reduceIte, Option.some.injEq, Prod.mk.injEq] at hbi
+        obtain ⟨rfl, rfl⟩ := hbi
+        have hnoarr := hnoarr_b b l rfl
+        have hfv := hfvCov b l rfl
+        have heval_bridge := eval_mapVarsRel b rel origCond' hmap σ_o σ_t am_o am_t hcons hnoarr hfv
+        -- Case split on the step; unify the ifgoto instruction first
+        cases hstep with
+        | iftrue hinstr' heval =>
+          have heq := Option.some.inj (hinstr.symm.trans hinstr')
+          cases heq; simp only [beq_self_eq_true]; rw [heval_bridge, heval]
+        | iffall hinstr' heval =>
+          have heq := Option.some.inj (hinstr.symm.trans hinstr')
+          cases heq
+          simp only [Bool.not_eq_true'] at hguard
+          have hne : ¬(l = pc + 1) := fun h => by simp [h] at hguard
+          simp [beq_eq_false_iff_ne.mpr (Ne.symm hne)]
+          rw [heval_bridge, heval]
+        | const h => exact absurd (hinstr.symm.trans h) (by simp)
+        | copy h => exact absurd (hinstr.symm.trans h) (by simp)
+        | binop h _ _ _ => exact absurd (hinstr.symm.trans h) (by simp)
+        | boolop h => exact absurd (hinstr.symm.trans h) (by simp)
+        | goto h => exact absurd (hinstr.symm.trans h) (by simp)
+        | arrLoad h _ _ => exact absurd (hinstr.symm.trans h) (by simp)
+        | arrStore h _ _ _ => exact absurd (hinstr.symm.trans h) (by simp)
+        | fbinop h _ _ => exact absurd (hinstr.symm.trans h) (by simp)
+        | fternop h _ _ _ => exact absurd (hinstr.symm.trans h) (by simp)
+        | intToFloat h _ => exact absurd (hinstr.symm.trans h) (by simp)
+        | floatToInt h _ => exact absurd (hinstr.symm.trans h) (by simp)
+        | floatUnary h _ => exact absurd (hinstr.symm.trans h) (by simp)
+        | printInt h => exact absurd (hinstr.symm.trans h) (by simp)
+        | printFloat h => exact absurd (hinstr.symm.trans h) (by simp)
+      · simp [hguard] at hbi
+  | _ => simp [branchInfoWithRel] at hbi
+
 /-- Extract the pairCheck from checkRelConsistency. -/
 private theorem checkRelConsistency_pairCheck
     (orig : Prog) (pc_orig : Label) (origLabels : List Label) (transInstr : TAC)
@@ -2523,6 +2674,8 @@ private theorem transRel_sound (dc : ECertificate)
     (hBoolNoArrTrans : ∀ (pc' : Nat) instr, dc.trans[pc']? = some instr →
         (∀ x be, instr = TAC.boolop x be → be.hasArrRead = false) ∧
         (∀ b l, instr = TAC.ifgoto b l → b.hasArrRead = false))
+    (hBoolVarsCov : ∀ b l, instr = .ifgoto b l →
+        ∀ v, v ∈ b.exprFreeVars → ∃ e_o, (e_o, .var v) ∈ dtc.rel)
     (hpath : checkOrigPath dc.orig ([] : SymStore) ([] : SymArrayMem) (dc.inv_orig.getD dic.pc_orig ([] : EInv))
       dic.pc_orig dtc.origLabels pc_o'
       (branchInfoWithRel instr dtc.rel pc_t pc_t') = true)
@@ -2616,7 +2769,9 @@ private theorem transRel_sound (dc : ECertificate)
   have hbranch : ∀ cond taken, branchInfoWithRel instr dtc.rel pc_t pc_t' = some (cond, taken) →
       cond.eval σ_o am_t = taken := by
     intro cond taken hbi
-    exact branchInfo_of_step_with_rel hinstr hstep hstorerel hbi
+    exact branchInfo_of_step_with_rel hinstr hstep hstorerel
+      (fun b l heq => (hBoolNoArrTrans pc_t _ hinstr).2 b l heq)
+      hBoolVarsCov hbi
   have hbranchNoArr : ∀ cond taken, branchInfoWithRel instr dtc.rel pc_t pc_t' = some (cond, taken) →
       cond.hasArrRead = false := by
     intro cond taken hbi
@@ -3044,6 +3199,7 @@ theorem checkAllTransitionsExec_sound (dc : ECertificate)
     (hpathbounds : checkOrigPathBoundsOk dc = true)
     (hboolnoarr_orig : checkBoolExprNoArrRead dc.orig = true)
     (hboolnoarr_trans : checkBoolExprNoArrRead dc.trans = true)
+    (hboolvarscov : checkBoolVarsCoveredExec dc = true)
     (h : checkAllTransitionsExec dc = true) :
     checkAllTransitionsProp dc.tyCtx (toPCertificate dc) := by
   intro pc_t σ_t σ_t' pc_t' am_t am_t' hstep
@@ -3105,11 +3261,22 @@ theorem checkAllTransitionsExec_sound (dc : ECertificate)
       fun l hmem => (hRestAll dtc hdtc_mem l hmem).2
     -- Extract rel equality
     have hrel_eq_dtc : dtc.rel = dic.rel := hrel_eq
+    -- BoolExpr free-variable coverage: from checkBoolVarsCoveredExec + dtc.rel = dic.rel
+    have hBoolVarsCov : ∀ b l, instr = .ifgoto b l →
+        ∀ v, v ∈ b.exprFreeVars → ∃ e_o, (e_o, .var v) ∈ dtc.rel := by
+      intro b l heq v hv
+      have hcov := checkBoolVarsCoveredExec_sound dc hboolvarscov pc_t b l (by
+        simp only [toPCertificate] at hinstr; rw [hinstr, heq])
+      -- hcov uses (dc.instrCerts.getD pc_t default).rel = dic.rel = dtc.rel
+      rw [array_getD_of_getElem? hdic] at hcov
+      rw [← hrel_eq_dtc] at hcov
+      exact hcov v hv
     exact transRel_sound dc hwtp hnoarr_orig hbndpres harrsize hdivpres
       pc_t pc_t' dic dtc _ ((dc.instrCerts.getD pc_t' default).pc_orig) hdic
       hnoarr_dtc_rel hnoarr_dtc_rel_next hinstr hOrigFirstOk hrel_eq_dtc hRestScalar hRestNoDivMod
       (checkBoolExprNoArrRead_sound dc.orig hboolnoarr_orig)
       (checkBoolExprNoArrRead_sound dc.trans hboolnoarr_trans)
+      hBoolVarsCov
       hpath' hrelcheck
 
 -- ============================================================
@@ -3434,10 +3601,11 @@ theorem soundness_bridge
     (dc : ECertificate) (h : checkCertificateExec dc = true)
     (htyctx : dc.orig.tyCtx = dc.trans.tyCtx) :
     PCertificateValid (toPCertificate dc) := by
-  -- checkCertificateExec is: wt_orig && wt_trans && same_obs && c1..c16 && bool_no_arr_{orig,trans}
-  -- && is left-associative, so decompose from right to left (21 conjuncts, 20 steps)
+  -- checkCertificateExec is: wt_orig && wt_trans && same_obs && c1..c16 && bool_no_arr_{orig,trans} && bool_vars_cov
+  -- && is left-associative, so decompose from right to left (22 conjuncts, 21 steps)
   unfold checkCertificateExec at h
-  have ⟨h20, h_boolnoarr_t⟩  := and_true_of_and_eq_true h
+  have ⟨h21, h_boolvarscov⟩  := and_true_of_and_eq_true h
+  have ⟨h20, h_boolnoarr_t⟩  := and_true_of_and_eq_true h21
   have ⟨h19, h_boolnoarr_o⟩  := and_true_of_and_eq_true h20
   have ⟨h18, h_step_bounds⟩  := and_true_of_and_eq_true h19
   have ⟨h17, h_pathbounds⟩   := and_true_of_and_eq_true h18
@@ -3470,7 +3638,7 @@ theorem soundness_bridge
     start_corr    := checkStartCorrespondenceExec_sound dc h_startcorr hrel0
     start_inv     := checkInvariantsAtStartExec_sound dc h_invstart
     inv_preserved := checkInvariantsPreservedExec_sound dc h_invpres h_noarr_o h_noarr_t
-    transitions   := checkAllTransitionsExec_sound dc (checkWellTypedProg_sound hwt_orig) h_noarr_o h_noarr_rels h_bndpres h_arrsize h_div h_pathbounds h_boolnoarr_o h_boolnoarr_t h_trans
+    transitions   := checkAllTransitionsExec_sound dc (checkWellTypedProg_sound hwt_orig) h_noarr_o h_noarr_rels h_bndpres h_arrsize h_div h_pathbounds h_boolnoarr_o h_boolnoarr_t h_boolvarscov h_trans
     halt_corr     := checkHaltCorrespondenceExec_sound dc h_haltcorr
     halt_obs      := checkHaltObservableExec_sound dc h_haltobs
     nonterm       := checkNonterminationExec_sound dc h_nonterm

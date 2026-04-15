@@ -1035,6 +1035,26 @@ def checkNoArrReadInRels (certs : Array EInstrCert) : Bool :=
       tc.rel.all (fun (e, _) => !e.hasArrRead) &&
       tc.rel_next.all (fun (e, _) => !e.hasArrRead)
 
+/-- Collect free variables from the Expr operands of a BoolExpr.
+    For `.bvar x`, includes `x` (needed for the store-relation bridge). -/
+def BoolExpr.exprFreeVars : BoolExpr → List Var
+  | .lit _       => []
+  | .bvar x      => [x]
+  | .cmp _ a b   => a.freeVars ++ b.freeVars
+  | .not e       => e.exprFreeVars
+  | .fcmp _ a b  => a.freeVars ++ b.freeVars
+
+/-- Check that all free variables in BoolExpr operands of ifgoto instructions
+    in the transformed program are covered by the instruction's expression relation.
+    This guarantees the `substSym` bridge in `branchInfo_of_step_with_rel`. -/
+def checkBoolVarsCoveredExec (cert : ECertificate) : Bool :=
+  (List.range cert.trans.size).all fun pc =>
+    match cert.trans.code[pc]?, cert.instrCerts[pc]? with
+    | some (.ifgoto b _), some ic =>
+      b.exprFreeVars.all fun v => ic.rel.any fun (_, e_t) => e_t == .var v
+    | some (.ifgoto _ _), none => false
+    | _, _ => true
+
 /-- Check that all BoolExpr operands in a program's boolop/ifgoto instructions
     are arrRead-free (no `.arrRead`/`.farrRead` sub-expressions). -/
 def checkBoolExprNoArrRead (p : Prog) : Bool :=
@@ -1132,7 +1152,8 @@ def checkCertificateExec (cert : ECertificate) : Bool :=
   checkOrigPathBoundsOk cert &&
   checkSuccessorsInBounds cert &&
   checkBoolExprNoArrRead cert.orig &&
-  checkBoolExprNoArrRead cert.trans
+  checkBoolExprNoArrRead cert.trans &&
+  checkBoolVarsCoveredExec cert
 
 /-- Verbose check: returns the result of each individual condition. -/
 def checkCertificateVerboseExec (cert : ECertificate) : List (String × Bool) :=
@@ -1156,7 +1177,8 @@ def checkCertificateVerboseExec (cert : ECertificate) : List (String × Bool) :=
     ("orig_path_bounds_ok",   checkOrigPathBoundsOk cert),
     ("successors_in_bounds",  checkSuccessorsInBounds cert),
     ("bool_expr_no_arr_read_orig", checkBoolExprNoArrRead cert.orig),
-    ("bool_expr_no_arr_read_trans", checkBoolExprNoArrRead cert.trans) ]
+    ("bool_expr_no_arr_read_trans", checkBoolExprNoArrRead cert.trans),
+    ("bool_vars_covered",     checkBoolVarsCoveredExec cert) ]
 
 /-- Observable output of a configuration with respect to an executable certificate.
     - If the current instruction is `halt`, returns `halt` with observable variable–value pairs.
