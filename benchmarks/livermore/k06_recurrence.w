@@ -31,4 +31,5 @@ while (rep <= 2781000) {
     i := i + 1
   };
   rep := rep + 1
-}
+};
+printfloat w[64]

@@ -57,6 +57,7 @@ def instrDef (instr : TAC) : Option Var :=
   | .floatUnary x _ _ => some x
   | .fternop x _ _ _ _ => some x
   | .arrLoad x _ _ _ => some x
+  | .printInt _ | .printFloat _ => none
   | _ => none
 
 /-- Variables used (read) by an instruction. -/
@@ -76,6 +77,8 @@ def instrUse (instr : TAC) : List Var :=
   | .goto _          => []
   | .ifgoto be _     => be.vars
   | .halt            => []
+  | .printInt v      => [v]
+  | .printFloat v    => [v]
 
 /-- Remove a variable from a list. -/
 private def listRemove (xs : List Var) (v : Var) : List Var :=
@@ -156,6 +159,7 @@ def isDead (instr : TAC) (liveOut : List Var) : Bool :=
   | .arrLoad _ _ _ _ => false
   | .arrStore _ _ _ _ => false
   | .goto _ | .ifgoto _ _ | .halt => false
+  | .printInt _ | .printFloat _ => false  -- side effect, never eliminate
 
 -- ============================================================
 -- § 3. Trans-side value tracking via ConstProp

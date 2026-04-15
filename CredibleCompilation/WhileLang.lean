@@ -67,6 +67,8 @@ inductive Stmt where
   | label    : String → Stmt                      -- label declaration (goto target)
   | goto     : String → Stmt                      -- unconditional jump
   | ifgoto   : SBool → String → Stmt             -- conditional jump
+  | printint   : SExpr → Stmt                     -- print integer expression
+  | printfloat : SExpr → Stmt                     -- print float expression
   deriving Repr
 
 -- Syntactic sugar
@@ -228,6 +230,10 @@ def Stmt.interp (fuel : Nat) (σ : Store) (am : ArrayMem)
   | .goto _ => some (σ, am)   -- no-op at statement level; goto resolved at compilation
   | .ifgoto b _ =>
     if b.isSafe σ am decls then some (σ, am) else none
+  | .printint e =>
+    if e.isSafe σ am decls then some (σ, am) else none
+  | .printfloat e =>
+    if e.isSafe σ am decls then some (σ, am) else none
 
 -- ============================================================
 -- § 3. Compiler: While language → TAC (pure functional)
@@ -400,6 +406,8 @@ def stmtCodeLen : Stmt → Nat
   | .label _ => 0    -- labels emit no code
   | .goto _ => 1     -- single goto instruction
   | .ifgoto b _ => boolCodeLen b + 1  -- condition code + ifgoto
+  | .printint e => exprCodeLen e + 1    -- expression code + printInt
+  | .printfloat e => exprCodeLen e + 1  -- expression code + printFloat
 
 /-- Collect label→PC mappings from a statement, given the starting offset. -/
 def collectLabels : Stmt → Nat → List (String × Nat)
@@ -513,6 +521,12 @@ def compileStmt (s : Stmt) (offset nextTmp : Nat)
     let (codeB, be, tmpB) := compileBool b offset nextTmp
     let target := (labels.lookup lbl).getD 0
     (codeB ++ [.ifgoto be target], tmpB)
+  | .printint e =>
+    let (codeE, ve, tmp1) := compileExpr e offset nextTmp
+    (codeE ++ [.printInt ve], tmp1)
+  | .printfloat e =>
+    let (codeE, ve, tmp1) := compileExpr e offset nextTmp
+    (codeE ++ [.printFloat ve], tmp1)
 
 -- ============================================================
 -- § 4. Pretty-printing
@@ -575,6 +589,8 @@ def Stmt.toString : Stmt → String
   | .label lbl => s!"{lbl}:"
   | .goto lbl => s!"goto {lbl}"
   | .ifgoto b lbl => s!"if {b.toString} goto {lbl}"
+  | .printint e => s!"printint {e.toString}"
+  | .printfloat e => s!"printfloat {e.toString}"
 
 instance : ToString Stmt := ⟨Stmt.toString⟩
 instance : ToString SExpr := ⟨SExpr.toString⟩
@@ -687,6 +703,8 @@ def checkStmt (lookup : Var → Option VarTy) (arrayDecls : List (ArrayName × N
   | .label _ => true
   | .goto _ => true
   | .ifgoto b _ => checkSBool lookup arrayDecls b
+  | .printint e => checkSExpr lookup arrayDecls e
+  | .printfloat e => checkFExpr lookup arrayDecls e
 
 /-- Full static type check: no duplicate declarations, no compiler-reserved
     temporary names in declarations, and the body is well-typed w.r.t.
@@ -774,6 +792,8 @@ private theorem instrDefType_matches_tyCtx {Γ : TyCtx}
   | fternop hx _ _ _ =>
     simp only [instrDefType, Option.some.injEq, Prod.mk.injEq] at hdef
     obtain ⟨rfl, rfl⟩ := hdef; exact hx.symm
+  | printInt _ => simp [instrDefType] at hdef
+  | printFloat _ => simp [instrDefType] at hdef
 
 /-- `buildTyCtx` is the identity when every instruction defines variables
     at their existing type in the base context. -/
@@ -1644,6 +1664,16 @@ theorem compileStmt_wt (prog : Program)
     simp only [compileStmt]
     have ⟨hb_wt, hb_ty⟩ := compileBool_wt prog hnt b hchk offset nextTmp
     exact allWTI_append' hb_wt (allWTI_one (.ifgoto hb_ty))
+  | printint e =>
+    simp only [Program.checkStmt] at hchk
+    simp only [compileStmt]
+    have ⟨he_wt, he_ty⟩ := compileExpr_wt prog hnt e hchk offset nextTmp
+    exact allWTI_append' he_wt (allWTI_one (.printInt he_ty))
+  | printfloat e =>
+    simp only [Program.checkStmt] at hchk
+    simp only [compileStmt]
+    have ⟨he_wt, he_ty⟩ := compileExpr_float_wt prog hnt e hchk offset nextTmp
+    exact allWTI_append' he_wt (allWTI_one (.printFloat he_ty))
 
 -- initCode produces well-typed instructions
 theorem initCode_wt (prog : Program)
@@ -1807,7 +1837,8 @@ def IsSeqInstr (instr : TAC) : Prop :=
   match instr with
   | .const _ _ | .copy _ _ | .binop _ _ _ _ | .boolop _ _
   | .arrLoad _ _ _ _ | .arrStore _ _ _ _
-  | .fbinop _ _ _ _ | .intToFloat _ _ | .floatToInt _ _ | .floatUnary _ _ _ => True
+  | .fbinop _ _ _ _ | .intToFloat _ _ | .floatToInt _ _ | .floatUnary _ _ _
+  | .printInt _ | .printFloat _ => True
   | _ => False
 
 theorem AllJumpsLe_of_allSeq {code : List TAC}
@@ -2029,6 +2060,10 @@ theorem compileStmt_length (s : Stmt) (offset nextTmp : Nat)
   | goto _ => simp [compileStmt, stmtCodeLen]
   | ifgoto b _ =>
     simp [compileStmt, stmtCodeLen, List.length_append, compileBool_length]
+  | printint e =>
+    simp [compileStmt, stmtCodeLen, List.length_append, compileExpr_length]
+  | printfloat e =>
+    simp [compileStmt, stmtCodeLen, List.length_append, compileExpr_length]
 
 -- collectLabels produces label values ≤ offset + stmtCodeLen s
 theorem collectLabels_allLabelsLe (s : Stmt) (offset : Nat) :
@@ -2059,7 +2094,7 @@ theorem collectLabels_allLabelsLe (s : Stmt) (offset : Nat) :
     simp only [stmtCodeLen]
     have := ih (offset + boolCodeLen b + 1) k v hmem; omega
   | skip | assign _ _ | bassign _ _ | arrWrite _ _ _ | barrWrite _ _ _
-  | fassign _ _ | farrWrite _ _ _ | goto _ | ifgoto _ _ =>
+  | fassign _ _ | farrWrite _ _ _ | goto _ | ifgoto _ _ | printint _ | printfloat _ =>
     intro k v hmem; simp [collectLabels] at hmem
 
 /-- All jump targets in compiled statement code are ≤ bound,
@@ -2240,6 +2275,18 @@ theorem compileStmt_allJumpsLe (s : Stmt) (offset nextTmp : Nat)
     exact AllJumpsLe_append
       (AllJumpsLe_mono (compileBool_allJumpsLe b offset nextTmp _ (Nat.le_refl _)) (by omega))
       (AllJumpsLe_single_ifgoto (Nat.le_trans (AllLabelsLe_lookup hlabels lbl) (by omega)))
+  | printint e =>
+    exact AllJumpsLe_of_allSeq (by
+      intro instr hmem; simp [compileStmt, List.mem_append] at hmem
+      rcases hmem with he | rfl
+      · exact compileExpr_allSeq e _ _ instr he
+      · trivial)
+  | printfloat e =>
+    exact AllJumpsLe_of_allSeq (by
+      intro instr hmem; simp [compileStmt, List.mem_append] at hmem
+      rcases hmem with he | rfl
+      · exact compileExpr_allSeq e _ _ instr he
+      · trivial)
 
 /-- Bridge: if all jump targets in `code` are ≤ `code.length`, then
     `(code ++ [halt]).toArray` is step-closed in bounds. -/
@@ -2266,7 +2313,7 @@ private theorem stepClosed_of_allJumpsLe {code : List TAC} {p : Prog}
       | arrLoad _ _ _ _ | arrStore _ _ _ _ =>
         simp [TAC.successors] at hmem; omega
       | fbinop _ _ _ _ | intToFloat _ _ | floatToInt _ _ | floatUnary _ _ _
-      | fternop _ _ _ _ _ =>
+      | fternop _ _ _ _ _ | printInt _ | printFloat _ =>
         simp [TAC.successors] at hmem; omega
       | goto l => simp [TAC.successors] at hmem; subst hmem; exact Nat.lt_of_le_of_lt hj (by omega)
       | ifgoto _ l =>

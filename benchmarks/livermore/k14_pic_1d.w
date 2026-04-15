@@ -98,4 +98,5 @@ while (rep <= 1867000) {
     k := k + 1
   };
   rep := rep + 1
-}
+};
+printfloat xx[1]

@@ -48,4 +48,5 @@ while (rep <= 30088000) {
     i := i + 1
   };
   rep := rep + 1
-}
+};
+printfloat b5[51]

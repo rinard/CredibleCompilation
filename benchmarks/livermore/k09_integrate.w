@@ -44,4 +44,5 @@ while (rep <= 60639000) {
     i := i + 1
   };
   rep := rep + 1
-}
+};
+printfloat px[(1 - 1) * 101 + 51]

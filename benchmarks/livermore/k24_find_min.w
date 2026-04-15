@@ -27,4 +27,6 @@ while (rep <= 30595000) {
     k := k + 1
   };
   rep := rep + 1
-}
+};
+printint m;
+printfloat x[m]

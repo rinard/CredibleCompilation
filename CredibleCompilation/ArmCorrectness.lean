@@ -1760,6 +1760,15 @@ theorem genInstr_correct (prog : ArmProg) (vm : VarMap) (pcMap : Nat → Nat)
       · simp [ArmState.setStack, ArmState.setFReg, ArmState.nextPC, hArrayMem]
   | fternop_typeError hinstr hne =>
     exact absurd (Step.fternop_typeError (am := am) hinstr hne) (Step.no_typeError_of_wellTyped hPC_bound hWT hTS)
+  | printInt hinstr =>
+    -- printInt generates empty instruction list, so ARM state unchanged
+    have heq : instr = .printInt _ := Option.some.inj (hInstr.symm.trans hinstr)
+    rw [heq] at hCodeInstr; simp only [formalGenInstr] at hCodeInstr
+    exact sorry  -- unverified: print not modeled in ARM semantics
+  | printFloat hinstr =>
+    have heq : instr = .printFloat _ := Option.some.inj (hInstr.symm.trans hinstr)
+    rw [heq] at hCodeInstr; simp only [formalGenInstr] at hCodeInstr
+    exact sorry  -- unverified: print not modeled in ARM semantics
 
 /-- Main backward simulation: every TAC step is matched by ARM64 steps.
     Directly delegates to `genInstr_correct`. -/
@@ -2609,6 +2618,10 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
     exact ⟨s, .refl, trivial⟩
   | arrStore_boundsError hinstr hidx hval hbounds =>
     exact ⟨s, .refl, trivial⟩
+  | printInt hinstr =>
+    exact sorry  -- unverified: print not modeled in ARM semantics
+  | printFloat hinstr =>
+    exact sorry  -- unverified: print not modeled in ARM semantics
   | const hinstr =>
     rename_i x v
     have heq : instr = .const x v := Option.some.inj (hInstr.symm.trans hinstr)

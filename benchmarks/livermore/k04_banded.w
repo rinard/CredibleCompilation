@@ -41,4 +41,5 @@ while (rep <= 11250000) {
     k := k + m
   };
   rep := rep + 1
-}
+};
+printfloat x[7]

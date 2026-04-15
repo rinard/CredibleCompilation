@@ -37,7 +37,8 @@ inductive Token where
 private def keywords : List String :=
   ["var", "array", "int", "bool", "float", "if", "else", "while", "skip", "true", "false",
    "intToFloat", "floatToInt", "exp", "sqrt", "sin", "cos", "tan",
-   "log", "log2", "log10", "abs", "neg", "round", "pow", "fmin", "fmax", "goto"]
+   "log", "log2", "log10", "abs", "neg", "round", "pow", "fmin", "fmax", "goto",
+   "printint", "printfloat"]
 
 private def spanDigits : List Char → List Char × List Char
   | c :: rest => if c.isDigit then let (d, r) := spanDigits rest; (c :: d, r) else ([], c :: rest)
@@ -450,6 +451,12 @@ partial def parseStmtAtom (toks : List Token) : Except String (Stmt × List Toke
       | _ => .error "expected '}' after while body"
     | _ => .error "expected '{' after while condition"
   | Token.ident lbl :: Token.colon :: rest => .ok (.label lbl, rest)
+  | Token.kw "printint" :: rest => do
+    let (e, rest') ← parseExpr rest
+    .ok (.printint e, rest')
+  | Token.kw "printfloat" :: rest => do
+    let (e, rest') ← parseExpr rest
+    .ok (.printfloat e, rest')
   | tok :: _ => .error s!"expected statement, got {repr tok}"
   | [] => .error "expected statement, got end of input"
 
@@ -621,6 +628,8 @@ private partial def resolveStmt (lookupVar : Var → Option VarTy)
   | .label lbl => .label lbl
   | .goto lbl => .goto lbl
   | .ifgoto b lbl => .ifgoto (resolveSBool lookupVar lookupArr b) lbl
+  | .printint e => .printint (resolveSExpr lookupVar lookupArr e)
+  | .printfloat e => .printfloat (resolveSExpr lookupVar lookupArr e)
 
 /-- Parse a string into a `Program`. -/
 def parseProgram (input : String) : Except String Program := do

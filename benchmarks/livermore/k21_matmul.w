@@ -63,4 +63,5 @@ while (rep <= 2476000) {
     k := k + 1
   };
   rep := rep + 1
-}
+};
+printfloat px[(51 - 1) * 25 + 13]

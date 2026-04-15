@@ -42,4 +42,5 @@ while (rep <= 7770000) {
     i := i + 1
   };
   rep := rep + 1
-}
+};
+printfloat x[501]

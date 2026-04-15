@@ -68,4 +68,5 @@ while (rep <= 760000) {
     k := k + 1
   };
   rep := rep + 1
-}
+};
+printfloat w[51]

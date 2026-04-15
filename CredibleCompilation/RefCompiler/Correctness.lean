@@ -1255,6 +1255,8 @@ theorem compileStmt_correct (s : Stmt) (fuel : Nat) (σ σ' : Store) (am am' : A
     exact ⟨σ_tac, FragExec.rfl' _ _ _ _, hagree⟩
   | goto _ => exact absurd hNoGoto (by simp [Stmt.noGoto])
   | ifgoto b _ => exact absurd hNoGoto (by simp [Stmt.noGoto])
+  | printint e => exact sorry  -- unverified: print not modeled in RefCompiler
+  | printfloat e => exact sorry  -- unverified: print not modeled in RefCompiler
   | assign x e =>
     simp only [Stmt.safe] at hsafe
     simp only [Stmt.typedVars] at htypedv

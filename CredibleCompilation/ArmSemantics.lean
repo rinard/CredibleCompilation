@@ -835,6 +835,8 @@ def formalGenInstr (vm : VarMap) (pcMap : Nat → Nat) (instr : TAC)
     | some offA, some offB, some offC, some offD =>
       [.fldr .d3 offA, .fldr .d1 offB, .fldr .d2 offC, fpInstr, .fstr .d0 offD]
     | _, _, _, _ => []
+  | .printInt _ => []     -- handled by unverified codegen path
+  | .printFloat _ => []   -- handled by unverified codegen path
 
 -- ============================================================
 -- § 8b. Verified codegen helpers (register-allocation-aware)
@@ -1047,6 +1049,8 @@ def verifiedGenInstr (layout : VarLayout) (pcMap : Nat → Nat) (instr : TAC)
         | .fmsub => ArmInstr.fmsubR dst_reg b_reg c_reg a_reg
       some (vLoadVarFP layout a a_reg ++ vLoadVarFP layout b b_reg ++
         vLoadVarFP layout c c_reg ++ [fpInstr] ++ vStoreVarFP layout dst dst_reg)
+  | .printInt _ => none     -- handled by unverified codegen path
+  | .printFloat _ => none   -- handled by unverified codegen path
 
 -- ============================================================
 -- § 9. CodeAt and helper lemmas

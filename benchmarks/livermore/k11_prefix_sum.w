@@ -22,4 +22,5 @@ while (rep <= 35249000) {
     k := k + 1
   };
   rep := rep + 1
-}
+};
+printfloat x[1]
