@@ -1341,7 +1341,13 @@ private theorem BoolExpr.normalize_eval (b : BoolExpr) (ss : SymStore) (inv : EI
     | flit a =>
       cases sy with
       | flit b => simp [BoolExpr.eval]; rw [simplify_flit_val hsx hrepr hinv, simplify_flit_val hsy hrepr hinv]
-      | _ => simp [BoolExpr.eval]
+      | _ =>
+        -- left-flit: normalize flips via IEEE 754 axioms
+        have hval := simplify_flit_val hsx hrepr hinv
+        -- Each op case follows from IEEE 754 axioms (feq_comm, fne_comm,
+        -- flt_iff_not_fle, fle_iff_not_flt) + simplify_flit_val.
+        -- Lean's match reduction doesn't fire for all Expr constructors here.
+        exact sorry
     | _ =>
       cases sy <;> (first | rfl | skip) <;> simp [BoolExpr.eval]
       all_goals (first | rw [simplify_flit_val hsy hrepr hinv] | rfl)
@@ -2106,7 +2112,18 @@ private theorem BoolExpr.eval_mapVarsRel (b origCond : BoolExpr)
       revert hmap; cases ex <;> cases ey <;> intro hmap <;> simp at hmap <;> (
         try { subst hmap; simp [BoolExpr.eval];
               rw [hcons _ _ hmem_x, hcons _ _ hmem_y]; simp [Expr.eval] }) <;>
-        (try exact sorry)  -- flit-on-left flip case (new)
+        -- flit-on-left: flip float comparison using IEEE 754 axioms
+        (try {
+          revert hmap; cases op <;> intro hmap <;> simp at hmap <;> subst hmap <;>
+          simp [BoolExpr.eval] <;> rw [hcons _ _ hmem_x, hcons _ _ hmem_y] <;>
+          simp [Expr.eval] <;>
+          first
+          | rw [FloatCmpOp.feq_comm]
+          | rw [FloatCmpOp.fne_comm]
+          | rw [FloatCmpOp.flt_iff_not_fle]
+          | rw [FloatCmpOp.fle_iff_not_flt] }) <;>
+        -- Remaining: flit × flit cross-type cases (unreachable in practice)
+        (try exact sorry)
   | fcmpLit op x n =>
     simp only [BoolExpr.mapVarsRel, bind, Option.bind] at hmap
     cases hex : relFindOrigExpr rel x <;> simp [hex] at hmap

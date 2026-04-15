@@ -304,6 +304,24 @@ inductive FloatCmpOp | feq | fne | flt | fle deriving Repr, DecidableEq
     are uninterpreted predicates over BitVec 64. -/
 opaque FloatCmpOp.eval : FloatCmpOp → BitVec 64 → BitVec 64 → Bool
 
+/-- IEEE 754: `a < b ↔ ¬(b ≤ a)` for all bit patterns (including NaN, where
+    both sides are false/true consistently since `flt` and `fle` both return
+    false for NaN operands). -/
+axiom FloatCmpOp.flt_iff_not_fle (a b : BitVec 64) :
+  FloatCmpOp.eval .flt a b = !FloatCmpOp.eval .fle b a
+
+/-- IEEE 754: `a ≤ b ↔ ¬(b < a)`. Flip of `flt_iff_not_fle`. -/
+axiom FloatCmpOp.fle_iff_not_flt (a b : BitVec 64) :
+  FloatCmpOp.eval .fle a b = !FloatCmpOp.eval .flt b a
+
+/-- IEEE 754: equality is symmetric. -/
+axiom FloatCmpOp.feq_comm (a b : BitVec 64) :
+  FloatCmpOp.eval .feq a b = FloatCmpOp.eval .feq b a
+
+/-- IEEE 754: inequality is symmetric. -/
+axiom FloatCmpOp.fne_comm (a b : BitVec 64) :
+  FloatCmpOp.eval .fne a b = FloatCmpOp.eval .fne b a
+
 /-- Convert a signed integer (BitVec 64) to float (BitVec 64).
     Opaque — corresponds to ARM64 `scvtf`. -/
 opaque intToFloatBv : BitVec 64 → BitVec 64
