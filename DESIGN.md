@@ -140,4 +140,93 @@ Actually, the simplest correct approach: teach Expr.simplifyFast to canonicalize
 
 Want me to implement that canonicalization approach? It would let us fuse both fadd(a, t) and fadd(t, a), and also handle the fsub case where only fsub(a, t) is valid (subtraction isn't commutative, so that one's already correct).
 
- o) I suggest to add an axiom that fadd commutes. Claude says not worth it for now. 
+ o) I suggest to add an axiom that fadd commutes. Claude says not worth it for now. At 2:32 come back after getting system to stable state and pushing, ask for plan. Plan for adding axiom that fadd commutes to enable fmadd for a + (b * c) and (b * c) + a. Here is the plan. 
+
+Implementation Plan
+4 files, 5 changes
+1. Core.lean:291 — Add axiom (after FloatBinOp.eval)
+
+
+/-- IEEE 754 addition is commutative for all values. -/
+axiom FloatBinOp.fadd_comm (a b : BitVec 64) :
+  FloatBinOp.eval .fadd a b = FloatBinOp.eval .fadd b a
+2. ExecChecker.lean:71 — Normalize fbin .fadd in simplify
+
+Change:
+
+
+| .fbin op a b    => .fbin op (a.simplify inv) (b.simplify inv)
+To:
+
+
+| .fbin op a b    =>
+    let a' := a.simplify inv; let b' := b.simplify inv
+    match op, a' with
+    | .fadd, .fbin .fmul _ _ => .fbin .fadd b' a'
+    | _, _ => .fbin op a' b'
+When fadd's left arg is an fmul, swap them so the product lands on the right. This is the only case the FMA pattern creates.
+
+3. ExecChecker.lean:521 — Same normalization in simplifyFast
+
+Change:
+
+
+| .fbin op a b    => .fbin op (a.simplifyFast m) (b.simplifyFast m)
+To:
+
+
+| .fbin op a b    =>
+    let a' := a.simplifyFast m; let b' := b.simplifyFast m
+    match op, a' with
+    | .fadd, .fbin .fmul _ _ => .fbin .fadd b' a'
+    | _, _ => .fbin op a' b'
+The ftern unfolding at lines 526-528 already puts the product on the right, so no change needed there.
+
+4. FMAFusionOpt.lean:49 — Add t == lhs case
+
+Change:
+
+
+else if t == rhs && t != lhs then
+  some (x, .fmadd, lhs, b, c)
+else none
+To:
+
+
+else if t == rhs && t != lhs then
+  some (x, .fmadd, lhs, b, c)
+else if t == lhs && t != rhs then
+  some (x, .fmadd, rhs, b, c)
+else none
+5. SoundnessBridge.lean:275 — Update simplify_sound for fbin case
+
+Current proof:
+
+
+| fbin _ _ _ iha ihb =>
+    simp only [Expr.simplify, Expr.eval]
+    rw [iha, ihb]
+New proof needs to case-split on the normalization:
+
+
+| fbin op _ _ iha ihb =>
+    simp only [Expr.simplify]
+    split
+    · case h_1 _ _ _ _ _ heq =>  -- fadd with fmul on left → swapped
+      simp only [Expr.eval]
+      rw [iha, ihb, FloatBinOp.fadd_comm]
+    · case h_2 =>                 -- everything else → unchanged
+      simp only [Expr.eval]
+      rw [iha, ihb]
+Plus update the simplifyFast_eq_simplify proof at ExecChecker.lean:633 — the fbin case becomes a split + cases on both functions to show the match branches align.
+
+Why refinement proofs go through
+Checker pass/fail: After normalization, orig produces fbin .fadd (var a) (fbin .fmul b c) (product swapped right) and trans produces the same from ftern .fmadd unfolding. Structural equality holds.
+simplify_sound: The swap case uses fadd_comm to show eval is preserved. One new rw.
+simplifyFast_eq_simplify: Both functions do the same match, so the proof is simp + split with matching branches.
+Everything downstream (PipelineCorrectness, ArmCorrectness) is untouched — they don't inspect simplifier internals.
+No new sorrys expected.
+
+Want me to implement it?
+
+  p) Plan implemented at 2:35

@@ -290,6 +290,10 @@ inductive FloatBinOp | fadd | fsub | fmul | fdiv | fpow | fmin | fmax deriving R
     are uninterpreted functions over BitVec 64. -/
 opaque FloatBinOp.eval : FloatBinOp → BitVec 64 → BitVec 64 → BitVec 64
 
+/-- IEEE 754 addition is commutative for all values (including NaN, ±0, ±∞). -/
+axiom FloatBinOp.fadd_comm (a b : BitVec 64) :
+  FloatBinOp.eval .fadd a b = FloatBinOp.eval .fadd b a
+
 -- ============================================================
 -- § 2a''. Float comparison operators
 -- ============================================================

@@ -68,7 +68,11 @@ def Expr.simplify (inv : EInv) : Expr → Expr
   | .orE a b        => .orE a b
   | .arrRead arr idx => .arrRead arr (idx.simplify inv)
   | .flit n         => .flit n
-  | .fbin op a b    => .fbin op (a.simplify inv) (b.simplify inv)
+  | .fbin op a b    =>
+    let a' := a.simplify inv; let b' := b.simplify inv
+    match op, a' with
+    | .fadd, .fbin .fmul _ _ => .fbin .fadd b' a'  -- normalize: fmul on right
+    | _, _ => .fbin op a' b'
   | .fcmpE op a b   => .fcmpE op (a.simplify inv) (b.simplify inv)
   | .intToFloat e   => .intToFloat (e.simplify inv)
   | .floatToInt e   => .floatToInt (e.simplify inv)
@@ -518,7 +522,11 @@ def Expr.simplifyFast (m : FastVarMap) : Expr → Expr
   | .orE a b        => .orE a b
   | .arrRead arr idx => .arrRead arr (idx.simplifyFast m)
   | .flit n         => .flit n
-  | .fbin op a b    => .fbin op (a.simplifyFast m) (b.simplifyFast m)
+  | .fbin op a b    =>
+    let a' := a.simplifyFast m; let b' := b.simplifyFast m
+    match op, a' with
+    | .fadd, .fbin .fmul _ _ => .fbin .fadd b' a'  -- normalize: fmul on right
+    | _, _ => .fbin op a' b'
   | .fcmpE op a b   => .fcmpE op (a.simplifyFast m) (b.simplifyFast m)
   | .intToFloat e   => .intToFloat (e.simplifyFast m)
   | .floatToInt e   => .floatToInt (e.simplifyFast m)

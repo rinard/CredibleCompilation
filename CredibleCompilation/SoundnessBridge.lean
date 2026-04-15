@@ -272,9 +272,15 @@ theorem Expr.simplify_sound (inv : EInv) (e : Expr) (σ : Store) (am : ArrayMem)
     simp only [Expr.simplify, Expr.eval]
     rw [ih]
   | flit _ => rfl
-  | fbin _ _ _ iha ihb =>
-    simp only [Expr.simplify, Expr.eval]
-    rw [iha, ihb]
+  | fbin op _ _ iha ihb =>
+    simp only [Expr.simplify]
+    split
+    · -- fadd with fmul on left → swapped by normalization
+      simp only [Expr.eval]
+      rw [iha, ihb, FloatBinOp.fadd_comm]
+    · -- all other cases → unchanged
+      simp only [Expr.eval]
+      rw [iha, ihb]
   | fcmpE _ _ _ iha ihb =>
     simp only [Expr.simplify, Expr.eval]
     rw [iha, ihb]

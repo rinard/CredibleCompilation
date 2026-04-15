@@ -50,6 +50,9 @@ def isFusible (prog : Prog) (liveOut : Array (List Var))
         -- x := fadd(a, t) → fmadd(a, b, c)
         -- fmadd semantics: a + b*c, matching fadd(a, fmul(b,c))
         some (x, .fmadd, lhs, b, c)
+      else if t == lhs && t != rhs then
+        -- x := fadd(t, a) → fmadd(a, b, c)  (by commutativity of fadd)
+        some (x, .fmadd, rhs, b, c)
       else none
   | some (.fbinop t .fmul b c), some (.fbinop x .fsub lhs rhs) =>
     -- fsub: only a - t pattern (not t - a, which would be -(a - b*c))
