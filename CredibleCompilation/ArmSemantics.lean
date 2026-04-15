@@ -269,6 +269,11 @@ theorem Value.encode_eq_toInt_of_int {v : Value} (h : ∃ n, v = .int n) :
     v.encode = v.toInt := by
   obtain ⟨n, rfl⟩ := h; rfl
 
+/-- For float values, encode produces toFloat. -/
+theorem Value.encode_eq_toFloat_of_float {v : Value} (h : ∃ f, v = .float f) :
+    v.encode = v.toFloat := by
+  obtain ⟨f, rfl⟩ := h; rfl
+
 /-- For any value, encode of an integer. -/
 @[simp] theorem Value.encode_int (n : BitVec 64) : (Value.int n).encode = n := rfl
 
@@ -973,11 +978,13 @@ def verifiedGenInstr (layout : VarLayout) (pcMap : Nat → Nat) (instr : TAC)
       some (vLoadVar layout lv lv_reg ++ vLoadVar layout rv rv_reg ++
       opInstr ++ vStoreVar layout dst dst_reg)
   | .boolop dst be =>
+    if !be.hasSimpleOps then none else
     let notFreg := match layout dst with | some (.freg _) => true | _ => false
     if notFreg then none else
     some (verifiedGenBoolExpr layout be ++ vStoreVar layout dst .x0)
   | .goto l => some [.b (pcMap l)]
   | .ifgoto be l =>
+    if !be.hasSimpleOps then none else
     some (verifiedGenBoolExpr layout be ++ [.cbnz .x0 (pcMap l)])
   | .halt => some [.b haltLabel]
   | .arrLoad x arr idx ty =>

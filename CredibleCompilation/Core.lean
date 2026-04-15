@@ -569,6 +569,32 @@ theorem BoolExpr.eval_noArrRead (be : BoolExpr) (σ : Store) (am₁ am₂ : Arra
     simp only [hasArrRead, Bool.or_eq_false_iff] at h
     simp only [BoolExpr.eval, Expr.eval_noArrRead a σ am₁ am₂ h.1, Expr.eval_noArrRead b σ am₁ am₂ h.2]
 
+/-- Are the Expr operands in cmp/fcmp simple atoms (.var/.lit for int, .var/.flit for float)?
+    Code generation only emits correct load sequences for these forms. -/
+def BoolExpr.hasSimpleOps : BoolExpr → Bool
+  | .lit _ | .bvar _ => true
+  | .cmp _ a b =>
+    (match a with | .var _ | .lit _ => true | _ => false) &&
+    (match b with | .var _ | .lit _ => true | _ => false)
+  | .not e => e.hasSimpleOps
+  | .fcmp _ a b =>
+    (match a with | .var _ | .flit _ => true | _ => false) &&
+    (match b with | .var _ | .flit _ => true | _ => false)
+
+theorem BoolExpr.hasSimpleOps_cmp {op : CmpOp} {a b : Expr}
+    (h : (BoolExpr.cmp op a b).hasSimpleOps = true) :
+    ((∃ v, a = .var v) ∨ (∃ n, a = .lit n)) ∧ ((∃ w, b = .var w) ∨ (∃ m, b = .lit m)) := by
+  simp only [hasSimpleOps, Bool.and_eq_true] at h
+  obtain ⟨h1, h2⟩ := h
+  exact ⟨by cases a <;> simp_all, by cases b <;> simp_all⟩
+
+theorem BoolExpr.hasSimpleOps_fcmp {fop : FloatCmpOp} {a b : Expr}
+    (h : (BoolExpr.fcmp fop a b).hasSimpleOps = true) :
+    ((∃ v, a = .var v) ∨ (∃ f, a = .flit f)) ∧ ((∃ w, b = .var w) ∨ (∃ g, b = .flit g)) := by
+  simp only [hasSimpleOps, Bool.and_eq_true] at h
+  obtain ⟨h1, h2⟩ := h
+  exact ⟨by cases a <;> simp_all, by cases b <;> simp_all⟩
+
 /-- Collect all variable names from a boolean expression. -/
 def BoolExpr.vars : BoolExpr → List Var
   | .lit _        => []

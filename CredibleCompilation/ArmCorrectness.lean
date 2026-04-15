@@ -398,13 +398,59 @@ theorem genBoolExpr_correct (prog : ArmProg) (vm : VarMap)
     (hVarMap : ∀ v, ∃ off, vm.lookup v = some off)
     (Γ : TyCtx) (hTS : TypedStore Γ σ)
     (hWTBE : WellTypedBoolExpr Γ be)
+    (hSimple : be.hasSimpleOps = true)
     (am : ArrayMem) :
     ∃ s', ArmSteps prog s s' ∧
       s'.regs .x0 = (if be.eval σ am then (1 : BitVec 64) else 0) ∧
       (∀ v off, vm.lookup v = some off → s'.stack off = s.stack off) ∧
       s'.pc = startPC + (formalGenBoolExpr vm be).length ∧
       s'.arrayMem = s.arrayMem := by
-  sorry
+  cases hWTBE with
+  | lit =>
+    rename_i b
+    simp only [formalGenBoolExpr] at hCode
+    have hMov := hCode.head; rw [← hPC] at hMov
+    exact ⟨s.setReg .x0 _ |>.nextPC, ArmSteps.single (.mov _ _ hMov),
+      by simp [ArmState.setReg, ArmState.nextPC, BoolExpr.eval],
+      by intro v off hv; simp [ArmState.setReg, ArmState.nextPC],
+      by simp [ArmState.setReg, ArmState.nextPC, hPC, formalGenBoolExpr],
+      by simp [ArmState.setReg, ArmState.nextPC]⟩
+  | bvar hty =>
+    rename_i x
+    obtain ⟨off, hoff⟩ := hVarMap x
+    simp only [formalGenBoolExpr, hoff] at hCode
+    have hLdr := hCode.head; rw [← hPC] at hLdr
+    have hPC1 : (s.setReg .x0 (s.stack off) |>.nextPC).pc = startPC + 1 := by
+      simp [ArmState.setReg, ArmState.nextPC, hPC]
+    have hAnd := hCode.tail.head; rw [← hPC1] at hAnd
+    have hTy := hTS x; rw [hty] at hTy
+    obtain ⟨bv, hbv⟩ := Value.bool_of_typeOf_bool hTy
+    refine ⟨(s.setReg .x0 (s.stack off) |>.nextPC).setReg .x0 _ |>.nextPC,
+      (ArmSteps.single (.ldr .x0 off hLdr)).trans (ArmSteps.single (.andImm .x0 .x0 1 hAnd)),
+      ?_, ?_, ?_, ?_⟩
+    · simp [ArmState.setReg, ArmState.nextPC, hRel x off hoff, hbv, BoolExpr.eval,
+            Value.toBool, Value.encode]; cases bv <;> simp
+    · intro v off' hv; simp [ArmState.setReg, ArmState.nextPC]
+    · simp [ArmState.setReg, ArmState.nextPC, hPC, formalGenBoolExpr, hoff]
+    · simp [ArmState.setReg, ArmState.nextPC]
+  | not hbe =>
+    rename_i e
+    simp only [formalGenBoolExpr] at hCode
+    have hSimpleE : e.hasSimpleOps = true := by
+      simp [BoolExpr.hasSimpleOps] at hSimple; exact hSimple
+    obtain ⟨s1, hSteps1, hX0_1, hStack1, hPC1, hAM1⟩ :=
+      genBoolExpr_correct prog vm e σ s startPC hRel hScratch hCode.append_left hPC hVarMap
+        Γ hTS hbe hSimpleE am
+    have hEor := hCode.append_right.head; rw [← hPC1] at hEor
+    refine ⟨s1.setReg .x0 (s1.regs .x0 ^^^ 1) |>.nextPC,
+      hSteps1.trans (ArmSteps.single (.eorImm .x0 .x0 1 hEor)), ?_, ?_, ?_, ?_⟩
+    · simp [ArmState.setReg, ArmState.nextPC, hX0_1, BoolExpr.eval]
+      cases h : e.eval σ am <;> simp [h] <;> decide
+    · intro v off hv; simp [ArmState.setReg, ArmState.nextPC]; exact hStack1 v off hv
+    · simp [ArmState.setReg, ArmState.nextPC, hPC1, formalGenBoolExpr]; omega
+    · simp [ArmState.setReg, ArmState.nextPC, hAM1]
+  | cmp ha hb => exact sorry
+  | fcmp ha hb => exact sorry
 /-- StateRel is preserved when store is updated at `x ↦ w` and stack at `off ↦ w.encode`,
     provided `vm.lookup x = some off` and the VarMap is injective. -/
 theorem StateRel.update {vm : VarMap} {σ : Store} {arm : ArmState}
@@ -977,7 +1023,7 @@ theorem genInstr_correct (prog : ArmProg) (vm : VarMap) (pcMap : Nat → Nat)
       cases hwti with | boolop _ hbe => exact hbe
     obtain ⟨s1, hSteps1, hx0, hStack1, hPC1, hAM1⟩ :=
       genBoolExpr_correct prog vm be σ s (pcMap pc) hStateRel hScratch hCodeBE hPcRel hVarMap
-        p.tyCtx hTS hWTbe am
+        p.tyCtx hTS hWTbe sorry am
     -- Then str x0, [sp, #offD]
     have hStr := hCodeStr.head; rw [← hPC1] at hStr
     refine ⟨s1.setStack offD (s1.regs .x0) |>.nextPC,
@@ -1018,7 +1064,7 @@ theorem genInstr_correct (prog : ArmProg) (vm : VarMap) (pcMap : Nat → Nat)
     have hCodeCbnz := hCodeInstr.append_right
     obtain ⟨s1, hSteps1, hx0, hStack1, hPC1, hAM1⟩ :=
       genBoolExpr_correct prog vm _ σ s (pcMap pc) hStateRel hScratch hCodeBE hPcRel hVarMap
-        p.tyCtx hTS hWTbe am
+        p.tyCtx hTS hWTbe sorry am
     have hCbnz := hCodeCbnz.head; rw [← hPC1] at hCbnz
     have hx0_ne : s1.regs .x0 ≠ 0 := by rw [hx0, hcond]; simp
     exact ⟨{ s1 with pc := pcMap _ },
@@ -1038,7 +1084,7 @@ theorem genInstr_correct (prog : ArmProg) (vm : VarMap) (pcMap : Nat → Nat)
     have hCodeCbnz := hCodeInstr.append_right
     obtain ⟨s1, hSteps1, hx0, hStack1, hPC1, hAM1⟩ :=
       genBoolExpr_correct prog vm _ σ s (pcMap pc) hStateRel hScratch hCodeBE hPcRel hVarMap
-        p.tyCtx hTS hWTbe am
+        p.tyCtx hTS hWTbe sorry am
     have hCbnz := hCodeCbnz.head; rw [← hPC1] at hCbnz
     have hx0_eq : s1.regs .x0 = 0 := by rw [hx0]; simp [hcond]
     refine ⟨s1.nextPC,
@@ -1987,6 +2033,7 @@ theorem verifiedGenBoolExpr_correct (prog : ArmProg) (layout : VarLayout)
     (hWTBE : WellTypedBoolExpr Γ be)
     (hWTL : WellTypedLayout Γ layout)
     (hMapped : ∀ v, v ∈ be.vars → layout v ≠ none)
+    (hSimple : be.hasSimpleOps = true)
     (am : ArrayMem) :
     ∃ s', ArmSteps prog s s' ∧
       s'.regs .x0 = (if be.eval σ am then (1 : BitVec 64) else 0) ∧
@@ -3154,10 +3201,14 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
     rename_i x be
     have heq : instr = .boolop x be := Option.some.inj (hInstr.symm.trans hinstr)
     rw [heq] at hSome
+    have hSimpleBE : be.hasSimpleOps = true := by
+      cases hb : be.hasSimpleOps with
+      | true => rfl
+      | false => simp [verifiedGenInstr, hSS, hII, hb] at hSome
     have hNotFregX : ∀ r, layout x ≠ some (.freg r) := by
-      intro r h; have := hSome; simp [verifiedGenInstr, hSS, hII, h] at this
+      intro r h; have := hSome; simp [verifiedGenInstr, hSS, hII, hSimpleBE, h] at this
     have hInstrs : instrs = verifiedGenBoolExpr layout be ++ vStoreVar layout x .x0 := by
-      have := hSome; simp [verifiedGenInstr, hSS, hII] at this; exact this.symm
+      have := hSome; simp [verifiedGenInstr, hSS, hII, hSimpleBE] at this; exact this.symm
     rw [hInstrs] at hCodeInstr hPcNext
     have hCodeBE := hCodeInstr.append_left
     have hCodeStore := hCodeInstr.append_right
@@ -3170,7 +3221,7 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
     obtain ⟨s1, hSteps1, hX0_1, hRel1, hPC1, hAM1⟩ :=
       verifiedGenBoolExpr_correct prog layout be σ s (pcMap pc) hStateRel hScratch hCodeBE
         hPcRel p.tyCtx hTS hWTbe hWTL
-        (fun v hv => hMapped v (by simp [heq, TAC.vars]; exact Or.inr hv)) am
+        (fun v hv => hMapped v (by simp [heq, TAC.vars]; exact Or.inr hv)) hSimpleBE am
     -- vStoreVar x from x0
     have hX0_val : s1.regs .x0 = (Value.bool (be.eval σ am)).encode := by
       rw [hX0_1]; simp [Value.encode]
@@ -3191,15 +3242,19 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
       have heq_i := Prog.getElem?_eq_getElem hPC_bound
       rw [hinstr] at heq_i; rw [← Option.some.inj heq_i] at hwti
       cases hwti with | ifgoto hbe => exact hbe
+    have hSimpleBV : be_var.hasSimpleOps = true := by
+      cases hb : be_var.hasSimpleOps with
+      | true => rfl
+      | false => simp [verifiedGenInstr, hSS, hII, hb] at hSome
     have hInstrs : instrs = verifiedGenBoolExpr layout be_var ++ [.cbnz .x0 (pcMap l_var)] := by
-      have := hSome; simp [verifiedGenInstr, hSS, hII] at this; exact this.symm
+      have := hSome; simp [verifiedGenInstr, hSS, hII, hSimpleBV] at this; exact this.symm
     rw [hInstrs] at hCodeInstr hPcNext
     have hCodeBE := hCodeInstr.append_left
     have hCodeCbnz := hCodeInstr.append_right
     obtain ⟨s1, hSteps1, hX0_1, hRel1, hPC1, hAM1⟩ :=
       verifiedGenBoolExpr_correct prog layout be_var σ s (pcMap pc) hStateRel hScratch hCodeBE
         hPcRel p.tyCtx hTS hWTbe hWTL
-        (fun v hv => hMapped v (by simp [heq, TAC.vars]; exact hv)) am
+        (fun v hv => hMapped v (by simp [heq, TAC.vars]; exact hv)) hSimpleBV am
     have hCbnz := hCodeCbnz.head; rw [← hPC1] at hCbnz
     have hx0_ne : s1.regs .x0 ≠ 0 := by rw [hX0_1, hcond]; simp
     exact ⟨{ s1 with pc := pcMap l_var },
@@ -3214,15 +3269,19 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
       have heq_i := Prog.getElem?_eq_getElem hPC_bound
       rw [hinstr] at heq_i; rw [← Option.some.inj heq_i] at hwti
       cases hwti with | ifgoto hbe => exact hbe
+    have hSimpleBV : be_var.hasSimpleOps = true := by
+      cases hb : be_var.hasSimpleOps with
+      | true => rfl
+      | false => simp [verifiedGenInstr, hSS, hII, hb] at hSome
     have hInstrs : instrs = verifiedGenBoolExpr layout be_var ++ [.cbnz .x0 (pcMap l_var)] := by
-      have := hSome; simp [verifiedGenInstr, hSS, hII] at this; exact this.symm
+      have := hSome; simp [verifiedGenInstr, hSS, hII, hSimpleBV] at this; exact this.symm
     rw [hInstrs] at hCodeInstr hPcNext
     have hCodeBE := hCodeInstr.append_left
     have hCodeCbnz := hCodeInstr.append_right
     obtain ⟨s1, hSteps1, hX0_1, hRel1, hPC1, hAM1⟩ :=
       verifiedGenBoolExpr_correct prog layout be_var σ s (pcMap pc) hStateRel hScratch hCodeBE
         hPcRel p.tyCtx hTS hWTbe hWTL
-        (fun v hv => hMapped v (by simp [heq, TAC.vars]; exact hv)) am
+        (fun v hv => hMapped v (by simp [heq, TAC.vars]; exact hv)) hSimpleBV am
     have hCbnz := hCodeCbnz.head; rw [← hPC1] at hCbnz
     have hx0_eq : s1.regs .x0 = 0 := by rw [hX0_1]; simp [hcond]
     refine ⟨s1.nextPC,

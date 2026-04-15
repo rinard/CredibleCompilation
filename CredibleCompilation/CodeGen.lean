@@ -924,8 +924,9 @@ private theorem verifiedGenInstr_length_pcMap_indep {layout : VarLayout}
     simp [verifiedGenInstr] at h₁ h₂
     obtain ⟨_, h₁⟩ := h₁; obtain ⟨_, h₂⟩ := h₂; subst h₁; subst h₂; rfl
   | ifgoto be l =>
-    simp [verifiedGenInstr] at h₁ h₂
-    obtain ⟨_, h₁⟩ := h₁; obtain ⟨_, h₂⟩ := h₂; subst h₁; subst h₂; simp
+    simp only [verifiedGenInstr] at h₁ h₂
+    split at h₁ <;> simp_all
+    obtain ⟨_, rfl⟩ := h₁; obtain ⟨_, rfl⟩ := h₂; simp
   | const _ val =>
     have : some l₁ = some l₂ := by rw [← h₁, ← h₂]; cases val <;> simp [verifiedGenInstr]
     exact congrArg _ (Option.some.inj this)
