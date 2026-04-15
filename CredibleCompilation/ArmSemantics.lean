@@ -171,6 +171,16 @@ inductive ArmStep (prog : ArmProg) : ArmState → ArmState → Prop where
     prog[s.pc]? = some (.fdivR fd fn fm) →
     ArmStep prog s (s.setFReg fd (FloatBinOp.eval .fdiv (s.fregs fn) (s.fregs fm)) |>.nextPC)
 
+  /-- `fmadd Dd, Dn, Dm, Da` — Dd ← Da + Dn × Dm (option 3: two-rounding model). -/
+  | fmaddR (fd fn fm fa : ArmFReg) :
+    prog[s.pc]? = some (.fmaddR fd fn fm fa) →
+    ArmStep prog s (s.setFReg fd (FloatBinOp.eval .fadd (s.fregs fa) (FloatBinOp.eval .fmul (s.fregs fn) (s.fregs fm))) |>.nextPC)
+
+  /-- `fmsub Dd, Dn, Dm, Da` — Dd ← Da - Dn × Dm (option 3: two-rounding model). -/
+  | fmsubR (fd fn fm fa : ArmFReg) :
+    prog[s.pc]? = some (.fmsubR fd fn fm fa) →
+    ArmStep prog s (s.setFReg fd (FloatBinOp.eval .fsub (s.fregs fa) (FloatBinOp.eval .fmul (s.fregs fn) (s.fregs fm))) |>.nextPC)
+
   | fcmpRR (fn fm : ArmFReg) :
     prog[s.pc]? = some (.fcmpR fn fm) →
     ArmStep prog s ({ s with flags := Flags.mk (s.fregs fn) (s.fregs fm), pc := s.pc + 1 })

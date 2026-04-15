@@ -237,6 +237,13 @@ inductive ArmInstr where
   | fmulR    : ArmFReg → ArmFReg → ArmFReg → ArmInstr
   /-- `fdiv Dd, Dn, Dm` — FP division. -/
   | fdivR    : ArmFReg → ArmFReg → ArmFReg → ArmInstr
+  /-- `fmadd Dd, Dn, Dm, Da` — FP fused multiply-add: Dd ← Da + Dn × Dm.
+      Modeled as round(Da + round(Dn × Dm)) (two roundings), which is a safe
+      under-approximation of the real single-rounding hardware semantics. -/
+  | fmaddR   : ArmFReg → ArmFReg → ArmFReg → ArmFReg → ArmInstr
+  /-- `fmsub Dd, Dn, Dm, Da` — FP fused multiply-subtract: Dd ← Da - Dn × Dm.
+      Modeled as round(Da - round(Dn × Dm)) (two roundings). -/
+  | fmsubR   : ArmFReg → ArmFReg → ArmFReg → ArmFReg → ArmInstr
   /-- `fminnm Dd, Dn, Dm` — FP minimum (IEEE 754-2008). -/
   | fminR    : ArmFReg → ArmFReg → ArmFReg → ArmInstr
   /-- `fmaxnm Dd, Dn, Dm` — FP maximum (IEEE 754-2008). -/

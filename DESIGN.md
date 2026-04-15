@@ -45,3 +45,5 @@ Record of key design decisions for CredibleCompilation.
 20) Standard C operations like bitwise and arithmetic operations can be handled in a uniform way by abstracting specific operation cases. Similarly for floating point intrinsics like exp, sqrt, sin, cos, ...
 
 21) Generated code sometimes calls procedures like exp() and sqrt(). Codegen needs to save caller save registers around call. 
+
+22) fmadd different rounding than fadd fmul. ignore in semantics - just say has same semantics

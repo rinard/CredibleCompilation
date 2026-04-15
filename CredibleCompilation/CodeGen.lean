@@ -227,6 +227,10 @@ private def ppInstr (lbl : Nat → String) (afterFcmp : Bool)
     [s!"  fmul {ppFReg fd}, {ppFReg fn}, {ppFReg fm}"]
   | .fdivR fd fn fm =>
     [s!"  fdiv {ppFReg fd}, {ppFReg fn}, {ppFReg fm}"]
+  | .fmaddR fd fn fm fa =>
+    [s!"  fmadd {ppFReg fd}, {ppFReg fn}, {ppFReg fm}, {ppFReg fa}"]
+  | .fmsubR fd fn fm fa =>
+    [s!"  fmsub {ppFReg fd}, {ppFReg fn}, {ppFReg fm}, {ppFReg fa}"]
   | .fminR fd fn fm =>
     [s!"  fminnm {ppFReg fd}, {ppFReg fn}, {ppFReg fm}"]
   | .fmaxR fd fn fm =>
@@ -883,6 +887,32 @@ private theorem body_foldl_spec {code : Array TAC} {layout : VarLayout} {pcMap :
             simp [Array.getElem_push, hIdx]
             rw [← hGetD]; exact hMidNew k hkLt (by omega)
 
+/-- `verifiedGenInstr` output length is independent of pcMap.
+    For goto/ifgoto, pcMap changes values but not list length.
+    For all other instructions, pcMap is unused so `simp` normalizes to identical terms. -/
+private theorem verifiedGenInstr_length_pcMap_indep {layout : VarLayout}
+    {pcMap₁ pcMap₂ : Nat → Nat} {instr : TAC}
+    {haltS divS boundsS : Nat} {arrayDecls : List (ArrayName × Nat × VarTy)}
+    {safe : Bool} {l₁ l₂ : List ArmInstr}
+    (h₁ : verifiedGenInstr layout pcMap₁ instr haltS divS boundsS arrayDecls safe = some l₁)
+    (h₂ : verifiedGenInstr layout pcMap₂ instr haltS divS boundsS arrayDecls safe = some l₂) :
+    l₁.length = l₂.length := by
+  cases instr with
+  | goto l =>
+    simp [verifiedGenInstr] at h₁ h₂
+    obtain ⟨_, h₁⟩ := h₁; obtain ⟨_, h₂⟩ := h₂; subst h₁; subst h₂; rfl
+  | ifgoto be l =>
+    simp [verifiedGenInstr] at h₁ h₂
+    obtain ⟨_, h₁⟩ := h₁; obtain ⟨_, h₂⟩ := h₂; subst h₁; subst h₂; simp
+  | const _ val =>
+    have : some l₁ = some l₂ := by rw [← h₁, ← h₂]; cases val <;> simp [verifiedGenInstr]
+    exact congrArg _ (Option.some.inj this)
+  | copy _ _ | binop _ _ _ _ | boolop _ _ | halt
+  | arrLoad _ _ _ _ | arrStore _ _ _ _ | fbinop _ _ _ _
+  | intToFloat _ _ | floatToInt _ _ | floatUnary _ _ _ =>
+    have : some l₁ = some l₂ := by rw [← h₁, ← h₂]; simp [verifiedGenInstr]
+    exact congrArg _ (Option.some.inj this)
+
 /-- instrLength equals the length of the generated instruction list (including
     save/restore wrapping at call sites). -/
 private theorem instrLength_eq_length {layout : VarLayout} {pcMap : Nat → Nat} {instr : TAC}
@@ -895,7 +925,38 @@ private theorem instrLength_eq_length {layout : VarLayout} {pcMap : Nat → Nat}
         let (saves, restores) := genCallSaveRestore liveVars layout varMap
         (saves ++ instrs ++ restores).length
       else instrs.length) := by
-  sorry -- TODO: update for call-site save/restore
+  simp only [instrLength]
+  -- baseLen uses pcMap = (fun _ => 0); show the zero-pcMap version also returns some
+  -- with the same length as instrs
+  suffices hBase : ∃ l, verifiedGenInstr layout (fun _ => 0) instr haltS divS boundsS arrayDecls safe = some l ∧
+      l.length = instrs.length by
+    obtain ⟨l, hl, hlen⟩ := hBase
+    simp only [instrLength, hl]
+    split
+    · -- isLibCallTAC = true
+      simp only [callSaveRestoreLen, hlen, List.length_append,
+        Nat.add_assoc, Nat.add_comm, Nat.add_left_comm]
+    · -- isLibCallTAC = false
+      exact hlen
+  cases instr with
+  | goto l =>
+    -- Both pcMaps produce [.b _], length 1
+    exact ⟨[.b 0], by simp [verifiedGenInstr] at h ⊢; exact h.1,
+      by simp [verifiedGenInstr] at h; obtain ⟨_, h⟩ := h; subst h; rfl⟩
+  | ifgoto be l =>
+    exact ⟨verifiedGenBoolExpr layout be ++ [.cbnz .x0 0], by simp [verifiedGenInstr] at h ⊢; exact h.1,
+      by simp [verifiedGenInstr] at h; obtain ⟨_, h⟩ := h; subst h; simp⟩
+  | const v val =>
+    have : verifiedGenInstr layout pcMap (.const v val) haltS divS boundsS arrayDecls safe =
+           verifiedGenInstr layout (fun _ => 0) (.const v val) haltS divS boundsS arrayDecls safe := by
+      cases val <;> simp [verifiedGenInstr]
+    rw [this] at h; exact ⟨_, h, rfl⟩
+  | copy _ _ | binop _ _ _ _ | boolop _ _ | halt
+  | arrLoad _ _ _ _ | arrStore _ _ _ _ | fbinop _ _ _ _
+  | intToFloat _ _ | floatToInt _ _ | floatUnary _ _ _ =>
+    -- pcMap unused: both pcMaps give the same result
+    refine ⟨instrs, ?_, rfl⟩
+    rw [← h]; simp [verifiedGenInstr]
 
 
 /-- A successful `verifiedGenerateAsm` call satisfies `GenAsmSpec`. -/
