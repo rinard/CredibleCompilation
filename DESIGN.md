@@ -46,7 +46,9 @@ Record of key design decisions for CredibleCompilation.
 
 21) Generated code sometimes calls procedures like exp() and sqrt(). Codegen needs to save caller save registers around call. 
 
-22) fmadd different rounding than fadd fmul. ignore in semantics - just say has same semantics
+22) fmadd different rounding than fadd fmul. ignore in semantics - just say has same semantics. Also adding axioms about IEEE floating point numbers, specifically comparisons, etc. This is to avoid having to prove theorems about IEEE floating point because compiler treats them as opaque. 
+
+23) Certificate checkers do exhibit success for some programs and failures for others. Often cascading failures as ramp up the optimizations and more general expressions make it into the optimizations. These are typically handled via Claude Code, which automatically prints the certificate, traces the failure to a specific node, and immediately spots and corrects the certificate/reasoning error. Most of the time the reasoning is not general enough. 
 
 23) implementation of fmadd detail:
   Starting situation: fmadd in ARM semantics and TAC operation (added in less than two hours to existing infrastructure)
@@ -229,4 +231,4 @@ No new sorrys expected.
 
 Want me to implement it?
 
-  p) Plan implemented at 2:35
+  p) Plan implemented, built, and tested at 2:50
