@@ -63,26 +63,6 @@ def main (args : List String) : IO UInt32 := do
       IO.println s!"\n=== Verbose Check ==="
       for (name, result) in checkCertificateVerboseExec cert do
         IO.println s!"  {name}: {if result then "ok" else "FAIL"}"
-      -- Dump failing checks
-      IO.println s!"\n=== Bounds Preservation Detail ==="
-      for pc_t in List.range cert.trans.size do
-        let ic := cert.instrCerts.getD pc_t default
-        match cert.trans[pc_t]? with
-        | some (.arrLoad x arr idx ty) =>
-          match cert.orig[ic.pc_orig]? with
-          | some (.arrLoad x' arr' idx' ty') =>
-            let ok := arr == arr' && relFindOrigVar ic.rel idx == some idx'
-            if !ok then
-              IO.println s!"  FAIL arrLoad pc_t={pc_t} pc_o={ic.pc_orig}: arr={arr}={arr'} idx={idx} idx'={idx'} relFindOrigVar={relFindOrigVar ic.rel idx}"
-          | other => IO.println s!"  FAIL arrLoad pc_t={pc_t} pc_o={ic.pc_orig}: orig={repr other}"
-        | some (.arrStore arr idx val ty) =>
-          match cert.orig[ic.pc_orig]? with
-          | some (.arrStore arr' idx' val' ty') =>
-            let ok := arr == arr' && relFindOrigVar ic.rel idx == some idx'
-            if !ok then
-              IO.println s!"  FAIL arrStore pc_t={pc_t} pc_o={ic.pc_orig}: arr={arr}={arr'} idx={idx} idx'={idx'} relFindOrigVar={relFindOrigVar ic.rel idx}"
-          | other => IO.println s!"  FAIL arrStore pc_t={pc_t} pc_o={ic.pc_orig}: orig={repr other}"
-        | _ => pure ()
       return 0
   | _ =>
     IO.eprintln "Usage: compiler <file.w>          -- print assembly to stdout"

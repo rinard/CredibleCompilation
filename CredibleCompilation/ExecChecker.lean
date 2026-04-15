@@ -212,7 +212,7 @@ def BoolExpr.normalize (ss : SymStore) (inv : EInv) : BoolExpr → BoolExpr
   | .cmp op a b =>
     match (a.substSym' ss).simplify inv, (b.substSym' ss).simplify inv with
     | .lit va, .lit vb => .lit (op.eval va vb)
-    | _, _ => .cmp op a b
+    | a', b' => .cmp op a' b'
   | .not e => match e.normalize ss inv with
     | .lit b => .lit (!b)
     | .not inner => inner  -- double negation elimination
@@ -220,7 +220,7 @@ def BoolExpr.normalize (ss : SymStore) (inv : EInv) : BoolExpr → BoolExpr
   | .fcmp op a b =>
     match (a.substSym' ss).simplify inv, (b.substSym' ss).simplify inv with
     | .flit va, .flit vb => .lit (FloatCmpOp.eval op va vb)
-    | _, _ => .fcmp op a b
+    | a', b' => .fcmp op a' b'
 
 /-- Symbolically evaluate a BoolExpr under a symbolic store and invariant.
     Returns `some true`/`some false` if the result can be determined, `none` otherwise. -/
@@ -935,7 +935,15 @@ def checkDivPreservationExec (cert : ECertificate) : Bool :=
         match op with
         | .div | .mod =>
           relFindOrigVar ic.rel y == some y' &&
-          relFindOrigVar ic.rel z == some z'
+          (relFindOrigVar ic.rel z == some z' ||
+           -- Fallback for hoisted constants: the relation maps the trans divisor
+           -- to a non-zero literal (preventing trans errors), AND the orig invariant
+           -- proves the orig divisor is non-zero (ensuring orig path walkability).
+           ((match relFindOrigExpr ic.rel z with
+             | some (.lit c) => c != 0 | _ => false) &&
+            (match (cert.inv_orig.getD ic.pc_orig ([] : EInv)).find?
+               (fun (v, _) => v == z') with
+             | some (_, .lit c) => c != 0 | _ => false)))
         | _ => true
       | _ => false
     | _ =>

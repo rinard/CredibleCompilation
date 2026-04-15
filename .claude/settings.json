@@ -108,7 +108,8 @@
       "Bash(grep -rc \"sorry\" CredibleCompilation/*.lean CredibleCompilation/**/*.lean)",
       "Bash(tee /tmp/build2.txt)",
       "Bash(find /Users/mr/CredibleCompilation -name \"*.lean\" -exec grep -l \"def verifiedGenInstr\" {} \\\\;)",
-      "Bash(grep -rn \"floatSqrt\" /Users/mr/CredibleCompilation/CredibleCompilation/*.lean)"
+      "Bash(grep -rn \"floatSqrt\" /Users/mr/CredibleCompilation/CredibleCompilation/*.lean)",
+      "Bash(ls benchmarks/livermore/*.w)"
     ],
     "additionalDirectories": [
       "/Users/mr/CredibleCompilation/tests/programs"

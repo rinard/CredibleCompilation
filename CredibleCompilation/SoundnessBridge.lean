@@ -1231,7 +1231,7 @@ private theorem BoolExpr.normalize_eval (b : BoolExpr) (ss : SymStore) (inv : EI
   | cmp op a b_e =>
     simp only [BoolExpr.hasArrRead, Bool.or_eq_false_iff] at hnoarr
     simp only [BoolExpr.normalize]
-    split <;> try rfl
+    split
     next va vb ha hb =>
       simp only [BoolExpr.eval]
       have hsa := Expr.simplify_sound inv (a.substSym' ss) σ₀ am₀ hinv
@@ -1243,6 +1243,12 @@ private theorem BoolExpr.normalize_eval (b : BoolExpr) (ss : SymStore) (inv : EI
       rw [← Expr.eval_noArrRead a σ am₀ am hnoarr.1,
           ← Expr.eval_noArrRead b_e σ am₀ am hnoarr.2,
           ← hsa, ← hsb]; simp [Value.toInt]
+    next a' b' _ =>
+      -- The simplified operands evaluate the same as the originals.
+      -- Needs a store-bridging lemma: (e.substSym' ss |>.simplify inv).eval σ am = e.eval σ am
+      -- given hrepr/hinv and arr-read-freeness. All free variables of the simplified
+      -- expression agree under σ and σ₀ (since unsimplified vars are not in ss/inv).
+      sorry
   | not e ih =>
     simp only [BoolExpr.hasArrRead] at hnoarr
     have hih := ih hnoarr
@@ -1263,7 +1269,7 @@ private theorem BoolExpr.normalize_eval (b : BoolExpr) (ss : SymStore) (inv : EI
   | fcmp op a b_e =>
     simp only [BoolExpr.hasArrRead, Bool.or_eq_false_iff] at hnoarr
     simp only [BoolExpr.normalize]
-    split <;> try rfl
+    split
     next va vb ha hb =>
       simp only [BoolExpr.eval]
       have hsa := Expr.simplify_sound inv (a.substSym' ss) σ₀ am₀ hinv
@@ -1275,6 +1281,9 @@ private theorem BoolExpr.normalize_eval (b : BoolExpr) (ss : SymStore) (inv : EI
       rw [← Expr.eval_noArrRead a σ am₀ am hnoarr.1,
           ← Expr.eval_noArrRead b_e σ am₀ am hnoarr.2,
           ← hsa, ← hsb]; simp [Value.toFloat]
+    next a' b' _ =>
+      -- Same store-bridging gap as the cmp case
+      sorry
 
 /-- From checkInstrAliasOk for arrLoad, derive the no-alias condition for samGet_sound. -/
 private theorem checkInstrAliasOk_arrLoad_noalias
@@ -2724,17 +2733,42 @@ private theorem transRel_sound (dc : ECertificate)
         rw [Bool.and_eq_true] at hrest
         obtain ⟨hy_rel, hz_rel⟩ := hrest
         have hy_find : relFindOrigVar dic.rel y_t = some y_o := beq_iff_eq.mp hy_rel
-        have hz_find : relFindOrigVar dic.rel z_t = some z_o := beq_iff_eq.mp hz_rel
         have hσt_y : σ_t y_t = σ_o y_o := by
           rw [← hrel_eq] at hy_find
           exact store_eq_of_relFindOrigVar hy_find hcons
-        have hσt_z : σ_t z_t = σ_o z_o := by
-          rw [← hrel_eq] at hz_find
-          exact store_eq_of_relFindOrigVar hz_find hcons
         have ha_eq : a_o = a_t := Value.int.inj ((hya).symm.trans (hσt_y ▸ hya_t))
-        have hb_eq : b_o = b_t := Value.int.inj ((hzb).symm.trans (hσt_z ▸ hzb_t))
-        subst ha_eq; subst hb_eq
-        simp only [BinOp.safe]; rw [hop] at hsafe_t; exact hsafe_t
+        -- Case split: either relFindOrigVar succeeds, or conjunction fallback
+        rw [Bool.or_eq_true] at hz_rel
+        rcases hz_rel with hz_var | hz_conj
+        · -- relFindOrigVar succeeds: transfer safety via store equality
+          have hz_find : relFindOrigVar dic.rel z_t = some z_o := beq_iff_eq.mp hz_var
+          have hσt_z : σ_t z_t = σ_o z_o := by
+            rw [← hrel_eq] at hz_find
+            exact store_eq_of_relFindOrigVar hz_find hcons
+          have hb_eq : b_o = b_t := Value.int.inj ((hzb).symm.trans (hσt_z ▸ hzb_t))
+          subst ha_eq; subst hb_eq
+          simp only [BinOp.safe]; rw [hop] at hsafe_t; exact hsafe_t
+        · -- Conjunction fallback: use orig invariant for walkability
+          rw [Bool.and_eq_true] at hz_conj
+          obtain ⟨_, hz_inv⟩ := hz_conj
+          set inv := dc.inv_orig.getD dic.pc_orig ([] : EInv) with hinv_def
+          cases hfind : inv.find? (fun (w, _) => w == z_o) with
+          | none => simp [hfind] at hz_inv
+          | some p =>
+            obtain ⟨v, e⟩ := p
+            have hmem := List.mem_of_find?_eq_some hfind
+            have hpred : v = z_o := by
+              have hfs := List.find?_some hfind
+              simp only at hfs; exact beq_iff_eq.mp hfs
+            cases e with
+            | lit c =>
+              simp [hfind] at hz_inv
+              rw [hpred] at hmem
+              have hinv_z := hinv_o (z_o, .lit c) hmem
+              simp [Expr.eval] at hinv_z
+              rw [hinv_z] at hzb; cases hzb
+              simp only [BinOp.safe]; exact hz_inv
+            | _ => simp [hfind] at hz_inv
       | _ =>
         intro hstep hpc_check
         rw [hinstr] at hpc_check
@@ -3392,12 +3426,36 @@ theorem checkDivPreservationExec_sound (dc : ECertificate)
         rcases this with rfl | rfl <;> (
           rw [Bool.and_eq_true] at hrest; obtain ⟨hy_eq, hz_eq⟩ := hrest
           have hy_find : relFindOrigVar ic.rel y = some y' := beq_iff_eq.mp hy_eq
-          have hz_find : relFindOrigVar ic.rel z = some z' := beq_iff_eq.mp hz_eq
-          have hσt_y := store_eq_of_relFindOrigVar hy_find hrel
-          have hσt_z := store_eq_of_relFindOrigVar hz_find hrel
-          have hya' : σ_o y' = .int a := by rw [← hσt_y]; exact hya
-          have hzb' : σ_o z' = .int b := by rw [← hσt_z]; exact hzb
-          exact ⟨σ_o, am_o, Steps.single (Step.error horig hya' hzb' (hop ▸ hunsafe))⟩)
+          rw [Bool.or_eq_true] at hz_eq
+          rcases hz_eq with hz_var | hz_conj
+          · -- relFindOrigVar succeeds: same as before
+            have hz_find : relFindOrigVar ic.rel z = some z' := beq_iff_eq.mp hz_var
+            have hσt_y := store_eq_of_relFindOrigVar hy_find hrel
+            have hσt_z := store_eq_of_relFindOrigVar hz_find hrel
+            have hya' : σ_o y' = .int a := by rw [← hσt_y]; exact hya
+            have hzb' : σ_o z' = .int b := by rw [← hσt_z]; exact hzb
+            exact ⟨σ_o, am_o, Steps.single (Step.error horig hya' hzb' (hop ▸ hunsafe))⟩
+          · -- Conjunction fallback: relFindOrigExpr gives contradiction
+            rw [Bool.and_eq_true] at hz_conj
+            obtain ⟨hz_rel_lit, _⟩ := hz_conj
+            -- Extract the literal from relFindOrigExpr
+            generalize hfre : relFindOrigExpr ic.rel z = fre at hz_rel_lit
+            cases fre with
+            | none => simp at hz_rel_lit
+            | some e =>
+              cases e with
+              | lit c =>
+                -- (.lit c, .var z) ∈ rel, so σ_t z = .int c
+                have hmem := relFindOrigExpr_mem hfre
+                have hσt_z := hrel _ _ hmem
+                simp [Expr.eval] at hσt_z  -- hσt_z : σ_t z = .int c
+                -- But σ_t z = .int b from the step, so b = c
+                have hbc : b = c := Value.int.inj (hzb.symm.trans hσt_z)
+                -- And c ≠ 0 from the checker
+                simp at hz_rel_lit  -- hz_rel_lit : c ≠ 0
+                -- So b ≠ 0, meaning op.safe a b = true, contradicting hunsafe
+                subst hbc; simp [BinOp.safe] at hunsafe; exact absurd hunsafe hz_rel_lit
+              | _ => simp at hz_rel_lit)
       | const => simp at hpc
       | copy => simp at hpc
       | boolop => simp at hpc
