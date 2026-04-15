@@ -98,16 +98,36 @@ def ssGet (ss : SymStore) (v : Var) : Expr :=
 def ssSet (ss : SymStore) (x : Var) (e : Expr) : SymStore :=
   (x, e) :: ss.filter (fun p => !(p.1 == x))
 
+/-- Substitute variables in an Expr using a SymStore. -/
+def Expr.substSym' (ss : SymStore) : Expr → Expr
+  | .lit n      => .lit n
+  | .blit b     => .blit b
+  | .var v      => ssGet ss v
+  | .bin op a b => .bin op (a.substSym' ss) (b.substSym' ss)
+  | .tobool e       => .tobool (e.substSym' ss)
+  | .cmpE op a b    => .cmpE op (a.substSym' ss) (b.substSym' ss)
+  | .cmpLitE op a n => .cmpLitE op (a.substSym' ss) n
+  | .notE e         => .notE (e.substSym' ss)
+  | .andE a b       => .andE (a.substSym' ss) (b.substSym' ss)
+  | .orE a b        => .orE (a.substSym' ss) (b.substSym' ss)
+  | .arrRead arr idx => .arrRead arr (idx.substSym' ss)
+  | .flit n          => .flit n
+  | .fbin op a b     => .fbin op (a.substSym' ss) (b.substSym' ss)
+  | .fcmpE op a b    => .fcmpE op (a.substSym' ss) (b.substSym' ss)
+  | .intToFloat e    => .intToFloat (e.substSym' ss)
+  | .floatToInt e    => .floatToInt (e.substSym' ss)
+  | .floatUnary op e  => .floatUnary op (e.substSym' ss)
+  | .ftern op a b c   => .ftern op (a.substSym' ss) (b.substSym' ss) (c.substSym' ss)
+  | .farrRead arr idx => .farrRead arr (idx.substSym' ss)
+
 /-- Convert a BoolExpr to a symbolic Expr by replacing each variable reference
     with its symbolic expression from the store. -/
 def BoolExpr.toSymExpr (ss : SymStore) : BoolExpr → Expr
-  | .lit b         => .blit b
-  | .bvar x        => .tobool (ssGet ss x)
-  | .cmp op x y    => .cmpE op (ssGet ss x) (ssGet ss y)
-  | .cmpLit op x n => .cmpLitE op (ssGet ss x) n
-  | .not e         => .notE (e.toSymExpr ss)
-  | .fcmp op x y      => .fcmpE op (ssGet ss x) (ssGet ss y)
-  | .fcmpLit op x n   => .fcmpE op (ssGet ss x) (.flit n)
+  | .lit b       => .blit b
+  | .bvar x      => .tobool (ssGet ss x)
+  | .cmp op a b  => .cmpE op (a.substSym' ss) (b.substSym' ss)
+  | .not e       => .notE (e.toSymExpr ss)
+  | .fcmp op a b => .fcmpE op (a.substSym' ss) (b.substSym' ss)
 
 /-- Symbolic array memory: tracks array writes as a list of (array, index, value) triples.
     Most recent writes are at the head. -/
@@ -182,45 +202,25 @@ def Expr.isNonZeroLit : Expr → Bool
   | .flit _ | .fbin _ _ _ | .fcmpE _ _ _ | .intToFloat _ | .floatToInt _ | .floatUnary _ _ | .ftern _ _ _ _ | .farrRead _ _ => false
 
 /-- Normalize a BoolExpr under a symbolic store and invariant: replace variables
-    with known literal values and canonicalize `cmp` to `cmpLit` when possible. -/
+    with known literal values, folding constant comparisons when possible. -/
 def BoolExpr.normalize (ss : SymStore) (inv : EInv) : BoolExpr → BoolExpr
   | .lit b => .lit b
   | .bvar x =>
     match (ssGet ss x).simplify inv with
     | .blit b => .lit b
     | _ => .bvar x
-  | .cmp op x y =>
-    match (ssGet ss x).simplify inv, (ssGet ss y).simplify inv with
-    | .lit a, .lit b => .lit (op.eval a b)
-    | _, .lit n => .cmpLit op x n
-    | .lit n, _ => match op with  -- left-literal: flip comparison
-      | .eq => .cmpLit .eq y n       -- n == y ↔ y == n
-      | .ne => .cmpLit .ne y n       -- n != y ↔ y != n
-      | .lt => .not (.cmpLit .le y n) -- n < y ↔ ¬(y ≤ n)
-      | .le => .not (.cmpLit .lt y n) -- n ≤ y ↔ ¬(y < n)
-    | _, _ => .cmp op x y
-  | .cmpLit op x n =>
-    match (ssGet ss x).simplify inv with
-    | .lit a => .lit (op.eval a n)
-    | _ => .cmpLit op x n
+  | .cmp op a b =>
+    match (a.substSym' ss).simplify inv, (b.substSym' ss).simplify inv with
+    | .lit va, .lit vb => .lit (op.eval va vb)
+    | _, _ => .cmp op a b
   | .not e => match e.normalize ss inv with
     | .lit b => .lit (!b)
     | .not inner => inner  -- double negation elimination
     | e' => .not e'
-  | .fcmp op x y =>
-    match (ssGet ss x).simplify inv, (ssGet ss y).simplify inv with
-    | .flit a, .flit b => .lit (FloatCmpOp.eval op a b)
-    | _, .flit n => .fcmpLit op x n
-    | .flit n, _ => match op with  -- left-flit: flip comparison
-      | .feq => .fcmpLit .feq y n       -- n == y ↔ y == n
-      | .fne => .fcmpLit .fne y n       -- n != y ↔ y != n
-      | .flt => .not (.fcmpLit .fle y n) -- n < y ↔ ¬(y ≤ n)
-      | .fle => .not (.fcmpLit .flt y n) -- n ≤ y ↔ ¬(y < n)
-    | _, _ => .fcmp op x y
-  | .fcmpLit op x n =>
-    match (ssGet ss x).simplify inv with
-    | .flit a => .lit (FloatCmpOp.eval op a n)
-    | _ => .fcmpLit op x n
+  | .fcmp op a b =>
+    match (a.substSym' ss).simplify inv, (b.substSym' ss).simplify inv with
+    | .flit va, .flit vb => .lit (FloatCmpOp.eval op va vb)
+    | _, _ => .fcmp op a b
 
 /-- Symbolically evaluate a BoolExpr under a symbolic store and invariant.
     Returns `some true`/`some false` if the result can be determined, `none` otherwise. -/
@@ -230,17 +230,12 @@ def BoolExpr.symEval (ss : SymStore) (inv : EInv) : BoolExpr → Option Bool
     match (ssGet ss x).simplify inv with
     | .blit b => some b
     | _ => none
-  | .cmp op x y =>
-    match (ssGet ss x).simplify inv, (ssGet ss y).simplify inv with
-    | .lit a, .lit b => some (op.eval a b)
+  | .cmp op a b =>
+    match (a.substSym' ss).simplify inv, (b.substSym' ss).simplify inv with
+    | .lit va, .lit vb => some (op.eval va vb)
     | _, _ => none
-  | .cmpLit op x n =>
-    match (ssGet ss x).simplify inv with
-    | .lit a => some (op.eval a n)
-    | _ => none
   | .not e => e.symEval ss inv |>.map (!·)
-  | .fcmp _op _x _y => none  -- FloatCmpOp.eval is opaque; fall back to branchInfo
-  | .fcmpLit _op _x _n => none  -- same
+  | .fcmp _op _a _b => none  -- FloatCmpOp.eval is opaque; fall back to branchInfo
 
 /-- Like `canReach`, but for `ifgoto` also verifies the branch direction
     via symbolic evaluation of the boolean condition under the invariant.
@@ -340,51 +335,6 @@ def relFindOrigExpr (rel : EExprRel) (v : Var) : Option Expr :=
   | some (e_o, _) => some e_o
   | _ => none
 
-/-- Map variables in a BoolExpr through the expression relation.
-    Resolves each variable to its original-side expression. For `(.var v', .var x)`
-    maps to the original variable. For `(lit c, .var x)` (e.g., hoisted constants)
-    folds the constant into the condition as `.cmpLit`. When the literal is on the
-    left of a comparison (`lit n cmp var y`), flips the comparison using
-    `.not (.cmpLit ...)` for lt/le (since we lack gt/ge operators). -/
-def BoolExpr.mapVarsRel (rel : EExprRel) : BoolExpr → Option BoolExpr
-  | .lit b => some (.lit b)
-  | .bvar x => do
-    let e ← relFindOrigExpr rel x
-    match e with | .var v => return .bvar v | _ => none
-  | .cmp op x y => do
-    let ex ← relFindOrigExpr rel x
-    let ey ← relFindOrigExpr rel y
-    match ex, ey with
-    | .var x', .var y' => return .cmp op x' y'
-    | .var x', .lit n  => return .cmpLit op x' n
-    | .lit n, .var y'  => match op with  -- hoisted constant on left: flip comparison
-      | .eq => return .cmpLit .eq y' n       -- n == y ↔ y == n
-      | .ne => return .cmpLit .ne y' n       -- n != y ↔ y != n
-      | .lt => return .not (.cmpLit .le y' n) -- n < y ↔ ¬(y ≤ n)
-      | .le => return .not (.cmpLit .lt y' n) -- n ≤ y ↔ ¬(y < n)
-    | _, _ => none
-  | .cmpLit op x n => do
-    let e ← relFindOrigExpr rel x
-    match e with | .var v => return .cmpLit op v n | _ => none
-  | .not e => e.mapVarsRel rel |>.map fun
-    | .not inner => inner  -- double negation elimination: ¬¬p = p
-    | e' => .not e'
-  | .fcmp op x y => do
-    let ex ← relFindOrigExpr rel x
-    let ey ← relFindOrigExpr rel y
-    match ex, ey with
-    | .var x', .var y'   => return .fcmp op x' y'
-    | .var x', .flit n   => return .fcmpLit op x' n
-    | .flit n, .var y'   => match op with  -- left-flit: flip comparison
-      | .feq => return .fcmpLit .feq y' n       -- n == y ↔ y == n
-      | .fne => return .fcmpLit .fne y' n       -- n != y ↔ y != n
-      | .flt => return .not (.fcmpLit .fle y' n) -- n < y ↔ ¬(y ≤ n)
-      | .fle => return .not (.fcmpLit .flt y' n) -- n ≤ y ↔ ¬(y < n)
-    | _, _ => none
-  | .fcmpLit op x n => do
-    let e ← relFindOrigExpr rel x
-    match e with | .var v => return .fcmpLit op v n | _ => none
-
 /-- Build a substitution map from pre-relation pairs of the form `(e_o, .var v)`.
     Maps transformed variable `v` to original expression `e_o`. -/
 def buildSubstMap (rel : EExprRel) : SymStore :=
@@ -392,6 +342,24 @@ def buildSubstMap (rel : EExprRel) : SymStore :=
     match e_t with
     | .var v => some (v, e_o)
     | _ => none
+
+/-- Map variables in a BoolExpr through the expression relation.
+    With Expr operands, just substitute vars in each operand via the relation.
+    No flip logic needed — literals on either side are just Expr.lit/Expr.flit. -/
+def BoolExpr.mapVarsRel (rel : EExprRel) : BoolExpr → Option BoolExpr
+  | .lit b => some (.lit b)
+  | .bvar x => do
+    let e ← relFindOrigExpr rel x
+    match e with | .var v => return .bvar v | _ => none
+  | .cmp op a b =>
+    let ss := buildSubstMap rel
+    some (.cmp op (a.substSym' ss) (b.substSym' ss))
+  | .not e => e.mapVarsRel rel |>.map fun
+    | .not inner => inner  -- double negation elimination: ¬¬p = p
+    | e' => .not e'
+  | .fcmp op a b =>
+    let ss := buildSubstMap rel
+    some (.fcmp op (a.substSym' ss) (b.substSym' ss))
 
 /-- An executable certificate: all data needed to verify the transformation.
     The type context and observable variables are derived from the original program. -/

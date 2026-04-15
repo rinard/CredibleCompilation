@@ -110,21 +110,21 @@ def transferInterval (m : IMap) (instr : TAC) : IMap :=
 partial def refineCondition (m : IMap) (be : BoolExpr) (isTrue : Bool) : IMap :=
   match be with
   | .not inner => refineCondition m inner (!isTrue)
-  | .cmpLit .lt x n =>
+  | .cmp .lt (.var x) (.lit n) =>
     let iv := imLookup m x
     if isTrue then imSet m x ⟨iv.lo, min iv.hi n.toInt⟩
     else imSet m x ⟨max iv.lo n.toInt, iv.hi⟩
-  | .cmp .lt x bound =>
+  | .cmp .lt (.var x) (.var bound) =>
     let biv := imLookup m bound; let iv := imLookup m x
     if biv.lo + 1 == biv.hi then
       if isTrue then imSet m x ⟨iv.lo, min iv.hi biv.lo⟩
       else imSet m x ⟨max iv.lo biv.lo, iv.hi⟩
     else m
-  | .cmpLit .le x n =>
+  | .cmp .le (.var x) (.lit n) =>
     let iv := imLookup m x
     if isTrue then imSet m x ⟨iv.lo, min iv.hi (n.toInt + 1)⟩
     else imSet m x ⟨max iv.lo (n.toInt + 1), iv.hi⟩
-  | .cmp .le x bound =>
+  | .cmp .le (.var x) (.var bound) =>
     let biv := imLookup m bound; let iv := imLookup m x
     if biv.lo + 1 == biv.hi then
       if isTrue then imSet m x ⟨iv.lo, min iv.hi (biv.lo + 1)⟩

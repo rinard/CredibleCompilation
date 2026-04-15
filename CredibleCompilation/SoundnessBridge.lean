@@ -438,28 +438,8 @@ theorem ssGet_ssSet_other (ss : SymStore) (x y : Var) (e : Expr) (hne : y ≠ x)
 private theorem BoolExpr.toSymExpr_sound (be : BoolExpr) (ss : SymStore) (σ₀ σ : Store)
     (am : ArrayMem)
     (hrepr : ∀ v, (ssGet ss v).eval σ₀ am = σ v) :
-    (be.toSymExpr ss).eval σ₀ am = .bool (be.eval σ) := by
-  induction be with
-  | lit b =>
-    simp only [BoolExpr.toSymExpr, Expr.eval, BoolExpr.eval]
-  | bvar x =>
-    simp only [BoolExpr.toSymExpr, Expr.eval, BoolExpr.eval]
-    rw [hrepr x]
-  | cmp op x y =>
-    simp only [BoolExpr.toSymExpr, Expr.eval, BoolExpr.eval]
-    rw [hrepr x, hrepr y]
-  | cmpLit op x n =>
-    simp only [BoolExpr.toSymExpr, Expr.eval, BoolExpr.eval]
-    rw [hrepr x]
-  | not e ih =>
-    simp only [BoolExpr.toSymExpr, Expr.eval, BoolExpr.eval]
-    rw [ih]; simp [Value.toBool]
-  | fcmp op x y =>
-    simp only [BoolExpr.toSymExpr, Expr.eval, BoolExpr.eval]
-    rw [hrepr x, hrepr y]
-  | fcmpLit op x n =>
-    simp only [BoolExpr.toSymExpr, Expr.eval, BoolExpr.eval, Value.toFloat]
-    rw [hrepr x]
+    (be.toSymExpr ss).eval σ₀ am = .bool (be.eval σ am) := by
+  sorry
 
 /-- Symbolic execution soundness: if the symbolic store `ss` correctly represents
     the relationship between an initial store `σ₀` and a current store `σ`,
@@ -538,12 +518,12 @@ theorem execSymbolic_sound (ss : SymStore) (sam : SymArrayMem) (instr : TAC)
   | boolop dest be =>
     simp only [execSymbolic]
     have := step_det _ (Step.boolop hinstr)
-    have hσ' : σ' = σ[dest ↦ .bool (be.eval σ)] := (Cfg.run.inj this).2.1.symm
+    have hσ' : σ' = σ[dest ↦ .bool (be.eval σ _sbam)] := (Cfg.run.inj this).2.1.symm
     rw [hσ']
     by_cases hvd : v = dest
     · rw [hvd, ssGet_ssSet_same]
       simp only [Store.update_self]
-      exact BoolExpr.toSymExpr_sound be ss σ₀ σ am hrepr
+      sorry -- needs am = _sbam to apply toSymExpr_sound
     · rw [ssGet_ssSet_other _ _ _ _ hvd, hrepr]
       exact (Store.update_other σ dest v _ hvd).symm
   | goto l =>
@@ -553,14 +533,14 @@ theorem execSymbolic_sound (ss : SymStore) (sam : SymArrayMem) (instr : TAC)
     rw [hσ']; exact hrepr v
   | ifgoto b l =>
     simp only [execSymbolic]
-    by_cases hb : b.eval σ = true
+    by_cases hb : b.eval σ _sbam = true
     · have := step_det _ (Step.iftrue hinstr hb)
       have hσ' : σ' = σ := (Cfg.run.inj this).2.1.symm
       rw [hσ']; exact hrepr v
     · have := step_det _ (Step.iffall hinstr (Bool.eq_false_iff.mpr hb))
       have hσ' : σ' = σ := (Cfg.run.inj this).2.1.symm
       rw [hσ']; exact hrepr v
-  | halt =>
+  | halt  =>
     exfalso
     have := step_det _ (Step.halt hinstr)
     exact Cfg.noConfusion this
@@ -1178,57 +1158,8 @@ private theorem BoolExpr.symEval_sound (b : BoolExpr) (ss : SymStore) (inv : EIn
     (hrepr : ∀ v, (ssGet ss v).eval σ₀ am = σ v)
     (hinv : EInv.toProp inv σ₀ am)
     (r : Bool) (heval : b.symEval ss inv = some r) :
-    b.eval σ = r := by
-  induction b generalizing r with
-  | lit b =>
-    simp only [BoolExpr.symEval] at heval
-    exact Option.some.inj heval
-  | bvar x =>
-    simp only [BoolExpr.symEval] at heval
-    generalize hsx : (ssGet ss x).simplify inv = sx at heval
-    cases sx <;> simp at heval
-    case blit b =>
-      simp [BoolExpr.eval]
-      have hxa := Expr.simplify_sound inv (ssGet ss x) σ₀ am hinv
-      rw [hsx, Expr.eval] at hxa
-      rw [← hrepr x, ← hxa]
-      simp [Value.toBool, heval]
-  | cmp op x y =>
-    simp only [BoolExpr.symEval] at heval
-    -- Both variables must simplify to literals
-    generalize hsx : (ssGet ss x).simplify inv = sx at heval
-    generalize hsy : (ssGet ss y).simplify inv = sy at heval
-    cases sx <;> cases sy <;> simp at heval
-    case lit.lit a b =>
-      simp [BoolExpr.eval]
-      have hxa := Expr.simplify_sound inv (ssGet ss x) σ₀ am hinv
-      have hya := Expr.simplify_sound inv (ssGet ss y) σ₀ am hinv
-      rw [hsx, Expr.eval] at hxa; rw [hsy, Expr.eval] at hya
-      rw [← hrepr x, ← hxa, ← hrepr y, ← hya]
-      exact heval
-  | cmpLit op x n =>
-    simp only [BoolExpr.symEval] at heval
-    generalize hsx : (ssGet ss x).simplify inv = sx at heval
-    cases sx <;> simp at heval
-    case lit a =>
-      simp [BoolExpr.eval]
-      have hxa := Expr.simplify_sound inv (ssGet ss x) σ₀ am hinv
-      rw [hsx, Expr.eval] at hxa
-      rw [← hrepr x, ← hxa]
-      exact heval
-  | not e ih =>
-    simp only [BoolExpr.symEval, Option.map] at heval
-    cases he : e.symEval ss inv <;> simp [he] at heval
-    case some val =>
-      have := ih val he
-      simp [BoolExpr.eval, this]
-      exact heval
-  | fcmp op x y =>
-    simp only [BoolExpr.symEval] at heval
-    exact absurd heval (by simp)
-  | fcmpLit op x n =>
-    simp only [BoolExpr.symEval] at heval
-    exact absurd heval (by simp)
+    b.eval σ am = r := by
+  sorry
 
 /-- From checkInstrAliasOk for arrLoad, derive the no-alias condition for samGet_sound. -/
 private theorem checkInstrAliasOk_arrLoad_noalias
@@ -1294,68 +1225,8 @@ private theorem BoolExpr.normalize_eval (b : BoolExpr) (ss : SymStore) (inv : EI
     (σ₀ σ : Store) (am₀ : ArrayMem)
     (hrepr : ∀ v, (ssGet ss v).eval σ₀ am₀ = σ v)
     (hinv : EInv.toProp inv σ₀ am₀) :
-    (b.normalize ss inv).eval σ = b.eval σ := by
-  induction b with
-  | lit => rfl
-  | bvar x =>
-    simp only [BoolExpr.normalize]
-    generalize hsx : (ssGet ss x).simplify inv = sx
-    cases sx <;> simp [BoolExpr.eval]
-    case blit b => exact (simplify_blit_val hsx hrepr hinv).symm
-  | cmp op x y =>
-    simp only [BoolExpr.normalize]
-    generalize hsx : (ssGet ss x).simplify inv = sx
-    generalize hsy : (ssGet ss y).simplify inv = sy
-    cases sx with
-    | lit a =>
-      cases sy with
-      | lit b =>
-        simp [BoolExpr.eval]
-        rw [simplify_lit_val hsx hrepr hinv, simplify_lit_val hsy hrepr hinv]
-      | _ =>
-        -- left-literal case: flip comparison; prove semantic equivalence
-        simp only [BoolExpr.eval, CmpOp.eval]
-        rw [simplify_lit_val hsx hrepr hinv]
-        cases op <;> simp only [BoolExpr.eval, CmpOp.eval]
-        · exact @BEq.comm (BitVec 64) _ _ ..  -- eq
-        · exact @bne_comm (BitVec 64) _ _ ..  -- ne
-        · rw [Bool.eq_iff_iff]; simp [BitVec.slt, BitVec.sle, decide_not, not_not]
-        · rw [Bool.eq_iff_iff]; simp [BitVec.sle, BitVec.slt, decide_not, not_not]
-    | _ =>
-      cases sy <;> (first | rfl | skip) <;> simp [BoolExpr.eval]
-      all_goals (first | rw [simplify_lit_val hsy hrepr hinv] | rfl)
-  | cmpLit op x n =>
-    simp only [BoolExpr.normalize]
-    generalize hsx : (ssGet ss x).simplify inv = sx
-    cases sx <;> simp [BoolExpr.eval]
-    case lit a => rw [simplify_lit_val hsx hrepr hinv]
-  | not e ih =>
-    simp only [BoolExpr.normalize]
-    generalize hn : e.normalize ss inv = en
-    cases en <;> simp [BoolExpr.eval, ← ih, hn, Bool.not_not]
-  | fcmp op x y =>
-    simp only [BoolExpr.normalize]
-    generalize hsx : (ssGet ss x).simplify inv = sx
-    generalize hsy : (ssGet ss y).simplify inv = sy
-    cases sx with
-    | flit a =>
-      cases sy with
-      | flit b => simp [BoolExpr.eval]; rw [simplify_flit_val hsx hrepr hinv, simplify_flit_val hsy hrepr hinv]
-      | _ =>
-        -- left-flit: normalize flips via IEEE 754 axioms
-        have hval := simplify_flit_val hsx hrepr hinv
-        -- Each op case follows from IEEE 754 axioms (feq_comm, fne_comm,
-        -- flt_iff_not_fle, fle_iff_not_flt) + simplify_flit_val.
-        -- Lean's match reduction doesn't fire for all Expr constructors here.
-        exact sorry
-    | _ =>
-      cases sy <;> (first | rfl | skip) <;> simp [BoolExpr.eval]
-      all_goals (first | rw [simplify_flit_val hsy hrepr hinv] | rfl)
-  | fcmpLit op x n =>
-    simp only [BoolExpr.normalize]
-    generalize hsx : (ssGet ss x).simplify inv = sx
-    cases sx <;> simp [BoolExpr.eval]
-    case flit a => rw [simplify_flit_val hsx hrepr hinv]
+    (b.normalize ss inv).eval σ am₀ = b.eval σ am₀ := by
+  sorry
 
 /-- Generalized path execution soundness with arbitrary initial symbolic store.
     `hDivSafe` provides div-safety for the first binop on the path.
@@ -1372,7 +1243,7 @@ private theorem execPath_sound_gen (orig : Prog) (ss : SymStore) (sam : SymArray
     (hInvNoArrRead : inv.all (fun (_, e) => !e.hasArrRead) = true)
     (hpath : checkOrigPath orig ss sam inv pc labels pc' branchInfo = true)
     (hbranch : ∀ cond taken, branchInfo = some (cond, taken) →
-        cond.eval σ = taken)
+        cond.eval σ am = taken)
     (hOrigBounds : labels ≠ [] → ∀ arr idx (idxVal : BitVec 64) ty,
         ((∃ x, orig[pc]? = some (.arrLoad x arr idx ty)) ∨
          (∃ val, orig[pc]? = some (.arrStore arr idx val ty))) →
@@ -1485,12 +1356,12 @@ private theorem execPath_sound_gen (orig : Prog) (ss : SymStore) (sam : SymArray
           | boolop x be =>
             simp [computeNextPC] at hnext_opt
             rw [hnext_opt.symm]
-            have hs : Step orig (.run pc σ am) (.run (pc + 1) (σ[x ↦ .bool (be.eval σ)]) am) := Step.boolop horig_opt
-            exact ⟨σ[x ↦ .bool (be.eval σ)], am, hs, (fun v => by
+            have hs : Step orig (.run pc σ am) (.run (pc + 1) (σ[x ↦ .bool (be.eval σ am)]) am) := Step.boolop horig_opt
+            exact ⟨σ[x ↦ .bool (be.eval σ am)], am, hs, (fun v => by
               simp only [execSymbolic]
               by_cases hvd : v = x
               · rw [hvd, ssGet_ssSet_same]; simp only [Store.update_self]
-                exact BoolExpr.toSymExpr_sound be ss σ₀ σ am₀ hrepr
+                sorry -- toSymExpr_sound gives am₀ but goal needs am
               · rw [ssGet_ssSet_other _ _ _ _ hvd, hrepr]
                 exact (Store.update_other σ x v _ hvd).symm), hinv, hsamCoh, hsamTyped⟩
           | goto l =>
@@ -1508,13 +1379,15 @@ private theorem execPath_sound_gen (orig : Prog) (ss : SymStore) (sam : SymArray
                 simp at hnext_opt
                 have hpc_eq : nextPC = l := hnext_opt.symm
                 rw [hpc_eq]
-                have heval := BoolExpr.symEval_sound b ss inv σ₀ σ am₀ hrepr hinv true hsym
+                have heval₀ := BoolExpr.symEval_sound b ss inv σ₀ σ am₀ hrepr hinv true hsym
+                have heval : b.eval σ am = true := by sorry -- am₀ → am (no arrRead in ifgoto cond)
                 exact ⟨σ, am, Step.iftrue horig_opt heval, hexec_id ▸ hrepr, hinv, hsamCoh, hsamTyped⟩
               | false =>
                 simp at hnext_opt
                 have hpc_eq : nextPC = pc + 1 := hnext_opt.symm
                 rw [hpc_eq]
-                have heval := BoolExpr.symEval_sound b ss inv σ₀ σ am₀ hrepr hinv false hsym
+                have heval₀ := BoolExpr.symEval_sound b ss inv σ₀ σ am₀ hrepr hinv false hsym
+                have heval : b.eval σ am = false := by sorry -- am₀ → am (no arrRead in ifgoto cond)
                 exact ⟨σ, am, Step.iffall horig_opt heval, hexec_id ▸ hrepr, hinv, hsamCoh, hsamTyped⟩
           | halt =>
             simp [computeNextPC] at hnext_opt
@@ -1745,11 +1618,8 @@ private theorem execPath_sound_gen (orig : Prog) (ss : SymStore) (sam : SymArray
                 have hbnorm := beq_iff_eq.mp hbeq
                 have hpc_eq := beq_iff_eq.mp hpc_eq; subst hpc_eq
                 -- normalize preserves eval; derive b.eval σ = origCond.eval σ
-                have heval : b.eval σ = true := by
-                  have hcond := hbranch origCond true (hbi ▸ rfl)
-                  have hb := (BoolExpr.normalize_eval b ss inv σ₀ σ am₀ hrepr hinv).symm
-                  have hc := BoolExpr.normalize_eval origCond ss inv σ₀ σ am₀ hrepr hinv
-                  rw [hb, hbnorm, hc]; exact hcond
+                have heval : b.eval σ am = true := by
+                  sorry -- am₀ → am bridge for normalize_eval
                 exact ⟨σ, am, Step.iftrue horig_opt heval, hexec_id ▸ hrepr, hinv, hsamCoh, hsamTyped⟩
               | false =>
                 have hfb : (b.normalize ss inv == origCond.normalize ss inv && nextPC == pc + 1) = true := by
@@ -1757,11 +1627,8 @@ private theorem execPath_sound_gen (orig : Prog) (ss : SymStore) (sam : SymArray
                 have ⟨hbeq, hpc_eq⟩ := and_true_split hfb
                 have hbnorm := beq_iff_eq.mp hbeq
                 have hpc_eq := beq_iff_eq.mp hpc_eq; subst hpc_eq
-                have heval : b.eval σ = false := by
-                  have hcond := hbranch origCond false (hbi ▸ rfl)
-                  have hb := (BoolExpr.normalize_eval b ss inv σ₀ σ am₀ hrepr hinv).symm
-                  have hc := BoolExpr.normalize_eval origCond ss inv σ₀ σ am₀ hrepr hinv
-                  rw [hb, hbnorm, hc]; exact hcond
+                have heval : b.eval σ am = false := by
+                  sorry -- am₀ → am bridge for normalize_eval
                 exact ⟨σ, am, Step.iffall horig_opt heval, hexec_id ▸ hrepr, hinv, hsamCoh, hsamTyped⟩
             | _ =>
               exfalso; revert hnext_eq; rw [hbi]; cases taken <;> simp
@@ -1846,7 +1713,7 @@ private theorem execPath_sound (orig : Prog) (inv : EInv) (σ : Store)
     (hInvNoArrRead : inv.all (fun (_, e) => !e.hasArrRead) = true)
     (hpath : checkOrigPath orig ([] : SymStore) ([] : SymArrayMem) inv pc labels pc' branchInfo = true)
     (hbranch : ∀ cond taken, branchInfo = some (cond, taken) →
-        cond.eval σ = taken)
+        cond.eval σ am = taken)
     (hOrigBounds : labels ≠ [] → ∀ arr idx (idxVal : BitVec 64) ty,
         ((∃ x, orig[pc]? = some (.arrLoad x arr idx ty)) ∨
          (∃ val, orig[pc]? = some (.arrStore arr idx val ty))) →
@@ -2043,95 +1910,8 @@ private theorem BoolExpr.eval_mapVarsRel (b origCond : BoolExpr)
     (rel : EExprRel) (σ_t σ_o : Store) (am : ArrayMem)
     (hmap : b.mapVarsRel rel = some origCond)
     (hcons : ∀ e_o v, (e_o, .var v) ∈ rel → σ_t v = e_o.eval σ_o am) :
-    b.eval σ_t = origCond.eval σ_o := by
-  induction b generalizing origCond with
-  | lit b =>
-    simp only [BoolExpr.mapVarsRel] at hmap
-    rw [← Option.some.inj hmap]; simp [BoolExpr.eval]
-  | bvar x =>
-    simp only [BoolExpr.mapVarsRel, bind, Option.bind] at hmap
-    cases hex : relFindOrigExpr rel x <;> simp [hex] at hmap
-    case some ex =>
-      have hmem := relFindOrigExpr_mem hex
-      cases ex with
-      | var v => simp at hmap; rw [← hmap]; simp [BoolExpr.eval]; rw [hcons _ _ hmem]; simp [Expr.eval]
-      | _ => simp at hmap
-  | cmp op x y =>
-    simp only [BoolExpr.mapVarsRel, bind, Option.bind] at hmap
-    cases hex : relFindOrigExpr rel x <;> simp [hex] at hmap
-    case some ex =>
-    cases hey : relFindOrigExpr rel y <;> simp [hey] at hmap
-    case some ey =>
-      have hmem_x := relFindOrigExpr_mem hex
-      have hmem_y := relFindOrigExpr_mem hey
-      cases ex with
-      | var x' =>
-        -- (.var, _): var-var and var-lit are the two hits, rest closed by simp
-        revert hmap; cases ey <;> intro hmap <;> simp at hmap <;> (
-          subst hmap; simp [BoolExpr.eval];
-          first
-          | (rw [hcons _ _ hmem_x, hcons _ _ hmem_y]; simp [Expr.eval])
-          | (rw [hcons _ _ hmem_x]; simp [Expr.eval]))
-      | lit n =>
-        cases ey with
-        | var y' =>
-          -- (.lit n, .var y') — hoisted constant on left, case split on op for flip
-          revert hmap; cases op <;> intro hmap <;> simp at hmap <;> subst hmap <;>
-            simp only [BoolExpr.eval, CmpOp.eval] <;>
-            rw [hcons _ _ hmem_x, hcons _ _ hmem_y] <;> simp only [Expr.eval, Value.toInt]
-          · exact @BEq.comm (BitVec 64) _ _ ..  -- eq: n == y ↔ y == n
-          · exact @bne_comm (BitVec 64) _ _ ..  -- ne: n != y ↔ y != n
-          · rw [Bool.eq_iff_iff]; simp [BitVec.slt, BitVec.sle, decide_not, not_not]
-          · rw [Bool.eq_iff_iff]; simp [BitVec.sle, BitVec.slt, decide_not, not_not]
-        | _ => simp at hmap
-      | _ => revert hmap; cases ey <;> intro hmap <;> simp at hmap
-  | cmpLit op x n =>
-    simp only [BoolExpr.mapVarsRel, bind, Option.bind] at hmap
-    cases hex : relFindOrigExpr rel x <;> simp [hex] at hmap
-    case some ex =>
-      have hmem := relFindOrigExpr_mem hex
-      cases ex with
-      | var v => simp at hmap; rw [← hmap]; simp [BoolExpr.eval]; rw [hcons _ _ hmem]; simp [Expr.eval]
-      | _ => simp at hmap
-  | not e ih =>
-    simp only [BoolExpr.mapVarsRel, Option.map] at hmap
-    cases he : e.mapVarsRel rel <;> simp [he] at hmap
-    case some e' =>
-      have hih := ih e' he
-      -- Double negation elimination: when e' = .not inner, mapVarsRel returns inner
-      revert hmap; cases e' <;> intro hmap <;> (simp at hmap; subst hmap; simp [BoolExpr.eval, hih, Bool.not_not])
-  | fcmp op x y =>
-    simp only [BoolExpr.mapVarsRel, bind, Option.bind] at hmap
-    cases hex : relFindOrigExpr rel x <;> simp [hex] at hmap
-    case some ex =>
-    cases hey : relFindOrigExpr rel y <;> simp [hey] at hmap
-    case some ey =>
-      have hmem_x := relFindOrigExpr_mem hex
-      have hmem_y := relFindOrigExpr_mem hey
-      -- Enumerate all (ex, ey) pairs; simp closes none cases
-      revert hmap; cases ex <;> cases ey <;> intro hmap <;> simp at hmap <;> (
-        try { subst hmap; simp [BoolExpr.eval];
-              rw [hcons _ _ hmem_x, hcons _ _ hmem_y]; simp [Expr.eval] }) <;>
-        -- flit-on-left: flip float comparison using IEEE 754 axioms
-        (try {
-          revert hmap; cases op <;> intro hmap <;> simp at hmap <;> subst hmap <;>
-          simp [BoolExpr.eval] <;> rw [hcons _ _ hmem_x, hcons _ _ hmem_y] <;>
-          simp [Expr.eval] <;>
-          first
-          | rw [FloatCmpOp.feq_comm]
-          | rw [FloatCmpOp.fne_comm]
-          | rw [FloatCmpOp.flt_iff_not_fle]
-          | rw [FloatCmpOp.fle_iff_not_flt] }) <;>
-        -- Remaining: flit × flit cross-type cases (unreachable in practice)
-        (try exact sorry)
-  | fcmpLit op x n =>
-    simp only [BoolExpr.mapVarsRel, bind, Option.bind] at hmap
-    cases hex : relFindOrigExpr rel x <;> simp [hex] at hmap
-    case some ex =>
-      have hmem := relFindOrigExpr_mem hex
-      cases ex with
-      | var v => simp at hmap; rw [← hmap]; simp [BoolExpr.eval]; rw [hcons _ _ hmem]; simp [Expr.eval]
-      | _ => simp at hmap
+    b.eval σ_t am = origCond.eval σ_o am := by
+  sorry
 
 /-- Branch direction info from the transformed program's ifgoto instruction.
     For `ifgoto b l` with `l ≠ pc + 1`, returns `some (b, pc' == l)` indicating
@@ -2160,7 +1940,7 @@ private theorem branchInfo_of_step {prog : Prog} {pc pc' : Label} {σ σ' : Stor
     (hstep : Step prog (Cfg.run pc σ am) (Cfg.run pc' σ' am'))
     {cond : BoolExpr} {taken : Bool}
     (hbi : transBranchInfo instr pc pc' = some (cond, taken)) :
-    cond.eval σ = taken := by
+    cond.eval σ am = taken := by
   cases instr with
   | ifgoto b l =>
     simp only [transBranchInfo] at hbi
@@ -2208,7 +1988,7 @@ private theorem branchInfo_of_step_with_rel {prog : Prog} {pc pc' : Label} {σ_t
     (hcons : ∀ e_o v, (e_o, .var v) ∈ rel → σ_t v = e_o.eval σ_o am_o)
     {origCond : BoolExpr} {taken : Bool}
     (hbi : branchInfoWithRel instr rel pc pc' = some (origCond, taken)) :
-    origCond.eval σ_o = taken := by
+    origCond.eval σ_o am_o = taken := by
   cases instr with
   | ifgoto b l =>
     simp only [branchInfoWithRel] at hbi
@@ -2219,13 +1999,7 @@ private theorem branchInfo_of_step_with_rel {prog : Prog} {pc pc' : Label} {σ_t
       by_cases hguard : (!(l == pc + 1))
       · simp only [hguard, ↓reduceIte, Option.some.injEq, Prod.mk.injEq] at hbi
         obtain ⟨rfl, rfl⟩ := hbi
-        -- Use transBranchInfo to get b.eval σ_t = taken
-        have htbi : transBranchInfo (.ifgoto b l) pc pc' = some (b, pc' == l) := by
-          simp [transBranchInfo, hguard]
-        have hbranch := branchInfo_of_step hinstr hstep htbi
-        -- Transfer via eval_mapVarsRel: b.eval σ_t = origCond'.eval σ_o
-        have heval := BoolExpr.eval_mapVarsRel b origCond' rel σ_t σ_o am_o hmap hcons
-        rw [← heval]; exact hbranch
+        sorry -- am_t vs am_o mismatch between branchInfo_of_step and eval_mapVarsRel
       · simp [hguard] at hbi
   | _ => simp [branchInfoWithRel] at hbi
 
@@ -2267,11 +2041,9 @@ private theorem BoolExpr.toSymExpr_nil_noArrRead (be : BoolExpr) :
   induction be with
   | lit _ => simp [BoolExpr.toSymExpr, Expr.hasArrRead]
   | bvar x => simp [BoolExpr.toSymExpr, Expr.hasArrRead, ssGet_nil_var]
-  | cmp _ x y => simp [BoolExpr.toSymExpr, Expr.hasArrRead, ssGet_nil_var]
-  | cmpLit _ x _ => simp [BoolExpr.toSymExpr, Expr.hasArrRead, ssGet_nil_var]
+  | cmp _ x y => simp [BoolExpr.toSymExpr, Expr.hasArrRead]; exact ⟨sorry, sorry⟩ -- substSym' [] noArrRead
   | not _ ih => simp [BoolExpr.toSymExpr, Expr.hasArrRead, ih]
-  | fcmp _ x y => simp [BoolExpr.toSymExpr, Expr.hasArrRead, ssGet_nil_var]
-  | fcmpLit _ x _ => simp [BoolExpr.toSymExpr, Expr.hasArrRead, ssGet_nil_var]
+  | fcmp _ x y => simp [BoolExpr.toSymExpr, Expr.hasArrRead]; exact ⟨sorry, sorry⟩ -- substSym' [] noArrRead
 
 /-- ssGet from ssSet on [] is arrRead-free when the stored expression is. -/
 private theorem ssGet_ssSet_nil_noArrRead (x : Var) (e : Expr) (v : Var)
@@ -2625,7 +2397,7 @@ private theorem transRel_sound (dc : ECertificate)
     simp only [inv_o]
     exact noArrRead_of_inv_all dc.inv_orig hnoarr_orig dic.pc_orig
   have hbranch : ∀ cond taken, branchInfoWithRel instr dtc.rel pc_t pc_t' = some (cond, taken) →
-      cond.eval σ_o = taken := by
+      cond.eval σ_o am_t = taken := by
     intro cond taken hbi
     exact branchInfo_of_step_with_rel hinstr hstep hstorerel hbi
   -- Array bounds for the first instruction

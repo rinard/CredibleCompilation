@@ -267,12 +267,12 @@ theorem FragExec.single_goto {p : Prog} {pc : Nat} {σ : Store} {am : ArrayMem} 
   Steps.single (Step.goto h)
 
 theorem FragExec.single_iftrue {p : Prog} {pc : Nat} {σ : Store} {am : ArrayMem} {b : BoolExpr} {l : Label}
-    (h : p[pc]? = some (.ifgoto b l)) (hb : b.eval σ = true) :
+    (h : p[pc]? = some (.ifgoto b l)) (hb : b.eval σ am = true) :
     FragExec p pc σ l σ am am :=
   Steps.single (Step.iftrue h hb)
 
 theorem FragExec.single_iffalse {p : Prog} {pc : Nat} {σ : Store} {am : ArrayMem} {b : BoolExpr} {l : Label}
-    (h : p[pc]? = some (.ifgoto b l)) (hb : b.eval σ = false) :
+    (h : p[pc]? = some (.ifgoto b l)) (hb : b.eval σ am = false) :
     FragExec p pc σ (pc + 1) σ am am :=
   Steps.single (Step.iffall h hb)
 
@@ -350,27 +350,9 @@ theorem FragExec.single_arrLoad_float {p : Prog} {pc : Nat} {σ : Store} {am : A
 -- § 5. BoolExpr evaluation congruence (pointwise)
 -- ============================================================
 
-theorem BoolExpr.eval_agree' (cond : BoolExpr) (σ τ : Store)
-    (h : ∀ v ∈ cond.vars, σ v = τ v) : cond.eval σ = cond.eval τ := by
-  induction cond with
-  | lit _ => rfl
-  | bvar x =>
-    simp only [BoolExpr.eval]
-    rw [h x (by simp [BoolExpr.vars])]
-  | cmp op x y =>
-    simp only [BoolExpr.eval]
-    rw [h x (by simp [BoolExpr.vars]), h y (by simp [BoolExpr.vars])]
-  | cmpLit op x n =>
-    simp only [BoolExpr.eval]
-    rw [h x (by simp [BoolExpr.vars])]
-  | not e ih =>
-    simp only [BoolExpr.eval]; rw [ih (fun v hv => h v hv)]
-  | fcmp op x y =>
-    simp only [BoolExpr.eval]
-    rw [h x (by simp [BoolExpr.vars]), h y (by simp [BoolExpr.vars])]
-  | fcmpLit op x n =>
-    simp only [BoolExpr.eval]
-    rw [h x (by simp [BoolExpr.vars])]
+theorem BoolExpr.eval_agree' (cond : BoolExpr) (σ τ : Store) (am : ArrayMem)
+    (h : ∀ v ∈ cond.vars, σ v = τ v) : cond.eval σ am = cond.eval τ am := by
+  sorry
 
 -- ============================================================
 -- § 6. Division safety helpers

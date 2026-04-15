@@ -380,10 +380,10 @@ theorem compileBool_stuck (sb : SBool) (offset nextTmp : Nat) (σ σ_tac : Store
       rw [hra] at hexec_a heval_a; simp at hexec_a heval_a
       have hagree_a : ∀ v, v.isTmp = false → v.isFTmp = false → σ_a v = σ v := by
         intro v hv1 hv2; rw [hntmp_a v hv1 hv2]; exact hagree v hv1 hv2
-      have hba_true : ba.eval σ_a = true := by rw [heval_a, ha_eval]
+      have hba_true : ba.eval σ_a am = true := by rw [heval_a, ha_eval]
       have hifgA : p[offset + codeA.length]? = some (TAC.ifgoto (.not ba) (offset + codeA.length + 1 + codeB.length + 3)) :=
         hcode.left.left.right.head
-      have hnot_ba_false : (BoolExpr.not ba).eval σ_a = false := by
+      have hnot_ba_false : (BoolExpr.not ba).eval σ_a am = false := by
         simp [BoolExpr.eval, hba_true]
       have hexec_ifA := FragExec.single_iffalse (am := am) hifgA hnot_ba_false
       have hcodeB : RC.CodeAt (compileBool b (offset + codeA.length + 1) (tmp1 + 1)).1 p
@@ -429,7 +429,7 @@ theorem compileBool_stuck (sb : SBool) (offset nextTmp : Nat) (σ σ_tac : Store
       rw [hra] at hexec_a heval_a; simp at hexec_a heval_a
       have hagree_a : ∀ v, v.isTmp = false → v.isFTmp = false → σ_a v = σ v := by
         intro v hv1 hv2; rw [hntmp_a v hv1 hv2]; exact hagree v hv1 hv2
-      have hba_false : ba.eval σ_a = false := by rw [heval_a, ha_eval]
+      have hba_false : ba.eval σ_a am = false := by rw [heval_a, ha_eval]
       have hifgA : p[offset + codeA.length]? = some (TAC.ifgoto ba (offset + codeA.length + 1 + codeB.length + 3)) :=
         hcode.left.left.right.head
       have hexec_ifA := FragExec.single_iffalse (am := am) hifgA hba_false

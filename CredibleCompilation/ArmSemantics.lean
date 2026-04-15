@@ -706,32 +706,30 @@ def formalGenBoolExpr (vm : VarMap) (be : BoolExpr) : List ArmInstr :=
     match vm.lookup v with
     | some off => [.ldr .x0 off, .andImm .x0 .x0 (1 : BitVec 64)]
     | none => []
-  | .cmp op lv rv =>
+  | .cmp op a b =>
     let cond := match op with | .eq => Cond.eq | .ne => .ne | .lt => .lt | .le => .le
-    match vm.lookup lv, vm.lookup rv with
-    | some offL, some offR =>
-      [.ldr .x1 offL, .ldr .x2 offR, .cmp .x1 .x2, .cset .x0 cond]
-    | _, _ => []
-  | .cmpLit op v n =>
-    let cond := match op with | .eq => Cond.eq | .ne => .ne | .lt => .lt | .le => .le
-    match vm.lookup v with
-    | some off =>
-      [.ldr .x1 off] ++ formalLoadImm64 .x2 n ++ [.cmp .x1 .x2, .cset .x0 cond]
-    | none => []
+    let loadA := match a with
+      | .var v => match vm.lookup v with | some off => [.ldr .x1 off] | none => []
+      | .lit n => formalLoadImm64 .x1 n
+      | _ => []
+    let loadB := match b with
+      | .var v => match vm.lookup v with | some off => [.ldr .x2 off] | none => []
+      | .lit n => formalLoadImm64 .x2 n
+      | _ => []
+    loadA ++ loadB ++ [.cmp .x1 .x2, .cset .x0 cond]
   | .not e =>
     formalGenBoolExpr vm e ++ [.eorImm .x0 .x0 (1 : BitVec 64)]
-  | .fcmp fop lv rv =>
+  | .fcmp fop a b =>
     let cond := match fop with | .feq => Cond.eq | .fne => .ne | .flt => .lt | .fle => .le
-    match vm.lookup lv, vm.lookup rv with
-    | some offL, some offR =>
-      [.fldr .d1 offL, .fldr .d2 offR, .fcmpR .d1 .d2, .cset .x0 cond]
-    | _, _ => []
-  | .fcmpLit fop v n =>
-    let cond := match fop with | .feq => Cond.eq | .fne => .ne | .flt => .lt | .fle => .le
-    match vm.lookup v with
-    | some off =>
-      [.fldr .d1 off] ++ formalLoadImm64 .x0 n ++ [.fmovToFP .d2 .x0, .fcmpR .d1 .d2, .cset .x0 cond]
-    | none => []
+    let loadA := match a with
+      | .var v => match vm.lookup v with | some off => [.fldr .d1 off] | none => []
+      | .flit n => formalLoadImm64 .x0 n ++ [.fmovToFP .d1 .x0]
+      | _ => []
+    let loadB := match b with
+      | .var v => match vm.lookup v with | some off => [.fldr .d2 off] | none => []
+      | .flit n => formalLoadImm64 .x0 n ++ [.fmovToFP .d2 .x0]
+      | _ => []
+    loadA ++ loadB ++ [.fcmpR .d1 .d2, .cset .x0 cond]
 
 /-- Generate formal ARM64 instructions for a TAC instruction.
     Mirrors `genInstr` in CodeGen.lean (without the label string).
@@ -888,22 +886,30 @@ def verifiedGenBoolExpr (layout : VarLayout) (be : BoolExpr) : List ArmInstr :=
     [.mov .x0 (if b then (1 : BitVec 64) else 0)]
   | .bvar v =>
     vLoadVar layout v .x0 ++ [.andImm .x0 .x0 (1 : BitVec 64)]
-  | .cmp op lv rv =>
+  | .cmp op a b =>
     let cond := match op with | .eq => Cond.eq | .ne => .ne | .lt => .lt | .le => .le
-    vLoadVar layout lv .x1 ++ vLoadVar layout rv .x2 ++
-    [.cmp .x1 .x2, .cset .x0 cond]
-  | .cmpLit op v n =>
-    let cond := match op with | .eq => Cond.eq | .ne => .ne | .lt => .lt | .le => .le
-    vLoadVar layout v .x1 ++ formalLoadImm64 .x2 n ++ [.cmp .x1 .x2, .cset .x0 cond]
+    let loadA := match a with
+      | .var v => vLoadVar layout v .x1
+      | .lit n => formalLoadImm64 .x1 n
+      | _ => []
+    let loadB := match b with
+      | .var v => vLoadVar layout v .x2
+      | .lit n => formalLoadImm64 .x2 n
+      | _ => []
+    loadA ++ loadB ++ [.cmp .x1 .x2, .cset .x0 cond]
   | .not e =>
     verifiedGenBoolExpr layout e ++ [.eorImm .x0 .x0 (1 : BitVec 64)]
-  | .fcmp fop lv rv =>
+  | .fcmp fop a b =>
     let cond := match fop with | .feq => Cond.eq | .fne => .ne | .flt => .lt | .fle => .le
-    vLoadVarFP layout lv .d1 ++ vLoadVarFP layout rv .d2 ++
-    [.fcmpR .d1 .d2, .cset .x0 cond]
-  | .fcmpLit fop v n =>
-    let cond := match fop with | .feq => Cond.eq | .fne => .ne | .flt => .lt | .fle => .le
-    vLoadVarFP layout v .d1 ++ formalLoadImm64 .x0 n ++ [.fmovToFP .d2 .x0, .fcmpR .d1 .d2, .cset .x0 cond]
+    let loadA := match a with
+      | .var v => vLoadVarFP layout v .d1
+      | .flit n => formalLoadImm64 .x0 n ++ [.fmovToFP .d1 .x0]
+      | _ => []
+    let loadB := match b with
+      | .var v => vLoadVarFP layout v .d2
+      | .flit n => formalLoadImm64 .x0 n ++ [.fmovToFP .d2 .x0]
+      | _ => []
+    loadA ++ loadB ++ [.fcmpR .d1 .d2, .cset .x0 cond]
 
 -- ============================================================
 -- § 8d. Verified instruction codegen

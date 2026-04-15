@@ -308,7 +308,7 @@ def compileBool (b : SBool) (offset nextTmp : Nat) : List TAC × BoolExpr × Nat
   | .cmp op a b =>
     let (codeA, va, tmp1) := compileExpr a offset nextTmp
     let (codeB, vb, tmp2) := compileExpr b (offset + codeA.length) tmp1
-    (codeA ++ codeB, .cmp op va vb, tmp2)
+    (codeA ++ codeB, .cmp op (.var va) (.var vb), tmp2)
   | .not e =>
     let (code, be, tmp') := compileBool e offset nextTmp
     (code, .not be, tmp')
@@ -336,7 +336,7 @@ def compileBool (b : SBool) (offset nextTmp : Nat) : List TAC × BoolExpr × Nat
        TAC.const tR (.int (1 : BitVec 64)),
        TAC.goto endL,
        TAC.const tR (.int (0 : BitVec 64))]
-    (code, .cmpLit .ne tR 0, tmp2)
+    (code, .cmp .ne (.var tR) (.lit 0), tmp2)
   | .or a b =>
     -- Flatten a || b: if a goto true; if b goto true; tR := 0; goto end; true: tR := 1; end:
     let (codeA, ba, tmp1) := compileBool a offset nextTmp
@@ -352,15 +352,15 @@ def compileBool (b : SBool) (offset nextTmp : Nat) : List TAC × BoolExpr × Nat
        TAC.const tR (.int (0 : BitVec 64)),
        TAC.goto endL,
        TAC.const tR (.int (1 : BitVec 64))]
-    (code, .cmpLit .ne tR 0, tmp2)
+    (code, .cmp .ne (.var tR) (.lit 0), tmp2)
   | .barrRead arr idx =>
     let (codeIdx, vIdx, tmp1) := compileExpr idx offset nextTmp
     let t := tmpName tmp1
-    (codeIdx ++ [.arrLoad t arr vIdx .int], .cmpLit .ne t 0, tmp1 + 1)
+    (codeIdx ++ [.arrLoad t arr vIdx .int], .cmp .ne (.var t) (.lit 0), tmp1 + 1)
   | .fcmp op a b =>
     let (codeA, va, tmp1) := compileExpr a offset nextTmp
     let (codeB, vb, tmp2) := compileExpr b (offset + codeA.length) tmp1
-    (codeA ++ codeB, .fcmp op va vb, tmp2)
+    (codeA ++ codeB, .fcmp op (.var va) (.var vb), tmp2)
 
 /-- Compute code length of a compiled expression (offset-independent). -/
 def exprCodeLen : SExpr → Nat
@@ -1422,7 +1422,7 @@ theorem compileBool_wt (prog : Program)
       (offset + (compileBool a offset nextTmp).1.length + 1)
       ((compileBool a offset nextTmp).2.2 + 1)
     simp only [compileBool]
-    refine ⟨?_, .cmpLit (tyCtx_tmp_wt prog hnt _) (by native_decide) (by native_decide)⟩
+    refine ⟨?_, .cmp (by simp [ExprHasTy]; exact tyCtx_tmp_wt prog hnt _) (by simp [ExprHasTy])⟩
     let tmp1 := (compileBool a offset nextTmp).2.2
     have htR : (Value.int 1).typeOf = prog.tyCtx (tmpName tmp1) := by
       simp [Value.typeOf]; exact (tyCtx_tmp_wt prog hnt tmp1).symm
@@ -1444,7 +1444,7 @@ theorem compileBool_wt (prog : Program)
       (offset + (compileBool a offset nextTmp).1.length + 1)
       ((compileBool a offset nextTmp).2.2 + 1)
     simp only [compileBool]
-    refine ⟨?_, .cmpLit (tyCtx_tmp_wt prog hnt _) (by native_decide) (by native_decide)⟩
+    refine ⟨?_, .cmp (by simp [ExprHasTy]; exact tyCtx_tmp_wt prog hnt _) (by simp [ExprHasTy])⟩
     let tmp1 := (compileBool a offset nextTmp).2.2
     have htR : (Value.int 0).typeOf = prog.tyCtx (tmpName tmp1) := by
       simp [Value.typeOf]; exact (tyCtx_tmp_wt prog hnt tmp1).symm
@@ -1463,7 +1463,7 @@ theorem compileBool_wt (prog : Program)
     have ⟨hi_wt, hi_ty⟩ := compileExpr_wt prog hnt idx hci offset nextTmp
     simp only [compileBool]
     exact ⟨allWTI_append' hi_wt (allWTI_one (.arrLoad (tyCtx_tmp_wt prog hnt _) hi_ty hety.symm)),
-           .cmpLit (tyCtx_tmp_wt prog hnt _) (by native_decide) (by native_decide)⟩
+           .cmp (by simp [ExprHasTy]; exact tyCtx_tmp_wt prog hnt _) (by simp [ExprHasTy])⟩
   | fcmp op a b =>
     simp [Program.checkSBool, Bool.and_eq_true] at hchk
     obtain ⟨hca, hcb⟩ := hchk

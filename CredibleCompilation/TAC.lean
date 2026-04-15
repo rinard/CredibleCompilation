@@ -192,15 +192,15 @@ inductive Step (p : Prog) : Cfg → Cfg → Prop where
       Step p (.run pc σ am) (.run (pc + 1) (σ[x ↦ .int (op.eval a b)]) am)
 
   | boolop : p[pc]? = some (.boolop x be) →
-      Step p (.run pc σ am) (.run (pc + 1) (σ[x ↦ .bool (be.eval σ)]) am)
+      Step p (.run pc σ am) (.run (pc + 1) (σ[x ↦ .bool (be.eval σ am)]) am)
 
   | goto   : p[pc]? = some (.goto l) →
       Step p (.run pc σ am) (.run l σ am)
 
-  | iftrue : p[pc]? = some (.ifgoto b l) → b.eval σ = true →
+  | iftrue : p[pc]? = some (.ifgoto b l) → b.eval σ am = true →
       Step p (.run pc σ am) (.run l σ am)
 
-  | iffall : p[pc]? = some (.ifgoto b l) → b.eval σ = false →
+  | iffall : p[pc]? = some (.ifgoto b l) → b.eval σ am = false →
       Step p (.run pc σ am) (.run (pc + 1) σ am)
 
   | halt   : p[pc]? = some .halt →
@@ -449,8 +449,8 @@ theorem Step.store_congr {p : Prog} {pc : Nat} {σ τ : Store} {am : ArrayMem} {
     · rw [← hagree]; exact hz
   | boolop h => exact ⟨_, .boolop h⟩
   | goto   h => exact ⟨_, .goto h⟩
-  | iftrue h hne => exact ⟨_, .iftrue h (BoolExpr.eval_congr _ σ τ hagree ▸ hne)⟩
-  | iffall h heq => exact ⟨_, .iffall h (BoolExpr.eval_congr _ σ τ hagree ▸ heq)⟩
+  | iftrue h hne => exact ⟨_, .iftrue h (BoolExpr.eval_congr _ σ τ am hagree ▸ hne)⟩
+  | iffall h heq => exact ⟨_, .iffall h (BoolExpr.eval_congr _ σ τ am hagree ▸ heq)⟩
   | halt   h => exact ⟨_, .halt h⟩
   | error h hy hz hs =>
     refine ⟨_, .error h ?_ ?_ hs⟩
@@ -548,7 +548,7 @@ def observe (p : Prog) (obs : List Var) (c : Cfg) : Observation :=
 --  4:  goto 0             -- loop back
 
 def sumProg : Prog := .ofCode #[
-  TAC.ifgoto (.cmpLit .ne "n" 0) 2,       -- 0
+  TAC.ifgoto (.cmp .ne (.var "n") (.lit 0)) 2,       -- 0
   TAC.halt,                               -- 1
   TAC.binop  "acc" .add "acc" "n",        -- 2
   TAC.binop  "n"   .sub "n"   "one",      -- 3

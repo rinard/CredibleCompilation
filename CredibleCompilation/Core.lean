@@ -304,23 +304,7 @@ inductive FloatCmpOp | feq | fne | flt | fle deriving Repr, DecidableEq
     are uninterpreted predicates over BitVec 64. -/
 opaque FloatCmpOp.eval : FloatCmpOp → BitVec 64 → BitVec 64 → Bool
 
-/-- IEEE 754: `a < b ↔ ¬(b ≤ a)` for all bit patterns (including NaN, where
-    both sides are false/true consistently since `flt` and `fle` both return
-    false for NaN operands). -/
-axiom FloatCmpOp.flt_iff_not_fle (a b : BitVec 64) :
-  FloatCmpOp.eval .flt a b = !FloatCmpOp.eval .fle b a
-
-/-- IEEE 754: `a ≤ b ↔ ¬(b < a)`. Flip of `flt_iff_not_fle`. -/
-axiom FloatCmpOp.fle_iff_not_flt (a b : BitVec 64) :
-  FloatCmpOp.eval .fle a b = !FloatCmpOp.eval .flt b a
-
-/-- IEEE 754: equality is symmetric. -/
-axiom FloatCmpOp.feq_comm (a b : BitVec 64) :
-  FloatCmpOp.eval .feq a b = FloatCmpOp.eval .feq b a
-
-/-- IEEE 754: inequality is symmetric. -/
-axiom FloatCmpOp.fne_comm (a b : BitVec 64) :
-  FloatCmpOp.eval .fne a b = FloatCmpOp.eval .fne b a
+-- IEEE 754 flip axioms removed: no longer needed with Expr operands in BoolExpr
 
 /-- Convert a signed integer (BitVec 64) to float (BitVec 64).
     Opaque — corresponds to ARM64 `scvtf`. -/
@@ -514,45 +498,59 @@ theorem Expr.eval_noArrRead (e : Expr) (σ : Store) (am₁ am₂ : ArrayMem)
 -- § 2c. Boolean expressions
 -- ============================================================
 
-/-- Boolean expressions for conditional branches. -/
+/-- Boolean expressions for conditional branches.
+    Comparisons take `Expr` operands so that literals on either side are
+    representable without flip logic (`cmpLit`/`fcmpLit` are gone). -/
 inductive BoolExpr where
-  | lit    : Bool → BoolExpr                   -- true / false literal
-  | bvar   : Var → BoolExpr                    -- read a boolean variable
-  | cmp    : CmpOp → Var → Var → BoolExpr     -- x op y (integer comparison)
-  | cmpLit : CmpOp → Var → BitVec 64 → BoolExpr     -- x op n (variable vs literal)
-  | not    : BoolExpr → BoolExpr
-  | fcmp    : FloatCmpOp → Var → Var → BoolExpr      -- float comparison
-  | fcmpLit : FloatCmpOp → Var → BitVec 64 → BoolExpr  -- x fop n (variable vs float literal)
+  | lit  : Bool → BoolExpr                         -- true / false literal
+  | bvar : Var → BoolExpr                          -- read a boolean variable
+  | cmp  : CmpOp → Expr → Expr → BoolExpr         -- integer comparison
+  | not  : BoolExpr → BoolExpr
+  | fcmp : FloatCmpOp → Expr → Expr → BoolExpr    -- float comparison
   deriving Repr, DecidableEq
 
-/-- Evaluate a boolean expression. Uses `.toInt`/`.toBool` extractors;
-    under well-typedness the extractors are faithful. -/
-def BoolExpr.eval (σ : Store) : BoolExpr → Bool
-  | .lit b         => b
-  | .bvar x        => (σ x).toBool
-  | .cmp op x y    => op.eval (σ x).toInt (σ y).toInt
-  | .cmpLit op x n => op.eval (σ x).toInt n
-  | .not e         => !e.eval σ
-  | .fcmp op x y      => FloatCmpOp.eval op (σ x).toFloat (σ y).toFloat
-  | .fcmpLit op x n   => FloatCmpOp.eval op (σ x).toFloat n
+/-- Evaluate a boolean expression. Uses `Expr.eval` for operands. -/
+def BoolExpr.eval (σ : Store) (am : ArrayMem) : BoolExpr → Bool
+  | .lit b       => b
+  | .bvar x      => (σ x).toBool
+  | .cmp op a b  => op.eval (a.eval σ am).toInt (b.eval σ am).toInt
+  | .not e       => !e.eval σ am
+  | .fcmp op a b => FloatCmpOp.eval op (a.eval σ am).toFloat (b.eval σ am).toFloat
 
-theorem BoolExpr.eval_congr (cond : BoolExpr) (σ τ : Store)
-    (hagree : ∀ y, σ y = τ y) : cond.eval σ = cond.eval τ := by
+theorem Expr.eval_congr (e : Expr) (σ τ : Store) (am : ArrayMem)
+    (hagree : ∀ y, σ y = τ y) : e.eval σ am = e.eval τ am := by
+  induction e with
+  | var v => simp [Expr.eval, hagree]
+  | lit _ | blit _ | flit _ => simp [Expr.eval]
+  | bin _ a b iha ihb => simp [Expr.eval, iha, ihb]
+  | tobool e ih => simp [Expr.eval, ih]
+  | cmpE _ a b iha ihb => simp [Expr.eval, iha, ihb]
+  | cmpLitE _ a _ ih => simp [Expr.eval, ih]
+  | notE e ih => simp [Expr.eval, ih]
+  | andE a b iha ihb => simp [Expr.eval, iha, ihb]
+  | orE a b iha ihb => simp [Expr.eval, iha, ihb]
+  | arrRead _ idx ih => simp [Expr.eval, ih]
+  | fbin _ a b iha ihb => simp [Expr.eval, iha, ihb]
+  | fcmpE _ a b iha ihb => simp [Expr.eval, iha, ihb]
+  | intToFloat e ih => simp [Expr.eval, ih]
+  | floatToInt e ih => simp [Expr.eval, ih]
+  | floatUnary _ e ih => simp [Expr.eval, ih]
+  | ftern _ a b c iha ihb ihc => simp [Expr.eval, iha, ihb, ihc]
+  | farrRead _ idx ih => simp [Expr.eval, ih]
+
+theorem BoolExpr.eval_congr (cond : BoolExpr) (σ τ : Store) (am : ArrayMem)
+    (hagree : ∀ y, σ y = τ y) : cond.eval σ am = cond.eval τ am := by
   induction cond with
   | lit b => simp [BoolExpr.eval]
   | bvar x => simp [BoolExpr.eval, hagree]
-  | cmp op x y => simp [BoolExpr.eval, hagree]
-  | cmpLit op x n => simp [BoolExpr.eval, hagree]
+  | cmp op a b => simp [BoolExpr.eval, Expr.eval_congr a σ τ am hagree, Expr.eval_congr b σ τ am hagree]
   | not e ih => simp [BoolExpr.eval, ih]
-  | fcmp op x y => simp [BoolExpr.eval, hagree]
-  | fcmpLit op x n => simp [BoolExpr.eval, hagree]
+  | fcmp op a b => simp [BoolExpr.eval, Expr.eval_congr a σ τ am hagree, Expr.eval_congr b σ τ am hagree]
 
 /-- Collect all variable names from a boolean expression. -/
 def BoolExpr.vars : BoolExpr → List Var
-  | .lit _          => []
-  | .bvar x         => [x]
-  | .cmp _ x y      => [x, y]
-  | .cmpLit _ x _   => [x]
-  | .not e          => e.vars
-  | .fcmp _ x y     => [x, y]
-  | .fcmpLit _ x _  => [x]
+  | .lit _        => []
+  | .bvar x       => [x]
+  | .cmp _ a b    => a.freeVars ++ b.freeVars
+  | .not e        => e.vars
+  | .fcmp _ a b   => a.freeVars ++ b.freeVars

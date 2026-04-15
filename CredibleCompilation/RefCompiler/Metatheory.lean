@@ -412,7 +412,7 @@ private theorem loop_one_iter
       some (.ifgoto (.not be) (offset + codeBool.length + 1 + codeBody.length + 1)) := by
     have := hcode.left.left.right.head
     simp only [List.length_append, List.length_cons, List.length_nil] at this; exact this
-  have hnotbe : (BoolExpr.not be).eval σ_bool = false := by
+  have hnotbe : (BoolExpr.not be).eval σ_bool am = false := by
     simp [BoolExpr.eval, heval_bool, hb]
   have hexec_if := FragExec.single_iffalse (am := am) hifg hnotbe
   -- Step 3: Execute body

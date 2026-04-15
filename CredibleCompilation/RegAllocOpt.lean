@@ -230,11 +230,15 @@ where
     match be with
     | .lit b       => .lit b
     | .bvar v      => .bvar (r v)
-    | .cmp op x y  => .cmp op (r x) (r y)
-    | .cmpLit op x n => .cmpLit op (r x) n
+    | .cmp op a b  => .cmp op (renameExprVars r a) (renameExprVars r b)
     | .not e       => .not (renameBoolExpr coloring e)
-    | .fcmp op x y => .fcmp op (r x) (r y)
-    | .fcmpLit op x n => .fcmpLit op (r x) n
+    | .fcmp op a b => .fcmp op (renameExprVars r a) (renameExprVars r b)
+  renameExprVars (r : Var → Var) : Expr → Expr
+    | .var v  => .var (r v)
+    | .lit n  => .lit n
+    | .flit f => .flit f
+    | .blit b => .blit b
+    | e       => e  -- complex Expr: shouldn't occur in BoolExpr operands
 
 /-- Generate copy-back instructions for observable variables that were renamed.
     Returns `copy origName regName` for each observable that has a coloring entry. -/

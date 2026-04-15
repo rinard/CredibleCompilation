@@ -52,16 +52,23 @@ def evalBoolConst (cm : ConstMap) : BoolExpr → Option Bool
     match cmLookup cm x with
     | some (.bool b) => some b
     | _ => none
-  | .cmp op x y =>
-    match cmLookup cm x, cmLookup cm y with
-    | some (.int a), some (.int b) => some (op.eval a b)
+  | .cmp op a b =>
+    match a, b with
+    | .var x, .var y =>
+      match cmLookup cm x, cmLookup cm y with
+      | some (.int va), some (.int vb) => some (op.eval va vb)
+      | _, _ => none
+    | .var x, .lit n =>
+      match cmLookup cm x with
+      | some (.int va) => some (op.eval va n)
+      | _ => none
+    | .lit n, .var y =>
+      match cmLookup cm y with
+      | some (.int vb) => some (op.eval n vb)
+      | _ => none
+    | .lit va, .lit vb => some (op.eval va vb)
     | _, _ => none
-  | .cmpLit op x n =>
-    match cmLookup cm x with
-    | some (.int a) => some (op.eval a n)
-    | _ => none
-  | .fcmp _op _x _y => none
-  | .fcmpLit _op _x _n => none
+  | .fcmp _op _a _b => none
   | .not e => evalBoolConst cm e |>.map (!·)
 
 -- ============================================================

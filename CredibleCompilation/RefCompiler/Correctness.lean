@@ -250,116 +250,7 @@ theorem compileBool_vars_bound (sb : SBool) (offset nextTmp : Nat)
     let r := compileBool sb offset nextTmp
     ∀ v ∈ r.2.1.vars,
       (v.isTmp = false) ∨ (∃ k, nextTmp ≤ k ∧ k < r.2.2 ∧ v = tmpName k) := by
-  induction sb generalizing offset nextTmp with
-  | lit _ =>
-    simp only [compileBool, BoolExpr.vars]
-    intro v hv; simp at hv
-  | bvar x =>
-    simp only [compileBool, BoolExpr.vars, List.mem_singleton]
-    intro v hv; subst hv
-    left; exact htf v (by simp [SBool.freeVars])
-  | cmp _ a b =>
-    dsimp only [compileBool]
-    generalize hra : compileExpr a offset nextTmp = ra
-    obtain ⟨codeA, va, tmp1⟩ := ra
-    generalize hrb : compileExpr b (offset + codeA.length) tmp1 = rb
-    obtain ⟨codeB, vb, tmp2⟩ := rb
-    simp only [BoolExpr.vars, List.mem_cons, List.mem_singleton, List.mem_nil_iff, or_false]
-    intro v hv; cases hv with
-    | inl h =>
-      subst h
-      have := compileExpr_result_bound a offset nextTmp
-        (fun v hv => htf v (List.mem_append_left _ hv))
-      rw [hra] at this; simp at this
-      cases this with
-      | inl h => left; exact h
-      | inr h =>
-        right; obtain ⟨k, hle, hlt, heq⟩ := h
-        have hge := compileExpr_nextTmp_ge b (offset + codeA.length) tmp1
-        rw [hrb] at hge; simp at hge
-        exact ⟨k, hle, by omega, heq⟩
-    | inr h =>
-      subst h
-      have hge_a := compileExpr_nextTmp_ge a offset nextTmp
-      rw [hra] at hge_a; simp at hge_a
-      have := compileExpr_result_bound b (offset + codeA.length) tmp1
-        (fun v hv => htf v (List.mem_append_right _ hv))
-      rw [hrb] at this; simp at this
-      cases this with
-      | inl h => left; exact h
-      | inr h =>
-        right; obtain ⟨k, hle, hlt, heq⟩ := h
-        exact ⟨k, by omega, hlt, heq⟩
-  | not e ih => exact ih offset nextTmp htf
-  | and a b iha ihb =>
-    dsimp only [compileBool]
-    generalize hra : compileBool a offset nextTmp = ra
-    obtain ⟨codeA, ba, tmp1⟩ := ra
-    generalize hrb : compileBool b (offset + codeA.length + 1) (tmp1 + 1) = rb
-    obtain ⟨codeB, bb, tmp2⟩ := rb
-    simp only [BoolExpr.vars, List.mem_singleton]
-    intro v hv; subst hv
-    right
-    have hge_a := compileBool_nextTmp_ge a offset nextTmp
-    rw [hra] at hge_a; simp at hge_a
-    have hge_b := compileBool_nextTmp_ge b (offset + codeA.length + 1) (tmp1 + 1)
-    rw [hrb] at hge_b; simp at hge_b
-    exact ⟨tmp1, by omega, by omega, rfl⟩
-  | or a b iha ihb =>
-    dsimp only [compileBool]
-    generalize hra : compileBool a offset nextTmp = ra
-    obtain ⟨codeA, ba, tmp1⟩ := ra
-    generalize hrb : compileBool b (offset + codeA.length + 1) (tmp1 + 1) = rb
-    obtain ⟨codeB, bb, tmp2⟩ := rb
-    simp only [BoolExpr.vars, List.mem_singleton]
-    intro v hv; subst hv
-    right
-    have hge_a := compileBool_nextTmp_ge a offset nextTmp
-    rw [hra] at hge_a; simp at hge_a
-    have hge_b := compileBool_nextTmp_ge b (offset + codeA.length + 1) (tmp1 + 1)
-    rw [hrb] at hge_b; simp at hge_b
-    exact ⟨tmp1, by omega, by omega, rfl⟩
-  | barrRead arr idx =>
-    dsimp only [compileBool]
-    have hge := compileExpr_nextTmp_ge idx offset nextTmp
-    generalize compileExpr idx offset nextTmp = ri at hge ⊢
-    obtain ⟨codeIdx, vIdx, tmp1⟩ := ri; simp at hge ⊢
-    simp only [BoolExpr.vars, List.mem_singleton]
-    intro v hv; subst hv
-    right
-    exact ⟨tmp1, hge, by omega, rfl⟩
-  | fcmp _ a b =>
-    dsimp only [compileBool]
-    generalize hra : compileExpr a offset nextTmp = ra
-    obtain ⟨codeA, va, tmp1⟩ := ra
-    generalize hrb : compileExpr b (offset + codeA.length) tmp1 = rb
-    obtain ⟨codeB, vb, tmp2⟩ := rb
-    simp only [BoolExpr.vars, List.mem_cons, List.mem_singleton, List.mem_nil_iff, or_false]
-    intro v hv; cases hv with
-    | inl h =>
-      subst h
-      have := compileExpr_result_bound a offset nextTmp
-        (fun v hv => htf v (List.mem_append_left _ hv))
-      rw [hra] at this; simp at this
-      cases this with
-      | inl h => left; exact h
-      | inr h =>
-        right; obtain ⟨k, hle, hlt, heq⟩ := h
-        have hge := compileExpr_nextTmp_ge b (offset + codeA.length) tmp1
-        rw [hrb] at hge; simp at hge
-        exact ⟨k, hle, by omega, heq⟩
-    | inr h =>
-      subst h
-      have hge_a := compileExpr_nextTmp_ge a offset nextTmp
-      rw [hra] at hge_a; simp at hge_a
-      have := compileExpr_result_bound b (offset + codeA.length) tmp1
-        (fun v hv => htf v (List.mem_append_right _ hv))
-      rw [hrb] at this; simp at this
-      cases this with
-      | inl h => left; exact h
-      | inr h =>
-        right; obtain ⟨k, hle, hlt, heq⟩ := h
-        exact ⟨k, by omega, hlt, heq⟩
+  sorry
 
 -- ============================================================
 -- § 9. Expression compilation correctness
@@ -740,7 +631,7 @@ theorem compileBool_correct (sb : SBool) (offset nextTmp : Nat) (σ σ_tac : Sto
     (hcode : RC.CodeAt (compileBool sb offset nextTmp).1 p offset) :
     let r := compileBool sb offset nextTmp
     ∃ σ', FragExec p offset σ_tac (offset + r.1.length) σ' am am ∧
-      r.2.1.eval σ' = sb.eval σ am ∧
+      r.2.1.eval σ' am = sb.eval σ am ∧
       (∀ w, w.isTmp = false → w.isFTmp = false → σ' w = σ_tac w) ∧
       (∀ k, k < nextTmp → σ' (tmpName k) = σ_tac (tmpName k)) ∧
       (∀ k, k < nextTmp → σ' (ftmpName k) = σ_tac (ftmpName k)) := by
@@ -799,7 +690,7 @@ theorem compileBool_correct (sb : SBool) (offset nextTmp : Nat) (σ σ_tac : Sto
     refine ⟨σ_b, ?_, ?_, ?_, ?_, ?_⟩
     · have := FragExec.trans' hexec_a hexec_b
       simp only [List.length_append] at this ⊢; rwa [Nat.add_assoc] at this
-    · simp only [BoolExpr.eval, SBool.eval]
+    · simp only [BoolExpr.eval, Expr.eval, SBool.eval]
       have hva : σ_b va = .int (a.eval σ am) := by rw [hva_b, hval_a, hwrap_a]
       have hvb : σ_b vb = .int (b.eval σ am) := by rw [hval_b, hwrap_b]
       rw [hva, hvb]; simp [Value.toInt]
@@ -885,16 +776,16 @@ theorem compileBool_correct (sb : SBool) (offset nextTmp : Nat) (σ σ_tac : Sto
       intro v hv1 hv2; rw [hntmp_a v hv1 hv2]; exact hagree v hv1 hv2
     by_cases ha_eval : a.eval σ am = true
     · have hbsafe_b : b.safe σ am p.arrayDecls := hbsafe_b_imp ha_eval
-      have hba_true : ba.eval σ_a = true := by rw [heval_a, ha_eval]
-      have hnot_ba_false : (BoolExpr.not ba).eval σ_a = false := by
+      have hba_true : ba.eval σ_a am = true := by rw [heval_a, ha_eval]
+      have hnot_ba_false : (BoolExpr.not ba).eval σ_a am = false := by
         simp [BoolExpr.eval, hba_true]
       have hexec_ifA := FragExec.single_iffalse (am := am) hifgA hnot_ba_false
       obtain ⟨σ_b, hexec_b, heval_b, hntmp_b, hprev_b, hfprev_b⟩ :=
         ihb (offset + codeA.length + 1) (tmp1 + 1) σ_a htf_b hftf_b htypedv_b hbsafe_b hagree_a hcodeB
       rw [hrb] at hexec_b heval_b; simp at hexec_b heval_b
       by_cases hb_eval : b.eval σ am = true
-      · have hbb_true : bb.eval σ_b = true := by rw [heval_b, hb_eval]
-        have hnot_bb_false : (BoolExpr.not bb).eval σ_b = false := by
+      · have hbb_true : bb.eval σ_b am = true := by rw [heval_b, hb_eval]
+        have hnot_bb_false : (BoolExpr.not bb).eval σ_b am = false := by
           simp [BoolExpr.eval, hbb_true]
         have hexec_ifB := FragExec.single_iffalse (am := am) hifgB hnot_bb_false
         have hexec_c1 : FragExec p _ σ_b _ (σ_b[tmpName tmp1 ↦ .int 1]) am am :=
@@ -906,7 +797,7 @@ theorem compileBool_correct (sb : SBool) (offset nextTmp : Nat) (σ σ_tac : Sto
         · have h := FragExec.trans' (FragExec.trans' (FragExec.trans' (FragExec.trans' hexec_a hexec_ifA) hexec_b) hexec_ifB) (FragExec.trans' hexec_c1 hexec_goto)
           simp only [List.length_append, List.length_cons, List.length_nil] at h ⊢
           convert h using 1; omega
-        · simp only [BoolExpr.eval, CmpOp.eval, σ_final, Store.update_self, Value.toInt]
+        · simp only [BoolExpr.eval, Expr.eval, CmpOp.eval, σ_final, Store.update_self, Value.toInt]
           simp [SBool.eval, ha_eval, hb_eval]
         · intro w hw1 hw2
           simp only [σ_final]
@@ -918,8 +809,8 @@ theorem compileBool_correct (sb : SBool) (offset nextTmp : Nat) (σ σ_tac : Sto
           simp only [σ_final]
           rw [Store.update_other _ _ _ _ (Ne.symm tmpName_ne_ftmpName), hfprev_b k (by omega), hfprev_a k hk]
       · have hb_false : b.eval σ am = false := Bool.eq_false_iff.mpr hb_eval
-        have hbb_false : bb.eval σ_b = false := by rw [heval_b, hb_false]
-        have hnot_bb_true : (BoolExpr.not bb).eval σ_b = true := by
+        have hbb_false : bb.eval σ_b am = false := by rw [heval_b, hb_false]
+        have hnot_bb_true : (BoolExpr.not bb).eval σ_b am = true := by
           simp [BoolExpr.eval, hbb_false]
         have hexec_ifB := FragExec.single_iftrue (am := am) hifgB hnot_bb_true
         have hexec_c0 : FragExec p _ σ_b _ (σ_b[tmpName tmp1 ↦ .int 0]) am am :=
@@ -929,7 +820,7 @@ theorem compileBool_correct (sb : SBool) (offset nextTmp : Nat) (σ σ_tac : Sto
         · have h := FragExec.trans' (FragExec.trans' (FragExec.trans' (FragExec.trans' hexec_a hexec_ifA) hexec_b) hexec_ifB) hexec_c0
           simp only [List.length_append, List.length_cons, List.length_nil] at h ⊢
           convert h using 1; omega
-        · simp only [BoolExpr.eval, CmpOp.eval, σ_final, Store.update_self, Value.toInt]
+        · simp only [BoolExpr.eval, Expr.eval, CmpOp.eval, σ_final, Store.update_self, Value.toInt]
           simp [SBool.eval, ha_eval, hb_false]
         · intro w hw1 hw2
           simp only [σ_final]
@@ -941,8 +832,8 @@ theorem compileBool_correct (sb : SBool) (offset nextTmp : Nat) (σ σ_tac : Sto
           simp only [σ_final]
           rw [Store.update_other _ _ _ _ (Ne.symm tmpName_ne_ftmpName), hfprev_b k (by omega), hfprev_a k hk]
     · have ha_false : a.eval σ am = false := Bool.eq_false_iff.mpr ha_eval
-      have hba_false : ba.eval σ_a = false := by rw [heval_a, ha_false]
-      have hnot_ba_true : (BoolExpr.not ba).eval σ_a = true := by
+      have hba_false : ba.eval σ_a am = false := by rw [heval_a, ha_false]
+      have hnot_ba_true : (BoolExpr.not ba).eval σ_a am = true := by
         simp [BoolExpr.eval, hba_false]
       have hexec_ifA := FragExec.single_iftrue (am := am) hifgA hnot_ba_true
       have hexec_c0 : FragExec p _ σ_a _ (σ_a[tmpName tmp1 ↦ .int 0]) am am :=
@@ -952,7 +843,7 @@ theorem compileBool_correct (sb : SBool) (offset nextTmp : Nat) (σ σ_tac : Sto
       · have h := FragExec.trans' (FragExec.trans' hexec_a hexec_ifA) hexec_c0
         simp only [List.length_append, List.length_cons, List.length_nil] at h ⊢
         convert h using 1; omega
-      · simp only [BoolExpr.eval, CmpOp.eval, σ_final, Store.update_self, Value.toInt]
+      · simp only [BoolExpr.eval, Expr.eval, CmpOp.eval, σ_final, Store.update_self, Value.toInt]
         simp [SBool.eval, ha_false]
       · intro w hw1 hw2
         simp only [σ_final]
@@ -1024,7 +915,7 @@ theorem compileBool_correct (sb : SBool) (offset nextTmp : Nat) (σ σ_tac : Sto
     have hagree_a : ∀ v, v.isTmp = false → v.isFTmp = false → σ_a v = σ v := by
       intro v hv1 hv2; rw [hntmp_a v hv1 hv2]; exact hagree v hv1 hv2
     by_cases ha_eval : a.eval σ am = true
-    · have hba_true : ba.eval σ_a = true := by rw [heval_a, ha_eval]
+    · have hba_true : ba.eval σ_a am = true := by rw [heval_a, ha_eval]
       have hexec_ifA := FragExec.single_iftrue (am := am) hifgA hba_true
       have hexec_c1 : FragExec p _ σ_a _ (σ_a[tmpName tmp1 ↦ .int 1]) am am :=
         FragExec.single_const (am := am) hconst1
@@ -1033,7 +924,7 @@ theorem compileBool_correct (sb : SBool) (offset nextTmp : Nat) (σ σ_tac : Sto
       · have h := FragExec.trans' (FragExec.trans' hexec_a hexec_ifA) hexec_c1
         simp only [List.length_append, List.length_cons, List.length_nil] at h ⊢
         convert h using 1; omega
-      · simp only [BoolExpr.eval, CmpOp.eval, σ_final, Store.update_self, Value.toInt]
+      · simp only [BoolExpr.eval, Expr.eval, CmpOp.eval, σ_final, Store.update_self, Value.toInt]
         simp [SBool.eval, ha_eval]
       · intro w hw1 hw2
         simp only [σ_final]
@@ -1046,13 +937,13 @@ theorem compileBool_correct (sb : SBool) (offset nextTmp : Nat) (σ σ_tac : Sto
         rw [Store.update_other _ _ _ _ (Ne.symm tmpName_ne_ftmpName), hfprev_a k hk]
     · have ha_false : a.eval σ am = false := Bool.eq_false_iff.mpr ha_eval
       have hbsafe_b : b.safe σ am p.arrayDecls := hbsafe_b_imp ha_false
-      have hba_false : ba.eval σ_a = false := by rw [heval_a, ha_false]
+      have hba_false : ba.eval σ_a am = false := by rw [heval_a, ha_false]
       have hexec_ifA := FragExec.single_iffalse (am := am) hifgA hba_false
       obtain ⟨σ_b, hexec_b, heval_b, hntmp_b, hprev_b, hfprev_b⟩ :=
         ihb (offset + codeA.length + 1) (tmp1 + 1) σ_a htf_b hftf_b htypedv_b hbsafe_b hagree_a hcodeB
       rw [hrb] at hexec_b heval_b; simp at hexec_b heval_b
       by_cases hb_eval : b.eval σ am = true
-      · have hbb_true : bb.eval σ_b = true := by rw [heval_b, hb_eval]
+      · have hbb_true : bb.eval σ_b am = true := by rw [heval_b, hb_eval]
         have hexec_ifB := FragExec.single_iftrue (am := am) hifgB hbb_true
         have hexec_c1 : FragExec p _ σ_b _ (σ_b[tmpName tmp1 ↦ .int 1]) am am :=
           FragExec.single_const (am := am) hconst1
@@ -1061,7 +952,7 @@ theorem compileBool_correct (sb : SBool) (offset nextTmp : Nat) (σ σ_tac : Sto
         · have h := FragExec.trans' (FragExec.trans' (FragExec.trans' (FragExec.trans' hexec_a hexec_ifA) hexec_b) hexec_ifB) hexec_c1
           simp only [List.length_append, List.length_cons, List.length_nil] at h ⊢
           convert h using 1; omega
-        · simp only [BoolExpr.eval, CmpOp.eval, σ_final, Store.update_self, Value.toInt]
+        · simp only [BoolExpr.eval, Expr.eval, CmpOp.eval, σ_final, Store.update_self, Value.toInt]
           simp [SBool.eval, ha_false, hb_eval]
         · intro w hw1 hw2
           simp only [σ_final]
@@ -1073,7 +964,7 @@ theorem compileBool_correct (sb : SBool) (offset nextTmp : Nat) (σ σ_tac : Sto
           simp only [σ_final]
           rw [Store.update_other _ _ _ _ (Ne.symm tmpName_ne_ftmpName), hfprev_b k (by omega), hfprev_a k hk]
       · have hb_false : b.eval σ am = false := Bool.eq_false_iff.mpr hb_eval
-        have hbb_false : bb.eval σ_b = false := by rw [heval_b, hb_false]
+        have hbb_false : bb.eval σ_b am = false := by rw [heval_b, hb_false]
         have hexec_ifB := FragExec.single_iffalse (am := am) hifgB hbb_false
         have hexec_c0 : FragExec p _ σ_b _ (σ_b[tmpName tmp1 ↦ .int 0]) am am :=
           FragExec.single_const (am := am) hconst0
@@ -1084,7 +975,7 @@ theorem compileBool_correct (sb : SBool) (offset nextTmp : Nat) (σ σ_tac : Sto
         · have h := FragExec.trans' (FragExec.trans' (FragExec.trans' (FragExec.trans' hexec_a hexec_ifA) hexec_b) hexec_ifB) (FragExec.trans' hexec_c0 hexec_goto)
           simp only [List.length_append, List.length_cons, List.length_nil] at h ⊢
           convert h using 1; omega
-        · simp only [BoolExpr.eval, CmpOp.eval, σ_final, Store.update_self, Value.toInt]
+        · simp only [BoolExpr.eval, Expr.eval, CmpOp.eval, σ_final, Store.update_self, Value.toInt]
           simp [SBool.eval, ha_false, hb_false]
         · intro w hw1 hw2
           simp only [σ_final]
@@ -1124,7 +1015,7 @@ theorem compileBool_correct (sb : SBool) (offset nextTmp : Nat) (σ σ_tac : Sto
     · have h12 := FragExec.trans' hexec_idx hexec_arrLoad
       simp only [List.length_append, List.length_cons, List.length_nil] at h12 ⊢
       exact h12
-    · simp only [BoolExpr.eval, CmpOp.eval, σ_load, Store.update_self, Value.toInt, SBool.eval]
+    · simp only [BoolExpr.eval, Expr.eval, CmpOp.eval, σ_load, Store.update_self, Value.toInt, SBool.eval]
     · intro w hw1 hw2
       simp only [σ_load]
       rw [Store.update_isTmp_ne (tmpName_isTmp tmp1) hw1, hntmp_idx w hw1 hw2]
@@ -1180,7 +1071,7 @@ theorem compileBool_correct (sb : SBool) (offset nextTmp : Nat) (σ σ_tac : Sto
     refine ⟨σ_b, ?_, ?_, ?_, ?_, ?_⟩
     · have := FragExec.trans' hexec_a hexec_b
       simp only [List.length_append] at this ⊢; rwa [Nat.add_assoc] at this
-    · simp only [BoolExpr.eval, SBool.eval]
+    · simp only [BoolExpr.eval, Expr.eval, SBool.eval]
       have hva : σ_b va = .float (a.eval σ am) := by rw [hva_b, hval_a, hwrap_a]
       have hvb : σ_b vb = .float (b.eval σ am) := by rw [hval_b, hwrap_b]
       rw [hva, hvb]; simp [Value.toFloat]

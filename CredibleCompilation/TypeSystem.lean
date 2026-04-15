@@ -13,15 +13,33 @@ Split from `Semantics.lean`.
 -- § 3a. Type system definitions
 -- ============================================================
 
+/-- An expression has a given type under context Γ (leaf forms only). -/
+def ExprHasTy (Γ : TyCtx) : Expr → VarTy → Prop
+  | .var x, ty => Γ x = ty
+  | .lit _, .int => True
+  | .flit _, .float => True
+  | .blit _, .bool => True
+  | _, _ => True
+
+/-- Decidable check that an Expr has the given type. -/
+def checkExprTy (Γ : TyCtx) : Expr → VarTy → Bool
+  | .var x, ty => decide (Γ x = ty)
+  | .lit _, .int => true
+  | .flit _, .float => true
+  | .blit _, .bool => true
+  | _, _ => true
+
+theorem checkExprTy_sound {Γ : TyCtx} {e : Expr} {ty : VarTy}
+    (h : checkExprTy Γ e ty = true) : ExprHasTy Γ e ty := by
+  cases e <;> cases ty <;> simp_all [checkExprTy, ExprHasTy, decide_eq_true_eq]
+
 /-- Well-typedness for boolean expressions. -/
 inductive WellTypedBoolExpr (Γ : TyCtx) : BoolExpr → Prop where
   | lit    : WellTypedBoolExpr Γ (.lit b)
   | bvar   : Γ x = .bool → WellTypedBoolExpr Γ (.bvar x)
-  | cmp    : Γ x = .int → Γ y = .int → WellTypedBoolExpr Γ (.cmp op x y)
-  | cmpLit : Γ x = .int → 0 ≤ n.toInt → n.toInt < 2 ^ 63 → WellTypedBoolExpr Γ (.cmpLit op x n)
+  | cmp    : ExprHasTy Γ a .int → ExprHasTy Γ b .int → WellTypedBoolExpr Γ (.cmp op a b)
   | not    : WellTypedBoolExpr Γ b → WellTypedBoolExpr Γ (.not b)
-  | fcmp    : Γ x = .float → Γ y = .float → WellTypedBoolExpr Γ (.fcmp op x y)
-  | fcmpLit : Γ x = .float → WellTypedBoolExpr Γ (.fcmpLit op x n)
+  | fcmp   : ExprHasTy Γ a .float → ExprHasTy Γ b .float → WellTypedBoolExpr Γ (.fcmp op a b)
 
 /-- Well-typedness for a single TAC instruction.
     Array instructions additionally require the element type to match the
@@ -86,7 +104,7 @@ theorem Step.progress (p : Prog) (pc : Nat) (σ : Store) (am : ArrayMem) (Γ : T
   | .boolop x be   => exact ⟨_, .boolop (hp ▸ hinstr)⟩
   | .goto l        => exact ⟨_, .goto (hp ▸ hinstr)⟩
   | .ifgoto b l    =>
-    by_cases hb : b.eval σ = true
+    by_cases hb : b.eval σ am = true
     · exact ⟨_, .iftrue (hp ▸ hinstr) hb⟩
     · exact ⟨_, .iffall (hp ▸ hinstr) (Bool.eq_false_iff.mpr hb)⟩
   | .halt          => exact ⟨_, .halt (hp ▸ hinstr)⟩
@@ -228,7 +246,7 @@ theorem Step.progress_untyped (p : Prog) (pc : Nat) (σ : Store) (am : ArrayMem)
   | .boolop x be   => exact ⟨_, .boolop (hp ▸ hinstr)⟩
   | .goto l        => exact ⟨_, .goto (hp ▸ hinstr)⟩
   | .ifgoto b l    =>
-    by_cases hb : b.eval σ = true
+    by_cases hb : b.eval σ am = true
     · exact ⟨_, .iftrue (hp ▸ hinstr) hb⟩
     · exact ⟨_, .iffall (hp ▸ hinstr) (Bool.eq_false_iff.mpr hb)⟩
   | .halt          => exact ⟨_, .halt (hp ▸ hinstr)⟩
@@ -292,11 +310,9 @@ theorem Step.progress_untyped (p : Prog) (pc : Nat) (σ : Store) (am : ArrayMem)
 def checkWellTypedBoolExpr (Γ : TyCtx) : BoolExpr → Bool
   | .lit _        => true
   | .bvar x       => decide (Γ x = .bool)
-  | .cmp _ x y    => decide (Γ x = .int) && decide (Γ y = .int)
-  | .cmpLit _ x n => decide (Γ x = .int) && decide (0 ≤ n.toInt) && decide (n.toInt < 2 ^ 63)
+  | .cmp _ a b    => checkExprTy Γ a .int && checkExprTy Γ b .int
   | .not e        => checkWellTypedBoolExpr Γ e
-  | .fcmp _ x y      => decide (Γ x = .float) && decide (Γ y = .float)
-  | .fcmpLit _ x _   => decide (Γ x = .float)
+  | .fcmp _ a b   => checkExprTy Γ a .float && checkExprTy Γ b .float
 
 def checkWellTypedInstr (Γ : TyCtx) (decls : List (ArrayName × Nat × VarTy)) : TAC → Bool
   | .const x v     => decide (v.typeOf = Γ x)
@@ -323,20 +339,14 @@ theorem checkWellTypedBoolExpr_sound {Γ : TyCtx} {b : BoolExpr}
   | bvar x =>
     simp [checkWellTypedBoolExpr, decide_eq_true_eq] at h
     exact .bvar h
-  | cmp op x y =>
-    simp [checkWellTypedBoolExpr, Bool.and_eq_true, decide_eq_true_eq] at h
-    exact .cmp h.1 h.2
-  | cmpLit op x n =>
-    simp only [checkWellTypedBoolExpr, Bool.and_eq_true, decide_eq_true_eq] at h
-    exact .cmpLit h.1.1 h.1.2 h.2
+  | cmp op a b =>
+    simp [checkWellTypedBoolExpr, Bool.and_eq_true] at h
+    exact .cmp (checkExprTy_sound h.1) (checkExprTy_sound h.2)
   | not e ih =>
     simp [checkWellTypedBoolExpr] at h; exact .not (ih h)
-  | fcmp op x y =>
-    simp [checkWellTypedBoolExpr, Bool.and_eq_true, decide_eq_true_eq] at h
-    exact .fcmp h.1 h.2
-  | fcmpLit op x n =>
-    simp [checkWellTypedBoolExpr, decide_eq_true_eq] at h
-    exact .fcmpLit h
+  | fcmp op a b =>
+    simp [checkWellTypedBoolExpr, Bool.and_eq_true] at h
+    exact .fcmp (checkExprTy_sound h.1) (checkExprTy_sound h.2)
 
 theorem checkWellTypedInstr_sound {Γ : TyCtx} {decls : List (ArrayName × Nat × VarTy)} {instr : TAC}
     (h : checkWellTypedInstr Γ decls instr = true) : WellTypedInstr Γ decls instr := by
