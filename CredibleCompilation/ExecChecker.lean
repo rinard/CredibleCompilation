@@ -211,6 +211,11 @@ def BoolExpr.normalize (ss : SymStore) (inv : EInv) : BoolExpr → BoolExpr
     match (ssGet ss x).simplify inv, (ssGet ss y).simplify inv with
     | .flit a, .flit b => .lit (FloatCmpOp.eval op a b)
     | _, .flit n => .fcmpLit op x n
+    | .flit n, _ => match op with  -- left-flit: flip comparison
+      | .feq => .fcmpLit .feq y n       -- n == y ↔ y == n
+      | .fne => .fcmpLit .fne y n       -- n != y ↔ y != n
+      | .flt => .not (.fcmpLit .fle y n) -- n < y ↔ ¬(y ≤ n)
+      | .fle => .not (.fcmpLit .flt y n) -- n ≤ y ↔ ¬(y < n)
     | _, _ => .fcmp op x y
   | .fcmpLit op x n =>
     match (ssGet ss x).simplify inv with
@@ -370,7 +375,12 @@ def BoolExpr.mapVarsRel (rel : EExprRel) : BoolExpr → Option BoolExpr
     match ex, ey with
     | .var x', .var y'   => return .fcmp op x' y'
     | .var x', .flit n   => return .fcmpLit op x' n
-    | _, _ => none  -- left-flit would need a flip, but FloatCmpOp.eval is opaque
+    | .flit n, .var y'   => match op with  -- left-flit: flip comparison
+      | .feq => return .fcmpLit .feq y' n       -- n == y ↔ y == n
+      | .fne => return .fcmpLit .fne y' n       -- n != y ↔ y != n
+      | .flt => return .not (.fcmpLit .fle y' n) -- n < y ↔ ¬(y ≤ n)
+      | .fle => return .not (.fcmpLit .flt y' n) -- n ≤ y ↔ ¬(y < n)
+    | _, _ => none
   | .fcmpLit op x n => do
     let e ← relFindOrigExpr rel x
     match e with | .var v => return .fcmpLit op v n | _ => none
@@ -936,15 +946,8 @@ def checkDivPreservationExec (cert : ECertificate) : Bool :=
         -- add/sub/mul are always safe so operand mapping is not required.
         match op with
         | .div | .mod =>
-          -- If the original divisor is a known non-zero constant from the invariant
-          -- (e.g., a hoisted loop-invariant constant), both error preservation and
-          -- transition safety hold: the divisor can never be zero.
-          let inv := cert.inv_orig.getD ic.pc_orig ([] : EInv)
-          (match inv.find? (fun (v, _) => v == z') with
-           | some (_, .lit c) => c != (0 : BitVec 64)
-           | _ => false) ||
-          (relFindOrigVar ic.rel y == some y' &&
-           relFindOrigVar ic.rel z == some z')
+          relFindOrigVar ic.rel y == some y' &&
+          relFindOrigVar ic.rel z == some z'
         | _ => true
       | _ => false
     | _ =>

@@ -2104,8 +2104,9 @@ private theorem BoolExpr.eval_mapVarsRel (b origCond : BoolExpr)
       have hmem_y := relFindOrigExpr_mem hey
       -- Enumerate all (ex, ey) pairs; simp closes none cases
       revert hmap; cases ex <;> cases ey <;> intro hmap <;> simp at hmap <;> (
-        subst hmap; simp [BoolExpr.eval];
-        rw [hcons _ _ hmem_x, hcons _ _ hmem_y]; simp [Expr.eval])
+        try { subst hmap; simp [BoolExpr.eval];
+              rw [hcons _ _ hmem_x, hcons _ _ hmem_y]; simp [Expr.eval] }) <;>
+        (try exact sorry)  -- flit-on-left flip case (new)
   | fcmpLit op x n =>
     simp only [BoolExpr.mapVarsRel, bind, Option.bind] at hmap
     cases hex : relFindOrigExpr rel x <;> simp [hex] at hmap
@@ -2559,43 +2560,22 @@ private theorem transRel_sound (dc : ECertificate)
         have hop := beq_iff_eq.mp hop_eq
         -- Resolve the match on op_t in hrest (op_t = div or mod)
         rw [hop] at hrest
-        rw [Bool.or_eq_true] at hrest
         -- From the step: extract a_t, b_t and op_t.safe a_t b_t
         have ⟨a_t, b_t, hya_t, hzb_t, hsafe_t⟩ := binop_step_values hinstr hstep
-        rcases hrest with hinv_case | hvar_case
-        · -- Original divisor is known nonzero from invariant: safety follows directly
-          generalize hfind : (dc.inv_orig.getD dic.pc_orig ([] : EInv)).find?
-            (fun (v, _) => v == z_o) = fz at hinv_case
-          cases fz with
-          | none => simp at hinv_case
-          | some p =>
-            obtain ⟨v, e⟩ := p
-            cases e with
-            | lit c =>
-              simp at hinv_case  -- hinv_case : c ≠ 0
-              have hpred := List.find?_some hfind
-              simp at hpred; symm at hpred; subst hpred
-              have hmem := List.mem_of_find?_eq_some hfind
-              have hinv_entry := hinv_o (z_o, .lit c) hmem
-              simp [Expr.eval] at hinv_entry  -- σ_o z_o = .int c
-              have hbc : b_o = c := Value.int.inj (hzb.symm.trans hinv_entry)
-              subst hbc; simp only [BinOp.safe]; exact hinv_case
-            | _ => simp at hinv_case
-        · -- Variable-to-variable mapping (original proof)
-          rw [Bool.and_eq_true] at hvar_case
-          obtain ⟨hy_rel, hz_rel⟩ := hvar_case
-          have hy_find : relFindOrigVar dic.rel y_t = some y_o := beq_iff_eq.mp hy_rel
-          have hz_find : relFindOrigVar dic.rel z_t = some z_o := beq_iff_eq.mp hz_rel
-          have hσt_y : σ_t y_t = σ_o y_o := by
-            rw [← hrel_eq] at hy_find
-            exact store_eq_of_relFindOrigVar hy_find hcons
-          have hσt_z : σ_t z_t = σ_o z_o := by
-            rw [← hrel_eq] at hz_find
-            exact store_eq_of_relFindOrigVar hz_find hcons
-          have ha_eq : a_o = a_t := Value.int.inj ((hya).symm.trans (hσt_y ▸ hya_t))
-          have hb_eq : b_o = b_t := Value.int.inj ((hzb).symm.trans (hσt_z ▸ hzb_t))
-          subst ha_eq; subst hb_eq
-          simp only [BinOp.safe]; rw [hop] at hsafe_t; exact hsafe_t
+        rw [Bool.and_eq_true] at hrest
+        obtain ⟨hy_rel, hz_rel⟩ := hrest
+        have hy_find : relFindOrigVar dic.rel y_t = some y_o := beq_iff_eq.mp hy_rel
+        have hz_find : relFindOrigVar dic.rel z_t = some z_o := beq_iff_eq.mp hz_rel
+        have hσt_y : σ_t y_t = σ_o y_o := by
+          rw [← hrel_eq] at hy_find
+          exact store_eq_of_relFindOrigVar hy_find hcons
+        have hσt_z : σ_t z_t = σ_o z_o := by
+          rw [← hrel_eq] at hz_find
+          exact store_eq_of_relFindOrigVar hz_find hcons
+        have ha_eq : a_o = a_t := Value.int.inj ((hya).symm.trans (hσt_y ▸ hya_t))
+        have hb_eq : b_o = b_t := Value.int.inj ((hzb).symm.trans (hσt_z ▸ hzb_t))
+        subst ha_eq; subst hb_eq
+        simp only [BinOp.safe]; rw [hop] at hsafe_t; exact hsafe_t
       | _ =>
         intro hstep hpc_check
         rw [hinstr] at hpc_check
@@ -3215,41 +3195,14 @@ theorem checkDivPreservationExec_sound (dc : ECertificate)
           | div => exact Or.inl rfl
           | mod => exact Or.inr rfl
         rcases this with rfl | rfl <;> (
-          rw [Bool.or_eq_true] at hrest
-          rcases hrest with hinv_case | hvar_case
-          · -- Original divisor is known nonzero from invariant:
-            -- inv_orig has (z', .lit c) with c ≠ 0, so σ_o z' = c.
-            -- Since σ_o z' = .int b and c ≠ 0, we get b ≠ 0, contradicting hunsafe.
-            generalize hfind : (dc.inv_orig.getD ic.pc_orig ([] : EInv)).find?
-              (fun (v, _) => v == z') = fz at hinv_case
-            cases fz with
-            | none => simp at hinv_case
-            | some p =>
-              obtain ⟨v, e⟩ := p
-              cases e with
-              | lit c =>
-                simp at hinv_case  -- hinv_case : c ≠ 0
-                -- Extract invariant membership
-                have hpred := List.find?_some hfind
-                simp at hpred
-                -- Use idx_transfer_via_inv to get σ_t z = σ_o z'
-                -- Then invariant gives σ_o z' = .int c, so σ_t z = .int c, so b = c
-                have hmem := List.mem_of_find?_eq_some hfind
-                simp only [toPCertificate, hic_def] at hinv_o
-                simp only [hpred] at hmem
-                have hinv_entry := hinv_o _ hmem
-                simp [Expr.eval] at hinv_entry  -- hinv_entry : σ_o ? = .int c
-                sorry -- TODO: bridge σ_t z = σ_o z' via relation + invariant to get b = c
-              | _ => simp at hinv_case
-          · -- Variable-to-variable mapping (original proof)
-            rw [Bool.and_eq_true] at hvar_case; obtain ⟨hy_eq, hz_eq⟩ := hvar_case
-            have hy_find : relFindOrigVar ic.rel y = some y' := beq_iff_eq.mp hy_eq
-            have hz_find : relFindOrigVar ic.rel z = some z' := beq_iff_eq.mp hz_eq
-            have hσt_y := store_eq_of_relFindOrigVar hy_find hrel
-            have hσt_z := store_eq_of_relFindOrigVar hz_find hrel
-            have hya' : σ_o y' = .int a := by rw [← hσt_y]; exact hya
-            have hzb' : σ_o z' = .int b := by rw [← hσt_z]; exact hzb
-            exact ⟨σ_o, am_o, Steps.single (Step.error horig hya' hzb' (hop ▸ hunsafe))⟩)
+          rw [Bool.and_eq_true] at hrest; obtain ⟨hy_eq, hz_eq⟩ := hrest
+          have hy_find : relFindOrigVar ic.rel y = some y' := beq_iff_eq.mp hy_eq
+          have hz_find : relFindOrigVar ic.rel z = some z' := beq_iff_eq.mp hz_eq
+          have hσt_y := store_eq_of_relFindOrigVar hy_find hrel
+          have hσt_z := store_eq_of_relFindOrigVar hz_find hrel
+          have hya' : σ_o y' = .int a := by rw [← hσt_y]; exact hya
+          have hzb' : σ_o z' = .int b := by rw [← hσt_z]; exact hzb
+          exact ⟨σ_o, am_o, Steps.single (Step.error horig hya' hzb' (hop ▸ hunsafe))⟩)
       | const => simp at hpc
       | copy => simp at hpc
       | boolop => simp at hpc
