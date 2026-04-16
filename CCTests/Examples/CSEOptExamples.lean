@@ -188,4 +188,32 @@ def aliasCert := optimize aliasProg
 #eval! checkCertificateExec aliasCert
 #eval! checkCertificateVerboseExec aliasCert
 
+-- ============================================================
+-- § 8. CSE across different temps holding same constant
+-- ============================================================
+
+/-! Original:
+    0: _t1 := 1
+    1: a := k + _t1
+    2: _t2 := 1
+    3: b := k + _t2   ← same expression (k + 1), should reuse a
+    4: halt
+
+  Currently: no optimization (CSE matches on raw operand names,
+  _t1 ≠ _t2 so it doesn't see them as the same expression).
+
+  After fix: pc 3 becomes `copy b a`.
+-/
+
+def constTempProg : Prog :=
+  { code := #[.const "_t1" (.int 1), .binop "a" .add "k" "_t1",
+              .const "_t2" (.int 1), .binop "b" .add "k" "_t2", .halt],
+    tyCtx := fun _ => .int, observable := ["b"] }
+
+def constTempCert := optimize constTempProg
+
+#eval! constTempCert.trans
+#eval! checkCertificateExec constTempCert
+#eval! checkCertificateVerboseExec constTempCert
+
 end CSEOptExamples

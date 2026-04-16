@@ -130,7 +130,12 @@
       "Bash(ls benchmarks/livermore/build_fast/src/*.w benchmarks/livermore/build_fast/src/*.c)",
       "Bash(ls benchmarks/livermore/build_fast/src/*.c)",
       "Bash(clang -o /tmp/k02_final /tmp/k02_final.s -lSystem)",
-      "Bash(/tmp/k02_final)"
+      "Bash(/tmp/k02_final)",
+      "Bash(echo \"---EXIT: $?\")",
+      "Bash(clang -O0 -S -o /tmp/k02_c_O0.s k02_iccg.c -I.)",
+      "Bash(clang -o /tmp/k02_new /tmp/k02_wl_new.s -lSystem)",
+      "Bash(clang -o /tmp/k02_old /tmp/k02_wl.s -lSystem)",
+      "Bash(bash run_fast.sh)"
     ],
     "additionalDirectories": [
       "/Users/mr/CredibleCompilation/tests/programs"

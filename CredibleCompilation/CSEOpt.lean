@@ -50,6 +50,21 @@ instance : BEq AvailEntry where
 
 abbrev AvailSet := List AvailEntry
 
+/-- Map from variables to their known constant values. -/
+abbrev ConstMap := List (Var × Value)
+
+/-- Kill a variable from the constant map. -/
+def constKill (cm : ConstMap) (x : Var) : ConstMap :=
+  cm.filter fun (v, _) => v != x
+
+/-- Intersection of two constant maps: keep entries present in both. -/
+def constMerge (a b : ConstMap) : ConstMap :=
+  a.filter fun (v, val) => b.any fun (v', val') => v == v' && val == val'
+
+/-- Semantic equality for constant maps (order-independent). -/
+def constBeq (a b : ConstMap) : Bool :=
+  a.length == b.length && a.all fun (v, val) => b.any fun (v', val') => v == v' && val == val'
+
 /-- Does the expression reference variable `x`? -/
 def exprRefsVar (e : Expr) (x : Var) : Bool :=
   match e with
@@ -69,17 +84,50 @@ def exprRefsVar (e : Expr) (x : Var) : Bool :=
 def killVar (avail : AvailSet) (x : Var) : AvailSet :=
   avail.filter fun e => !(e.lhs == x || e.rhs == x || e.result == x || exprRefsVar e.invExpr x)
 
-/-- Find an available computation of `lhs op rhs`. -/
-def findAvail (avail : AvailSet) (op : AvailOp) (lhs rhs : Var) : Option AvailEntry :=
-  avail.find? fun e => e.op == op && e.lhs == lhs && e.rhs == rhs
-
-/-- Expand a variable through the available set: if `v` is the result of
-    an available expression, return its fully-expanded invariant expression;
-    otherwise return `.var v`. -/
-def expandVar (avail : AvailSet) (v : Var) : Expr :=
+/-- Expand a variable through the available set only (for certificate invariants).
+    Does NOT expand constants — the checker can verify `.var` references directly. -/
+def expandVarCert (avail : AvailSet) (v : Var) : Expr :=
   match avail.find? (fun e => e.result == v) with
   | some e => e.invExpr
   | none   => .var v
+
+/-- Substitute known constants into an expression (for matching only). -/
+def expandExprConsts (cm : ConstMap) : Expr → Expr
+  | .var v =>
+    match cm.find? (fun (v', _) => v == v') with
+    | some (_, .int n)   => .lit n
+    | some (_, .float f) => .flit f
+    | some (_, .bool b)  => .blit b
+    | none               => .var v
+  | .bin op a b   => .bin op (expandExprConsts cm a) (expandExprConsts cm b)
+  | .fbin op a b  => .fbin op (expandExprConsts cm a) (expandExprConsts cm b)
+  | e => e
+
+/-- Expand a variable through the available set and constant map (for matching).
+    Returns a fully-expanded expression with constants substituted. -/
+def expandVarFull (avail : AvailSet) (cm : ConstMap) (v : Var) : Expr :=
+  match avail.find? (fun e => e.result == v) with
+  | some e => expandExprConsts cm e.invExpr
+  | none   =>
+    match cm.find? (fun (v', _) => v == v') with
+    | some (_, .int n)   => .lit n
+    | some (_, .float f) => .flit f
+    | some (_, .bool b)  => .blit b
+    | none => .var v
+
+/-- Find an available computation matching the expanded form of `lhs op rhs`.
+    Uses constant expansion so that e.g. `k + _t1` and `k + _t2` match
+    when both `_t1` and `_t2` are known to be the same constant. -/
+def findAvail (avail : AvailSet) (cm : ConstMap) (op : AvailOp) (lhs rhs : Var) : Option AvailEntry :=
+  let eLhs := expandVarFull avail cm lhs
+  let eRhs := expandVarFull avail cm rhs
+  let targetExpr := match op with
+    | .int o => Expr.bin o eLhs eRhs
+    | .float o => match o, eLhs with
+      | .fadd, .fbin .fmul _ _ => Expr.fbin .fadd eRhs eLhs
+      | _, _ => Expr.fbin o eLhs eRhs
+  avail.find? fun e =>
+    e.op == op && expandExprConsts cm e.invExpr == targetExpr
 
 /-- Intersection: keep entries present in both sets (all fields equal). -/
 def availMerge (a b : AvailSet) : AvailSet :=
@@ -89,79 +137,86 @@ def availMerge (a b : AvailSet) : AvailSet :=
 def availBeq (a b : AvailSet) : Bool :=
   a.length == b.length && a.all fun e => b.any (· == e)
 
+/-- Combined CSE analysis state: available expressions + known constants. -/
+abbrev CSEState := AvailSet × ConstMap
+
 -- ============================================================
 -- § 2. Transfer function
 -- ============================================================
 
-/-- Update available expressions after executing one instruction. -/
-def transfer (avail : AvailSet) (instr : TAC) : AvailSet :=
+/-- Update available expressions and constant map after executing one instruction. -/
+def transfer (st : CSEState) (instr : TAC) : CSEState :=
+  let (avail, cm) := st
   match instr with
-  | .const x _ => killVar avail x
-  | .copy x _  => killVar avail x
+  | .const x v =>
+    (killVar avail x, (x, v) :: constKill cm x)
+  | .copy x _  => (killVar avail x, constKill cm x)
   | .binop x op y z =>
     let avail' := killVar avail x
-    -- Only add if x doesn't alias an operand (otherwise the expression
-    -- would reference a variable that was just overwritten).
-    if x == y || x == z then avail'
+    let cm' := constKill cm x
+    if x == y || x == z then (avail', cm')
     else
-      let invExpr := Expr.bin op (expandVar avail' y) (expandVar avail' z)
-      { op := .int op, lhs := y, rhs := z, result := x, invExpr } :: avail'
+      let invExpr := Expr.bin op (expandVarCert avail' y) (expandVarCert avail' z)
+      ({ op := .int op, lhs := y, rhs := z, result := x, invExpr } :: avail', cm')
   | .fbinop x fop y z =>
     let avail' := killVar avail x
-    if x == y || x == z then avail'
+    let cm' := constKill cm x
+    if x == y || x == z then (avail', cm')
     else
-      let a' := expandVar avail' y
-      let b' := expandVar avail' z
+      let a' := expandVarCert avail' y
+      let b' := expandVarCert avail' z
       -- Normalize fadd with fmul on left: swap to match simplify's normalization
       let invExpr := match fop, a' with
         | .fadd, .fbin .fmul _ _ => Expr.fbin .fadd b' a'
         | _, _ => Expr.fbin fop a' b'
-      { op := .float fop, lhs := y, rhs := z, result := x, invExpr } :: avail'
-  | .boolop x _        => killVar avail x
-  | .arrLoad x _ _ _   => killVar avail x
-  | .intToFloat x _    => killVar avail x
-  | .floatToInt x _    => killVar avail x
-  | .floatUnary x _ _  => killVar avail x
-  | .fternop x _ _ _ _ => killVar avail x
-  | _ => avail
+      ({ op := .float fop, lhs := y, rhs := z, result := x, invExpr } :: avail', cm')
+  | .boolop x _        => (killVar avail x, constKill cm x)
+  | .arrLoad x _ _ _   => (killVar avail x, constKill cm x)
+  | .intToFloat x _    => (killVar avail x, constKill cm x)
+  | .floatToInt x _    => (killVar avail x, constKill cm x)
+  | .floatUnary x _ _  => (killVar avail x, constKill cm x)
+  | .fternop x _ _ _ _ => (killVar avail x, constKill cm x)
+  | _ => (avail, cm)
 
 -- ============================================================
 -- § 3. Forward analysis (worklist)
 -- ============================================================
 
-private def propagate (prog : Prog) (avails : Array (Option AvailSet))
-    (pc : Nat) : Array (Option AvailSet) × List Nat :=
-  match prog[pc]?, avails[pc]? with
-  | some instr, some (some av) =>
-    let out := transfer av instr
+private def propagate (prog : Prog) (states : Array (Option CSEState))
+    (pc : Nat) : Array (Option CSEState) × List Nat :=
+  match prog[pc]?, states[pc]? with
+  | some instr, some (some st) =>
+    let out := transfer st instr
     let succs := successors instr pc
     succs.foldl (fun (arr, wl) pc' =>
       if pc' < arr.size then
         match arr[pc']? with
         | some none | none =>
           (arr.set! pc' (some out), pc' :: wl)
-        | some (some old) =>
-          let merged := availMerge old out
-          if availBeq merged old then (arr, wl)
-          else (arr.set! pc' (some merged), pc' :: wl)
+        | some (some (oldAv, oldCm)) =>
+          let (outAv, outCm) := out
+          let mergedAv := availMerge oldAv outAv
+          let mergedCm := constMerge oldCm outCm
+          if availBeq mergedAv oldAv && constBeq mergedCm oldCm then (arr, wl)
+          else (arr.set! pc' (some (mergedAv, mergedCm)), pc' :: wl)
       else (arr, wl)
-    ) (avails, [])
-  | _, _ => (avails, [])
+    ) (states, [])
+  | _, _ => (states, [])
 
-private partial def analyzeLoop (prog : Prog) (avails : Array (Option AvailSet))
-    (worklist : List Nat) : Array (Option AvailSet) :=
+private partial def analyzeLoop (prog : Prog) (states : Array (Option CSEState))
+    (worklist : List Nat) : Array (Option CSEState) :=
   match worklist with
-  | [] => avails
+  | [] => states
   | pc :: rest =>
-    let (avails', newWork) := propagate prog avails pc
-    analyzeLoop prog avails' (rest ++ newWork)
+    let (states', newWork) := propagate prog states pc
+    analyzeLoop prog states' (rest ++ newWork)
 
 /-- Forward available-expression analysis.
-    Returns `Option AvailSet` per PC (`none` = unreachable). -/
-def analyze (prog : Prog) : Array (Option AvailSet) :=
+    Returns `Option CSEState` per PC (`none` = unreachable). -/
+def analyze (prog : Prog) : Array (Option CSEState) :=
   if prog.size == 0 then #[]
   else
-    let init := (Array.replicate prog.size (none : Option AvailSet)).set! 0 (some [])
+    let init := (Array.replicate prog.size (none : Option CSEState)).set! 0 (some ([], []))
     analyzeLoop prog init (0 :: [])
 
 -- ============================================================
@@ -169,23 +224,24 @@ def analyze (prog : Prog) : Array (Option AvailSet) :=
 -- ============================================================
 
 /-- Transform a single instruction using available expressions at its PC. -/
-def transformInstr (avail : AvailSet) (instr : TAC) : TAC :=
+def transformInstr (st : CSEState) (instr : TAC) : TAC :=
+  let (avail, cm) := st
   match instr with
   | .binop x op y z =>
-    match findAvail avail (.int op) y z with
+    match findAvail avail cm (.int op) y z with
     | some e => if x == e.result then instr else .copy x e.result
     | none   => instr
   | .fbinop x fop y z =>
-    match findAvail avail (.float fop) y z with
+    match findAvail avail cm (.float fop) y z with
     | some e => if x == e.result then instr else .copy x e.result
     | none   => instr
   | other => other
 
 /-- Transform the entire program. -/
-def transformProg (prog : Prog) (avails : Array (Option AvailSet)) : Prog :=
+def transformProg (prog : Prog) (states : Array (Option CSEState)) : Prog :=
   let arr := (List.range prog.size).map fun i =>
-    match prog[i]?, avails[i]? with
-    | some instr, some (some av) => transformInstr av instr
+    match prog[i]?, states[i]? with
+    | some instr, some (some st) => transformInstr st instr
     | some instr, _              => instr
     | none, _                    => .halt
   { code := arr.toArray, tyCtx := prog.tyCtx, observable := prog.observable, arrayDecls := prog.arrayDecls }
@@ -194,14 +250,25 @@ def transformProg (prog : Prog) (avails : Array (Option AvailSet)) : Prog :=
 -- § 5. Certificate generation
 -- ============================================================
 
-/-- Convert an available set to an EInv (invariant). -/
-def availToInv (avail : AvailSet) : EInv :=
-  avail.map fun e => (e.result, e.invExpr)
+/-- Convert a CSE state to an EInv (invariant).
+    Includes both available expressions and known constant bindings,
+    so the checker can verify CSE across different temps for the same constant.
+    Avail entries are pre-simplified through constants so that the checker's
+    `Expr.simplify` (which doesn't recurse into `.var` lookup results) sees
+    a consistent form. -/
+def stateToInv (st : CSEState) : EInv :=
+  let (avail, cm) := st
+  let constInv : EInv := cm.map fun (v, val) => match val with
+    | .int n   => (v, Expr.lit n)
+    | .float f => (v, Expr.flit f)
+    | .bool b  => (v, Expr.blit b)
+  let availInv := avail.map fun e => (e.result, e.invExpr.simplify constInv)
+  availInv ++ constInv
 
 /-- Build invariant arrays from the analysis result. -/
-def buildInvariants (avails : Array (Option AvailSet)) : Array EInv :=
-  avails.map fun
-    | some av => availToInv av
+def buildInvariants (states : Array (Option CSEState)) : Array EInv :=
+  states.map fun
+    | some st => stateToInv st
     | none    => []
 
 
@@ -212,9 +279,9 @@ def buildInvariants (avails : Array (Option AvailSet)) : Array EInv :=
 /-- Run CSE on `prog` and produce a certified transformation.
     The result is an `ECertificate` that `checkCertificateExec` will accept. -/
 def optimize (prog : Prog) : ECertificate :=
-  let avails := analyze prog
-  let trans := transformProg prog avails
-  let inv := buildInvariants avails
+  let states := analyze prog
+  let trans := transformProg prog states
+  let inv := buildInvariants states
   let instrCerts := _root_.buildInstrCerts1to1 trans (_root_.collectAllVars prog trans)
   let haltCerts := _root_.buildHaltCerts instrCerts trans
   { orig := prog
