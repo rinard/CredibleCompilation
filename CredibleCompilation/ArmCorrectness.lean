@@ -451,6 +451,7 @@ theorem genBoolExpr_correct (prog : ArmProg) (vm : VarMap)
     · simp [ArmState.setReg, ArmState.nextPC, hAM1]
   | cmp ha hb => exact sorry
   | fcmp ha hb => exact sorry
+  | bexpr he => exact sorry
 /-- StateRel is preserved when store is updated at `x ↦ w` and stack at `off ↦ w.encode`,
     provided `vm.lookup x = some off` and the VarMap is injective. -/
 theorem StateRel.update {vm : VarMap} {σ : Store} {arm : ArmState}

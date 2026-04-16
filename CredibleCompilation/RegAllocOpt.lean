@@ -233,6 +233,7 @@ where
     | .cmp op a b  => .cmp op (renameExprVars r a) (renameExprVars r b)
     | .not e       => .not (renameBoolExpr coloring e)
     | .fcmp op a b => .fcmp op (renameExprVars r a) (renameExprVars r b)
+    | .bexpr e     => .bexpr (renameExprVars r e)
   renameExprVars (r : Var → Var) : Expr → Expr
     | .var v  => .var (r v)
     | .lit n  => .lit n

@@ -70,6 +70,7 @@ def evalBoolConst (cm : ConstMap) : BoolExpr → Option Bool
     | _, _ => none
   | .fcmp _op _a _b => none
   | .not e => evalBoolConst cm e |>.map (!·)
+  | .bexpr _ => none
 
 -- ============================================================
 -- § 3. Transfer function

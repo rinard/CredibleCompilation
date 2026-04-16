@@ -735,6 +735,11 @@ def formalGenBoolExpr (vm : VarMap) (be : BoolExpr) : List ArmInstr :=
       | .flit n => formalLoadImm64 .x0 n ++ [.fmovToFP .d2 .x0]
       | _ => []
     loadA ++ loadB ++ [.fcmpR .d1 .d2, .cset .x0 cond]
+  | .bexpr e =>
+    -- bexpr wraps an Expr evaluated as boolean; load it and mask to 0/1
+    match e with
+    | .var v => match vm.lookup v with | some off => [.ldr .x0 off, .andImm .x0 .x0 (1 : BitVec 64)] | none => []
+    | _ => []
 
 /-- Generate formal ARM64 instructions for a TAC instruction.
     Mirrors `genInstr` in CodeGen.lean (without the label string).
@@ -915,6 +920,10 @@ def verifiedGenBoolExpr (layout : VarLayout) (be : BoolExpr) : List ArmInstr :=
       | .flit n => formalLoadImm64 .x0 n ++ [.fmovToFP .d2 .x0]
       | _ => []
     loadA ++ loadB ++ [.fcmpR .d1 .d2, .cset .x0 cond]
+  | .bexpr e =>
+    match e with
+    | .var v => vLoadVar layout v .x0 ++ [.andImm .x0 .x0 (1 : BitVec 64)]
+    | _ => []
 
 -- ============================================================
 -- § 8d. Verified instruction codegen

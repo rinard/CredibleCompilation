@@ -128,6 +128,7 @@ def BoolExpr.toSymExpr (ss : SymStore) : BoolExpr → Expr
   | .cmp op a b  => .cmpE op (a.substSym' ss) (b.substSym' ss)
   | .not e       => .notE (e.toSymExpr ss)
   | .fcmp op a b => .fcmpE op (a.substSym' ss) (b.substSym' ss)
+  | .bexpr e     => .tobool (e.substSym' ss)
 
 /-- Symbolic array memory: tracks array writes as a list of (array, index, value) triples.
     Most recent writes are at the head. -/
@@ -208,7 +209,7 @@ def BoolExpr.normalize (ss : SymStore) (inv : EInv) : BoolExpr → BoolExpr
   | .bvar x =>
     match (ssGet ss x).simplify inv with
     | .blit b => .lit b
-    | _ => .bvar x
+    | e'      => .bexpr e'
   | .cmp op a b =>
     match (a.substSym' ss).simplify inv, (b.substSym' ss).simplify inv with
     | .lit va, .lit vb => .lit (op.eval va vb)
@@ -221,6 +222,10 @@ def BoolExpr.normalize (ss : SymStore) (inv : EInv) : BoolExpr → BoolExpr
     match (a.substSym' ss).simplify inv, (b.substSym' ss).simplify inv with
     | .flit va, .flit vb => .lit (FloatCmpOp.eval op va vb)
     | a', b' => .fcmp op a' b'
+  | .bexpr e =>
+    match (e.substSym' ss).simplify inv with
+    | .blit b => .lit b
+    | e'      => .bexpr e'
 
 /-- Symbolically evaluate a BoolExpr under a symbolic store and invariant.
     Returns `some true`/`some false` if the result can be determined, `none` otherwise. -/
@@ -236,6 +241,10 @@ def BoolExpr.symEval (ss : SymStore) (inv : EInv) : BoolExpr → Option Bool
     | _, _ => none
   | .not e => e.symEval ss inv |>.map (!·)
   | .fcmp _op _a _b => none  -- FloatCmpOp.eval is opaque; fall back to branchInfo
+  | .bexpr e =>
+    match (e.substSym' ss).simplify inv with
+    | .blit b => some b
+    | _ => none
 
 /-- Like `canReach`, but for `ifgoto` also verifies the branch direction
     via symbolic evaluation of the boolean condition under the invariant.
@@ -360,6 +369,9 @@ def BoolExpr.mapVarsRel (rel : EExprRel) : BoolExpr → Option BoolExpr
   | .fcmp op a b =>
     let ss := buildSubstMap rel
     some (.fcmp op (a.substSym' ss) (b.substSym' ss))
+  | .bexpr e =>
+    let ss := buildSubstMap rel
+    some (.bexpr (e.substSym' ss))
 
 /-- An executable certificate: all data needed to verify the transformation.
     The type context and observable variables are derived from the original program. -/
@@ -1051,6 +1063,7 @@ def BoolExpr.exprFreeVars : BoolExpr → List Var
   | .cmp _ a b   => a.freeVars ++ b.freeVars
   | .not e       => e.exprFreeVars
   | .fcmp _ a b  => a.freeVars ++ b.freeVars
+  | .bexpr e     => e.freeVars
 
 /-- Check that all free variables in BoolExpr operands of ifgoto instructions
     in the transformed program are covered by the instruction's expression relation.

@@ -496,6 +496,8 @@ private theorem BoolExpr.toSymExpr_sound (be : BoolExpr) (ss : SymStore) (σ₀ 
   | not e ih =>
     simp only [BoolExpr.toSymExpr, BoolExpr.eval, Expr.eval]
     have h := ih; rw [h]; simp [Value.toBool]
+  | bexpr e => simp [BoolExpr.toSymExpr, BoolExpr.eval, Expr.eval, Expr.substSym'_eq_substSym,
+                     Expr.substSym_sound ss e σ₀ σ am hrepr]
   | fcmp op a b =>
     simp only [BoolExpr.toSymExpr, BoolExpr.eval, Expr.eval,
                Expr.substSym'_eq_substSym,
@@ -1208,16 +1210,27 @@ private theorem BoolExpr.symEval_sound (b : BoolExpr) (ss : SymStore) (inv : EIn
       simp only [BoolExpr.eval, ih val he, heval, Bool.not_not]
   | fcmp op a b =>
     intro r heval; simp [BoolExpr.symEval] at heval
+  | bexpr e =>
+    intro r heval
+    simp only [BoolExpr.symEval] at heval
+    split at heval <;> simp at heval
+    rename_i b heq
+    have hs := Expr.simplify_sound inv (e.substSym' ss) σ₀ am hinv
+    rw [heq, Expr.eval] at hs
+    simp only [Expr.substSym'_eq_substSym] at hs
+    rw [Expr.substSym_sound ss e σ₀ σ am hrepr] at hs
+    simp only [BoolExpr.eval]; rw [← hs]; simp [heval]
 
 /-- Normalization preserves BoolExpr evaluation (under the symbolic store / invariant).
-    When the BoolExpr is arrRead-free, `(b.normalize ss inv).eval σ am = b.eval σ am`
-    even if hrepr/hinv are stated at a different array memory am₀. -/
+    The normalized expression is evaluated at `σ₀ am₀` (the initial store/memory
+    where hrepr/hinv hold), and the original at `σ am` (the post-store).
+    The chain: simplify_sound ∘ substSym_sound ∘ eval_noArrRead bridges them. -/
 private theorem BoolExpr.normalize_eval (b : BoolExpr) (ss : SymStore) (inv : EInv)
     (σ₀ σ : Store) (am₀ am : ArrayMem)
     (hrepr : ∀ v, (ssGet ss v).eval σ₀ am₀ = σ v)
     (hinv : EInv.toProp inv σ₀ am₀)
     (hnoarr : b.hasArrRead = false) :
-    (b.normalize ss inv).eval σ am = b.eval σ am := by
+    (b.normalize ss inv).eval σ₀ am₀ = b.eval σ am := by
   induction b with
   | lit _ => simp [BoolExpr.normalize, BoolExpr.eval]
   | bvar x =>
@@ -1227,7 +1240,11 @@ private theorem BoolExpr.normalize_eval (b : BoolExpr) (ss : SymStore) (inv : EI
       have hsimpl := Expr.simplify_sound inv (ssGet ss x) σ₀ am₀ hinv
       rw [heq, Expr.eval] at hsimpl
       simp only [BoolExpr.eval]; rw [← hrepr x, ← hsimpl]; rfl
-    · rfl
+    · -- bvar fallback: normalize returns .bexpr e' where e' = (ssGet ss x).simplify inv
+      rename_i e' heq
+      simp only [BoolExpr.eval]
+      have hsimpl := Expr.simplify_sound inv (ssGet ss x) σ₀ am₀ hinv
+      rw [hsimpl, hrepr x]
   | cmp op a b_e =>
     simp only [BoolExpr.hasArrRead, Bool.or_eq_false_iff] at hnoarr
     simp only [BoolExpr.normalize]
@@ -1244,20 +1261,21 @@ private theorem BoolExpr.normalize_eval (b : BoolExpr) (ss : SymStore) (inv : EI
           ← Expr.eval_noArrRead b_e σ am₀ am hnoarr.2,
           ← hsa, ← hsb]; simp [Value.toInt]
     next a' b' _ =>
-      -- The simplified operands evaluate the same as the originals.
-      -- Needs a store-bridging lemma: (e.substSym' ss |>.simplify inv).eval σ am = e.eval σ am
-      -- given hrepr/hinv and arr-read-freeness. All free variables of the simplified
-      -- expression agree under σ and σ₀ (since unsimplified vars are not in ss/inv).
-      sorry
+      -- Same chain as the lit case: simplify_sound ∘ substSym_sound ∘ eval_noArrRead
+      simp only [BoolExpr.eval, Expr.substSym'_eq_substSym]
+      have hsa := Expr.simplify_sound inv (a.substSym' ss) σ₀ am₀ hinv
+      have hsb := Expr.simplify_sound inv (b_e.substSym' ss) σ₀ am₀ hinv
+      simp only [Expr.substSym'_eq_substSym] at hsa hsb
+      rw [Expr.substSym_sound ss a σ₀ σ am₀ hrepr] at hsa
+      rw [Expr.substSym_sound ss b_e σ₀ σ am₀ hrepr] at hsb
+      rw [hsa, hsb, Expr.eval_noArrRead a σ am₀ am hnoarr.1,
+          Expr.eval_noArrRead b_e σ am₀ am hnoarr.2]
   | not e ih =>
     simp only [BoolExpr.hasArrRead] at hnoarr
     have hih := ih hnoarr
-    -- (.not e).eval σ am = !(e.eval σ am), so goal is
-    -- ((.not e).normalize ss inv).eval σ am = !(e.eval σ am)
     simp only [BoolExpr.eval]
-    -- Unfold normalize on .not, exposing match on e.normalize
     show (match e.normalize ss inv with
-      | BoolExpr.lit b => BoolExpr.lit (!b) | BoolExpr.not inner => inner | e' => BoolExpr.not e').eval σ am = !(e.eval σ am)
+      | BoolExpr.lit b => BoolExpr.lit (!b) | BoolExpr.not inner => inner | e' => BoolExpr.not e').eval σ₀ am₀ = !(e.eval σ am)
     generalize hgen : e.normalize ss inv = enorm
     rw [hgen] at hih
     cases enorm with
@@ -1266,6 +1284,7 @@ private theorem BoolExpr.normalize_eval (b : BoolExpr) (ss : SymStore) (inv : EI
     | bvar x => simp only [BoolExpr.eval] at hih ⊢; rw [hih]
     | cmp op' a' b' => simp only [BoolExpr.eval] at hih ⊢; rw [hih]
     | fcmp op' a' b' => simp only [BoolExpr.eval] at hih ⊢; rw [hih]
+    | bexpr e' => simp only [BoolExpr.eval] at hih ⊢; rw [hih]
   | fcmp op a b_e =>
     simp only [BoolExpr.hasArrRead, Bool.or_eq_false_iff] at hnoarr
     simp only [BoolExpr.normalize]
@@ -1282,8 +1301,34 @@ private theorem BoolExpr.normalize_eval (b : BoolExpr) (ss : SymStore) (inv : EI
           ← Expr.eval_noArrRead b_e σ am₀ am hnoarr.2,
           ← hsa, ← hsb]; simp [Value.toFloat]
     next a' b' _ =>
-      -- Same store-bridging gap as the cmp case
-      sorry
+      -- Same chain as the lit case: simplify_sound ∘ substSym_sound ∘ eval_noArrRead
+      simp only [BoolExpr.eval, Expr.substSym'_eq_substSym]
+      have hsa := Expr.simplify_sound inv (a.substSym' ss) σ₀ am₀ hinv
+      have hsb := Expr.simplify_sound inv (b_e.substSym' ss) σ₀ am₀ hinv
+      simp only [Expr.substSym'_eq_substSym] at hsa hsb
+      rw [Expr.substSym_sound ss a σ₀ σ am₀ hrepr] at hsa
+      rw [Expr.substSym_sound ss b_e σ₀ σ am₀ hrepr] at hsb
+      rw [hsa, hsb, Expr.eval_noArrRead a σ am₀ am hnoarr.1,
+          Expr.eval_noArrRead b_e σ am₀ am hnoarr.2]
+  | bexpr e =>
+    simp only [BoolExpr.hasArrRead] at hnoarr
+    unfold BoolExpr.normalize
+    split
+    · -- simplifies to .blit b → .lit b
+      rename_i b_val heq
+      simp only [BoolExpr.eval]
+      have hs := Expr.simplify_sound inv (e.substSym' ss) σ₀ am₀ hinv
+      rw [heq, Expr.eval] at hs
+      simp only [Expr.substSym'_eq_substSym] at hs
+      rw [Expr.substSym_sound ss e σ₀ σ am₀ hrepr] at hs
+      rw [← Expr.eval_noArrRead e σ am₀ am hnoarr, ← hs]; rfl
+    · -- fallback: .bexpr e' — same chain as cmp/fcmp
+      rename_i e' heq
+      simp only [BoolExpr.eval, Expr.substSym'_eq_substSym]
+      have hs := Expr.simplify_sound inv (e.substSym' ss) σ₀ am₀ hinv
+      simp only [Expr.substSym'_eq_substSym] at hs
+      rw [Expr.substSym_sound ss e σ₀ σ am₀ hrepr] at hs
+      rw [hs, Expr.eval_noArrRead e σ am₀ am hnoarr]
 
 /-- From checkInstrAliasOk for arrLoad, derive the no-alias condition for samGet_sound. -/
 private theorem checkInstrAliasOk_arrLoad_noalias
@@ -2269,6 +2314,7 @@ private theorem mapVarsRel_noArrRead (b : BoolExpr) (rel : EExprRel) (origCond :
       | .bvar _ => cases hmap; exact ih
       | .cmp _ _ _ => cases hmap; simp only [BoolExpr.hasArrRead]; exact ih
       | .fcmp _ _ _ => cases hmap; simp only [BoolExpr.hasArrRead]; exact ih
+      | .bexpr _ => cases hmap; simp only [BoolExpr.hasArrRead]; exact ih
   | fcmp op a b_e =>
     simp only [BoolExpr.hasArrRead, Bool.or_eq_false_iff] at hb
     simp only [BoolExpr.mapVarsRel] at hmap; cases hmap
@@ -2276,6 +2322,13 @@ private theorem mapVarsRel_noArrRead (b : BoolExpr) (rel : EExprRel) (origCond :
     have hss := buildSubstMap_noArrRead rel hrel
     rw [Expr.substSym'_eq_substSym, Expr.substSym'_eq_substSym]
     exact ⟨Expr.substSym_noArrRead a _ hb.1 hss, Expr.substSym_noArrRead b_e _ hb.2 hss⟩
+  | bexpr e =>
+    simp only [BoolExpr.hasArrRead] at hb
+    simp only [BoolExpr.mapVarsRel] at hmap; cases hmap
+    simp only [BoolExpr.hasArrRead]
+    have hss := buildSubstMap_noArrRead rel hrel
+    rw [Expr.substSym'_eq_substSym]
+    exact Expr.substSym_noArrRead e _ hb hss
 
 /-- ssGet from ssSet on [] is arrRead-free when the stored expression is. -/
 private theorem ssGet_ssSet_nil_noArrRead (x : Var) (e : Expr) (v : Var)
@@ -2466,7 +2519,7 @@ private theorem eval_mapVarsRel (b : BoolExpr) (rel : EExprRel)
         simp at hmap; subst hmap
         simp only [BoolExpr.eval] at ih_e ⊢
         rw [← ih_e, Bool.not_not]
-      | lit _ | bvar _ | cmp _ _ _ | fcmp _ _ _ =>
+      | lit _ | bvar _ | cmp _ _ _ | fcmp _ _ _ | bexpr _ =>
         simp at hmap; subst hmap; exact congrArg (! ·) ih_e
   | fcmp op a b_e =>
     simp only [BoolExpr.mapVarsRel] at hmap; cases hmap
@@ -2479,6 +2532,13 @@ private theorem eval_mapVarsRel (b : BoolExpr) (rel : EExprRel)
           (fun v hv => hfv v (List.mem_append_right _ hv)),
         Expr.eval_noArrRead a σ_t am_o am_t hnoarr.1,
         Expr.eval_noArrRead b_e σ_t am_o am_t hnoarr.2]
+  | bexpr e =>
+    simp only [BoolExpr.mapVarsRel] at hmap; cases hmap
+    simp only [BoolExpr.eval, Expr.substSym'_eq_substSym]
+    simp only [BoolExpr.hasArrRead] at hnoarr
+    simp only [BoolExpr.exprFreeVars] at hfv
+    rw [substSym_bridge _ e rel σ_o σ_t am_o rfl hcons hfv,
+        Expr.eval_noArrRead e σ_t am_o am_t hnoarr]
 
 /-- When `branchInfoWithRel` returns `some (origCond, taken)`, a step on the
     transformed program implies `origCond.eval σ_o = taken`

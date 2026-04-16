@@ -4,6 +4,34 @@ Record of key design decisions for CredibleCompilation.
 
 ---
 
+0) Initial certificate prompt:
+
+Develop a certificate checker that checks a certificate that an original program was correctly transformed into a transformed program. 
+
+The setup is largely similar to Credible Compilation as described in https://people.csail.mit.edu/rinard/techreport/MIT-LCS-TR-776.pdf.
+
+Use the program representation and operational semantics in Semantics.lean.
+
+A program behavior is an execution from start instruction to halt instruction. Certificate checker should check one way correspondence that every behavior of transformed program has a corresponding behavior of original program but not the other way around.
+
+Certificate should specify:
+  1) Original program and transformed program. Programs can be different sizes.
+
+  2) For original program and transformed program, a Floyd-Hoare style proof of properties that always hold in the original or transformed program. These properties may be used to establish correspondence between transitions in transformed and original programs.
+
+  3) For each instruction in transformed program,
+    a) A corresponding instruction in original program,
+
+    b) A function from variables in transformed program to expressions in original program with the same values,
+
+    c) For each transition from the instruction in the transformed program to a next instruction in the transformed program, 0 to n corresponding transitions in the original program that lead to a corresponding next instruction in the original program. These transitions enable a proof, by induction on sequences of executed instructions in the transformed program, that each behavior of the transformed program has a corresponding behavior in the original program.
+
+  4) For each halt instruction in the transformed program,
+     a) Check that corresponding instruction in original program is a halt instruction,
+     b) Check that observable variables at halt instruction in transformed program and at corresponding halt instruction in original program have same values.
+
+  5) Prove that is there is a behavior in the transformed program that does not halt, there is also a behavior in the original program that does not terminate.
+
 1) Bounds check elimination - code gen takes a tac program plus interval bounds invariants. checks invariants, if imply bounds checks are always satisfied, generate code without bounds checks. bounds analysis runs just before code gen or optimizations that run after bounds analysis preserve interval bounds invariants. include analysis of multiplication as in idx := i * 32 + k style indexing to bounds analysis.
 
 2) Think about including bitwise operations - and, or, not, nand, etc. In addition to standard integer operations like +, -, *, /, %.

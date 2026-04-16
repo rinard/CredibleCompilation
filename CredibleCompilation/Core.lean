@@ -507,6 +507,7 @@ inductive BoolExpr where
   | cmp  : CmpOp → Expr → Expr → BoolExpr         -- integer comparison
   | not  : BoolExpr → BoolExpr
   | fcmp : FloatCmpOp → Expr → Expr → BoolExpr    -- float comparison
+  | bexpr : Expr → BoolExpr                        -- evaluate Expr as boolean via toBool
   deriving Repr, DecidableEq
 
 /-- Evaluate a boolean expression. Uses `Expr.eval` for operands. -/
@@ -516,6 +517,7 @@ def BoolExpr.eval (σ : Store) (am : ArrayMem) : BoolExpr → Bool
   | .cmp op a b  => op.eval (a.eval σ am).toInt (b.eval σ am).toInt
   | .not e       => !e.eval σ am
   | .fcmp op a b => FloatCmpOp.eval op (a.eval σ am).toFloat (b.eval σ am).toFloat
+  | .bexpr e     => (e.eval σ am).toBool
 
 theorem Expr.eval_congr (e : Expr) (σ τ : Store) (am : ArrayMem)
     (hagree : ∀ y, σ y = τ y) : e.eval σ am = e.eval τ am := by
@@ -546,6 +548,7 @@ theorem BoolExpr.eval_congr (cond : BoolExpr) (σ τ : Store) (am : ArrayMem)
   | cmp op a b => simp [BoolExpr.eval, Expr.eval_congr a σ τ am hagree, Expr.eval_congr b σ τ am hagree]
   | not e ih => simp [BoolExpr.eval, ih]
   | fcmp op a b => simp [BoolExpr.eval, Expr.eval_congr a σ τ am hagree, Expr.eval_congr b σ τ am hagree]
+  | bexpr e => simp [BoolExpr.eval, Expr.eval_congr e σ τ am hagree]
 
 /-- Does a BoolExpr contain any arrRead/farrRead in its Expr operands? -/
 def BoolExpr.hasArrRead : BoolExpr → Bool
@@ -554,6 +557,7 @@ def BoolExpr.hasArrRead : BoolExpr → Bool
   | .cmp _ a b   => a.hasArrRead || b.hasArrRead
   | .not e       => e.hasArrRead
   | .fcmp _ a b  => a.hasArrRead || b.hasArrRead
+  | .bexpr e     => e.hasArrRead
 
 /-- For arrRead-free BoolExprs, evaluation is independent of the array memory. -/
 theorem BoolExpr.eval_noArrRead (be : BoolExpr) (σ : Store) (am₁ am₂ : ArrayMem)
@@ -568,6 +572,8 @@ theorem BoolExpr.eval_noArrRead (be : BoolExpr) (σ : Store) (am₁ am₂ : Arra
   | fcmp op a b =>
     simp only [hasArrRead, Bool.or_eq_false_iff] at h
     simp only [BoolExpr.eval, Expr.eval_noArrRead a σ am₁ am₂ h.1, Expr.eval_noArrRead b σ am₁ am₂ h.2]
+  | bexpr e =>
+    simp only [hasArrRead] at h; simp only [BoolExpr.eval, Expr.eval_noArrRead e σ am₁ am₂ h]
 
 /-- Are the Expr operands in cmp/fcmp simple atoms (.var/.lit for int, .var/.flit for float)?
     Code generation only emits correct load sequences for these forms. -/
@@ -580,6 +586,7 @@ def BoolExpr.hasSimpleOps : BoolExpr → Bool
   | .fcmp _ a b =>
     (match a with | .var _ | .flit _ => true | _ => false) &&
     (match b with | .var _ | .flit _ => true | _ => false)
+  | .bexpr _ => false
 
 theorem BoolExpr.hasSimpleOps_cmp {op : CmpOp} {a b : Expr}
     (h : (BoolExpr.cmp op a b).hasSimpleOps = true) :
@@ -599,6 +606,7 @@ theorem BoolExpr.hasSimpleOps_fcmp {fop : FloatCmpOp} {a b : Expr}
 def BoolExpr.vars : BoolExpr → List Var
   | .lit _        => []
   | .bvar x       => [x]
+  | .bexpr e      => e.freeVars
   | .cmp _ a b    => a.freeVars ++ b.freeVars
   | .not e        => e.vars
   | .fcmp _ a b   => a.freeVars ++ b.freeVars
