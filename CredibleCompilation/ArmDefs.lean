@@ -79,7 +79,7 @@ def ArmFReg.toNat : ArmFReg → Nat
 
 /-- ARM64 condition codes used by the code generator. -/
 inductive Cond where
-  | eq | ne | lt | le
+  | eq | ne | lt | le | gt | ge
   deriving Repr, DecidableEq
 
 /-- Condition flags set by `cmp`. We store both operands so that
@@ -101,6 +101,14 @@ def Flags.condHolds (f : Flags) : Cond → Bool
   | .ne => f.lhs != f.rhs
   | .lt => BitVec.slt f.lhs f.rhs
   | .le => BitVec.sle f.lhs f.rhs
+  | .gt => BitVec.slt f.rhs f.lhs
+  | .ge => BitVec.sle f.rhs f.lhs
+
+/-- Negate a condition code: the result holds iff the original does not. -/
+def Cond.negate : Cond → Cond
+  | .eq => .ne | .ne => .eq
+  | .lt => .ge | .ge => .lt
+  | .le => .gt | .gt => .le
 
 -- ============================================================
 -- § 3. Machine state
@@ -216,6 +224,8 @@ inductive ArmInstr where
   | asrR     : ArmReg → ArmReg → ArmReg → ArmInstr
   /-- `b label` — unconditional branch. -/
   | b        : Nat → ArmInstr
+  /-- `b.cc label` — conditional branch based on flags. -/
+  | bCond    : Cond → Nat → ArmInstr
   /-- Load from global array: `dst ← arrayMem[arr][idxReg]`. -/
   | arrLd    : ArmReg → ArrayName → ArmReg → ArmInstr
   /-- Store to global array: `arrayMem[arr][idxReg] ← valReg`. -/

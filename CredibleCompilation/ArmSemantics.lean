@@ -97,6 +97,16 @@ inductive ArmStep (prog : ArmProg) : ArmState → ArmState → Prop where
     s.regs rn = (0 : BitVec 64) →
     ArmStep prog s s.nextPC
 
+  | bCond_taken (c : Cond) (lbl : Nat) :
+    prog[s.pc]? = some (.bCond c lbl) →
+    s.flags.condHolds c = true →
+    ArmStep prog s { s with pc := lbl }
+
+  | bCond_fall (c : Cond) (lbl : Nat) :
+    prog[s.pc]? = some (.bCond c lbl) →
+    s.flags.condHolds c = false →
+    ArmStep prog s s.nextPC
+
   | andImm (rd rn : ArmReg) (imm : BitVec 64) :
     prog[s.pc]? = some (.andImm rd rn imm) →
     ArmStep prog s (s.setReg rd (s.regs rn &&& imm) |>.nextPC)
@@ -994,7 +1004,31 @@ def verifiedGenInstr (layout : VarLayout) (pcMap : Nat → Nat) (instr : TAC)
   | .goto l => some [.b (pcMap l)]
   | .ifgoto be l =>
     if !be.hasSimpleOps then none else
-    some (verifiedGenBoolExpr layout be ++ [.cbnz .x0 (pcMap l)])
+    -- Fuse compare + branch for negated comparisons (common while-loop pattern)
+    match be with
+    | .not (.cmp op a b) =>
+      let cond := match op with | .eq => Cond.eq | .ne => .ne | .lt => .lt | .le => .le
+      let loadA := match a with
+        | .var v => vLoadVar layout v .x1
+        | .lit n => formalLoadImm64 .x1 n
+        | _ => []
+      let loadB := match b with
+        | .var v => vLoadVar layout v .x2
+        | .lit n => formalLoadImm64 .x2 n
+        | _ => []
+      some (loadA ++ loadB ++ [.cmp .x1 .x2, .bCond cond.negate (pcMap l)])
+    | .not (.fcmp fop a b) =>
+      let cond := match fop with | .feq => Cond.eq | .fne => .ne | .flt => .lt | .fle => .le
+      let loadA := match a with
+        | .var v => vLoadVarFP layout v .d1
+        | .flit n => formalLoadImm64 .x0 n ++ [.fmovToFP .d1 .x0]
+        | _ => []
+      let loadB := match b with
+        | .var v => vLoadVarFP layout v .d2
+        | .flit n => formalLoadImm64 .x0 n ++ [.fmovToFP .d2 .x0]
+        | _ => []
+      some (loadA ++ loadB ++ [.fcmpR .d1 .d2, .bCond cond.negate (pcMap l)])
+    | _ => some (verifiedGenBoolExpr layout be ++ [.cbnz .x0 (pcMap l)])
   | .halt => some [.b haltLabel]
   | .arrLoad x arr idx ty =>
     let loadIdx := vLoadVar layout idx .x1

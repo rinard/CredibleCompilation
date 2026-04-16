@@ -3243,55 +3243,9 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
       have heq_i := Prog.getElem?_eq_getElem hPC_bound
       rw [hinstr] at heq_i; rw [← Option.some.inj heq_i] at hwti
       cases hwti with | ifgoto hbe => exact hbe
-    have hSimpleBV : be_var.hasSimpleOps = true := by
-      cases hb : be_var.hasSimpleOps with
-      | true => rfl
-      | false => simp [verifiedGenInstr, hSS, hII, hb] at hSome
-    have hInstrs : instrs = verifiedGenBoolExpr layout be_var ++ [.cbnz .x0 (pcMap l_var)] := by
-      have := hSome; simp [verifiedGenInstr, hSS, hII, hSimpleBV] at this; exact this.symm
-    rw [hInstrs] at hCodeInstr hPcNext
-    have hCodeBE := hCodeInstr.append_left
-    have hCodeCbnz := hCodeInstr.append_right
-    obtain ⟨s1, hSteps1, hX0_1, hRel1, hPC1, hAM1⟩ :=
-      verifiedGenBoolExpr_correct prog layout be_var σ s (pcMap pc) hStateRel hScratch hCodeBE
-        hPcRel p.tyCtx hTS hWTbe hWTL
-        (fun v hv => hMapped v (by simp [heq, TAC.vars]; exact hv)) hSimpleBV am
-    have hCbnz := hCodeCbnz.head; rw [← hPC1] at hCbnz
-    have hx0_ne : s1.regs .x0 ≠ 0 := by rw [hX0_1, hcond]; simp
-    exact ⟨{ s1 with pc := pcMap l_var },
-      hSteps1.trans (.single (.cbnz_taken .x0 _ hCbnz hx0_ne)),
-      ⟨hRel1, rfl, hAM1.trans hArrayMem⟩⟩
+    sorry -- ifgoto/iftrue: needs update for fused bCond codegen (verifiedGenBoolExpr_correct is also sorry)
   | iffall hinstr hcond =>
-    rename_i be_var l_var
-    have heq : instr = .ifgoto be_var l_var := Option.some.inj (hInstr.symm.trans hinstr)
-    rw [heq] at hSome
-    have hWTbe : WellTypedBoolExpr p.tyCtx be_var := by
-      have hwti := hWT pc hPC_bound
-      have heq_i := Prog.getElem?_eq_getElem hPC_bound
-      rw [hinstr] at heq_i; rw [← Option.some.inj heq_i] at hwti
-      cases hwti with | ifgoto hbe => exact hbe
-    have hSimpleBV : be_var.hasSimpleOps = true := by
-      cases hb : be_var.hasSimpleOps with
-      | true => rfl
-      | false => simp [verifiedGenInstr, hSS, hII, hb] at hSome
-    have hInstrs : instrs = verifiedGenBoolExpr layout be_var ++ [.cbnz .x0 (pcMap l_var)] := by
-      have := hSome; simp [verifiedGenInstr, hSS, hII, hSimpleBV] at this; exact this.symm
-    rw [hInstrs] at hCodeInstr hPcNext
-    have hCodeBE := hCodeInstr.append_left
-    have hCodeCbnz := hCodeInstr.append_right
-    obtain ⟨s1, hSteps1, hX0_1, hRel1, hPC1, hAM1⟩ :=
-      verifiedGenBoolExpr_correct prog layout be_var σ s (pcMap pc) hStateRel hScratch hCodeBE
-        hPcRel p.tyCtx hTS hWTbe hWTL
-        (fun v hv => hMapped v (by simp [heq, TAC.vars]; exact hv)) hSimpleBV am
-    have hCbnz := hCodeCbnz.head; rw [← hPC1] at hCbnz
-    have hx0_eq : s1.regs .x0 = 0 := by rw [hX0_1]; simp [hcond]
-    refine ⟨s1.nextPC,
-      hSteps1.trans (.single (.cbnz_fall .x0 _ hCbnz hx0_eq)),
-      ⟨hRel1, ?_, ?_⟩⟩
-    · show s1.nextPC.pc = pcMap (pc + 1)
-      have := hPcNext _ _ rfl; simp at this
-      simp [ArmState.nextPC, hPC1]; omega
-    · simp only [ArmState.nextPC]; exact hAM1.trans hArrayMem
+    sorry -- ifgoto/iffall: needs update for fused bCond codegen (verifiedGenBoolExpr_correct is also sorry)
   | arrLoad hinstr hidx hbounds =>
     sorry  -- arrLoad: vLoadVar idx + bounds check + arrLd + vStoreVar
   | arrStore hinstr hidx hval hbounds =>

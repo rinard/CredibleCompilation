@@ -130,13 +130,13 @@ private def ppFReg : ArmFReg → String
   | .d12 => "d12" | .d13 => "d13" | .d14 => "d14" | .d15 => "d15"
 
 private def ppCond : Cond → String
-  | .eq => "eq" | .ne => "ne" | .lt => "lt" | .le => "le"
+  | .eq => "eq" | .ne => "ne" | .lt => "lt" | .le => "le" | .gt => "gt" | .ge => "ge"
 
 /-- Map float-comparison condition codes to ARM64 mnemonics.
     After `fcmp`, ARM64 uses `mi` (minus) for less-than and `ls` (lower or same)
     for less-or-equal, unlike integer `cmp` which uses `lt`/`le`. -/
 private def ppCondFloat : Cond → String
-  | .eq => "eq" | .ne => "ne" | .lt => "mi" | .le => "ls"
+  | .eq => "eq" | .ne => "ne" | .lt => "mi" | .le => "ls" | .gt => "gt" | .ge => "ge"
 
 /-- Resolve a branch target (Nat) to a label string.
     Sentinel values map to special labels; others are reverse-mapped from
@@ -210,6 +210,8 @@ private def ppInstr (lbl : Nat → String) (afterFcmp : Bool)
     [s!"  asr {ppReg rd}, {ppReg rn}, {ppReg rm}"]
   | .b target =>
     [s!"  b {lbl target}"]
+  | .bCond c target =>
+    [s!"  b.{if afterFcmp then ppCondFloat c else ppCond c} {lbl target}"]
   | .arrLd dst arr idxReg =>
     [s!"  adrp x8, _arr_{arr}@PAGE",
      s!"  add x8, x8, _arr_{arr}@PAGEOFF",
@@ -926,7 +928,10 @@ private theorem verifiedGenInstr_length_pcMap_indep {layout : VarLayout}
   | ifgoto be l =>
     simp only [verifiedGenInstr] at h₁ h₂
     split at h₁ <;> simp_all
-    obtain ⟨_, rfl⟩ := h₁; obtain ⟨_, rfl⟩ := h₂; simp
+    -- Lists differ only in pcMap inside one instruction; length is identical
+    all_goals (split at h₁ <;> split at h₂ <;> simp_all
+               <;> (try (obtain ⟨_, rfl⟩ := h₁; obtain ⟨_, rfl⟩ := h₂; simp [List.length_append]))
+               <;> (try (subst_vars; obtain ⟨_, rfl⟩ := h₂; simp [List.length_append])))
   | const _ val =>
     have : some l₁ = some l₂ := by rw [← h₁, ← h₂]; cases val <;> simp [verifiedGenInstr]
     exact congrArg _ (Option.some.inj this)
