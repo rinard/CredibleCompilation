@@ -82,6 +82,14 @@ def Expr.simplify (inv : EInv) : Expr → Expr
     | .fmsub => .fbin .fsub (a.simplify inv) (.fbin .fmul (b.simplify inv) (c.simplify inv))
   | .farrRead arr idx => .farrRead arr (idx.simplify inv)
 
+/-- Like `Expr.simplify` but iterates to resolve chained `.var` lookups.
+    Applies `simplify` once, then re-applies up to `n` more times so that
+    var-chain references through the invariant are fully resolved.
+    Fuel `n` controls the number of extra iterations. -/
+def Expr.simplifyDeep : Nat → EInv → Expr → Expr
+  | 0, inv, e => e.simplify inv
+  | n + 1, inv, e => (e.simplify inv).simplifyDeep n inv
+
 -- ============================================================
 -- § 3. Symbolic execution
 -- ============================================================
@@ -684,8 +692,9 @@ theorem relVarSet_contains_eq_any (rel_pre : EExprRel) (w : Var) :
     when simplified under the pre-invariant. -/
 def checkInvAtom (inv_pre : EInv) (instr : TAC) (atom : Var × Expr) : Bool :=
   let (ss, _) := execSymbolic ([] : SymStore) ([] : SymArrayMem) instr
-  let lhs := (ssGet ss atom.1).simplify inv_pre
-  let rhs := (atom.2.substSym ss).simplify inv_pre
+  let fuel := inv_pre.length + 1
+  let lhs := (ssGet ss atom.1).simplifyDeep fuel inv_pre
+  let rhs := (atom.2.substSym ss).simplifyDeep fuel inv_pre
   lhs == rhs
 
 /-- Compute reachable PCs from PC 0 via successor edges. -/

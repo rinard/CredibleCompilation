@@ -34,22 +34,9 @@ equivalent expressions compare equal regardless of which temp holds a constant.
 
 The certificate invariant at each PC contains atoms `(w, expanded_expr)` for
 each available expression, **plus** atoms `(v, .lit n)` for each known constant.
-Avail entries are pre-simplified through the constant atoms via `Expr.simplify`
-so that the checker's non-recursive `.var` lookup returns an already-simplified
-form, avoiding mismatches with the recursively-simplified RHS.
-
-The `invExpr` stored in `AvailEntry` uses `expandVarCert` (avail-only, no
-constants) so the certificate references variables that the checker can resolve.
-Constant substitution is applied only at invariant-export time in `stateToInv`.
-
-## Known limitation
-
-`expandVarCert` can produce inconsistent `invExpr` across worklist iterations
-when the avail set at a binop site changes during loop convergence (e.g., `k`
-expands to `ipnt + t` on the first visit but `.var k` after the loop header
-merge drops the entry).  This causes the intersection at successor PCs to
-collapse to empty, preventing CSE in nested loops whose setup code creates
-transient avail entries for loop variables.
+The `invExpr` stored in `AvailEntry` uses raw `.var` references (identity
+expansion), and the checker's `simplifyDeep` recurses through `.var` lookups
+to resolve chains through the invariant at verification time.
 -/
 
 namespace CSEOpt
@@ -116,10 +103,7 @@ def killVar (avail : AvailSet) (x : Var) : AvailSet :=
 
 /-- Expand a variable through the available set only (for certificate invariants).
     Does NOT expand constants — the checker can verify `.var` references directly. -/
-def expandVarCert (avail : AvailSet) (v : Var) : Expr :=
-  match avail.find? (fun e => e.result == v) with
-  | some e => e.invExpr
-  | none   => .var v
+def expandVarCert (_avail : AvailSet) (v : Var) : Expr := .var v
 
 /-- Substitute known constants into an expression (for matching only). -/
 def expandExprConsts (cm : ConstMap) : Expr → Expr
@@ -283,16 +267,15 @@ def transformProg (prog : Prog) (states : Array (Option CSEState)) : Prog :=
 /-- Convert a CSE state to an EInv (invariant).
     Includes both available expressions and known constant bindings,
     so the checker can verify CSE across different temps for the same constant.
-    Avail entries are pre-simplified through constants so that the checker's
-    `Expr.simplify` (which doesn't recurse into `.var` lookup results) sees
-    a consistent form. -/
+    The checker's `simplifyDeep` recurses through `.var` lookup results,
+    so avail entries no longer need pre-simplification. -/
 def stateToInv (st : CSEState) : EInv :=
   let (avail, cm) := st
   let constInv : EInv := cm.map fun (v, val) => match val with
     | .int n   => (v, Expr.lit n)
     | .float f => (v, Expr.flit f)
     | .bool b  => (v, Expr.blit b)
-  let availInv := avail.map fun e => (e.result, e.invExpr.simplify constInv)
+  let availInv := avail.map fun e => (e.result, e.invExpr)
   availInv ++ constInv
 
 /-- Build invariant arrays from the analysis result. -/

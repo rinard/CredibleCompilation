@@ -4,6 +4,23 @@ Chronological record of what was built and why, to reconstruct the sequence of d
 
 ---
 
+## CSE: simplifyDeep fixes chained var-lookup asymmetry (2026-04-16)
+
+**Goal:** Fix the one-level `.var` lookup asymmetry in `checkInvAtom` that prevented CSE from working when invariant entries reference other entries (e.g., chained var lookups through the invariant).
+
+**Problem:** `checkInvAtom` compared lhs (from `.var` lookup, one-level via `Expr.simplify`) vs rhs (recursively simplified). When invariant entries referenced other entries, the lhs wasn't fully resolved, causing mismatches. This prevented CSE in the second k02 inner loop.
+
+**Fix:** Added `Expr.simplifyDeep` which iterates `Expr.simplify` to resolve chained `.var` lookups. Changed `checkInvAtom` to use `simplifyDeep` with fuel `inv.length + 1`. Simplified CSEOpt: `expandVarCert` is now identity (raw `.var` references), and `stateToInv` no longer pre-simplifies avail entries — the checker resolves chains itself.
+
+**Changes:**
+- **ExecChecker.lean**: Added `Expr.simplifyDeep` (iterates `simplify`). Changed `checkInvAtom` to use `simplifyDeep`.
+- **SoundnessBridge.lean**: Added `simplifyDeep_sound` (7-line proof composing `simplify_sound`). Updated `checkInvAtom_sound`.
+- **CSEOpt.lean**: `expandVarCert` → identity. `stateToInv` drops pre-simplification. Updated module docstring.
+
+**Result:** 0 new sorrys. All 24 Livermore kernels compile and pass. Both k02 inner loops now eligible for CSE.
+
+---
+
 ## CSE: cross-constant matching (2026-04-16)
 
 **Goal:** Eliminate duplicate `k+1` computations in Livermore k02 inner loop, where each occurrence of the literal `1` gets a fresh temp from `compileExpr`.

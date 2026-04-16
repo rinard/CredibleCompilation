@@ -300,6 +300,20 @@ theorem Expr.simplify_sound (inv : EInv) (e : Expr) (σ : Store) (am : ArrayMem)
     simp only [Expr.simplify, Expr.eval]
     rw [ih]
 
+/-- Deep simplification preserves semantics: iterating `simplify` is sound
+    because each application preserves eval. -/
+theorem Expr.simplifyDeep_sound (n : Nat) (inv : EInv) (e : Expr) (σ : Store) (am : ArrayMem)
+    (hinv : EInv.toProp inv σ am) :
+    (e.simplifyDeep n inv).eval σ am = e.eval σ am := by
+  induction n generalizing e with
+  | zero =>
+    show (e.simplify inv).eval σ am = e.eval σ am
+    exact Expr.simplify_sound inv e σ am hinv
+  | succ n ih =>
+    show ((e.simplify inv).simplifyDeep n inv).eval σ am = e.eval σ am
+    rw [ih]
+    exact Expr.simplify_sound inv e σ am hinv
+
 -- ============================================================
 -- § 5. Easy soundness lemmas
 -- ============================================================
@@ -901,9 +915,10 @@ theorem checkInvAtom_sound (inv_pre : EInv) (instr : TAC) (atom : Var × Expr)
           exact (Store.update_other σ dest v _ hvd).symm
       | _ => exact absurd rfl hscalar
   -- Build the chain using am, then bridge to am'.
-  have hlhs := Expr.simplify_sound inv_pre
+  let fuel := inv_pre.length + 1
+  have hlhs := Expr.simplifyDeep_sound fuel inv_pre
     (ssGet ((execSymbolic ([] : SymStore) ([] : SymArrayMem) instr).1) x) σ am hinv
-  have hrhs := Expr.simplify_sound inv_pre
+  have hrhs := Expr.simplifyDeep_sound fuel inv_pre
     (e.substSym ((execSymbolic ([] : SymStore) ([] : SymArrayMem) instr).1)) σ am hinv
   have hsub := Expr.substSym_sound ((execSymbolic ([] : SymStore) ([] : SymArrayMem) instr).1) e σ σ'
     am hrepr
@@ -911,8 +926,8 @@ theorem checkInvAtom_sound (inv_pre : EInv) (instr : TAC) (atom : Var × Expr)
   have hchain : σ' x = e.eval σ' am :=
     calc σ' x
         = (ssGet ((execSymbolic ([] : SymStore) ([] : SymArrayMem) instr).1) x).eval σ am := (hrepr x).symm
-      _ = ((ssGet ((execSymbolic ([] : SymStore) ([] : SymArrayMem) instr).1) x).simplify inv_pre).eval σ am := hlhs.symm
-      _ = ((e.substSym ((execSymbolic ([] : SymStore) ([] : SymArrayMem) instr).1)).simplify inv_pre).eval σ am := by
+      _ = ((ssGet ((execSymbolic ([] : SymStore) ([] : SymArrayMem) instr).1) x).simplifyDeep fuel inv_pre).eval σ am := hlhs.symm
+      _ = ((e.substSym ((execSymbolic ([] : SymStore) ([] : SymArrayMem) instr).1)).simplifyDeep fuel inv_pre).eval σ am := by
             rw [hbeq]
       _ = (e.substSym ((execSymbolic ([] : SymStore) ([] : SymArrayMem) instr).1)).eval σ am := hrhs
       _ = e.eval σ' am := hsub
