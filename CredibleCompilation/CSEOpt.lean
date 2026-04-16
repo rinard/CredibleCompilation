@@ -13,13 +13,43 @@ executable checker can verify.
 some variable `w` (and neither `w`, `y`, nor `z` has been reassigned since)
 → **copy x w**
 
+This includes **cross-constant matching**: `k + _t1` and `k + _t2` are
+recognized as the same expression when both `_t1` and `_t2` are known
+constants with the same value.  This is common because `compileExpr`
+allocates a fresh temp for each literal occurrence.
+
+## Analysis state
+
+The analysis tracks two structures per PC:
+
+- **AvailSet** — available expressions (result := lhs op rhs) with a
+  fully-expanded `invExpr` used for the certificate invariant.
+- **ConstMap** — known constant bindings (var → value) from `const` instructions.
+
+Matching uses `expandVarFull` / `expandExprConsts` to substitute constants
+into both the target expression and stored `invExpr`, so semantically
+equivalent expressions compare equal regardless of which temp holds a constant.
+
 ## Invariant strategy
 
 The certificate invariant at each PC contains atoms `(w, expanded_expr)` for
-each available expression.  Crucially, `expanded_expr` is **fully expanded**:
-operands that are themselves results of available expressions are recursively
-substituted so that only base variables remain.  This avoids a mismatch in
-`Expr.simplify`, which does one-level lookup for `.var` but recurses into `.bin`.
+each available expression, **plus** atoms `(v, .lit n)` for each known constant.
+Avail entries are pre-simplified through the constant atoms via `Expr.simplify`
+so that the checker's non-recursive `.var` lookup returns an already-simplified
+form, avoiding mismatches with the recursively-simplified RHS.
+
+The `invExpr` stored in `AvailEntry` uses `expandVarCert` (avail-only, no
+constants) so the certificate references variables that the checker can resolve.
+Constant substitution is applied only at invariant-export time in `stateToInv`.
+
+## Known limitation
+
+`expandVarCert` can produce inconsistent `invExpr` across worklist iterations
+when the avail set at a binop site changes during loop convergence (e.g., `k`
+expands to `ipnt + t` on the first visit but `.var k` after the loop header
+merge drops the entry).  This causes the intersection at successor PCs to
+collapse to empty, preventing CSE in nested loops whose setup code creates
+transient avail entries for loop variables.
 -/
 
 namespace CSEOpt
