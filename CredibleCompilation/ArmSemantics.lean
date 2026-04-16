@@ -1033,7 +1033,7 @@ def verifiedGenInstr (layout : VarLayout) (pcMap : Nat → Nat) (instr : TAC)
   | .arrLoad x arr idx ty =>
     let loadIdx := vLoadVar layout idx .x1
     let boundsCheck := if boundsSafe then [] else
-      [.cmpImm .x1 (arraySizeBv arrayDecls arr), .cset .x0 .lt, .cbz .x0 boundsLabel]
+      [.cmpImm .x1 (arraySizeBv arrayDecls arr), .bCond .ge boundsLabel]
     match ty with
     | .float =>
       let dst_reg := match layout x with | some (.freg r) => r | _ => .d0
@@ -1043,7 +1043,7 @@ def verifiedGenInstr (layout : VarLayout) (pcMap : Nat → Nat) (instr : TAC)
   | .arrStore arr idx val ty =>
     let loadIdx := vLoadVar layout idx .x1
     let boundsCheck := if boundsSafe then [] else
-      [.cmpImm .x1 (arraySizeBv arrayDecls arr), .cset .x0 .lt, .cbz .x0 boundsLabel]
+      [.cmpImm .x1 (arraySizeBv arrayDecls arr), .bCond .ge boundsLabel]
     if ty == .float then
       let val_reg := match layout val with | some (.freg r) => r | _ => .d0
       some (loadIdx ++ boundsCheck ++ vLoadVarFP layout val val_reg ++ [.farrSt arr .x1 val_reg])
