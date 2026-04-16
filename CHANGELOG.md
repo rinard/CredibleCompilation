@@ -4,6 +4,22 @@ Chronological record of what was built and why, to reconstruct the sequence of d
 
 ---
 
+## Close verifiedGenBoolExpr_correct sorry; scaffold iftrue/iffall (2026-04-16)
+
+**Goal:** Eliminate the `verifiedGenBoolExpr_correct` sorry (line 877) and the `iftrue`/`iffall` sorrys in `verifiedGenInstr_correct`.
+
+**Result:** `verifiedGenBoolExpr_correct` fully proved (0 sorry). `iftrue`/`iffall` remain sorry — the fused `bCond` codegen paths (`.not (.cmp ...)` and `.not (.fcmp ...)`) require per-operand-combination proofs inside `verifiedGenInstr_correct`'s more complex hypothesis context. The fallback `cbnz` path structure is validated.
+
+**Changes:**
+- **ArmCorrectness.lean**:
+  - `verifiedGenBoolExpr_correct`: Full proof for all `BoolExpr` cases — `bexpr` (contradiction), `lit` (single mov), `bvar` (vLoadVar + andImm), `not` (recursive + eorImm), `cmp` (4 operand subcases: var+var, var+lit, lit+var, lit+lit), `fcmp` (4 operand subcases: var+var, var+flit, flit+var, flit+flit).
+  - Uses `BoolExpr.hasSimpleOps_cmp`/`hasSimpleOps_fcmp` for operand case splits.
+  - `Cond.negate_correct` (already in ArmDefs.lean) enables fused branch proofs.
+
+**Sorry count:** 6 remaining (2 print, 2 iftrue/iffall, 2 arrLoad/arrStore).
+
+---
+
 ## Handle LICM-hoisted constants in checker: left-literal comparisons, invariant-based div safety (2026-04-14)
 
 **Goal:** Fix LICM certificate checker rejecting `(lit c, .var x)` relation pairs from hoisted constants. 9/24 Livermore kernels failed; after this change 16/24 pass (remaining 8 are `bounds_preservation` / `all_transitions` issues unrelated to this fix).
