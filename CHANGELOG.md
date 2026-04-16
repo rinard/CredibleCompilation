@@ -4,6 +4,22 @@ Chronological record of what was built and why, to reconstruct the sequence of d
 
 ---
 
+## Checker: uniformly use simplifyDeep in all checker functions (2026-04-16)
+
+**Goal:** Replace all uses of `Expr.simplify`/`Expr.simplifyFast` in checker functions and soundness proofs with `Expr.simplifyDeep`/`Expr.simplifyDeepFast`, so optimization passes don't need to pre-simplify certificate entries.
+
+**Problem:** Only `checkInvAtom` used `simplifyDeep`. Other checker functions (`BoolExpr.normalize`, `BoolExpr.symEval`, `checkBinopSafe`, `isDivByZero`, `checkInstrAliasOk`, `checkRelConsistency`) still used single-pass `simplify`/`simplifyFast`, which couldn't resolve chained var-lookups through invariants.
+
+**Fix:** Introduced `sdFuel` — an opaque fuel wrapper (`inv.length + 1`) that prevents Lean's type-checker from pattern-matching the Nat as `Nat.succ _`, which would unfold `simplifyDeep` one step and break `split`-based proof strategies. All checker functions and ~20 soundness proof call sites updated mechanically.
+
+**Changes:**
+- **ExecChecker.lean**: Added `sdFuel`. Updated `BoolExpr.normalize` (4 calls), `BoolExpr.symEval` (3), `checkBinopSafe` (1), `isDivByZero` (1), `checkInstrAliasOk` (2), `checkRelConsistency` (4 `.simplifyFast` → `.simplifyDeepFast`), `checkInvAtom` (uses `sdFuel` for consistency).
+- **SoundnessBridge.lean**: Updated `symEval_sound`, `normalize_eval`, `checkInstrAliasOk_arrLoad_noalias`, `simplify_lit_val`/`simplify_blit_val`/`simplify_flit_val`, `checkRelConsistency_pairCheck`/`amCheck` (`simplifyFast_eq_simplify` → `simplifyDeepFast_eq_simplifyDeep`), `hpair_sound`, and array index/value proofs.
+
+**Result:** 0 new sorrys. All existing tests pass. `Expr.simplify`, `simplify_sound`, `simplifyFast_eq_simplify` preserved as internal building blocks.
+
+---
+
 ## CSE: simplifyDeep fixes chained var-lookup asymmetry (2026-04-16)
 
 **Goal:** Fix the one-level `.var` lookup asymmetry in `checkInvAtom` that prevented CSE from working when invariant entries reference other entries (e.g., chained var lookups through the invariant).

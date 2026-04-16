@@ -915,7 +915,7 @@ theorem checkInvAtom_sound (inv_pre : EInv) (instr : TAC) (atom : Var × Expr)
           exact (Store.update_other σ dest v _ hvd).symm
       | _ => exact absurd rfl hscalar
   -- Build the chain using am, then bridge to am'.
-  let fuel := inv_pre.length + 1
+  let fuel := sdFuel inv_pre
   have hlhs := Expr.simplifyDeep_sound fuel inv_pre
     (ssGet ((execSymbolic ([] : SymStore) ([] : SymArrayMem) instr).1) x) σ am hinv
   have hrhs := Expr.simplifyDeep_sound fuel inv_pre
@@ -1198,7 +1198,7 @@ private theorem BoolExpr.symEval_sound (b : BoolExpr) (ss : SymStore) (inv : EIn
     simp only [BoolExpr.symEval] at heval
     split at heval <;> simp at heval
     rename_i b heq
-    have hsimpl := Expr.simplify_sound inv (ssGet ss x) σ₀ am hinv
+    have hsimpl := Expr.simplifyDeep_sound (sdFuel inv) inv (ssGet ss x) σ₀ am hinv
     rw [heq, Expr.eval] at hsimpl
     simp only [BoolExpr.eval]
     rw [← hrepr x, ← hsimpl]; simp [heval]
@@ -1208,8 +1208,8 @@ private theorem BoolExpr.symEval_sound (b : BoolExpr) (ss : SymStore) (inv : EIn
     split at heval <;> simp at heval
     rename_i va vb ha hb
     simp only [BoolExpr.eval]
-    have hsa := Expr.simplify_sound inv (a.substSym' ss) σ₀ am hinv
-    have hsb := Expr.simplify_sound inv (b.substSym' ss) σ₀ am hinv
+    have hsa := Expr.simplifyDeep_sound (sdFuel inv) inv (a.substSym' ss) σ₀ am hinv
+    have hsb := Expr.simplifyDeep_sound (sdFuel inv) inv (b.substSym' ss) σ₀ am hinv
     rw [ha, Expr.eval] at hsa; rw [hb, Expr.eval] at hsb
     simp only [Expr.substSym'_eq_substSym] at hsa hsb
     rw [Expr.substSym_sound ss a σ₀ σ am hrepr] at hsa
@@ -1230,7 +1230,7 @@ private theorem BoolExpr.symEval_sound (b : BoolExpr) (ss : SymStore) (inv : EIn
     simp only [BoolExpr.symEval] at heval
     split at heval <;> simp at heval
     rename_i b heq
-    have hs := Expr.simplify_sound inv (e.substSym' ss) σ₀ am hinv
+    have hs := Expr.simplifyDeep_sound (sdFuel inv) inv (e.substSym' ss) σ₀ am hinv
     rw [heq, Expr.eval] at hs
     simp only [Expr.substSym'_eq_substSym] at hs
     rw [Expr.substSym_sound ss e σ₀ σ am hrepr] at hs
@@ -1252,13 +1252,13 @@ private theorem BoolExpr.normalize_eval (b : BoolExpr) (ss : SymStore) (inv : EI
     unfold BoolExpr.normalize
     split
     · rename_i b_val heq
-      have hsimpl := Expr.simplify_sound inv (ssGet ss x) σ₀ am₀ hinv
+      have hsimpl := Expr.simplifyDeep_sound (sdFuel inv) inv (ssGet ss x) σ₀ am₀ hinv
       rw [heq, Expr.eval] at hsimpl
       simp only [BoolExpr.eval]; rw [← hrepr x, ← hsimpl]; rfl
-    · -- bvar fallback: normalize returns .bexpr e' where e' = (ssGet ss x).simplify inv
+    · -- bvar fallback: normalize returns .bexpr e' where e' = (ssGet ss x).simplifyDeep
       rename_i e' heq
       simp only [BoolExpr.eval]
-      have hsimpl := Expr.simplify_sound inv (ssGet ss x) σ₀ am₀ hinv
+      have hsimpl := Expr.simplifyDeep_sound (sdFuel inv) inv (ssGet ss x) σ₀ am₀ hinv
       rw [hsimpl, hrepr x]
   | cmp op a b_e =>
     simp only [BoolExpr.hasArrRead, Bool.or_eq_false_iff] at hnoarr
@@ -1266,8 +1266,8 @@ private theorem BoolExpr.normalize_eval (b : BoolExpr) (ss : SymStore) (inv : EI
     split
     next va vb ha hb =>
       simp only [BoolExpr.eval]
-      have hsa := Expr.simplify_sound inv (a.substSym' ss) σ₀ am₀ hinv
-      have hsb := Expr.simplify_sound inv (b_e.substSym' ss) σ₀ am₀ hinv
+      have hsa := Expr.simplifyDeep_sound (sdFuel inv) inv (a.substSym' ss) σ₀ am₀ hinv
+      have hsb := Expr.simplifyDeep_sound (sdFuel inv) inv (b_e.substSym' ss) σ₀ am₀ hinv
       rw [ha, Expr.eval] at hsa; rw [hb, Expr.eval] at hsb
       simp only [Expr.substSym'_eq_substSym] at hsa hsb
       rw [Expr.substSym_sound ss a σ₀ σ am₀ hrepr] at hsa
@@ -1276,10 +1276,10 @@ private theorem BoolExpr.normalize_eval (b : BoolExpr) (ss : SymStore) (inv : EI
           ← Expr.eval_noArrRead b_e σ am₀ am hnoarr.2,
           ← hsa, ← hsb]; simp [Value.toInt]
     next a' b' _ =>
-      -- Same chain as the lit case: simplify_sound ∘ substSym_sound ∘ eval_noArrRead
+      -- Same chain as the lit case: simplifyDeep_sound ∘ substSym_sound ∘ eval_noArrRead
       simp only [BoolExpr.eval, Expr.substSym'_eq_substSym]
-      have hsa := Expr.simplify_sound inv (a.substSym' ss) σ₀ am₀ hinv
-      have hsb := Expr.simplify_sound inv (b_e.substSym' ss) σ₀ am₀ hinv
+      have hsa := Expr.simplifyDeep_sound (sdFuel inv) inv (a.substSym' ss) σ₀ am₀ hinv
+      have hsb := Expr.simplifyDeep_sound (sdFuel inv) inv (b_e.substSym' ss) σ₀ am₀ hinv
       simp only [Expr.substSym'_eq_substSym] at hsa hsb
       rw [Expr.substSym_sound ss a σ₀ σ am₀ hrepr] at hsa
       rw [Expr.substSym_sound ss b_e σ₀ σ am₀ hrepr] at hsb
@@ -1306,8 +1306,8 @@ private theorem BoolExpr.normalize_eval (b : BoolExpr) (ss : SymStore) (inv : EI
     split
     next va vb ha hb =>
       simp only [BoolExpr.eval]
-      have hsa := Expr.simplify_sound inv (a.substSym' ss) σ₀ am₀ hinv
-      have hsb := Expr.simplify_sound inv (b_e.substSym' ss) σ₀ am₀ hinv
+      have hsa := Expr.simplifyDeep_sound (sdFuel inv) inv (a.substSym' ss) σ₀ am₀ hinv
+      have hsb := Expr.simplifyDeep_sound (sdFuel inv) inv (b_e.substSym' ss) σ₀ am₀ hinv
       rw [ha, Expr.eval] at hsa; rw [hb, Expr.eval] at hsb
       simp only [Expr.substSym'_eq_substSym] at hsa hsb
       rw [Expr.substSym_sound ss a σ₀ σ am₀ hrepr] at hsa
@@ -1316,10 +1316,10 @@ private theorem BoolExpr.normalize_eval (b : BoolExpr) (ss : SymStore) (inv : EI
           ← Expr.eval_noArrRead b_e σ am₀ am hnoarr.2,
           ← hsa, ← hsb]; simp [Value.toFloat]
     next a' b' _ =>
-      -- Same chain as the lit case: simplify_sound ∘ substSym_sound ∘ eval_noArrRead
+      -- Same chain as the lit case: simplifyDeep_sound ∘ substSym_sound ∘ eval_noArrRead
       simp only [BoolExpr.eval, Expr.substSym'_eq_substSym]
-      have hsa := Expr.simplify_sound inv (a.substSym' ss) σ₀ am₀ hinv
-      have hsb := Expr.simplify_sound inv (b_e.substSym' ss) σ₀ am₀ hinv
+      have hsa := Expr.simplifyDeep_sound (sdFuel inv) inv (a.substSym' ss) σ₀ am₀ hinv
+      have hsb := Expr.simplifyDeep_sound (sdFuel inv) inv (b_e.substSym' ss) σ₀ am₀ hinv
       simp only [Expr.substSym'_eq_substSym] at hsa hsb
       rw [Expr.substSym_sound ss a σ₀ σ am₀ hrepr] at hsa
       rw [Expr.substSym_sound ss b_e σ₀ σ am₀ hrepr] at hsb
@@ -1332,7 +1332,7 @@ private theorem BoolExpr.normalize_eval (b : BoolExpr) (ss : SymStore) (inv : EI
     · -- simplifies to .blit b → .lit b
       rename_i b_val heq
       simp only [BoolExpr.eval]
-      have hs := Expr.simplify_sound inv (e.substSym' ss) σ₀ am₀ hinv
+      have hs := Expr.simplifyDeep_sound (sdFuel inv) inv (e.substSym' ss) σ₀ am₀ hinv
       rw [heq, Expr.eval] at hs
       simp only [Expr.substSym'_eq_substSym] at hs
       rw [Expr.substSym_sound ss e σ₀ σ am₀ hrepr] at hs
@@ -1340,7 +1340,7 @@ private theorem BoolExpr.normalize_eval (b : BoolExpr) (ss : SymStore) (inv : EI
     · -- fallback: .bexpr e' — same chain as cmp/fcmp
       rename_i e' heq
       simp only [BoolExpr.eval, Expr.substSym'_eq_substSym]
-      have hs := Expr.simplify_sound inv (e.substSym' ss) σ₀ am₀ hinv
+      have hs := Expr.simplifyDeep_sound (sdFuel inv) inv (e.substSym' ss) σ₀ am₀ hinv
       simp only [Expr.substSym'_eq_substSym] at hs
       rw [Expr.substSym_sound ss e σ₀ σ am₀ hrepr] at hs
       rw [hs, Expr.eval_noArrRead e σ am₀ am hnoarr]
@@ -1361,47 +1361,45 @@ private theorem checkInstrAliasOk_arrLoad_noalias
   -- hentry now: (ie == ssGet ss idx || match ...) = true
   rw [show (ie == ssGet ss idx) = false from Bool.eq_false_iff.mpr hne] at hentry
   simp only [Bool.false_or] at hentry
-  -- hentry: match ie.simplify inv, (ssGet ss idx).simplify inv with | .lit n, .lit m => !(n==m) | _ => false = true
-  generalize hsi : ie.simplify inv = si at hentry
-  generalize hsk : (ssGet ss idx).simplify inv = sk at hentry
+  -- hentry: match ie.simplifyDeep .. inv, (ssGet ss idx).simplifyDeep .. inv with | .lit n, .lit m => !(n==m) | _ => false = true
+  generalize hsi : ie.simplifyDeep (sdFuel inv) inv = si at hentry
+  generalize hsk : (ssGet ss idx).simplifyDeep (sdFuel inv) inv = sk at hentry
   match si, sk, hentry with
   | .lit n, .lit m, hlit =>
     simp only [Bool.not_eq_true', beq_eq_false_iff_ne] at hlit
-    have hs1 := (Expr.simplify_sound inv ie σ₀ am₀ hinv).symm
-    have hs2 := (Expr.simplify_sound inv (ssGet ss idx) σ₀ am₀ hinv).symm
+    have hs1 := (Expr.simplifyDeep_sound (sdFuel inv) inv ie σ₀ am₀ hinv).symm
+    have hs2 := (Expr.simplifyDeep_sound (sdFuel inv) inv (ssGet ss idx) σ₀ am₀ hinv).symm
     rw [hsi, Expr.eval] at hs1; rw [hsk, Expr.eval] at hs2
     rw [hs1, hs2]; simp [Value.toInt]
     exact fun h => hlit h
 
-/-- If `simplify` returns `.lit n`, then the variable's runtime value is `.int n`. -/
+/-- If `simplifyDeep` returns `.lit n`, then the variable's runtime value is `.int n`. -/
 private theorem simplify_lit_val {ss : SymStore} {inv : EInv} {v : Var} {n : BitVec 64}
     {σ₀ σ : Store} {am₀ : ArrayMem}
-    (hsx : (ssGet ss v).simplify inv = .lit n)
+    (hsx : (ssGet ss v).simplifyDeep (sdFuel inv) inv = .lit n)
     (hrepr : ∀ w, (ssGet ss w).eval σ₀ am₀ = σ w)
     (hinv : EInv.toProp inv σ₀ am₀) : (σ v).toInt = n := by
-  have h := Expr.simplify_sound inv (ssGet ss v) σ₀ am₀ hinv
+  have h := Expr.simplifyDeep_sound (sdFuel inv) inv (ssGet ss v) σ₀ am₀ hinv
   rw [hsx, Expr.eval] at h
-  -- h : Value.int n = (ssGet ss v).eval σ₀ am₀
-  -- hrepr v : (ssGet ss v).eval σ₀ am₀ = σ v
   rw [hrepr v] at h; rw [← h]; rfl
 
-/-- If `simplify` returns `.blit b`, then the variable's runtime toBool is `b`. -/
+/-- If `simplifyDeep` returns `.blit b`, then the variable's runtime toBool is `b`. -/
 private theorem simplify_blit_val {ss : SymStore} {inv : EInv} {v : Var} {b : Bool}
     {σ₀ σ : Store} {am₀ : ArrayMem}
-    (hsx : (ssGet ss v).simplify inv = .blit b)
+    (hsx : (ssGet ss v).simplifyDeep (sdFuel inv) inv = .blit b)
     (hrepr : ∀ w, (ssGet ss w).eval σ₀ am₀ = σ w)
     (hinv : EInv.toProp inv σ₀ am₀) : (σ v).toBool = b := by
-  have h := Expr.simplify_sound inv (ssGet ss v) σ₀ am₀ hinv
+  have h := Expr.simplifyDeep_sound (sdFuel inv) inv (ssGet ss v) σ₀ am₀ hinv
   rw [hsx, Expr.eval] at h
   rw [hrepr v] at h; rw [← h]; rfl
 
-/-- If `simplify` returns `.flit f`, then the variable's runtime toFloat is `f`. -/
+/-- If `simplifyDeep` returns `.flit f`, then the variable's runtime toFloat is `f`. -/
 private theorem simplify_flit_val {ss : SymStore} {inv : EInv} {v : Var} {f : BitVec 64}
     {σ₀ σ : Store} {am₀ : ArrayMem}
-    (hsx : (ssGet ss v).simplify inv = .flit f)
+    (hsx : (ssGet ss v).simplifyDeep (sdFuel inv) inv = .flit f)
     (hrepr : ∀ w, (ssGet ss w).eval σ₀ am₀ = σ w)
     (hinv : EInv.toProp inv σ₀ am₀) : (σ v).toFloat = f := by
-  have h := Expr.simplify_sound inv (ssGet ss v) σ₀ am₀ hinv
+  have h := Expr.simplifyDeep_sound (sdFuel inv) inv (ssGet ss v) σ₀ am₀ hinv
   rw [hsx, Expr.eval] at h
   rw [hrepr v] at h; rw [← h]; rfl
 
@@ -2616,10 +2614,10 @@ private theorem checkRelConsistency_pairCheck
     (inv_orig : EInv) (rel_pre rel_post : EExprRel)
     (h : checkRelConsistency orig pc_orig origLabels transInstr inv_orig rel_pre rel_post = true) :
     rel_post.all (fun (e_o, e_t) =>
-      (e_o.substSym (execPath orig ([] : SymStore) ([] : SymArrayMem) pc_orig origLabels).1).simplify inv_orig ==
+      (e_o.substSym (execPath orig ([] : SymStore) ([] : SymArrayMem) pc_orig origLabels).1).simplifyDeep (sdFuel inv_orig) inv_orig ==
       ((e_t.substSym (execSymbolic ([] : SymStore) ([] : SymArrayMem) transInstr).1).substSym
-        (buildSubstMap rel_pre)).simplify inv_orig) = true := by
-  simp only [← Expr.substSymFast_eq_substSym, ← Expr.simplifyFast_eq_simplify]
+        (buildSubstMap rel_pre)).simplifyDeep (sdFuel inv_orig) inv_orig) = true := by
+  simp only [← Expr.substSymFast_eq_substSym, ← Expr.simplifyDeepFast_eq_simplifyDeep]
   simp only [checkRelConsistency, Bool.and_eq_true] at h
   exact h.1.1.1
 
@@ -2659,9 +2657,9 @@ private theorem checkRelConsistency_amCheck
       (execSymbolic ([] : SymStore) ([] : SymArrayMem) transInstr).2).all
       (fun ((a_o, i_o, v_o), (a_t, i_t, v_t)) =>
         a_o == a_t &&
-        i_o.simplify inv_orig == (i_t.substSym (buildSubstMap rel_pre)).simplify inv_orig &&
-        v_o.simplify inv_orig == (v_t.substSym (buildSubstMap rel_pre)).simplify inv_orig) = true := by
-  simp only [← Expr.substSymFast_eq_substSym, ← Expr.simplifyFast_eq_simplify]
+        i_o.simplifyDeep (sdFuel inv_orig) inv_orig == (i_t.substSym (buildSubstMap rel_pre)).simplifyDeep (sdFuel inv_orig) inv_orig &&
+        v_o.simplifyDeep (sdFuel inv_orig) inv_orig == (v_t.substSym (buildSubstMap rel_pre)).simplifyDeep (sdFuel inv_orig) inv_orig) = true := by
+  simp only [← Expr.substSymFast_eq_substSym, ← Expr.simplifyDeepFast_eq_simplifyDeep]
   simp only [checkRelConsistency, Bool.and_eq_true] at h
   obtain ⟨_, hamCheck⟩ := h
   simp only [beq_iff_eq] at hamCheck
@@ -3033,8 +3031,8 @@ private theorem transRel_sound (dc : ECertificate)
       have hcheck := hpairCheck (e_o, e_t) hmem
       have hcheck_eq := beq_iff_eq.mp hcheck
       -- Evaluate both simplified sides at (σ_o, am_t) under inv_o
-      have hlhs := Expr.simplify_sound inv_o (e_o.substSym origSS) σ_o am_t hinv_o
-      have hrhs := Expr.simplify_sound inv_o
+      have hlhs := Expr.simplifyDeep_sound (sdFuel inv_o) inv_o (e_o.substSym origSS) σ_o am_t hinv_o
+      have hrhs := Expr.simplifyDeep_sound (sdFuel inv_o) inv_o
         ((e_t.substSym transSS).substSym preSubst) σ_o am_t hinv_o
       have heval_eq : (e_o.substSym origSS).eval σ_o am_t =
           ((e_t.substSym transSS).substSym preSubst).eval σ_o am_t := by
@@ -3109,8 +3107,8 @@ private theorem transRel_sound (dc : ECertificate)
       rw [harr]; congr 1
       · -- Index: idx_o.eval σ_o am_t = .int iv_t, so .toInt matches iv_t
         have h_idx_simp := beq_iff_eq.mp hidx_match
-        have hlhs := Expr.simplify_sound inv_o idx_o σ_o am_t hinv_o
-        have hrhs := Expr.simplify_sound inv_o
+        have hlhs := Expr.simplifyDeep_sound (sdFuel inv_o) inv_o idx_o σ_o am_t hinv_o
+        have hrhs := Expr.simplifyDeep_sound (sdFuel inv_o) inv_o
           ((ssGet ([] : SymStore) idx_t).substSym (buildSubstMap dtc.rel)) σ_o am_t hinv_o
         rw [h_idx_simp] at hlhs
         have heq_eval : idx_o.eval σ_o am_t =
@@ -3140,8 +3138,8 @@ private theorem transRel_sound (dc : ECertificate)
         rw [heq_eval, hsubst_eq, hidx_t]; rfl
       · -- Value: val_o.eval σ_o am_t = .int bv, and (σ_t val_t).toBits matches bv
         have h_val_simp := beq_iff_eq.mp hval_match
-        have hlhs := Expr.simplify_sound inv_o val_o σ_o am_t hinv_o
-        have hrhs := Expr.simplify_sound inv_o
+        have hlhs := Expr.simplifyDeep_sound (sdFuel inv_o) inv_o val_o σ_o am_t hinv_o
+        have hrhs := Expr.simplifyDeep_sound (sdFuel inv_o) inv_o
           ((ssGet ([] : SymStore) val_t).substSym (buildSubstMap dtc.rel)) σ_o am_t hinv_o
         rw [h_val_simp] at hlhs
         have heq_eval : val_o.eval σ_o am_t =

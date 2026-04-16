@@ -90,6 +90,12 @@ def Expr.simplifyDeep : Nat → EInv → Expr → Expr
   | 0, inv, e => e.simplify inv
   | n + 1, inv, e => (e.simplify inv).simplifyDeep n inv
 
+/-- Fuel for `simplifyDeep`: one pass per invariant entry plus one.
+    Defined as a separate `def` so that the type-checker cannot pattern-match
+    the result as `Nat.succ _`, which would cause `simplifyDeep` to unfold
+    one step and break `split`-based proof strategies. -/
+def sdFuel (inv : EInv) : Nat := inv.length + 1
+
 -- ============================================================
 -- § 3. Symbolic execution
 -- ============================================================
@@ -215,11 +221,11 @@ def Expr.isNonZeroLit : Expr → Bool
 def BoolExpr.normalize (ss : SymStore) (inv : EInv) : BoolExpr → BoolExpr
   | .lit b => .lit b
   | .bvar x =>
-    match (ssGet ss x).simplify inv with
+    match (ssGet ss x).simplifyDeep (sdFuel inv) inv with
     | .blit b => .lit b
     | e'      => .bexpr e'
   | .cmp op a b =>
-    match (a.substSym' ss).simplify inv, (b.substSym' ss).simplify inv with
+    match (a.substSym' ss).simplifyDeep (sdFuel inv) inv, (b.substSym' ss).simplifyDeep (sdFuel inv) inv with
     | .lit va, .lit vb => .lit (op.eval va vb)
     | a', b' => .cmp op a' b'
   | .not e => match e.normalize ss inv with
@@ -227,11 +233,11 @@ def BoolExpr.normalize (ss : SymStore) (inv : EInv) : BoolExpr → BoolExpr
     | .not inner => inner  -- double negation elimination
     | e' => .not e'
   | .fcmp op a b =>
-    match (a.substSym' ss).simplify inv, (b.substSym' ss).simplify inv with
+    match (a.substSym' ss).simplifyDeep (sdFuel inv) inv, (b.substSym' ss).simplifyDeep (sdFuel inv) inv with
     | .flit va, .flit vb => .lit (FloatCmpOp.eval op va vb)
     | a', b' => .fcmp op a' b'
   | .bexpr e =>
-    match (e.substSym' ss).simplify inv with
+    match (e.substSym' ss).simplifyDeep (sdFuel inv) inv with
     | .blit b => .lit b
     | e'      => .bexpr e'
 
@@ -240,17 +246,17 @@ def BoolExpr.normalize (ss : SymStore) (inv : EInv) : BoolExpr → BoolExpr
 def BoolExpr.symEval (ss : SymStore) (inv : EInv) : BoolExpr → Option Bool
   | .lit b => some b
   | .bvar x =>
-    match (ssGet ss x).simplify inv with
+    match (ssGet ss x).simplifyDeep (sdFuel inv) inv with
     | .blit b => some b
     | _ => none
   | .cmp op a b =>
-    match (a.substSym' ss).simplify inv, (b.substSym' ss).simplify inv with
+    match (a.substSym' ss).simplifyDeep (sdFuel inv) inv, (b.substSym' ss).simplifyDeep (sdFuel inv) inv with
     | .lit va, .lit vb => some (op.eval va vb)
     | _, _ => none
   | .not e => e.symEval ss inv |>.map (!·)
   | .fcmp _op _a _b => none  -- FloatCmpOp.eval is opaque; fall back to branchInfo
   | .bexpr e =>
-    match (e.substSym' ss).simplify inv with
+    match (e.substSym' ss).simplifyDeep (sdFuel inv) inv with
     | .blit b => some b
     | _ => none
 
@@ -668,6 +674,22 @@ theorem Expr.simplifyFast_eq_simplify (e : Expr) (inv : EInv) :
   | ftern op a b c iha ihb ihc => cases op <;> simp only [simplifyFast, simplify, iha, ihb, ihc]
   | farrRead arr idx ih => simp only [simplifyFast, simplify, ih]
 
+/-- HashMap version of `simplifyDeep`: iterates `simplifyFast`. -/
+def Expr.simplifyDeepFast : Nat → FastVarMap → Expr → Expr
+  | 0, m, e => e.simplifyFast m
+  | n + 1, m, e => (e.simplifyFast m).simplifyDeepFast n m
+
+/-- `simplifyDeepFast` with `FastVarMap.ofList` equals `simplifyDeep`. -/
+theorem Expr.simplifyDeepFast_eq_simplifyDeep (n : Nat) (e : Expr) (inv : EInv) :
+    e.simplifyDeepFast n (FastVarMap.ofList inv) = e.simplifyDeep n inv := by
+  induction n generalizing e with
+  | zero =>
+    show e.simplifyFast _ = e.simplify _
+    exact Expr.simplifyFast_eq_simplify e inv
+  | succ n ih =>
+    show (e.simplifyFast _).simplifyDeepFast n _ = (e.simplify inv).simplifyDeep n inv
+    rw [Expr.simplifyFast_eq_simplify]; exact ih _
+
 /-- The HashMap-based variable set lookup used in `checkRelConsistency` is equivalent
     to the list-based `any` check used in the spec theorems. -/
 theorem relVarSet_contains_eq_any (rel_pre : EExprRel) (w : Var) :
@@ -692,7 +714,7 @@ theorem relVarSet_contains_eq_any (rel_pre : EExprRel) (w : Var) :
     when simplified under the pre-invariant. -/
 def checkInvAtom (inv_pre : EInv) (instr : TAC) (atom : Var × Expr) : Bool :=
   let (ss, _) := execSymbolic ([] : SymStore) ([] : SymArrayMem) instr
-  let fuel := inv_pre.length + 1
+  let fuel := sdFuel inv_pre
   let lhs := (ssGet ss atom.1).simplifyDeep fuel inv_pre
   let rhs := (atom.2.substSym ss).simplifyDeep fuel inv_pre
   lhs == rhs
@@ -788,7 +810,7 @@ def computeNextPC (instr : TAC) (pc : Label) (ss : SymStore) (inv : EInv) : Opti
 def checkBinopSafe (instr : TAC) (ss : SymStore) (inv : EInv) : Bool :=
   match instr with
   | .binop _ .div _ z | .binop _ .mod _ z =>
-    match (ssGet ss z).simplify inv with
+    match (ssGet ss z).simplifyDeep (sdFuel inv) inv with
     | .lit n => n != 0
     | _ => true  -- runtime variable: safety proven by div-preservation check
   | _ => true
@@ -798,7 +820,7 @@ def checkBinopSafe (instr : TAC) (ss : SymStore) (inv : EInv) : Bool :=
 def isDivByZero (instr : TAC) (ss : SymStore) (inv : EInv) : Bool :=
   match instr with
   | .binop _ .div _ z | .binop _ .mod _ z =>
-    match (ssGet ss z).simplify inv with
+    match (ssGet ss z).simplifyDeep (sdFuel inv) inv with
     | .lit n => n == 0
     | _ => false
   | _ => false
@@ -811,7 +833,7 @@ def checkInstrAliasOk (instr : TAC) (ss : SymStore) (sam : SymArrayMem) (inv : E
     let idx_sym := ssGet ss idx
     sam.all fun (a, i, _) =>
       !(a == arr) || (i == idx_sym) ||
-      match i.simplify inv, idx_sym.simplify inv with
+      match i.simplifyDeep (sdFuel inv) inv, idx_sym.simplifyDeep (sdFuel inv) inv with
       | .lit n, .lit m => !(n == m)
       | _, _ => false
   | _ => true
@@ -857,9 +879,10 @@ def checkRelConsistency
   let transSSMap := FastVarMap.ofList transSS
   let preSubstMap := FastVarMap.ofList preSubst
   let invMap := FastVarMap.ofList inv_orig
+  let fuel := sdFuel inv_orig
   let pairCheck := rel_post.all fun (e_o, e_t) =>
-    let origVal := e_o.substSymFast origSSMap |>.simplifyFast invMap
-    let transVal := (e_t.substSymFast transSSMap).substSymFast preSubstMap |>.simplifyFast invMap
+    let origVal := e_o.substSymFast origSSMap |>.simplifyDeepFast fuel invMap
+    let transVal := (e_t.substSymFast transSSMap).substSymFast preSubstMap |>.simplifyDeepFast fuel invMap
     origVal == transVal
   -- Free-variable coverage: for each (_, e_t) in rel_post, all free variables of
   -- (e_t.substSym transSS) must have a pair in rel_pre.
@@ -875,8 +898,8 @@ def checkRelConsistency
   let amCheck := origSAM.length == transSAM.length &&
     (origSAM.zip transSAM).all fun ((a_o, i_o, v_o), (a_t, i_t, v_t)) =>
       a_o == a_t &&
-      i_o.simplifyFast invMap == (i_t.substSymFast preSubstMap).simplifyFast invMap &&
-      v_o.simplifyFast invMap == (v_t.substSymFast preSubstMap).simplifyFast invMap
+      i_o.simplifyDeepFast fuel invMap == (i_t.substSymFast preSubstMap).simplifyDeepFast fuel invMap &&
+      v_o.simplifyDeepFast fuel invMap == (v_t.substSymFast preSubstMap).simplifyDeepFast fuel invMap
   pairCheck && fvCheck && amFvCheck && amCheck
 
 /-- **Condition 3**: Every transition in the transformed program has a
