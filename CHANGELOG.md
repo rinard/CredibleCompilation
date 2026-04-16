@@ -4,6 +4,22 @@ Chronological record of what was built and why, to reconstruct the sequence of d
 
 ---
 
+## CSE: cross-constant matching (2026-04-16)
+
+**Goal:** Eliminate duplicate `k+1` computations in Livermore k02 inner loop, where each occurrence of the literal `1` gets a fresh temp from `compileExpr`.
+
+**Problem:** CSE's `findAvail` matched on raw operand variable names. `binop _t34 add k _t33` and `binop _t37 add k _t36` look different even though `_t33` and `_t36` both hold constant `1`.
+
+**Fix:** Added `ConstMap` tracking to the CSE analysis state. `findAvail` now uses `expandVarFull`/`expandExprConsts` to substitute known constants before comparing, so semantically equivalent expressions match regardless of which temp holds the constant. Certificate invariants include constant bindings, with avail entries pre-simplified through `Expr.simplify` for checker compatibility.
+
+**Changes:**
+- **CSEOpt.lean**: Added `ConstMap`, `constKill`, `constMerge`, `constBeq`. Split `expandVar` into `expandVarCert` (avail-only, for `invExpr`) and `expandVarFull` (avail+constants, for matching). Added `expandExprConsts` for recursive constant substitution. `transfer` now threads `ConstMap`. `stateToInv` pre-simplifies avail entries through constant invariants.
+- **CSEOptExamples.lean**: Added § 8 test case (`const _t1 1; binop a add k _t1; const _t2 1; binop b add k _t2` → `copy b a`).
+
+**Result:** First k02 inner loop eliminates duplicate `k+1` (verified correct, all 24 Livermore kernels pass). Second inner loop unaffected due to pre-existing `expandVarCert` instability during loop convergence (documented in module docstring).
+
+---
+
 ## Close verifiedGenBoolExpr_correct sorry; scaffold iftrue/iffall (2026-04-16)
 
 **Goal:** Eliminate the `verifiedGenBoolExpr_correct` sorry (line 877) and the `iftrue`/`iffall` sorrys in `verifiedGenInstr_correct`.
