@@ -862,7 +862,11 @@ def verifiedGenInstr (layout : VarLayout) (pcMap : Nat → Nat) (instr : TAC)
         | .var v => vLoadVarFP layout v b_freg
         | .flit n => formalLoadImm64 .x0 n ++ [.fmovToFP b_freg .x0]
         | _ => []
-      some (loadA ++ loadB ++ [.fcmpR a_freg b_freg, .bCond cond.negate (pcMap l)])
+      -- Always load var before flit so proof-side PC plumbing is uniform
+      let loads := match a, b with
+        | .flit _, .var _ => loadB ++ loadA
+        | _, _ => loadA ++ loadB
+      some (loads ++ [.fcmpR a_freg b_freg, .bCond cond.negate (pcMap l)])
     | _ => some (verifiedGenBoolExpr layout be ++ [.cbnz .x0 (pcMap l)])
   | .halt => some [.b haltLabel]
   | .arrLoad x arr idx ty =>

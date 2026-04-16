@@ -4,6 +4,22 @@ Chronological record of what was built and why, to reconstruct the sequence of d
 
 ---
 
+## Effective registers for cmp/fcmp ifgoto codegen (2026-04-16)
+
+**Goal:** Use allocated registers directly in cmp/fcmp branch-fused ifgoto code instead of always copying to scratch registers (x1/x2 for int, d1/d2 for float).
+
+**Problem:** The old codegen always loaded cmp/fcmp operands into fixed scratch registers (.x1/.x2 or .d1/.d2), even when the variable was already in an allocated register. This generated unnecessary load instructions.
+
+**Fix:**
+- **ArmSemantics.lean**: `verifiedGenInstr` ifgoto cmp/fcmp sections now compute effective registers via `match layout v with | some (.ireg r) => r | _ => fallback`. For fcmp flit/var, the codegen emits the var load before the flit load so the proof-side PC plumbing stays uniform.
+- **ArmCorrectness.lean**: Added 4 helper lemmas (`x1_ne_eff_x2`, `eff_ireg_val_preserved`, `d1_ne_eff_d2`, `eff_freg_val_preserved`) for reasoning about effective register preservation across loads. Rewrote all 12 proof cases (cmp × 3 + fcmp × 3) × (iftrue + iffall) using `vLoadVar_eff_exec`/`vLoadVarFP_eff_exec` with `Eq.subst` (▸) for PC plumbing and concrete value extraction for flag conditions.
+
+**Key proof technique:** `simp [verifiedGenInstr]` expands `layout v` to `List.lookup v layout.entries`, creating a syntactic mismatch with proof-side `let` bindings. Solved by: (1) proving `hPC2'` via `rw [List.length_append, ← Nat.add_assoc]; exact hPC2`, (2) using `hPC2'.symm ▸ hCodeCmpBCond.head` for PC plumbing (definitional equality via ▸), (3) for iffall PC subgoal: `simp [List.length_append, Nat.add_assoc] at hPcN hPC2; rw [hPcN, hPC2]; rfl`.
+
+**Result:** 0 new sorrys. All 24 benchmarks pass. No changes to existing binop/fbinop/arrLoad proofs.
+
+---
+
 ## Checker: uniformly use simplifyDeep in all checker functions (2026-04-16)
 
 **Goal:** Replace all uses of `Expr.simplify`/`Expr.simplifyFast` in checker functions and soundness proofs with `Expr.simplifyDeep`/`Expr.simplifyDeepFast`, so optimization passes don't need to pre-simplify certificate entries.
