@@ -110,6 +110,10 @@ def Cond.negate : Cond → Cond
   | .lt => .ge | .ge => .lt
   | .le => .gt | .gt => .le
 
+theorem Cond.negate_correct (f : Flags) (c : Cond) :
+    f.condHolds c.negate = !f.condHolds c := by
+  cases c <;> simp [Cond.negate, Flags.condHolds, BitVec.sle_eq_not_slt, bne, BEq.beq]
+
 -- ============================================================
 -- § 3. Machine state
 -- ============================================================

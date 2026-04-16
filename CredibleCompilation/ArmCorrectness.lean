@@ -2076,9 +2076,9 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
       have heq_i := Prog.getElem?_eq_getElem hPC_bound
       rw [hinstr] at heq_i; rw [← Option.some.inj heq_i] at hwti
       cases hwti with | ifgoto hbe => exact hbe
-    sorry -- ifgoto/iftrue: needs update for fused bCond codegen (verifiedGenBoolExpr_correct is also sorry)
+    sorry -- ifgoto/iftrue: needs update for fused bCond codegen
   | iffall hinstr hcond =>
-    sorry -- ifgoto/iffall: needs update for fused bCond codegen (verifiedGenBoolExpr_correct is also sorry)
+    sorry -- ifgoto/iffall: needs update for fused bCond codegen
   | arrLoad hinstr hidx hbounds =>
     sorry  -- arrLoad: vLoadVar idx + bounds check + arrLd + vStoreVar
   | arrStore hinstr hidx hval hbounds =>
