@@ -831,26 +831,38 @@ def verifiedGenInstr (layout : VarLayout) (pcMap : Nat → Nat) (instr : TAC)
     match be with
     | .not (.cmp op a b) =>
       let cond := match op with | .eq => Cond.eq | .ne => .ne | .lt => .lt | .le => .le
+      let a_reg := match a with
+        | .var v => (match layout v with | some (.ireg r) => r | _ => .x1)
+        | _ => .x1
+      let b_reg := match b with
+        | .var v => (match layout v with | some (.ireg r) => r | _ => .x2)
+        | _ => .x2
       let loadA := match a with
-        | .var v => vLoadVar layout v .x1
-        | .lit n => formalLoadImm64 .x1 n
+        | .var v => vLoadVar layout v a_reg
+        | .lit n => formalLoadImm64 a_reg n
         | _ => []
       let loadB := match b with
-        | .var v => vLoadVar layout v .x2
-        | .lit n => formalLoadImm64 .x2 n
+        | .var v => vLoadVar layout v b_reg
+        | .lit n => formalLoadImm64 b_reg n
         | _ => []
-      some (loadA ++ loadB ++ [.cmp .x1 .x2, .bCond cond.negate (pcMap l)])
+      some (loadA ++ loadB ++ [.cmp a_reg b_reg, .bCond cond.negate (pcMap l)])
     | .not (.fcmp fop a b) =>
       let cond := match fop with | .feq => Cond.eq | .fne => .ne | .flt => .lt | .fle => .le
+      let a_freg := match a with
+        | .var v => (match layout v with | some (.freg r) => r | _ => .d1)
+        | _ => .d1
+      let b_freg := match b with
+        | .var v => (match layout v with | some (.freg r) => r | _ => .d2)
+        | _ => .d2
       let loadA := match a with
-        | .var v => vLoadVarFP layout v .d1
-        | .flit n => formalLoadImm64 .x0 n ++ [.fmovToFP .d1 .x0]
+        | .var v => vLoadVarFP layout v a_freg
+        | .flit n => formalLoadImm64 .x0 n ++ [.fmovToFP a_freg .x0]
         | _ => []
       let loadB := match b with
-        | .var v => vLoadVarFP layout v .d2
-        | .flit n => formalLoadImm64 .x0 n ++ [.fmovToFP .d2 .x0]
+        | .var v => vLoadVarFP layout v b_freg
+        | .flit n => formalLoadImm64 .x0 n ++ [.fmovToFP b_freg .x0]
         | _ => []
-      some (loadA ++ loadB ++ [.fcmpR .d1 .d2, .bCond cond.negate (pcMap l)])
+      some (loadA ++ loadB ++ [.fcmpR a_freg b_freg, .bCond cond.negate (pcMap l)])
     | _ => some (verifiedGenBoolExpr layout be ++ [.cbnz .x0 (pcMap l)])
   | .halt => some [.b haltLabel]
   | .arrLoad x arr idx ty =>
