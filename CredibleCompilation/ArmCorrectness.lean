@@ -3755,7 +3755,285 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
             (by have := hPcNext _ _ rfl; simp [hBS] at this; omega)
         exact ⟨s', ((hSteps1.trans hStepsCmp).trans hStepsBCond).trans hSteps', hSimRel'⟩
   | arrStore hinstr hidx hval hbounds =>
-    sorry  -- arrStore: vLoadVar idx + bounds check + vLoadVar val + arrSt
+    rename_i ty idxVal arr idx val
+    have heq : instr = .arrStore arr idx val ty := Option.some.inj (hInstr.symm.trans hinstr)
+    rw [heq] at hSome
+    -- idx is int-typed
+    have hNotFregIdx : ∀ r, layout idx ≠ some (.freg r) :=
+      hWTL.int_not_freg (by have := hTS idx; rw [hidx] at this; exact this.symm)
+    let idx_reg := match layout idx with | some (.ireg r) => r | _ => ArmReg.x1
+    -- case split on float vs non-float
+    by_cases hFloat : ty = .float
+    · -- float arrStore
+      rw [hFloat] at hSome
+      have hNotIregVal : ∀ r, layout val ≠ some (.ireg r) := by
+        have hwti := hWT pc hPC_bound
+        rw [Prog.getElem?_eq_getElem hPC_bound |>.symm.trans hinstr |> Option.some.inj] at hwti
+        exact match hwti with | .arrStore _ hv _ => hWTL.float_not_ireg (hv.trans hFloat)
+      let val_freg := match layout val with | some (.freg r) => r | _ => ArmFReg.d0
+      have hInstrs : instrs = vLoadVar layout idx idx_reg ++
+          ((if boundsSafe then [] else
+            [.cmpImm idx_reg (arraySizeBv arrayDecls arr), .bCond .hs boundsLabel]) ++
+          (vLoadVarFP layout val val_freg ++ [.farrSt arr idx_reg val_freg])) := by
+        simp [verifiedGenInstr, hSS, hII] at hSome; exact hSome.symm
+      rw [hInstrs] at hCodeInstr hPcNext
+      have hCodeA := hCodeInstr.append_left
+      have hCodeBCD := hCodeInstr.append_right
+      -- vLoadVar idx into idx_reg
+      obtain ⟨s1, hSteps1, hX1_1, hRel1, _, hPC1, hAM1, hRegs1⟩ :=
+        vLoadVar_eff_exec prog layout idx σ s (pcMap pc) .x1 hStateRel hScratch hPcRel
+          hNotFregIdx (Or.inr (Or.inl rfl)) (hMapped idx (by simp [heq, TAC.vars])) hCodeA
+      have hIdxVal : s1.regs idx_reg = idxVal := by rw [hX1_1, hidx]; simp [Value.encode]
+      -- bounds check
+      cases hBS : boundsSafe with
+      | true =>
+        simp [hBS] at hCodeBCD
+        -- vLoadVarFP val into val_freg
+        have hCodeValSt := hCodeBCD; rw [← hPC1] at hCodeValSt
+        have hCodeVal := hCodeValSt.append_left
+        obtain ⟨s2, hSteps2, hFVal_2, hRel2, hRegs2eq, hPC2, hAM2, hFregs2, hStack2⟩ :=
+          vLoadVarFP_eff_exec prog layout val σ s1 s1.pc .d0 hRel1 hScratch rfl
+            hNotIregVal (Or.inl rfl) (hMapped val (by simp [heq, TAC.vars])) hCodeVal
+        -- idx_reg preserved (integer reg, FP load doesn't touch it)
+        have hIdxVal2 : s2.regs idx_reg = idxVal := by rw [hRegs2eq]; exact hIdxVal
+        have hValEnc : s2.fregs val_freg = (σ val).encode := by rw [hFVal_2]
+        -- farrSt
+        have hCodeFarrSt := hCodeValSt.append_right; rw [← hPC2] at hCodeFarrSt
+        have hFarrSt := hCodeFarrSt.head
+        have hStepsFarrSt : ArmSteps prog s2
+            (s2.setArrayMem arr (s2.regs idx_reg) (s2.fregs val_freg) |>.nextPC) :=
+          .single (.farrSt arr idx_reg val_freg hFarrSt)
+        let s3 := s2.setArrayMem arr (s2.regs idx_reg) (s2.fregs val_freg) |>.nextPC
+        have hRel3 : ExtStateRel layout σ s3 := by
+          simp [s3, ArmState.setArrayMem, ArmState.nextPC]; exact hRel2.nextPC
+        have hPC3 : s3.pc = pcMap (pc + 1) := by
+          have := hPcNext _ _ rfl; simp [hBS] at this
+          have hPC_s3 : s3.pc = pcMap pc + (vLoadVar layout idx idx_reg).length +
+              (vLoadVarFP layout val val_freg).length + 1 := by
+            simp [s3, ArmState.setArrayMem, ArmState.nextPC]; rw [hPC2, hPC1]
+          rw [hPC_s3]; omega
+        have hAM3 : s3.arrayMem = am.write arr idxVal (σ val).toBits := by
+          funext a i
+          simp only [s3, ArmState.setArrayMem, ArmState.nextPC, ArrayMem.write,
+                hIdxVal2, hValEnc, hAM2, hAM1, hArrayMem, Value.encode, Value.toBits]
+          rfl
+        exact ⟨s3, (hSteps1.trans hSteps2).trans hStepsFarrSt, ⟨hRel3, hPC3, hAM3⟩⟩
+      | false =>
+        simp [hBS] at hCodeBCD
+        -- cmpImm + bCond
+        have hCmp := hCodeBCD.head; rw [← hPC1] at hCmp
+        let s2bc := { s1 with flags := Flags.mk (s1.regs idx_reg) (arraySizeBv arrayDecls arr), pc := s1.pc + 1 }
+        have hStepsCmp : ArmSteps prog s1 s2bc :=
+          .single (.cmpRI idx_reg (arraySizeBv arrayDecls arr) hCmp)
+        have hBoundsAD : idxVal < arraySizeBv arrayDecls arr := by rw [hAD]; exact hbounds
+        have hCondFalse : s2bc.flags.condHolds .hs = false := by
+          simp only [s2bc, Flags.condHolds, hIdxVal]
+          cases h : decide (arraySizeBv arrayDecls arr ≤ idxVal) <;> simp_all <;> bv_omega
+        have hPC2bc : s2bc.pc = pcMap pc + (vLoadVar layout idx idx_reg).length + 1 := by
+          show s1.pc + 1 = _; rw [hPC1]
+        have hBCond := hCodeBCD.tail.head; rw [← hPC2bc] at hBCond
+        have hStepsBCond : ArmSteps prog s2bc s2bc.nextPC :=
+          .single (.bCond_fall .hs boundsLabel hBCond hCondFalse)
+        have hRel1bc : ExtStateRel layout σ s2bc.nextPC := hRel1.nextPC
+        have hIdxValBC : s2bc.nextPC.regs idx_reg = idxVal := by
+          simp [ArmState.nextPC, s2bc]; exact hIdxVal
+        have hPC_post_bc : s2bc.nextPC.pc = pcMap pc + (vLoadVar layout idx idx_reg).length + 2 := by
+          simp [ArmState.nextPC, s2bc]; rw [hPC1]
+        -- vLoadVarFP val into val_freg
+        have hCodeValSt : CodeAt prog s2bc.nextPC.pc
+            (vLoadVarFP layout val val_freg ++ [.farrSt arr idx_reg val_freg]) := by
+          rw [hPC_post_bc]; exact hCodeBCD.tail.tail
+        have hCodeVal := hCodeValSt.append_left
+        obtain ⟨s2, hSteps2, hFVal_2, hRel2, hRegs2eq, hPC2, hAM2, hFregs2, hStack2⟩ :=
+          vLoadVarFP_eff_exec prog layout val σ s2bc.nextPC s2bc.nextPC.pc .d0
+            hRel1bc hScratch rfl hNotIregVal (Or.inl rfl)
+            (hMapped val (by simp [heq, TAC.vars])) hCodeVal
+        have hIdxVal2 : s2.regs idx_reg = idxVal := by rw [hRegs2eq]; exact hIdxValBC
+        have hValEnc : s2.fregs val_freg = (σ val).encode := by rw [hFVal_2]
+        -- farrSt
+        have hCodeFarrSt := hCodeValSt.append_right; rw [← hPC2] at hCodeFarrSt
+        have hFarrSt := hCodeFarrSt.head
+        have hStepsFarrSt : ArmSteps prog s2
+            (s2.setArrayMem arr (s2.regs idx_reg) (s2.fregs val_freg) |>.nextPC) :=
+          .single (.farrSt arr idx_reg val_freg hFarrSt)
+        let s3 := s2.setArrayMem arr (s2.regs idx_reg) (s2.fregs val_freg) |>.nextPC
+        have hRel3 : ExtStateRel layout σ s3 := by
+          simp [s3, ArmState.setArrayMem, ArmState.nextPC]; exact hRel2.nextPC
+        have hAM_bc : s2bc.nextPC.arrayMem = am := by
+          simp [ArmState.nextPC, s2bc, hAM1, hArrayMem]
+        have hAM2' : s2.arrayMem = am := by rw [hAM2, hAM_bc]
+        have hPC3 : s3.pc = pcMap (pc + 1) := by
+          have := hPcNext _ _ rfl; simp [hBS] at this
+          have hPC_s3 : s3.pc = pcMap pc + (vLoadVar layout idx idx_reg).length + 2 +
+              (vLoadVarFP layout val val_freg).length + 1 := by
+            simp [s3, ArmState.setArrayMem, ArmState.nextPC]
+            rw [hPC2, hPC_post_bc]
+          rw [hPC_s3]; omega
+        have hAM3 : s3.arrayMem = am.write arr idxVal (σ val).toBits := by
+          funext a i
+          simp only [s3, ArmState.setArrayMem, ArmState.nextPC, ArrayMem.write,
+                hIdxVal2, hValEnc, hAM2', Value.encode, Value.toBits]
+          rfl
+        exact ⟨s3, ((hSteps1.trans hStepsCmp).trans hStepsBCond).trans (hSteps2.trans hStepsFarrSt),
+          ⟨hRel3, hPC3, hAM3⟩⟩
+    · -- non-float arrStore
+      have hNotFloat : (ty == .float) = false := by
+        cases ty <;> simp_all
+      have hNotFregVal : ∀ r, layout val ≠ some (.freg r) := by
+        have hTyVal : p.tyCtx val = ty := by
+          have hwti := hWT pc hPC_bound
+          rw [Prog.getElem?_eq_getElem hPC_bound |>.symm.trans hinstr |> Option.some.inj] at hwti
+          exact match hwti with | .arrStore _ hv _ => hv
+        intro r h
+        cases ty with
+        | int => exact absurd h (hWTL.int_not_freg (by rw [hTyVal]) r)
+        | bool => exact absurd h (hWTL.bool_not_freg (by rw [hTyVal]) r)
+        | float => exact absurd rfl hFloat
+      let val_reg := match layout val with | some (.ireg r) => r | _ => ArmReg.x2
+      have hInstrs : instrs = vLoadVar layout idx idx_reg ++
+          ((if boundsSafe then [] else
+            [.cmpImm idx_reg (arraySizeBv arrayDecls arr), .bCond .hs boundsLabel]) ++
+          (vLoadVar layout val val_reg ++ [.arrSt arr idx_reg val_reg])) := by
+        simp [verifiedGenInstr, hSS, hII, hNotFloat] at hSome; exact hSome.symm
+      rw [hInstrs] at hCodeInstr hPcNext
+      have hCodeA := hCodeInstr.append_left
+      have hCodeBCD := hCodeInstr.append_right
+      -- vLoadVar idx into idx_reg
+      obtain ⟨s1, hSteps1, hX1_1, hRel1, _, hPC1, hAM1, hRegs1⟩ :=
+        vLoadVar_eff_exec prog layout idx σ s (pcMap pc) .x1 hStateRel hScratch hPcRel
+          hNotFregIdx (Or.inr (Or.inl rfl)) (hMapped idx (by simp [heq, TAC.vars])) hCodeA
+      have hIdxVal : s1.regs idx_reg = idxVal := by rw [hX1_1, hidx]; simp [Value.encode]
+      -- bounds check
+      cases hBS : boundsSafe with
+      | true =>
+        simp [hBS] at hCodeBCD
+        -- vLoadVar val into val_reg
+        have hCodeVal := hCodeBCD.append_left; rw [← hPC1] at hCodeVal
+        obtain ⟨s2, hSteps2, hVal_2, hRel2, _, hPC2, hAM2, hRegs2⟩ :=
+          vLoadVar_eff_exec prog layout val σ s1 s1.pc .x2 hRel1 hScratch rfl
+            hNotFregVal (Or.inr (Or.inr rfl)) (hMapped val (by simp [heq, TAC.vars])) hCodeVal
+        -- show idx_reg preserved across vLoadVar val
+        have hIdxVal2 : s2.regs idx_reg = idxVal := by
+          match hLI : layout idx with
+          | some (.ireg r) =>
+            have hir : idx_reg = r := by
+              show (match layout idx with | some (.ireg r) => r | _ => .x1) = r; simp [hLI]
+            rw [hir, hRel2.read_ireg hLI, hidx]; simp [Value.encode]
+          | some (.stack _) | none =>
+            have hir : idx_reg = .x1 := by
+              show (match layout idx with | some (.ireg r) => r | _ => .x1) = .x1; simp [hLI]
+            rw [hir]
+            have hne : ArmReg.x1 ≠ (match layout val with | some (.ireg r) => r | _ => .x2) := by
+              match hLV : layout val with
+              | some (.ireg rv) =>
+                show ArmReg.x1 ≠ rv
+                intro h; exact hScratch.not_x1 val (h ▸ hLV)
+              | some (.stack _) | none | some (.freg _) =>
+                show ArmReg.x1 ≠ .x2; decide
+            rw [hRegs2 .x1 hne, ← hir, hIdxVal]
+          | some (.freg r) => exact absurd hLI (hNotFregIdx r)
+        have hValEnc : s2.regs val_reg = (σ val).encode := by rw [hVal_2]
+        -- arrSt
+        have hPC2' : s2.pc = pcMap pc + (vLoadVar layout idx idx_reg).length +
+            (vLoadVar layout val val_reg).length := by rw [hPC2, hPC1]
+        have hCodeArrSt := hCodeBCD.append_right; rw [← hPC2'] at hCodeArrSt
+        have hArrSt := hCodeArrSt.head
+        have hStepsArrSt : ArmSteps prog s2
+            (s2.setArrayMem arr (s2.regs idx_reg) (s2.regs val_reg) |>.nextPC) :=
+          .single (.arrSt arr idx_reg val_reg hArrSt)
+        let s3 := s2.setArrayMem arr (s2.regs idx_reg) (s2.regs val_reg) |>.nextPC
+        -- final ExtSimRel
+        have hRel3 : ExtStateRel layout σ s3 := by
+          simp [s3, ArmState.setArrayMem, ArmState.nextPC]
+          exact hRel2.nextPC
+        have hPC3 : s3.pc = pcMap (pc + 1) := by
+          have := hPcNext _ _ rfl; simp [hBS] at this
+          simp [s3, ArmState.setArrayMem, ArmState.nextPC]; rw [hPC2]; omega
+        have hAM3 : s3.arrayMem = am.write arr idxVal (σ val).toBits := by
+          funext a i
+          simp only [s3, ArmState.setArrayMem, ArmState.nextPC, ArrayMem.write,
+                hIdxVal2, hValEnc, hAM2, hAM1, hArrayMem, Value.encode, Value.toBits]
+          rfl
+        exact ⟨s3, (hSteps1.trans hSteps2).trans hStepsArrSt, ⟨hRel3, hPC3, hAM3⟩⟩
+      | false =>
+        simp [hBS] at hCodeBCD
+        -- cmpImm + bCond
+        have hCmp := hCodeBCD.head; rw [← hPC1] at hCmp
+        let s2bc := { s1 with flags := Flags.mk (s1.regs idx_reg) (arraySizeBv arrayDecls arr), pc := s1.pc + 1 }
+        have hStepsCmp : ArmSteps prog s1 s2bc :=
+          .single (.cmpRI idx_reg (arraySizeBv arrayDecls arr) hCmp)
+        have hBoundsAD : idxVal < arraySizeBv arrayDecls arr := by rw [hAD]; exact hbounds
+        have hCondFalse : s2bc.flags.condHolds .hs = false := by
+          simp only [s2bc, Flags.condHolds, hIdxVal]
+          cases h : decide (arraySizeBv arrayDecls arr ≤ idxVal) <;> simp_all <;> bv_omega
+        have hPC2bc : s2bc.pc = pcMap pc + (vLoadVar layout idx idx_reg).length + 1 := by
+          show s1.pc + 1 = _; rw [hPC1]
+        have hBCond := hCodeBCD.tail.head; rw [← hPC2bc] at hBCond
+        have hStepsBCond : ArmSteps prog s2bc s2bc.nextPC :=
+          .single (.bCond_fall .hs boundsLabel hBCond hCondFalse)
+        have hRel1bc : ExtStateRel layout σ s2bc.nextPC := hRel1.nextPC
+        have hIdxValBC : s2bc.nextPC.regs idx_reg = idxVal := by
+          simp [ArmState.nextPC, s2bc]; exact hIdxVal
+        -- vLoadVar val into val_reg
+        have hPC_post_bc : s2bc.nextPC.pc = pcMap pc + (vLoadVar layout idx idx_reg).length + 2 := by
+          simp [ArmState.nextPC, s2bc]; rw [hPC1]
+        have hCodeValSt : CodeAt prog s2bc.nextPC.pc
+            (vLoadVar layout val val_reg ++ [.arrSt arr idx_reg val_reg]) := by
+          rw [hPC_post_bc]; exact hCodeBCD.tail.tail
+        have hCodeVal := hCodeValSt.append_left
+        obtain ⟨s2, hSteps2, hVal_2, hRel2, _, hPC2, hAM2, hRegs2⟩ :=
+          vLoadVar_eff_exec prog layout val σ s2bc.nextPC s2bc.nextPC.pc .x2
+            hRel1bc hScratch rfl hNotFregVal (Or.inr (Or.inr rfl))
+            (hMapped val (by simp [heq, TAC.vars])) hCodeVal
+        -- show idx_reg preserved across vLoadVar val
+        have hIdxVal2 : s2.regs idx_reg = idxVal := by
+          match hLI : layout idx with
+          | some (.ireg r) =>
+            have hir : idx_reg = r := by
+              show (match layout idx with | some (.ireg r) => r | _ => .x1) = r; simp [hLI]
+            rw [hir, hRel2.read_ireg hLI, hidx]; simp [Value.encode]
+          | some (.stack _) | none =>
+            have hir : idx_reg = .x1 := by
+              show (match layout idx with | some (.ireg r) => r | _ => .x1) = .x1; simp [hLI]
+            rw [hir]
+            have hne : ArmReg.x1 ≠ (match layout val with | some (.ireg r) => r | _ => .x2) := by
+              match hLV : layout val with
+              | some (.ireg rv) =>
+                show ArmReg.x1 ≠ rv
+                intro h; exact hScratch.not_x1 val (h ▸ hLV)
+              | some (.stack _) | none | some (.freg _) =>
+                show ArmReg.x1 ≠ .x2; decide
+            rw [hRegs2 .x1 hne, ← hir, hIdxValBC]
+          | some (.freg r) => exact absurd hLI (hNotFregIdx r)
+        have hValEnc : s2.regs val_reg = (σ val).encode := by rw [hVal_2]
+        -- arrSt
+        have hCodeArrSt := hCodeValSt.append_right; rw [← hPC2] at hCodeArrSt
+        have hArrSt := hCodeArrSt.head
+        have hStepsArrSt : ArmSteps prog s2
+            (s2.setArrayMem arr (s2.regs idx_reg) (s2.regs val_reg) |>.nextPC) :=
+          .single (.arrSt arr idx_reg val_reg hArrSt)
+        let s3 := s2.setArrayMem arr (s2.regs idx_reg) (s2.regs val_reg) |>.nextPC
+        -- final ExtSimRel
+        have hRel3 : ExtStateRel layout σ s3 := by
+          simp [s3, ArmState.setArrayMem, ArmState.nextPC]
+          exact hRel2.nextPC
+        have hPC3 : s3.pc = pcMap (pc + 1) := by
+          have := hPcNext _ _ rfl; simp [hBS] at this
+          have hPC_s3 : s3.pc = pcMap pc + (vLoadVar layout idx idx_reg).length + 2 +
+              (vLoadVar layout val val_reg).length + 1 := by
+            simp [s3, ArmState.setArrayMem, ArmState.nextPC]
+            rw [hPC2]; simp [ArmState.nextPC]; rw [hPC2bc]
+          rw [hPC_s3]; omega
+        have hAM_bc : s2bc.nextPC.arrayMem = am := by
+          simp [ArmState.nextPC, s2bc, hAM1, hArrayMem]
+        have hAM2' : s2.arrayMem = am := by rw [hAM2, hAM_bc]
+        have hAM3 : s3.arrayMem = am.write arr idxVal (σ val).toBits := by
+          funext a i
+          simp only [s3, ArmState.setArrayMem, ArmState.nextPC, ArrayMem.write,
+                hIdxVal2, hValEnc, hAM2', Value.encode, Value.toBits]
+          rfl
+        exact ⟨s3, ((hSteps1.trans hStepsCmp).trans hStepsBCond).trans (hSteps2.trans hStepsArrSt),
+          ⟨hRel3, hPC3, hAM3⟩⟩
   | fbinop hinstr hy hz =>
     rename_i x fop y z a b
     have heq : instr = .fbinop x fop y z := Option.some.inj (hInstr.symm.trans hinstr)
