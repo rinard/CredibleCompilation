@@ -1410,6 +1410,72 @@ def verifiedGenInstr (layout : VarLayout) (pcMap : Nat → Nat) (instr : TAC)
         vLoadVarFP layout c c_reg ++ [fpInstr] ++ vStoreVarFP layout dst dst_reg)
   | .print _ _ => none      -- handled by unverified codegen path
 
+-- ────────────────────────────────────────────────────────────
+-- § 8e. verifiedGenInstr output length is pcMap-independent
+-- ────────────────────────────────────────────────────────────
+
+/-- The length of verifiedGenInstr output does not depend on the pcMap.
+    pcMap only affects branch target immediates, not instruction count. -/
+theorem verifiedGenInstr_length_pcMap_ind
+    (layout : VarLayout) (instr : TAC)
+    (haltS divS boundsS : Nat) (arrayDecls : List (ArrayName × Nat × VarTy))
+    (safe : Bool) (pcMap1 pcMap2 : Nat → Nat)
+    (l1 l2 : List ArmInstr)
+    (h1 : verifiedGenInstr layout pcMap1 instr haltS divS boundsS arrayDecls safe = some l1)
+    (h2 : verifiedGenInstr layout pcMap2 instr haltS divS boundsS arrayDecls safe = some l2) :
+    l1.length = l2.length := by
+  cases instr with
+  | const v val =>
+    simp only [verifiedGenInstr] at h1 h2
+    cases val <;> simp_all <;> split at h1 <;> simp_all <;> split at h2 <;> simp_all
+  | copy dst src =>
+    simp only [verifiedGenInstr] at h1 h2
+    split at h1 <;> simp_all <;> split at h2 <;> simp_all
+  | binop x op y z =>
+    simp only [verifiedGenInstr] at h1 h2
+    split at h1 <;> simp_all <;> split at h2 <;> simp_all
+  | boolop x be =>
+    simp only [verifiedGenInstr] at h1 h2
+    split at h1 <;> simp_all <;> split at h2 <;> simp_all
+  | goto l =>
+    simp only [verifiedGenInstr] at h1 h2
+    split at h1 <;> simp_all; subst h1; subst h2; rfl
+  | ifgoto be l =>
+    simp only [verifiedGenInstr] at h1 h2
+    -- Split the `if !be.hasSimpleOps` guard
+    split at h1 <;> simp_all
+    -- Now h1, h2 have the `match be` result. Split h1 into 3 arms.
+    split at h1 <;> simp_all
+    -- In each arm, h1 is subst'd. h2 still has the conjunction; obtain the eq part.
+    all_goals (try obtain ⟨_, h2⟩ := h2)
+    all_goals (subst_vars; simp [List.length_append, List.length_cons])
+  | halt =>
+    simp only [verifiedGenInstr] at h1 h2
+    split at h1 <;> simp_all <;> subst_vars <;> simp_all
+  | arrLoad x arr idx ty =>
+    simp only [verifiedGenInstr] at h1 h2
+    split at h1 <;> simp_all <;> split at h2 <;> simp_all
+  | arrStore arr idx val ty =>
+    simp only [verifiedGenInstr] at h1 h2
+    split at h1 <;> simp_all <;> split at h2 <;> simp_all
+  | fbinop x fop y z =>
+    simp only [verifiedGenInstr] at h1 h2
+    split at h1 <;> simp_all <;> split at h2 <;> simp_all
+  | intToFloat x y =>
+    simp only [verifiedGenInstr] at h1 h2
+    split at h1 <;> simp_all <;> split at h2 <;> simp_all
+  | floatToInt x y =>
+    simp only [verifiedGenInstr] at h1 h2
+    split at h1 <;> simp_all <;> split at h2 <;> simp_all
+  | floatUnary x op y =>
+    simp only [verifiedGenInstr] at h1 h2
+    split at h1 <;> simp_all <;> split at h2 <;> simp_all
+  | fternop x op a b c =>
+    simp only [verifiedGenInstr] at h1 h2
+    split at h1 <;> simp_all <;> split at h2 <;> simp_all
+  | print fmt vs =>
+    simp [verifiedGenInstr] at h1
+
 -- ============================================================
 -- § 9. CodeAt and helper lemmas
 -- ============================================================

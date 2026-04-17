@@ -599,6 +599,38 @@ private def genVerifiedCalleeSave (intRegs : List Nat) (floatRegs : List Nat)
   ) ([], [], baseOffset + intRegs.length * 8)
   (intSaves ++ floatSaves, intRestores ++ floatRestores)
 
+/-- Step function for pass-2 body generation. For each TAC instruction,
+    generates (and possibly wraps) ARM instructions, pushing onto the accumulator.
+    Returns `none` if verifiedGenInstr fails; propagates `none` from previous steps. -/
+private def bodyGenStep (code : Array TAC) (layout : VarLayout) (pcMap : Nat → Nat)
+    (liveOut : Array (List Var)) (varMap : List (Var × Nat))
+    (intervals : Array (Option BoundsOpt.IMap))
+    (arrayDecls : List (ArrayName × Nat × VarTy))
+    (haltS divS boundsS : Nat)
+    (acc : Option (Array (List ArmInstr))) (pc : Nat)
+    : Option (Array (List ArmInstr)) :=
+  match acc with
+  | none => none
+  | some arr =>
+    let instr := code.getD pc .halt
+    let safe := isBoundsSafe arrayDecls intervals pc instr
+    let isPrint := match instr with | .print _ _ => true | _ => false
+    if isPrint then
+      let live := removeDest instr (liveOut.getD pc ([] : List Var))
+      let (saves, restores) := genCallSaveRestore live layout varMap
+      some (arr.push (saves ++ [ArmInstr.b (pcMap (pc + 1))] ++ restores))
+    else
+    match verifiedGenInstr layout pcMap instr haltS divS boundsS arrayDecls safe with
+    | none => none
+    | some armInstrs =>
+      let armInstrs' :=
+        if isLibCallTAC instr then
+          let live := removeDest instr (liveOut.getD pc ([] : List Var))
+          let (saves, restores) := genCallSaveRestore live layout varMap
+          saves ++ armInstrs ++ restores
+        else armInstrs
+      some (arr.push armInstrs')
+
 /-- Verified core of code generation. Performs all validation and produces
     structured ArmInstr data. No string emission or platform-specific code. -/
 def verifiedGenerateAsm (p : Prog) : Except String VerifiedAsmResult := do
@@ -639,31 +671,8 @@ def verifiedGenerateAsm (p : Prog) : Except String VerifiedAsmResult := do
     -- Pass 2: generate instructions with real pcMap
     -- For library call sites, wrap with save/restore of live caller-saved registers.
     let bodyResult := (List.range p.code.size).foldl
-        (init := some (Array.mkEmpty p.code.size)) fun acc pc =>
-      match acc with
-      | none => none
-      | some arr =>
-        let instr := p.code.getD pc .halt
-        let safe := isBoundsSafe p.arrayDecls intervals pc instr
-        -- Print instructions are handled by unverified string-level codegen
-        -- Generate placeholder no-ops for pcMap sizing
-        let isPrint := match instr with | .print _ _ => true | _ => false
-        if isPrint then
-          let live := removeDest instr (liveOut.getD pc ([] : List Var))
-          let (saves, restores) := genCallSaveRestore live layout varMap
-          -- Use saves + 1 placeholder + restores to get correct length
-          some (arr.push (saves ++ [ArmInstr.b 0] ++ restores))
-        else
-        match verifiedGenInstr layout pcMap instr haltS divS boundsS p.arrayDecls safe with
-        | none => none
-        | some armInstrs =>
-          let armInstrs' :=
-            if isLibCallTAC instr then
-              let live := removeDest instr (liveOut.getD pc ([] : List Var))
-              let (saves, restores) := genCallSaveRestore live layout varMap
-              saves ++ armInstrs ++ restores
-            else armInstrs
-          some (arr.push armInstrs')
+        (bodyGenStep p.code layout pcMap liveOut varMap intervals p.arrayDecls haltS divS boundsS)
+        (some (Array.mkEmpty p.code.size))
     match bodyResult with
     | none => .error "verifiedGenInstr failed (layout or type mismatch)"
     | some bodyPerPC =>
@@ -722,8 +731,11 @@ structure GenAsmSpec (p : Prog) (r : VerifiedAsmResult) : Prop where
   wellTypedLayout : WellTypedLayout p.tyCtx r.layout
   /-- bodyPerPC has one entry per TAC instruction. -/
   bodySize : r.bodyPerPC.size = p.size
-  /-- Each bodyPerPC entry was produced by verifiedGenInstr. -/
+  /-- Each non-print, non-lib-call bodyPerPC entry was produced by verifiedGenInstr.
+      Print PCs use unverified codegen; lib-call PCs are wrapped (see callSiteSaveRestore). -/
   instrGen : ∀ pc, (hpc : pc < p.size) →
+    isLibCallTAC p[pc] = false →
+    (∀ fmt vs, p[pc] ≠ .print fmt vs) →
     ∃ safe : Bool,
       verifiedGenInstr r.layout r.pcMap p[pc]
         r.haltS r.divS r.boundsS p.arrayDecls safe =
@@ -831,112 +843,136 @@ private theorem checkWellTypedLayout_instrMapped {Γ : TyCtx} {layout : VarLayou
       have := (List.find?_eq_none.mp hComplete) v hInAll
       simp [Option.isNone, hNone] at this
 
-/-- The foldl body generation produces arrays of the right size and content. -/
-private theorem body_foldl_spec {code : Array TAC} {layout : VarLayout} {pcMap : Nat → Nat}
-    {haltS divS boundsS : Nat} {arrayDecls : List (ArrayName × Nat × VarTy)}
-    {intervals : Array (Option BoundsOpt.IMap)} {bodyPerPC : Array (List ArmInstr)}
-    (hFold : (List.range code.size).foldl
-      (init := some (Array.mkEmpty code.size))
-      (fun acc pc => match acc with
-        | none => none
-        | some arr =>
-          let instr := code.getD pc .halt
-          let safe := isBoundsSafe arrayDecls intervals pc instr
-          match verifiedGenInstr layout pcMap instr haltS divS boundsS arrayDecls safe with
-          | none => none
-          | some armInstrs => some (arr.push armInstrs)) = some bodyPerPC) :
-    bodyPerPC.size = code.size ∧
-    ∀ pc (hb : pc < bodyPerPC.size),
-      verifiedGenInstr layout pcMap (code.getD pc .halt) haltS divS boundsS arrayDecls
-        (isBoundsSafe arrayDecls intervals pc (code.getD pc .halt)) =
-      some bodyPerPC[pc] := by
-  -- Generalized lemma: for any initial array and prefix length m,
-  -- if the foldl over range m succeeds, the result has the right size and content.
-  have hGetD : ∀ k : Nat, code.getD k .halt = (code[k]?.getD .halt) := by
-    intro k; unfold Array.getD
-    cases Decidable.em (k < code.size) with
-    | inl h => simp [h, getElem?_pos]
-    | inr h => simp [h, getElem?_neg]
-  let F := fun (acc : Option (Array (List ArmInstr))) (pc : Nat) =>
-    match acc with
-    | none => none
-    | some arr =>
-      let instr := code.getD pc .halt
-      let safe := isBoundsSafe arrayDecls intervals pc instr
-      match verifiedGenInstr layout pcMap instr haltS divS boundsS arrayDecls safe with
-      | none => none
-      | some armInstrs => some (arr.push armInstrs)
-  suffices key : ∀ (m : Nat) (initArr res : Array (List ArmInstr)),
-      m ≤ code.size →
+private theorem Array.push_inj {a : Array α} {x y : α} (h : a.push x = a.push y) : x = y := by
+  have := congrArg (·[a.size]?) h; simp at this; exact this
+
+/-- A foldl over `List.range n` that propagates `none` and pushes exactly one
+    element per successful `some` step produces an array of size `n`. -/
+private theorem foldl_push_size
+    {n : Nat} {res : Array α}
+    {F : Option (Array α) → Nat → Option (Array α)}
+    (hNone : ∀ pc, F none pc = none)
+    (hPush : ∀ arr pc, F (some arr) pc = none ∨ ∃ x, F (some arr) pc = some (arr.push x))
+    (hFold : (List.range n).foldl F (some #[]) = some res) :
+    res.size = n := by
+  suffices key : ∀ (m : Nat) (initArr res : Array α),
       (List.range m).foldl F (some initArr) = some res →
-      res.size = initArr.size + m ∧
-      (∀ (i : Nat) (hi : i < initArr.size) (hir : i < res.size),
-        res[i]'hir = initArr[i]'hi) ∧
-      (∀ (k : Nat), k < m →
-        (hkr : initArr.size + k < res.size) →
-        verifiedGenInstr layout pcMap (code.getD k .halt) haltS divS boundsS arrayDecls
-          (isBoundsSafe arrayDecls intervals k (code.getD k .halt)) =
-        some (res[initArr.size + k]'hkr)) by
-    have ⟨hSz, _, hNew⟩ := key code.size (Array.mkEmpty code.size) bodyPerPC
-      (Nat.le_refl _) hFold
-    simp at hSz
-    refine ⟨hSz, fun pc hb => ?_⟩
-    have h := hNew pc (by omega) (by show 0 + pc < bodyPerPC.size; omega)
-    simp only [show (Array.mkEmpty code.size : Array (List ArmInstr)).size = 0 from rfl,
-      Nat.zero_add] at h
-    exact h
+      res.size = initArr.size + m by
+    have := key n #[] res hFold; simp at this; exact this
   intro m
   induction m with
   | zero =>
-    intro initArr res _ hEq
-    simp [List.range_zero, List.foldl, F] at hEq
-    subst hEq
-    exact ⟨by omega, fun _ hi hir => rfl, fun _ hk => by omega⟩
-  | succ n ih =>
-    intro initArr res hle hEq
+    intro initArr res hEq; simp at hEq; subst hEq; omega
+  | succ k ih =>
+    intro initArr res hEq
     simp only [List.range_succ, List.foldl_append, List.foldl] at hEq
-    -- The foldl result is F (foldl F (some initArr) (range n)) n
-    -- Split on the intermediate foldl result
-    generalize hMid : (List.range n).foldl F (some initArr) = midResult at hEq
+    generalize hMid : (List.range k).foldl F (some initArr) = midResult at hEq
     match midResult with
-    | none =>
-      simp [F] at hEq
+    | none => rw [hNone] at hEq; simp at hEq
     | some midArr =>
-      -- Apply IH to get properties of midArr
-      have hle' : n ≤ code.size := by omega
-      have ⟨hMidSz, hMidOld, hMidNew⟩ := ih initArr midArr hle' hMid
-      -- Now the last step processes element n
-      dsimp only [F] at hEq
-      -- Split on verifiedGenInstr result
-      have hn_lt : n < code.size := by omega
-      generalize hGen : verifiedGenInstr layout pcMap (code.getD n .halt) haltS divS boundsS
-        arrayDecls (isBoundsSafe arrayDecls intervals n (code.getD n .halt)) = genR at hEq
-      match genR with
-      | none => simp at hEq
-      | some armInstrsN =>
-        simp at hEq; subst hEq
-        have hResSz : (midArr.push armInstrsN).size = initArr.size + (n + 1) := by
-          simp [Array.size_push, hMidSz]; omega
-        refine ⟨hResSz, ?_, ?_⟩
-        · -- Old elements from initArr are preserved
-          intro i hi hir
-          have hiMid : i < midArr.size := by rw [hMidSz]; omega
-          simp [Array.getElem_push, hiMid]
-          exact hMidOld i hi hiMid
-        · -- Elements k in range [0, n+1): code.getD k mapped to res[initArr.size + k]
-          intro k hk hkr
-          by_cases hkN : k = n
-          · -- k = n: this is the newly pushed element
-            subst hkN
-            have hIdx : initArr.size + k = midArr.size := by omega
-            have : ¬ (initArr.size + k < midArr.size) := by omega
-            simp [Array.getElem_push, this]
-            rw [← hGetD]; exact hGen
-          · -- k < n: use IH
-            have hkLt : k < n := by omega
-            have hIdx : initArr.size + k < midArr.size := by omega
-            simp [Array.getElem_push, hIdx]
-            rw [← hGetD]; exact hMidNew k hkLt (by omega)
+      have hMidSz := ih initArr midArr hMid
+      rcases hPush midArr k with hFail | ⟨x, hP⟩
+      · rw [hFail] at hEq; simp at hEq
+      · rw [hP] at hEq; simp at hEq; subst hEq
+        simp [Array.size_push, hMidSz]; omega
+
+/-- A foldl that propagates `none` and pushes one element per step:
+    for each index `pc < res.size`, there exists an intermediate array `mid`
+    of size `pc` such that `F (some mid) pc = some (mid.push res[pc])`. -/
+private theorem foldl_push_content
+    {n : Nat} {res : Array α}
+    {F : Option (Array α) → Nat → Option (Array α)}
+    (hNone : ∀ pc, F none pc = none)
+    (hPush : ∀ arr pc, F (some arr) pc = none ∨ ∃ x, F (some arr) pc = some (arr.push x))
+    (hFold : (List.range n).foldl F (some #[]) = some res)
+    (pc : Nat) (hpc : pc < res.size) :
+    ∃ mid : Array α, mid.size = pc ∧
+      F (some mid) pc = some (mid.push res[pc]) := by
+  have hResSz : res.size = n := foldl_push_size hNone hPush hFold
+  -- Generalized: for foldl over range m starting from initArr
+  suffices key : ∀ (m : Nat) (initArr midRes : Array α),
+      (List.range m).foldl F (some initArr) = some midRes →
+      midRes.size = initArr.size + m →
+      ∀ k, k < m → (hk : initArr.size + k < midRes.size) →
+        ∃ mid : Array α, mid.size = initArr.size + k ∧
+          F (some mid) k = some (mid.push midRes[initArr.size + k]) by
+    have := key n #[] res hFold (by simp; exact hResSz) pc (by omega) (by simp; exact hpc)
+    simpa using this
+  intro m
+  induction m with
+  | zero => intro _ _ _ _ k hk; omega
+  | succ j ih =>
+    intro initArr midRes hEq hSz k hk hkBound
+    simp only [List.range_succ, List.foldl_append, List.foldl] at hEq
+    generalize hMid : (List.range j).foldl F (some initArr) = midResult at hEq
+    match midResult with
+    | none => rw [hNone] at hEq; simp at hEq
+    | some midArr =>
+      -- Get midArr size by the same foldl_push_size argument
+      have hMidSz : midArr.size = initArr.size + j := by
+        clear ih hEq hSz hk hkBound
+        revert initArr midArr hMid
+        induction j with
+        | zero => intro i r h; simp at h; subst h; omega
+        | succ j' ihj =>
+          intro initArr midArr hEq
+          simp only [List.range_succ, List.foldl_append, List.foldl] at hEq
+          generalize hM : (List.range j').foldl F (some initArr) = mr at hEq
+          match mr with
+          | none => rw [hNone] at hEq; simp at hEq
+          | some ma =>
+            rcases hPush ma j' with hF | ⟨x, hP⟩
+            · rw [hF] at hEq; simp at hEq
+            · rw [hP] at hEq; simp at hEq; subst hEq
+              simp [Array.size_push, ihj initArr ma hM]; omega
+      rcases hPush midArr j with hFail | ⟨x, hP⟩
+      · rw [hFail] at hEq; simp at hEq
+      · rw [hP] at hEq; simp at hEq; subst hEq
+        by_cases hkj : k = j
+        · -- k = j: the element just pushed
+          subst hkj
+          have hNotLt : ¬ (initArr.size + k < midArr.size) := by omega
+          simp only [Array.getElem_push, hNotLt, dite_false]
+          exact ⟨midArr, hMidSz, hP⟩
+        · -- k < j: use IH, element preserved by push
+          have hkLt : k < j := by omega
+          have hIdxLt : initArr.size + k < midArr.size := by omega
+          have hPrevSz : midArr.size = initArr.size + j := hMidSz
+          have ⟨mid, hMidSz', hStep⟩ := ih initArr midArr hMid hPrevSz k hkLt (by omega)
+          refine ⟨mid, hMidSz', ?_⟩
+          simp only [Array.getElem_push, hIdxLt, dite_true] at hStep ⊢
+          exact hStep
+
+-- ──────────────────────────────────────────────────────────────
+-- bodyGenStep properties
+-- ──────────────────────────────────────────────────────────────
+
+@[simp] theorem bodyGenStep_none (code : Array TAC) (layout : VarLayout)
+    (pcMap : Nat → Nat) (liveOut : Array (List Var))
+    (varMap : List (Var × Nat)) (intervals : Array (Option BoundsOpt.IMap))
+    (arrayDecls : List (ArrayName × Nat × VarTy))
+    (haltS divS boundsS : Nat) (pc : Nat) :
+    bodyGenStep code layout pcMap liveOut varMap intervals arrayDecls
+      haltS divS boundsS none pc = none := rfl
+
+theorem bodyGenStep_push (code : Array TAC) (layout : VarLayout)
+    (pcMap : Nat → Nat) (liveOut : Array (List Var))
+    (varMap : List (Var × Nat)) (intervals : Array (Option BoundsOpt.IMap))
+    (arrayDecls : List (ArrayName × Nat × VarTy))
+    (haltS divS boundsS : Nat) (arr : Array (List ArmInstr)) (pc : Nat) :
+    bodyGenStep code layout pcMap liveOut varMap intervals arrayDecls
+      haltS divS boundsS (some arr) pc = none ∨
+    ∃ instrs, bodyGenStep code layout pcMap liveOut varMap intervals arrayDecls
+      haltS divS boundsS (some arr) pc = some (arr.push instrs) := by
+  simp only [bodyGenStep]
+  split <;> split <;> simp_all
+  -- print case: push (simp_all removed the Or, leaving ∃)
+  · exact ⟨_, rfl⟩
+  -- non-print case: split on verifiedGenInstr
+  · generalize verifiedGenInstr layout pcMap _ haltS divS boundsS arrayDecls _ = r
+    cases r with
+    | none => exact Or.inl rfl
+    | some instrs => exact Or.inr ⟨_, rfl⟩
 
 /-- `verifiedGenInstr` output length is independent of pcMap.
     For goto/ifgoto, pcMap changes values but not list length.
@@ -978,16 +1014,151 @@ private theorem instrLength_eq_length {layout : VarLayout} {pcMap : Nat → Nat}
     (h : verifiedGenInstr layout pcMap instr haltS divS boundsS arrayDecls safe = some instrs) :
     instrLength layout arrayDecls safe instr haltS divS boundsS liveVars varMap =
       (if isLibCallTAC instr then
-        let (saves, restores) := genCallSaveRestore liveVars layout varMap
+        let live := removeDest instr liveVars
+        let (saves, restores) := genCallSaveRestore live layout varMap
         (saves ++ instrs ++ restores).length
       else instrs.length) := by
-  sorry -- instrLength proof needs update for print instruction match restructuring
+  -- Print case: verifiedGenInstr returns none, contradicting h
+  -- Non-print: instrLength uses dummy pcMap (fun _ => 0); equate lengths via pcMap-independence
+  -- Lib-call: also need callSaveRestoreLen = saves.length + restores.length (definitional)
+  cases instr with
+  | print => simp [verifiedGenInstr] at h
+  | const v val =>
+    simp only [instrLength, isLibCallTAC, verifiedGenInstr] at *
+    cases val <;> simp_all <;> split at h <;> simp_all
+  | copy dst src =>
+    simp only [instrLength, isLibCallTAC, verifiedGenInstr] at *
+    split at h <;> simp_all
+  | binop x op y z =>
+    simp only [instrLength, isLibCallTAC, verifiedGenInstr] at *
+    split at h <;> simp_all
+  | boolop x be =>
+    simp only [instrLength, isLibCallTAC, verifiedGenInstr] at *
+    split at h <;> simp_all
+  | goto l =>
+    simp only [instrLength, isLibCallTAC, verifiedGenInstr] at *
+    split at h <;> simp_all; subst_vars; simp
+  | ifgoto be l =>
+    simp only [instrLength, isLibCallTAC, verifiedGenInstr] at *
+    split at h <;> simp_all
+    split at h <;> simp_all
+    all_goals (try obtain ⟨_, h⟩ := h)
+    all_goals (subst_vars; simp [List.length_append, List.length_cons])
+  | halt =>
+    simp only [instrLength, isLibCallTAC, verifiedGenInstr] at *
+    split at h <;> simp_all
+  | arrLoad x arr idx ty =>
+    simp only [instrLength, isLibCallTAC, verifiedGenInstr] at *
+    split at h <;> simp_all
+  | arrStore arr idx val ty =>
+    simp only [instrLength, isLibCallTAC, verifiedGenInstr] at *
+    split at h <;> simp_all
+  | fbinop x fop y z =>
+    simp only [instrLength, isLibCallTAC, removeDest, callSaveRestoreLen]
+    generalize hd : verifiedGenInstr layout (fun _ => 0)
+      (.fbinop x fop y z) haltS divS boundsS arrayDecls safe = dr
+    cases dr with
+    | none =>
+      simp only [verifiedGenInstr] at h hd
+      split at hd <;> simp_all <;> split at h <;> simp_all
+    | some dl =>
+      have hLen := verifiedGenInstr_length_pcMap_ind layout (.fbinop x fop y z) haltS divS boundsS
+          arrayDecls safe _ pcMap dl instrs hd h
+      simp only [hLen, List.length_append]; cases fop <;> simp_all [Nat.add_assoc, Nat.add_comm]
+  | intToFloat x y =>
+    simp only [instrLength, isLibCallTAC, verifiedGenInstr] at *
+    split at h <;> simp_all
+  | floatToInt x y =>
+    simp only [instrLength, isLibCallTAC, verifiedGenInstr] at *
+    split at h <;> simp_all
+  | floatUnary x op y =>
+    simp only [instrLength, isLibCallTAC, removeDest, callSaveRestoreLen]
+    generalize hd : verifiedGenInstr layout (fun _ => 0)
+      (.floatUnary x op y) haltS divS boundsS arrayDecls safe = dr
+    cases dr with
+    | none =>
+      simp only [verifiedGenInstr] at h hd
+      split at hd <;> simp_all <;> split at h <;> simp_all
+    | some dl =>
+      have hLen := verifiedGenInstr_length_pcMap_ind layout (.floatUnary x op y) haltS divS boundsS
+          arrayDecls safe _ pcMap dl instrs hd h
+      simp only [hLen, List.length_append]
+      cases op.isNative <;> simp_all [Nat.add_assoc, Nat.add_comm]
+  | fternop x op a b c =>
+    simp only [instrLength, isLibCallTAC, verifiedGenInstr] at *
+    split at h <;> simp_all
 
 
 /-- A successful `verifiedGenerateAsm` call satisfies `GenAsmSpec`. -/
 theorem verifiedGenerateAsm_spec {p : Prog} {r : VerifiedAsmResult}
     (hGen : verifiedGenerateAsm p = .ok r) : GenAsmSpec p r := by
-  sorry -- TODO: update proof for call-site save/restore and callee-save prologue/epilogue
+  -- Unfold and clear error guards
+  simp only [verifiedGenerateAsm] at hGen
+  split at hGen <;> simp_all                     -- checkWellTypedProg
+  -- checkWellTypedLayout
+  split at hGen
+  · simp_all
+  · -- none case — continue
+    -- checkBranchTargets
+    split at hGen
+    · simp_all
+    · -- none case — continue to bodyResult
+      split at hGen
+      · simp_all
+      · -- some bodyPerPC
+        -- Extract r = constructed record
+        simp only [Except.ok.injEq] at hGen; subst r
+        rename_i bodyPerPC heqFold
+        -- Foldl properties: Lean unifies F from heqFold
+        have hBSz : bodyPerPC.size = p.code.size := by
+          apply foldl_push_size _ _ heqFold
+          · intro; rfl
+          · intro arr pc; exact bodyGenStep_push _ _ _ _ _ _ _ _ _ _ arr pc
+        refine ⟨
+          checkWellTypedProg_sound ‹_›,
+          checkWellTypedLayout_wellTyped ‹_›,
+          by simp [Prog.size_eq]; exact hBSz,
+          ?instrGen, ?pcMapLengths, ?layoutComplete, ?callSiteSaveRestore⟩
+        case instrGen =>
+          intro pc hpc hNotLib hNotPrint
+          have hpcB : pc < bodyPerPC.size := by rw [hBSz]; simp [Prog.size_eq] at hpc; exact hpc
+          have hpcCode : pc < p.code.size := by simp [Prog.size_eq] at hpc; exact hpc
+          -- Get foldl content
+          have hContent := by
+            apply foldl_push_content _ _ heqFold pc hpcB
+            · intro; rfl
+            · intro arr pc; exact bodyGenStep_push _ _ _ _ _ _ _ _ _ _ arr pc
+          obtain ⟨mid, _, hStep⟩ := hContent
+          -- Unfold bodyGenStep; simplify getD to getElem
+          simp only [bodyGenStep, Array.getD, show pc < p.code.size from hpcCode,
+            dite_true] at hStep
+          -- Case split on isPrint match, then if isPrint
+          split at hStep <;> split at hStep
+          · -- print, isTrue: contradicts hNotPrint
+            simp_all
+          · -- print, isFalse: contradicts (isPrint was true)
+            simp_all
+          · -- non-print, isTrue: false=true, absurd
+            simp_all
+          · -- non-print, isFalse: the real case
+            simp at hStep
+            -- Split on verifiedGenInstr
+            split at hStep
+            · simp at hStep
+            · -- some armInstrs
+              rename_i armInstrs hGenInstr
+              -- isLibCallTAC is false (via hNotLib)
+              have : isLibCallTAC p.code[pc] = false := hNotLib
+              rw [this] at hStep; simp at hStep
+              exact ⟨_, (Array.push_inj hStep) ▸ hGenInstr⟩
+        case pcMapLengths =>
+          sorry
+        case layoutComplete =>
+          sorry
+        case callSiteSaveRestore =>
+          sorry
+
+
 
 -- ──────────────────────────────────────────────────────────────
 -- buildPcMap prefix-sum lemmas
