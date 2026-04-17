@@ -818,6 +818,72 @@ def genCallerSaveAll (layout : VarLayout) (varMap : List (Var × Nat)) : List Ca
       else none
     | .stack _ => none
 
+/-- Helper: characterize membership in genCallerSaveAll. -/
+private theorem mem_genCallerSaveAll {layout : VarLayout} {varMap : List (Var × Nat)}
+    {e : CallerSaveEntry} (h : e ∈ genCallerSaveAll layout varMap) :
+    ∃ v loc, (v, loc) ∈ layout.entries ∧
+      (match loc with
+       | .ireg r =>
+         if r.isCallerSaved then
+           (varMap.find? (fun (x, _) => x == v)).map (fun (_, off) => CallerSaveEntry.ireg r off) = some e
+         else False
+       | .freg r =>
+         if r.isCallerSaved then
+           (varMap.find? (fun (x, _) => x == v)).map (fun (_, off) => CallerSaveEntry.freg r off) = some e
+         else False
+       | .stack _ => False) := by
+  simp only [genCallerSaveAll, List.mem_filterMap] at h
+  obtain ⟨⟨v, loc⟩, hMem, hMap⟩ := h
+  refine ⟨v, loc, hMem, ?_⟩
+  cases loc with
+  | ireg r => simp only; split <;> simp_all
+  | freg r => simp only; split <;> simp_all
+  | stack _ => simp at hMap
+
+/-- Every integer register in a genCallerSaveAll entry is caller-saved. -/
+theorem genCallerSaveAll_allCS_ireg {layout : VarLayout} {varMap : List (Var × Nat)}
+    {ir : ArmReg} {off : Nat}
+    (h : CallerSaveEntry.ireg ir off ∈ genCallerSaveAll layout varMap) :
+    ir.isCallerSaved = true := by
+  obtain ⟨v, loc, _, hSpec⟩ := mem_genCallerSaveAll h
+  cases loc with
+  | ireg r =>
+    simp only at hSpec; split at hSpec
+    · rename_i hcs
+      match hFind : varMap.find? (fun (x, _) => x == v) with
+      | some (_, off') => simp [hFind, Option.map] at hSpec; exact hSpec.1 ▸ hcs
+      | none => simp [hFind] at hSpec
+    · exact hSpec.elim
+  | freg r =>
+    simp only at hSpec; split at hSpec
+    · match hFind : varMap.find? (fun (x, _) => x == v) with
+      | some (_, off') => simp [hFind, Option.map] at hSpec
+      | none => simp [hFind] at hSpec
+    · exact hSpec.elim
+  | stack _ => simp only at hSpec
+
+/-- Every float register in a genCallerSaveAll entry is caller-saved. -/
+theorem genCallerSaveAll_allCS_freg {layout : VarLayout} {varMap : List (Var × Nat)}
+    {fr : ArmFReg} {off : Nat}
+    (h : CallerSaveEntry.freg fr off ∈ genCallerSaveAll layout varMap) :
+    fr.isCallerSaved = true := by
+  obtain ⟨v, loc, _, hSpec⟩ := mem_genCallerSaveAll h
+  cases loc with
+  | ireg r =>
+    simp only at hSpec; split at hSpec
+    · match hFind : varMap.find? (fun (x, _) => x == v) with
+      | some (_, off') => simp [hFind, Option.map] at hSpec
+      | none => simp [hFind] at hSpec
+    · exact hSpec.elim
+  | freg r =>
+    simp only at hSpec; split at hSpec
+    · rename_i hcs
+      match hFind : varMap.find? (fun (x, _) => x == v) with
+      | some (_, off') => simp [hFind, Option.map] at hSpec; exact hSpec.1 ▸ hcs
+      | none => simp [hFind] at hSpec
+    · exact hSpec.elim
+  | stack _ => simp only at hSpec
+
 /-- Saves don't change integer registers. -/
 theorem applyCallerSaves_regs (entries : List CallerSaveEntry) (s : ArmState) (r : ArmReg) :
     (applyCallerSaves entries s).regs r = s.regs r := by

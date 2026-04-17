@@ -13,6 +13,18 @@ Useful prompts:
   g) Isolate failing goal and focus on that - try different alternatives quickly. 
   h) when it looks like it is thrashing, ask what is the problem - basically have it explain what is going on. This makes it reflect and apparently helps it get enough context to come up with a solution instead of thrashing. 
 
+Compromises:
+  Provability compromises:
+    All caller save variables live anywhere saved and restored across call instructions. Obviates a need to thread per instruction liveness information through proofs. 
+    Loads from boolean arrays normalize to 0/1. Avoids having to thread invariant that all booleans are 0/1 through entire proof structure. 
+    Float literal/variable comparisons - handle only one direction, turns out can't prove one of the combinations. 	
+
+    fmadd semantics subtly different from fmul + fadd - fixed by putting in an axiom that they are the same.
+
+  Provability Design Decisions:
+    Programming language level data types (integers, floats) identical to hardware data types. 
+  
+
 0) Initial certificate prompt:
 
 Develop a certificate checker that checks a certificate that an original program was correctly transformed into a transformed program. 

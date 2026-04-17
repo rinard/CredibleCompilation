@@ -436,12 +436,24 @@ def genCallSaveRestore (liveVars : List Var) (layout : VarLayout)
     | .inr (r, off) => ArmInstr.fldr r off
   (saves, restores)
 
-/-- Number of save/restore instructions for a call site.
-    Uses `genCallerSaveAll` (saves ALL caller-saved registers in layout,
-    not just live ones) so `callerSave_composition` coverage is satisfied. -/
+/-- Filter genCallerSaveAll entries to exclude the destination variable's register.
+    For lib-calls, the destination's register should NOT be saved/restored because
+    the base instructions write the result there and restoring would overwrite it. -/
+private def callerSaveEntries (layout : VarLayout) (varMap : List (Var × Nat))
+    (exclude : Option Var := none) : List CallerSaveEntry :=
+  let all := genCallerSaveAll layout varMap
+  match exclude with
+  | none => all
+  | some d => all.filter fun e =>
+    match layout d, e with
+    | some (.ireg r), .ireg ir _ => !(ir == r)
+    | some (.freg r), .freg fr _ => !(fr == r)
+    | _, _ => true
+
+/-- Number of save/restore instructions for a call site. -/
 private def callSaveRestoreLen (layout : VarLayout)
-    (varMap : List (Var × Nat)) : Nat :=
-  let entries := genCallerSaveAll layout varMap
+    (varMap : List (Var × Nat)) (exclude : Option Var := none) : Nat :=
+  let entries := callerSaveEntries layout varMap exclude
   (entriesToSaves entries).length + (entriesToRestores entries).length
 
 /-- Remove the destination variable of an instruction from a live-variable list.
@@ -472,7 +484,7 @@ private def instrLength (layout : VarLayout) (arrayDecls : List (ArrayName × Na
     | some l => l.length
     | none => 0
   if isLibCallTAC instr then
-    baseLen + callSaveRestoreLen layout varMap
+    baseLen + callSaveRestoreLen layout varMap (DAEOpt.instrDef instr)
   else baseLen
 
 /-- Build a pcMap (TAC PC → cumulative ARM instruction offset) as a prefix sum. -/
@@ -544,6 +556,139 @@ private def checkBranchTargets (code : Array TAC) : Option String :=
       | .goto l | .ifgoto _ l => l | _ => 0
     some s!"branch at PC {pc} targets {target} (out of bounds, size = {n})"
   | none => none
+
+/-- If lookup returns some, the key-value pair is in the list. -/
+private theorem lookup_mem {v : String} {loc : VarLoc}
+    {entries : List (String × VarLoc)}
+    (h : entries.lookup v = some loc) : (v, loc) ∈ entries := by
+  induction entries with
+  | nil => simp [List.lookup] at h
+  | cons hd tl ih =>
+    simp only [List.lookup] at h
+    split at h
+    · rename_i heq
+      have hv : v = hd.fst := by simpa using heq
+      have hl : hd.snd = loc := by simpa using h
+      subst hv; subst hl; simp
+    · exact List.mem_cons_of_mem _ (ih h)
+
+-- ============================================================
+-- § 4b. Caller-save spec checker
+-- ============================================================
+
+/-- Boolean no-duplicates check for a list. -/
+private def listNodupBool [BEq α] : List α → Bool
+  | [] => true
+  | x :: rest => !rest.any (· == x) && listNodupBool rest
+
+private theorem listNodupBool_sound [DecidableEq α] {l : List α}
+    (h : listNodupBool l = true) : l.Nodup := by
+  induction l with
+  | nil => exact List.nodup_nil
+  | cons x rest ih =>
+    simp only [listNodupBool, Bool.and_eq_true, Bool.not_eq_true'] at h
+    obtain ⟨hNotIn, hRest⟩ := h
+    refine List.nodup_cons.mpr ⟨?_, ih hRest⟩
+    intro hMem
+    simp only [Bool.eq_false_iff] at hNotIn
+    exact hNotIn (List.any_eq_true.mpr ⟨x, hMem, by simp⟩)
+
+/-- Check all properties needed by `callerSave_composition` for
+    the entries produced by `genCallerSaveAll layout varMap`. -/
+private def checkCallerSaveSpec (layout : VarLayout) (varMap : List (Var × Nat)) : Bool :=
+  let entries := genCallerSaveAll layout varMap
+  -- hFresh: no save offset equals a stack layout offset
+  entries.all (fun e =>
+    layout.entries.all (fun (_, loc) =>
+      match loc with | .stack o => !(o == e.off) | _ => true)) &&
+  -- hNodup: save offsets pairwise distinct
+  listNodupBool (entries.map CallerSaveEntry.off) &&
+  -- hCoversIreg: every caller-saved ireg in layout has an entry
+  layout.entries.all (fun (_, loc) =>
+    match loc with
+    | .ireg r => !r.isCallerSaved ||
+        entries.any (fun e => match e with | .ireg ir _ => ir == r | _ => false)
+    | _ => true) &&
+  -- hCoversFreg: every caller-saved freg in layout has an entry
+  layout.entries.all (fun (_, loc) =>
+    match loc with
+    | .freg r => !r.isCallerSaved ||
+        entries.any (fun e => match e with | .freg fr _ => fr == r | _ => false)
+    | _ => true) &&
+  -- hUniqIreg: any two ireg entries with the same register have equal offsets
+  entries.all (fun e1 => entries.all (fun e2 =>
+    match e1, e2 with
+    | .ireg ir1 off1, .ireg ir2 off2 => !(ir1 == ir2) || (off1 == off2)
+    | _, _ => true)) &&
+  -- hUniqFreg: any two freg entries with the same register have equal offsets
+  entries.all (fun e1 => entries.all (fun e2 =>
+    match e1, e2 with
+    | .freg fr1 off1, .freg fr2 off2 => !(fr1 == fr2) || (off1 == off2)
+    | _, _ => true))
+
+/-- Soundness: if the caller-save check passes, all 6 properties hold. -/
+private theorem checkCallerSaveSpec_sound {layout : VarLayout} {varMap : List (Var × Nat)}
+    (h : checkCallerSaveSpec layout varMap = true) :
+    let entries := genCallerSaveAll layout varMap
+    -- hFresh
+    (∀ e ∈ entries, ∀ v, layout v ≠ some (.stack e.off)) ∧
+    -- hNodup
+    (entries.map CallerSaveEntry.off).Nodup ∧
+    -- hCoversIreg
+    (∀ v ir, layout v = some (.ireg ir) → ir.isCallerSaved = true →
+      ∃ off, CallerSaveEntry.ireg ir off ∈ entries) ∧
+    -- hCoversFreg
+    (∀ v fr, layout v = some (.freg fr) → fr.isCallerSaved = true →
+      ∃ off, CallerSaveEntry.freg fr off ∈ entries) ∧
+    -- hUniqIreg
+    (∀ ir off1 off2, CallerSaveEntry.ireg ir off1 ∈ entries →
+      CallerSaveEntry.ireg ir off2 ∈ entries → off1 = off2) ∧
+    -- hUniqFreg
+    (∀ fr off1 off2, CallerSaveEntry.freg fr off1 ∈ entries →
+      CallerSaveEntry.freg fr off2 ∈ entries → off1 = off2) := by
+  simp only [checkCallerSaveSpec, Bool.and_eq_true] at h
+  obtain ⟨⟨⟨⟨⟨hFreshB, hNodupB⟩, hCovIB⟩, hCovFB⟩, hUniqIB⟩, hUniqFB⟩ := h
+  have hNodupP := listNodupBool_sound hNodupB
+  refine ⟨?_, hNodupP, ?_, ?_, ?_, ?_⟩
+  · -- hFresh
+    intro e he v hContra
+    have := (List.all_eq_true.mp hFreshB) e he
+    have hAll := List.all_eq_true.mp this
+    have hMem := lookup_mem hContra
+    have := hAll ⟨v, .stack e.off⟩ hMem
+    simp at this
+  · -- hCoversIreg
+    intro v ir hLoc hCS
+    have hMem := lookup_mem hLoc
+    have := (List.all_eq_true.mp hCovIB) ⟨v, .ireg ir⟩ hMem
+    simp only [hCS, Bool.not_true, Bool.false_or] at this
+    rw [List.any_eq_true] at this
+    obtain ⟨e, heMem, heEq⟩ := this
+    match e, heEq with
+    | .ireg ir' off, heq =>
+      simp at heq; exact ⟨off, heq ▸ heMem⟩
+    | .freg _ _, heq => simp at heq
+  · -- hCoversFreg
+    intro v fr hLoc hCS
+    have hMem := lookup_mem hLoc
+    have := (List.all_eq_true.mp hCovFB) ⟨v, .freg fr⟩ hMem
+    simp only [hCS, Bool.not_true, Bool.false_or] at this
+    rw [List.any_eq_true] at this
+    obtain ⟨e, heMem, heEq⟩ := this
+    match e, heEq with
+    | .freg fr' off, heq =>
+      simp at heq; exact ⟨off, heq ▸ heMem⟩
+    | .ireg _ _, heq => simp at heq
+  · -- hUniqIreg: pairwise check → same reg means same offset
+    intro ir off1 off2 h1 h2
+    have h1' := (List.all_eq_true.mp hUniqIB) (.ireg ir off1) h1
+    have h2' := (List.all_eq_true.mp h1') (.ireg ir off2) h2
+    simp at h2'; exact h2'
+  · -- hUniqFreg: pairwise check → same reg means same offset
+    intro fr off1 off2 h1 h2
+    have h1' := (List.all_eq_true.mp hUniqFB) (.freg fr off1) h1
+    have h2' := (List.all_eq_true.mp h1') (.freg fr off2) h2
+    simp at h2'; exact h2'
 
 -- ============================================================
 -- § 5. Program codegen
@@ -683,7 +828,8 @@ private def bodyGenStep (code : Array TAC) (layout : VarLayout) (pcMap : Nat →
     | some armInstrs =>
       let armInstrs' :=
         if isLibCallTAC instr then
-          let entries := genCallerSaveAll layout varMap
+          -- Exclude destination: restoring it would overwrite the computation result
+          let entries := callerSaveEntries layout varMap (DAEOpt.instrDef instr)
           entriesToSaves entries ++ armInstrs ++ entriesToRestores entries
         else armInstrs
       some (arr.push armInstrs')
@@ -701,6 +847,10 @@ def verifiedGenerateAsm (p : Prog) : Except String VerifiedAsmResult := do
     match checkWellTypedLayout p.tyCtx layout p.code with
     | some err => .error s!"well-typed layout check failed: {err}"
     | none =>
+    -- Check caller-save spec (callerSave_composition hypotheses)
+    if !checkCallerSaveSpec layout varMap then
+      .error "caller-save spec check failed"
+    else
     -- Check branch targets in bounds (hPC_bound on successors)
     match checkBranchTargets p.code with
     | some err => .error s!"branch target check failed: {err}"
@@ -822,21 +972,19 @@ structure GenAsmSpec (p : Prog) (r : VerifiedAsmResult) : Prop where
         entriesToSaves (genCallerSaveAll r.layout r.varMap) ++
         [ArmInstr.printCall lines] ++
         entriesToRestores (genCallerSaveAll r.layout r.varMap)
-
-/-- If lookup returns some, the key-value pair is in the list. -/
-private theorem lookup_mem {v : String} {loc : VarLoc}
-    {entries : List (String × VarLoc)}
-    (h : entries.lookup v = some loc) : (v, loc) ∈ entries := by
-  induction entries with
-  | nil => simp [List.lookup] at h
-  | cons hd tl ih =>
-    simp only [List.lookup] at h
-    split at h
-    · rename_i heq
-      have hv : v = hd.fst := by simpa using heq
-      have hl : hd.snd = loc := by simpa using h
-      subst hv; subst hl; simp
-    · exact List.mem_cons_of_mem _ (ih h)
+  /-- The entries from genCallerSaveAll satisfy all callerSave_composition hypotheses. -/
+  callerSaveSpec :
+    let entries := genCallerSaveAll r.layout r.varMap
+    (∀ e ∈ entries, ∀ v, r.layout v ≠ some (.stack e.off)) ∧
+    (entries.map CallerSaveEntry.off).Nodup ∧
+    (∀ v ir, r.layout v = some (.ireg ir) → ir.isCallerSaved = true →
+      ∃ off, CallerSaveEntry.ireg ir off ∈ entries) ∧
+    (∀ v fr, r.layout v = some (.freg fr) → fr.isCallerSaved = true →
+      ∃ off, CallerSaveEntry.freg fr off ∈ entries) ∧
+    (∀ ir off1 off2, CallerSaveEntry.ireg ir off1 ∈ entries →
+      CallerSaveEntry.ireg ir off2 ∈ entries → off1 = off2) ∧
+    (∀ fr off1 off2, CallerSaveEntry.freg fr off1 ∈ entries →
+      CallerSaveEntry.freg fr off2 ∈ entries → off1 = off2)
 
 /-- checkWellTypedLayout returning none implies WellTypedLayout (type consistency). -/
 private theorem checkWellTypedLayout_wellTyped {Γ : TyCtx} {layout : VarLayout}
@@ -1079,7 +1227,7 @@ private theorem instrLength_eq_length {layout : VarLayout} {pcMap : Nat → Nat}
     (h : verifiedGenInstr layout pcMap instr haltS divS boundsS arrayDecls safe = some instrs) :
     instrLength layout arrayDecls safe instr haltS divS boundsS varMap =
       (if isLibCallTAC instr then
-        let entries := genCallerSaveAll layout varMap
+        let entries := callerSaveEntries layout varMap (DAEOpt.instrDef instr)
         (entriesToSaves entries ++ instrs ++ entriesToRestores entries).length
       else instrs.length) := by
   -- Print case: verifiedGenInstr returns none, contradicting h
@@ -1118,7 +1266,7 @@ private theorem instrLength_eq_length {layout : VarLayout} {pcMap : Nat → Nat}
     simp only [instrLength, isLibCallTAC, verifiedGenInstr] at *
     split at h <;> simp_all
   | fbinop x fop y z =>
-    simp only [instrLength, isLibCallTAC, callSaveRestoreLen]
+    simp only [instrLength, isLibCallTAC, callSaveRestoreLen, callerSaveEntries, DAEOpt.instrDef]
     generalize hd : verifiedGenInstr layout (fun _ => 0)
       (.fbinop x fop y z) haltS divS boundsS arrayDecls safe = dr
     cases dr with
@@ -1128,7 +1276,7 @@ private theorem instrLength_eq_length {layout : VarLayout} {pcMap : Nat → Nat}
     | some dl =>
       have hLen := verifiedGenInstr_length_pcMap_ind layout (.fbinop x fop y z) haltS divS boundsS
           arrayDecls safe _ pcMap dl instrs hd h
-      simp only [hLen, List.length_append]
+      simp only [hLen, List.length_append, entriesToSaves_length, entriesToRestores_length]
       cases fop <;> simp_all [Nat.add_comm] <;> omega
   | intToFloat x y =>
     simp only [instrLength, isLibCallTAC, verifiedGenInstr] at *
@@ -1137,7 +1285,7 @@ private theorem instrLength_eq_length {layout : VarLayout} {pcMap : Nat → Nat}
     simp only [instrLength, isLibCallTAC, verifiedGenInstr] at *
     split at h <;> simp_all
   | floatUnary x op y =>
-    simp only [instrLength, isLibCallTAC, callSaveRestoreLen]
+    simp only [instrLength, isLibCallTAC, callSaveRestoreLen, callerSaveEntries, DAEOpt.instrDef]
     generalize hd : verifiedGenInstr layout (fun _ => 0)
       (.floatUnary x op y) haltS divS boundsS arrayDecls safe = dr
     cases dr with
@@ -1147,7 +1295,7 @@ private theorem instrLength_eq_length {layout : VarLayout} {pcMap : Nat → Nat}
     | some dl =>
       have hLen := verifiedGenInstr_length_pcMap_ind layout (.floatUnary x op y) haltS divS boundsS
           arrayDecls safe _ pcMap dl instrs hd h
-      simp only [hLen, List.length_append]
+      simp only [hLen, List.length_append, entriesToSaves_length, entriesToRestores_length]
       cases op.isNative <;> simp_all [Nat.add_comm] <;> omega
   | fternop x op a b c =>
     simp only [instrLength, isLibCallTAC, verifiedGenInstr] at *
@@ -1181,7 +1329,7 @@ private theorem bodyGenStep_length {code : Array TAC} {layout : VarLayout}
     · -- isPrint = true
       have heqI : code[pc] = TAC.print fmt vs := heq
       have := Array.push_inj (Option.some.inj hStep); subst this
-      simp_all [instrLength, callSaveRestoreLen, List.length_append]; omega
+      simp_all [instrLength, callSaveRestoreLen, callerSaveEntries, List.length_append]; omega
     · -- isPrint = false for .print: contradiction
       rename_i h; exact absurd rfl h
   · -- non-.print match
@@ -1200,7 +1348,8 @@ private theorem bodyGenStep_length {code : Array TAC} {layout : VarLayout}
         · -- lib-call case
           rename_i hLib
           have hInstrs := Array.push_inj (Option.some.inj hStep)
-          simp only [hLib, ite_true]; rw [← hInstrs]; simp [List.length_append]
+          simp only [hLib, ite_true]; rw [← hInstrs]
+          simp [List.length_append, entriesToSaves_length, entriesToRestores_length]
         · -- non-lib-call case
           rename_i hNotLib
           have hInstrs := Array.push_inj (Option.some.inj hStep)
@@ -1218,136 +1367,147 @@ theorem verifiedGenerateAsm_spec {p : Prog} {r : VerifiedAsmResult}
   split at hGen
   · simp_all
   · -- none case — continue
-    -- checkBranchTargets
+    -- checkCallerSaveSpec
     split at hGen
     · simp_all
-    · -- none case — continue to bodyResult
+    · -- !checkCallerSaveSpec = false, i.e. checkCallerSaveSpec = true
+      rename_i hWTL hCSS
+      replace hCSS : checkCallerSaveSpec
+          (buildVarLayout (collectVars p) (buildVarMap (collectVars p)))
+          (buildVarMap (collectVars p)) = true := by
+        revert hCSS; simp [Bool.not_eq_true]
+      -- checkBranchTargets
       split at hGen
       · simp_all
-      · -- some bodyPerPC
-        -- Extract r = constructed record
-        simp only [Except.ok.injEq] at hGen; subst r
-        rename_i bodyPerPC heqFold
-        -- Foldl properties: Lean unifies F from heqFold
-        have hBSz : bodyPerPC.size = p.code.size := by
-          apply foldl_push_size _ _ heqFold
-          · intro; rfl
-          · intro arr pc; exact bodyGenStep_push _ _ _ _ _ _ _ _ _ _ _ arr pc
-        refine ⟨
-          checkWellTypedProg_sound ‹_›,
-          checkWellTypedLayout_wellTyped ‹_›,
-          by simp [Prog.size_eq]; exact hBSz,
-          ?instrGen, ?pcMapLengths, ?layoutComplete, ?callSiteSaveRestore,
-          ?printSaveRestore⟩
-        case instrGen =>
-          intro pc hpc hNotLib hNotPrint
-          have hpcB : pc < bodyPerPC.size := by rw [hBSz]; simp [Prog.size_eq] at hpc; exact hpc
-          have hpcCode : pc < p.code.size := by simp [Prog.size_eq] at hpc; exact hpc
-          -- Get foldl content
-          have hContent := by
-            apply foldl_push_content _ _ heqFold pc hpcB
+      · -- none case — continue to bodyResult
+        split at hGen
+        · simp_all
+        · -- some bodyPerPC
+          -- Extract r = constructed record
+          simp only [Except.ok.injEq] at hGen; subst r
+          rename_i bodyPerPC heqFold
+          -- Foldl properties: Lean unifies F from heqFold
+          have hBSz : bodyPerPC.size = p.code.size := by
+            apply foldl_push_size _ _ heqFold
             · intro; rfl
             · intro arr pc; exact bodyGenStep_push _ _ _ _ _ _ _ _ _ _ _ arr pc
-          obtain ⟨mid, _, hStep⟩ := hContent
-          -- Unfold bodyGenStep; simplify getD to getElem
-          simp only [bodyGenStep, Array.getD, show pc < p.code.size from hpcCode,
-            dite_true] at hStep
-          -- Case split on isPrint match, then if isPrint
-          split at hStep <;> split at hStep
-          · -- print, isTrue: contradicts hNotPrint
-            simp_all
-          · -- print, isFalse: contradicts (isPrint was true)
-            simp_all
-          · -- non-print, isTrue: false=true, absurd
-            simp_all
-          · -- non-print, isFalse: the real case
-            simp at hStep
-            -- Split on verifiedGenInstr
-            split at hStep
-            · simp at hStep
-            · -- some armInstrs
-              rename_i armInstrs hGenInstr
-              -- isLibCallTAC is false (via hNotLib)
-              have : isLibCallTAC p.code[pc] = false := hNotLib
-              rw [this] at hStep; simp at hStep
-              exact ⟨_, (Array.push_inj hStep) ▸ hGenInstr⟩
-        case pcMapLengths =>
-          -- Witness: the inline lengthsArr from codegen; pcMap = buildPcMap _ is rfl
-          refine ⟨_, ?_, rfl, ?_⟩
-          · -- size: lengthsArr.size = bodyPerPC.size (both = p.code.size)
-            simp [List.length_map, List.length_range, hBSz]
-          · -- element equality: lengthsArr[i] = bodyPerPC[i].length
-            intro i hL hB
-            -- lengthsArr[i] = instrLength at pc i
-            -- bodyPerPC[i].length = instrLength at pc i (by bodyGenStep_length)
-            have hpcCode : i < p.code.size := by rw [← hBSz]; exact hB
+          refine ⟨
+            checkWellTypedProg_sound ‹_›,
+            checkWellTypedLayout_wellTyped ‹_›,
+            by simp [Prog.size_eq]; exact hBSz,
+            ?instrGen, ?pcMapLengths, ?layoutComplete, ?callSiteSaveRestore,
+            ?printSaveRestore, ?callerSaveSpec⟩
+          case instrGen =>
+            intro pc hpc hNotLib hNotPrint
+            have hpcB : pc < bodyPerPC.size := by rw [hBSz]; simp [Prog.size_eq] at hpc; exact hpc
+            have hpcCode : pc < p.code.size := by simp [Prog.size_eq] at hpc; exact hpc
+            -- Get foldl content
             have hContent := by
-              apply foldl_push_content _ _ heqFold i hB
+              apply foldl_push_content _ _ heqFold pc hpcB
               · intro; rfl
               · intro arr pc; exact bodyGenStep_push _ _ _ _ _ _ _ _ _ _ _ arr pc
             obtain ⟨mid, _, hStep⟩ := hContent
-            rw [bodyGenStep_length hStep hpcCode]
-            -- Now: instrLength ... = instrLength ... (should be rfl or simp)
-            simp [List.getElem_toArray, List.getElem_map]
-        case layoutComplete =>
-          intro pc hpc v hv
-          exact checkWellTypedLayout_instrMapped ‹_› (by simp [Prog.size_eq] at hpc; exact hpc) hv
-        case callSiteSaveRestore =>
-          intro pc hpc hLib
-          have hpcB : pc < bodyPerPC.size := by rw [hBSz]; simp [Prog.size_eq] at hpc; exact hpc
-          have hpcCode : pc < p.code.size := by simp [Prog.size_eq] at hpc; exact hpc
-          have hContent := by
-            apply foldl_push_content _ _ heqFold pc hpcB
-            · intro; rfl
-            · intro arr pc; exact bodyGenStep_push _ _ _ _ _ _ _ _ _ _ _ arr pc
-          obtain ⟨mid, _, hStep⟩ := hContent
-          simp only [bodyGenStep, Array.getD, show pc < p.code.size from hpcCode,
-            dite_true] at hStep
-          -- Not a print (lib-call TACs are floatUnary/fpow, not print)
-          split at hStep <;> split at hStep
-          · -- print, isTrue: print is not a lib-call
-            simp_all [isLibCallTAC]
-          · simp_all  -- print, isFalse
-          · simp_all  -- non-print, isTrue
-          · -- non-print, isFalse: the real case
-            simp at hStep
-            split at hStep
-            · simp at hStep  -- verifiedGenInstr = none: contradiction
-            · rename_i armInstrs hGenInstr
-              -- isLibCallTAC is true
-              rw [show isLibCallTAC p.code[pc] = true from hLib] at hStep
-              simp only [ite_true] at hStep
+            -- Unfold bodyGenStep; simplify getD to getElem
+            simp only [bodyGenStep, Array.getD, show pc < p.code.size from hpcCode,
+              dite_true] at hStep
+            -- Case split on isPrint match, then if isPrint
+            split at hStep <;> split at hStep
+            · -- print, isTrue: contradicts hNotPrint
+              simp_all
+            · -- print, isFalse: contradicts (isPrint was true)
+              simp_all
+            · -- non-print, isTrue: false=true, absurd
+              simp_all
+            · -- non-print, isFalse: the real case
+              simp at hStep
+              -- Split on verifiedGenInstr
+              split at hStep
+              · simp at hStep
+              · -- some armInstrs
+                rename_i armInstrs hGenInstr
+                -- isLibCallTAC is false (via hNotLib)
+                have : isLibCallTAC p.code[pc] = false := hNotLib
+                rw [this] at hStep; simp at hStep
+                exact ⟨_, (Array.push_inj hStep) ▸ hGenInstr⟩
+          case pcMapLengths =>
+            -- Witness: the inline lengthsArr from codegen; pcMap = buildPcMap _ is rfl
+            refine ⟨_, ?_, rfl, ?_⟩
+            · -- size: lengthsArr.size = bodyPerPC.size (both = p.code.size)
+              simp [List.length_map, List.length_range, hBSz]
+            · -- element equality: lengthsArr[i] = bodyPerPC[i].length
+              intro i hL hB
+              -- lengthsArr[i] = instrLength at pc i
+              -- bodyPerPC[i].length = instrLength at pc i (by bodyGenStep_length)
+              have hpcCode : i < p.code.size := by rw [← hBSz]; exact hB
+              have hContent := by
+                apply foldl_push_content _ _ heqFold i hB
+                · intro; rfl
+                · intro arr pc; exact bodyGenStep_push _ _ _ _ _ _ _ _ _ _ _ arr pc
+              obtain ⟨mid, _, hStep⟩ := hContent
+              rw [bodyGenStep_length hStep hpcCode]
+              -- Now: instrLength ... = instrLength ... (should be rfl or simp)
+              simp [List.getElem_toArray, List.getElem_map]
+          case layoutComplete =>
+            intro pc hpc v hv
+            exact checkWellTypedLayout_instrMapped ‹_› (by simp [Prog.size_eq] at hpc; exact hpc) hv
+          case callSiteSaveRestore =>
+            intro pc hpc hLib
+            have hpcB : pc < bodyPerPC.size := by rw [hBSz]; simp [Prog.size_eq] at hpc; exact hpc
+            have hpcCode : pc < p.code.size := by simp [Prog.size_eq] at hpc; exact hpc
+            have hContent := by
+              apply foldl_push_content _ _ heqFold pc hpcB
+              · intro; rfl
+              · intro arr pc; exact bodyGenStep_push _ _ _ _ _ _ _ _ _ _ _ arr pc
+            obtain ⟨mid, _, hStep⟩ := hContent
+            simp only [bodyGenStep, Array.getD, show pc < p.code.size from hpcCode,
+              dite_true] at hStep
+            -- Not a print (lib-call TACs are floatUnary/fpow, not print)
+            split at hStep <;> split at hStep
+            · -- print, isTrue: print is not a lib-call
+              simp_all [isLibCallTAC]
+            · simp_all  -- print, isFalse
+            · simp_all  -- non-print, isTrue
+            · -- non-print, isFalse: the real case
+              simp at hStep
+              split at hStep
+              · simp at hStep  -- verifiedGenInstr = none: contradiction
+              · rename_i armInstrs hGenInstr
+                -- isLibCallTAC is true
+                rw [show isLibCallTAC p.code[pc] = true from hLib] at hStep
+                simp only [ite_true] at hStep
+                have hEq := (Array.push_inj (Option.some.inj hStep)).symm
+                rw [← List.append_assoc] at hEq
+                exact ⟨armInstrs, _, _, hGenInstr, hEq⟩
+          case printSaveRestore =>
+            intro pc hpc ⟨fmt, vs, hPrint⟩
+            have hpcB : pc < bodyPerPC.size := by rw [hBSz]; simp [Prog.size_eq] at hpc; exact hpc
+            have hpcCode : pc < p.code.size := by simp [Prog.size_eq] at hpc; exact hpc
+            have hContent := by
+              apply foldl_push_content _ _ heqFold pc hpcB
+              · intro; rfl
+              · intro arr pc; exact bodyGenStep_push _ _ _ _ _ _ _ _ _ _ _ arr pc
+            obtain ⟨mid, _, hStep⟩ := hContent
+            simp only [bodyGenStep, Array.getD, show pc < p.code.size from hpcCode,
+              dite_true] at hStep
+            -- Print case: isPrint = true
+            split at hStep <;> split at hStep
+            · -- print, isTrue: extract entriesToSaves ++ [printCall] ++ entriesToRestores
               have hEq := (Array.push_inj (Option.some.inj hStep)).symm
-              rw [← List.append_assoc] at hEq
-              exact ⟨armInstrs, _, _, hGenInstr, hEq⟩
-        case printSaveRestore =>
-          intro pc hpc ⟨fmt, vs, hPrint⟩
-          have hpcB : pc < bodyPerPC.size := by rw [hBSz]; simp [Prog.size_eq] at hpc; exact hpc
-          have hpcCode : pc < p.code.size := by simp [Prog.size_eq] at hpc; exact hpc
-          have hContent := by
-            apply foldl_push_content _ _ heqFold pc hpcB
-            · intro; rfl
-            · intro arr pc; exact bodyGenStep_push _ _ _ _ _ _ _ _ _ _ _ arr pc
-          obtain ⟨mid, _, hStep⟩ := hContent
-          simp only [bodyGenStep, Array.getD, show pc < p.code.size from hpcCode,
-            dite_true] at hStep
-          -- Print case: isPrint = true
-          split at hStep <;> split at hStep
-          · -- print, isTrue: extract entriesToSaves ++ [printCall] ++ entriesToRestores
-            have hEq := (Array.push_inj (Option.some.inj hStep)).symm
-            exact ⟨_, hEq⟩
-          · -- print, isFalse: contradiction
-            rename_i h; exact absurd rfl h
-          · -- non-print, isTrue: contradiction (p[pc] is .print)
-            rename_i heq h
-            have hPE : p[pc] = TAC.print fmt vs := hPrint
-            simp [Prog.getElem_eq] at hPE
-            simp_all
-          · -- non-print, isFalse
-            rename_i heq h
-            have hPE : p[pc] = TAC.print fmt vs := hPrint
-            simp [Prog.getElem_eq] at hPE
-            simp_all
+              exact ⟨_, hEq⟩
+            · -- print, isFalse: contradiction
+              rename_i h; exact absurd rfl h
+            · -- non-print, isTrue: contradiction (p[pc] is .print)
+              rename_i heq h
+              have hPE : p[pc] = TAC.print fmt vs := hPrint
+              simp [Prog.getElem_eq] at hPE
+              simp_all
+            · -- non-print, isFalse
+              rename_i heq h
+              have hPE : p[pc] = TAC.print fmt vs := hPrint
+              simp [Prog.getElem_eq] at hPE
+              simp_all
+          case callerSaveSpec =>
+            exact checkCallerSaveSpec_sound hCSS
 
 
 -- ──────────────────────────────────────────────────────────────
@@ -1580,7 +1740,18 @@ private theorem step_simulation {p : Prog} {r : VerifiedAsmResult}
           ExtSimRel r.layout r.pcMap cfg' s' := by
   -- Case split: lib-call, print, or normal instruction
   by_cases hLib : isLibCallTAC p[pc] = true
-  · -- Lib-call case (floatUnary non-native, fpow): needs save/restore reasoning
+  · -- Lib-call case (floatUnary non-native, fpow): save/restore around computation.
+    -- bodyPerPC = saves ++ baseInstrs ++ restores where:
+    --   entries = callerSaveEntries layout varMap (instrDef p[pc])  (excludes dst)
+    --   saves = entriesToSaves entries, restores = entriesToRestores entries
+    --   baseInstrs from verifiedGenInstr (load, compute+havoc, store)
+    -- Proof outline:
+    --   1. armSteps_saves on filtered entries
+    --   2. ArmSteps for baseInstrs (floatUnaryLibCall/callBinF + vLoad/vStore)
+    --   3. armSteps_restores on filtered entries
+    --   4. For ExtStateRel(σ', s_final): non-dst caller-saved vars restored from
+    --      stack, dst var has result from base instrs (not overwritten by restore).
+    --      Needs a callerSave_composition variant that handles σ → σ' with dst excluded.
     sorry
   · by_cases hPrint : ∃ fmt vs, p[pc] = .print fmt vs
     · -- Print case: save/restore around printCall (havoc)
@@ -1660,22 +1831,14 @@ private theorem step_simulation {p : Prog} {r : VerifiedAsmResult}
         -- transfer to s_final via pc-independence.
         -- First, get the logical result
         let s_havoc := (applyCallerSaves entries s).havocCallerSaved newRegs newFregs
+        -- Destructure callerSaveSpec
+        obtain ⟨hFresh, hNodup, hCoversIreg, hCoversFreg, hUniqIreg, hUniqFreg⟩ :=
+          spec.callerSaveSpec
         have hCSC := @ExtStateRel.callerSave_composition _ _ _
           hStateRel entries newRegs newFregs
-          (sorry : ∀ e ∈ entries, ∀ v, r.layout v ≠ some (.stack e.off))       -- hFresh
-          (sorry : (entries.map CallerSaveEntry.off).Nodup)                      -- hNodup
-          (sorry : ∀ v ir, r.layout v = some (.ireg ir) → ir.isCallerSaved = true →
-            ∃ off, CallerSaveEntry.ireg ir off ∈ entries)                          -- hCoversIreg
-          (sorry : ∀ v fr, r.layout v = some (.freg fr) → fr.isCallerSaved = true →
-            ∃ off, CallerSaveEntry.freg fr off ∈ entries)                          -- hCoversFreg
-          (sorry : ∀ ir off1 off2, CallerSaveEntry.ireg ir off1 ∈ entries →
-            CallerSaveEntry.ireg ir off2 ∈ entries → off1 = off2)                  -- hUniqIreg
-          (sorry : ∀ fr off1 off2, CallerSaveEntry.freg fr off1 ∈ entries →
-            CallerSaveEntry.freg fr off2 ∈ entries → off1 = off2)                  -- hUniqFreg
-          (sorry : ∀ ir off, CallerSaveEntry.ireg ir off ∈ entries →
-            ir.isCallerSaved = true)                                               -- hAllCSIreg
-          (sorry : ∀ fr off, CallerSaveEntry.freg fr off ∈ entries →
-            fr.isCallerSaved = true)                                               -- hAllCSFreg
+          hFresh hNodup hCoversIreg hCoversFreg hUniqIreg hUniqFreg
+          (fun ir off h => genCallerSaveAll_allCS_ireg h)
+          (fun fr off h => genCallerSaveAll_allCS_freg h)
         -- hCSC : ExtStateRel layout σ (applyCallerRestores entries s_havoc)
         -- s_final = {applyCallerRestores entries s_mid with pc := ...}
         -- s_mid = {s_havoc with pc := ...}

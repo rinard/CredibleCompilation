@@ -4,6 +4,24 @@ Chronological record of what was built and why, to reconstruct the sequence of d
 
 ---
 
+## Discharge print case sorrys, fix lib-call save/restore (2026-04-17)
+
+**Goal:** Close the 8 `callerSave_composition` hypothesis sorrys in the print case of `step_simulation`, and fix a soundness bug in lib-call save/restore codegen.
+
+**Print case (8 sorrys → 0):**
+- Added `genCallerSaveAll_allCS_ireg`/`_freg` lemmas in ArmSemantics.lean (direct from filterMap definition)
+- Added `checkCallerSaveSpec` runtime checker + `checkCallerSaveSpec_sound` soundness proof: boolean checks for hFresh, hNodup, hCoversIreg/Freg, hUniqIreg/Freg with O(n²) pairwise validation
+- Added `callerSaveSpec` field to `GenAsmSpec`, proved in `verifiedGenerateAsm_spec` via the checker
+- Print case now uses `spec.callerSaveSpec` destructuring + standalone allCS lemmas
+
+**Lib-call codegen fix:**
+- **Bug:** `genCallerSaveAll` saved/restored ALL caller-saved regs including the destination. For `x := exp(y)` where x is in a caller-saved freg, the restore would overwrite the computation result with the old saved value.
+- **Fix:** Added `callerSaveEntries` helper that filters `genCallerSaveAll` to exclude `DAEOpt.instrDef instr` (the destination variable's register). Updated `bodyGenStep`, `instrLength`, `callSaveRestoreLen`, and `instrLength_eq_length` proof.
+
+**Result:** 8 print sorrys eliminated. Lib-call codegen now correct (1 sorry remains for the lib-call proof, which needs a callerSave_composition variant handling σ → σ' with dst excluded).
+
+---
+
 ## Effective registers for cmp/fcmp ifgoto codegen (2026-04-16)
 
 **Goal:** Use allocated registers directly in cmp/fcmp branch-fused ifgoto code instead of always copying to scratch registers (x1/x2 for int, d1/d2 for float).
