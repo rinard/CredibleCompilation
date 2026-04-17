@@ -131,12 +131,14 @@ private def ppFReg : ArmFReg → String
 
 private def ppCond : Cond → String
   | .eq => "eq" | .ne => "ne" | .lt => "lt" | .le => "le" | .gt => "gt" | .ge => "ge"
+  | .hs => "hs" | .lo => "lo"
 
 /-- Map float-comparison condition codes to ARM64 mnemonics.
     After `fcmp`, ARM64 uses `mi` (minus) for less-than and `ls` (lower or same)
     for less-or-equal, unlike integer `cmp` which uses `lt`/`le`. -/
 private def ppCondFloat : Cond → String
   | .eq => "eq" | .ne => "ne" | .lt => "mi" | .le => "ls" | .gt => "gt" | .ge => "ge"
+  | .hs => "hs" | .lo => "lo"
 
 /-- Resolve a branch target (Nat) to a label string.
     Sentinel values map to special labels; others are reverse-mapped from

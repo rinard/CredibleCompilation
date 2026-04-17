@@ -870,24 +870,31 @@ def verifiedGenInstr (layout : VarLayout) (pcMap : Nat → Nat) (instr : TAC)
     | _ => some (verifiedGenBoolExpr layout be ++ [.cbnz .x0 (pcMap l)])
   | .halt => some [.b haltLabel]
   | .arrLoad x arr idx ty =>
-    let loadIdx := vLoadVar layout idx .x1
+    let idx_reg := match layout idx with | some (.ireg r) => r | _ => .x1
+    let loadIdx := vLoadVar layout idx idx_reg
     let boundsCheck := if boundsSafe then [] else
-      [.cmpImm .x1 (arraySizeBv arrayDecls arr), .bCond .ge boundsLabel]
+      [.cmpImm idx_reg (arraySizeBv arrayDecls arr), .bCond .hs boundsLabel]
     match ty with
     | .float =>
       let dst_reg := match layout x with | some (.freg r) => r | _ => .d0
-      some (loadIdx ++ boundsCheck ++ [.farrLd dst_reg arr .x1] ++ vStoreVarFP layout x dst_reg)
-    | .bool  => some (loadIdx ++ boundsCheck ++ [.arrLd .x0 arr .x1, .cmpImm .x0 0, .cset .x0 .ne] ++ vStoreVar layout x .x0)
-    | .int   => some (loadIdx ++ boundsCheck ++ [.arrLd .x0 arr .x1] ++ vStoreVar layout x .x0)
+      some (loadIdx ++ boundsCheck ++ [.farrLd dst_reg arr idx_reg] ++ vStoreVarFP layout x dst_reg)
+    | .bool  =>
+      let dst_reg := match layout x with | some (.ireg r) => r | _ => .x0
+      some (loadIdx ++ boundsCheck ++ [.arrLd dst_reg arr idx_reg, .cmpImm dst_reg 0, .cset dst_reg .ne] ++ vStoreVar layout x dst_reg)
+    | .int   =>
+      let dst_reg := match layout x with | some (.ireg r) => r | _ => .x0
+      some (loadIdx ++ boundsCheck ++ [.arrLd dst_reg arr idx_reg] ++ vStoreVar layout x dst_reg)
   | .arrStore arr idx val ty =>
-    let loadIdx := vLoadVar layout idx .x1
+    let idx_reg := match layout idx with | some (.ireg r) => r | _ => .x1
+    let loadIdx := vLoadVar layout idx idx_reg
     let boundsCheck := if boundsSafe then [] else
-      [.cmpImm .x1 (arraySizeBv arrayDecls arr), .bCond .ge boundsLabel]
+      [.cmpImm idx_reg (arraySizeBv arrayDecls arr), .bCond .hs boundsLabel]
     if ty == .float then
       let val_reg := match layout val with | some (.freg r) => r | _ => .d0
-      some (loadIdx ++ boundsCheck ++ vLoadVarFP layout val val_reg ++ [.farrSt arr .x1 val_reg])
+      some (loadIdx ++ boundsCheck ++ vLoadVarFP layout val val_reg ++ [.farrSt arr idx_reg val_reg])
     else
-      some (loadIdx ++ boundsCheck ++ vLoadVar layout val .x2 ++ [.arrSt arr .x1 .x2])
+      let val_reg := match layout val with | some (.ireg r) => r | _ => .x2
+      some (loadIdx ++ boundsCheck ++ vLoadVar layout val val_reg ++ [.arrSt arr idx_reg val_reg])
   | .fbinop dst fop lv rv =>
     match layout lv, layout rv, layout dst with
     | some (.ireg _), _, _ => none

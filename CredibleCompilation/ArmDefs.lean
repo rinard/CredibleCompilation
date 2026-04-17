@@ -79,7 +79,7 @@ def ArmFReg.toNat : ArmFReg → Nat
 
 /-- ARM64 condition codes used by the code generator. -/
 inductive Cond where
-  | eq | ne | lt | le | gt | ge
+  | eq | ne | lt | le | gt | ge | hs | lo
   deriving Repr, DecidableEq
 
 /-- Condition flags set by `cmp`. We store both operands so that
@@ -103,16 +103,21 @@ def Flags.condHolds (f : Flags) : Cond → Bool
   | .le => BitVec.sle f.lhs f.rhs
   | .gt => BitVec.slt f.rhs f.lhs
   | .ge => BitVec.sle f.rhs f.lhs
+  | .hs => f.rhs ≤ f.lhs
+  | .lo => f.lhs < f.rhs
 
 /-- Negate a condition code: the result holds iff the original does not. -/
 def Cond.negate : Cond → Cond
   | .eq => .ne | .ne => .eq
   | .lt => .ge | .ge => .lt
   | .le => .gt | .gt => .le
+  | .hs => .lo | .lo => .hs
 
 theorem Cond.negate_correct (f : Flags) (c : Cond) :
     f.condHolds c.negate = !f.condHolds c := by
   cases c <;> simp [Cond.negate, Flags.condHolds, BitVec.sle_eq_not_slt, bne, BEq.beq]
+  · cases h : decide (f.lhs < f.rhs) <;> cases h2 : decide (f.rhs ≤ f.lhs) <;> simp_all <;> bv_omega
+  · cases h : decide (f.rhs ≤ f.lhs) <;> cases h2 : decide (f.lhs < f.rhs) <;> simp_all <;> bv_omega
 
 -- ============================================================
 -- § 3. Machine state
