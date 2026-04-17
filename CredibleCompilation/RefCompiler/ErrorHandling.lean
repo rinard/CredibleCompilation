@@ -513,8 +513,7 @@ theorem compileStmt_stuck (s : Stmt) (fuel : Nat) (σ σ' : Store) (am am' : Arr
   | skip => simp only [Stmt.safe] at hunsafe; exact absurd trivial hunsafe
   | label _ => simp only [Stmt.safe] at hunsafe; exact absurd trivial hunsafe
   | goto _ => simp only [Stmt.safe] at hunsafe; exact absurd trivial hunsafe
-  | printint _ => exact sorry  -- unverified: print not modeled in RefCompiler
-  | printfloat _ => exact sorry  -- unverified: print not modeled in RefCompiler
+  | print _ _ => exact sorry  -- unverified: print not modeled in RefCompiler
   | ifgoto b _ =>
     simp only [Stmt.safe] at hunsafe
     simp only [Stmt.interp] at hinterp
@@ -815,8 +814,7 @@ theorem compileStmt_unsafe (s : Stmt) (fuel : Nat) (σ : Store) (am : ArrayMem)
   | skip => simp only [Stmt.safe] at hunsafe; exact absurd trivial hunsafe
   | label _ => simp only [Stmt.safe] at hunsafe; exact absurd trivial hunsafe
   | goto _ => simp only [Stmt.safe] at hunsafe; exact absurd trivial hunsafe
-  | printint _ => exact sorry  -- unverified: print not modeled in RefCompiler
-  | printfloat _ => exact sorry  -- unverified: print not modeled in RefCompiler
+  | print _ _ => exact sorry  -- unverified: print not modeled in RefCompiler
   | ifgoto b _ =>
     simp only [Stmt.safe] at hunsafe
     simp only [Stmt.typedVars] at htypedv

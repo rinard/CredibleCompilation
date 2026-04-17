@@ -199,7 +199,7 @@ def successors (instr : TAC) (pc : Label) : List Label :=
   | .const _ _ | .copy _ _ | .binop _ _ _ _ | .boolop _ _ => [pc + 1]
   | .fbinop _ _ _ _ | .intToFloat _ _ | .floatToInt _ _ | .floatUnary _ _ _ | .fternop _ _ _ _ _ => [pc + 1]
   | .arrLoad _ _ _ _ | .arrStore _ _ _ _ => [pc + 1]
-  | .printInt _ | .printFloat _ => [pc + 1]
+  | .print _ _ => [pc + 1]
   | .goto l        => [l]
   | .ifgoto _ l    => [l, pc + 1]
   | .halt          => []
@@ -287,8 +287,7 @@ def collectAllVars (p1 p2 : Prog) : List Var :=
     | .fternop x _ a b c => [x, a, b, c]
     | .arrLoad x _ idx _ => [x, idx]
     | .arrStore _ idx val _ => [idx, val]
-    | .printInt v    => [v]
-    | .printFloat v  => [v]
+    | .print _ vs => vs
     | .ifgoto b _    => b.vars
     | _              => []
   let go (code : Array TAC) := code.toList.foldl (fun acc i => acc ++ extract i) ([] : List Var)
@@ -426,7 +425,7 @@ def buildInstrCerts1to1 (trans : Prog) (allVars : List Var) : Array EInstrCert :
     | some (.fbinop _ _ _ _) | some (.intToFloat _ _) | some (.floatToInt _ _) | some (.floatUnary _ _ _)
     | some (.fternop _ _ _ _ _)
     | some (.arrLoad _ _ _ _) | some (.arrStore _ _ _ _)
-    | some (.printInt _) | some (.printFloat _) =>
+    | some (.print _ _) =>
       { pc_orig := i, rel := idRel,
         transitions := [{ origLabels := [i + 1], rel := idRel, rel_next := idRel }] }
     | some (.goto l) =>
@@ -795,7 +794,7 @@ def computeNextPC (instr : TAC) (pc : Label) (ss : SymStore) (inv : EInv) : Opti
   | .const _ _ | .copy _ _ | .binop _ _ _ _ | .boolop _ _ => some (pc + 1)
   | .fbinop _ _ _ _ | .intToFloat _ _ | .floatToInt _ _ | .floatUnary _ _ _ | .fternop _ _ _ _ _ => some (pc + 1)
   | .arrLoad _ _ _ _ | .arrStore _ _ _ _ => some (pc + 1)
-  | .printInt _ | .printFloat _ => some (pc + 1)
+  | .print _ _ => some (pc + 1)
   | .goto l => some l
   | .ifgoto b l =>
     match b.symEval ss inv with

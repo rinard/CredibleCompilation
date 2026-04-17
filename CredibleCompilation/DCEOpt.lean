@@ -53,8 +53,7 @@ def transformInstr (prog : Prog) (revMap : Array Nat) (origPC : Nat) : TAC :=
   | some (.floatToInt x y) => .floatToInt x y
   | some (.floatUnary x op y) => .floatUnary x op y
   | some (.fternop x op a b c) => .fternop x op a b c
-  | some (.printInt v) => .printInt v
-  | some (.printFloat v) => .printFloat v
+  | some (.print fmt vs) => .print fmt vs
   | some .halt             => .halt
   | some (.goto l)         => .goto (revMap.getD l 0)
   | some (.ifgoto b l)     => .ifgoto b (revMap.getD l 0)
@@ -86,7 +85,7 @@ def buildInstrCerts (origMap : Array Nat) (trans : Prog) (allVars : List Var) : 
     | some (.arrLoad _ _ _ _) | some (.arrStore _ _ _ _)
     | some (.fbinop _ _ _ _) | some (.intToFloat _ _) | some (.floatToInt _ _) | some (.floatUnary _ _ _)
     | some (.fternop _ _ _ _ _)
-    | some (.printInt _) | some (.printFloat _) =>
+    | some (.print _ _) =>
       let nextOrigPC := origMap.getD (i + 1) 0
       { pc_orig := origPC, rel := idRel,
         transitions := [{ origLabels := (nextOrigPC :: []), rel := idRel, rel_next := idRel }] }

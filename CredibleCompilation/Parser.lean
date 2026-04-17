@@ -29,6 +29,7 @@ inductive Token where
   | ident  : String → Token
   | num    : Int → Token
   | fnum   : Float → Token
+  | str    : String → Token
   | kw     : String → Token
   | op     : String → Token
   | lparen | rparen | lbrace | rbrace | lbracket | rbracket | comma | semi | colon : Token
@@ -38,7 +39,7 @@ private def keywords : List String :=
   ["var", "array", "int", "bool", "float", "if", "else", "while", "skip", "true", "false",
    "intToFloat", "floatToInt", "exp", "sqrt", "sin", "cos", "tan",
    "log", "log2", "log10", "abs", "neg", "round", "pow", "fmin", "fmax", "goto",
-   "printint", "printfloat"]
+   "print"]
 
 private def spanDigits : List Char → List Char × List Char
   | c :: rest => if c.isDigit then let (d, r) := spanDigits rest; (c :: d, r) else ([], c :: rest)
@@ -49,6 +50,16 @@ private def spanAlphaNum : List Char → List Char × List Char
     if c.isAlphanum || c == '_' then let (d, r) := spanAlphaNum rest; (c :: d, r)
     else ([], c :: rest)
   | [] => ([], [])
+
+/-- Scan a string literal body (after opening `"`), handling escape sequences. -/
+private def scanStr : List Char → List Char → Except String (List Char × List Char)
+  | [], _ => .error "unterminated string literal"
+  | '"' :: rest, acc => .ok (acc.reverse, rest)
+  | '\\' :: 'n' :: rest, acc => scanStr rest ('\n' :: acc)
+  | '\\' :: 't' :: rest, acc => scanStr rest ('\t' :: acc)
+  | '\\' :: '\\' :: rest, acc => scanStr rest ('\\' :: acc)
+  | '\\' :: '"' :: rest, acc => scanStr rest ('"' :: acc)
+  | ch :: rest, acc => scanStr rest (ch :: acc)
 
 partial def tokenize (s : String) : Except String (List Token) :=
   go s.toList ([] : List Token)
@@ -119,6 +130,10 @@ where
         | _ =>
           let n := digits.foldl (fun acc d => acc * 10 + d.toNat - '0'.toNat) 0
           go rest' (.num (Int.ofNat n) :: acc)
+      else if c == '"' then
+        match scanStr rest ([] : List Char) with
+        | .error e => .error e
+        | .ok (chars, rest') => go rest' (.str (String.ofList chars) :: acc)
       else if c.isAlpha || c == '_' then
         let (chars, rest') := spanAlphaNum (c :: rest)
         let word := String.ofList chars
@@ -451,12 +466,10 @@ partial def parseStmtAtom (toks : List Token) : Except String (Stmt × List Toke
       | _ => .error "expected '}' after while body"
     | _ => .error "expected '{' after while condition"
   | Token.ident lbl :: Token.colon :: rest => .ok (.label lbl, rest)
-  | Token.kw "printint" :: rest => do
-    let (e, rest') ← parseExpr rest
-    .ok (.printint e, rest')
-  | Token.kw "printfloat" :: rest => do
-    let (e, rest') ← parseExpr rest
-    .ok (.printfloat e, rest')
+  | Token.kw "print" :: Token.str fmt :: rest => do
+    let (args, rest') ← parsePrintArgs rest ([] : List SExpr)
+    .ok (.print fmt args, rest')
+  | Token.kw "print" :: _ => .error "expected string literal after 'print'"
   | tok :: _ => .error s!"expected statement, got {repr tok}"
   | [] => .error "expected statement, got end of input"
 
@@ -471,6 +484,14 @@ partial def parseStmt' (lhs : Stmt) (toks : List Token) : Except String (Stmt ×
     let (rhs, rest') ← parseStmtAtom rest
     parseStmt' (.seq lhs rhs) rest'
   | _ => .ok (lhs, toks)
+
+/-- Parse comma-separated expressions for print arguments. -/
+partial def parsePrintArgs (toks : List Token) (acc : List SExpr) : Except String (List SExpr × List Token) :=
+  match toks with
+  | Token.comma :: rest => do
+    let (e, rest') ← parseExpr rest
+    parsePrintArgs rest' (acc ++ [e])
+  | _ => .ok (acc, toks)
 
 end
 
@@ -628,8 +649,7 @@ private partial def resolveStmt (lookupVar : Var → Option VarTy)
   | .label lbl => .label lbl
   | .goto lbl => .goto lbl
   | .ifgoto b lbl => .ifgoto (resolveSBool lookupVar lookupArr b) lbl
-  | .printint e => .printint (resolveSExpr lookupVar lookupArr e)
-  | .printfloat e => .printfloat (resolveSExpr lookupVar lookupArr e)
+  | .print fmt args => .print fmt (args.map (resolveSExpr lookupVar lookupArr))
 
 /-- Parse a string into a `Program`. -/
 def parseProgram (input : String) : Except String Program := do

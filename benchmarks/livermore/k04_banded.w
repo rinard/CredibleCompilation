@@ -42,4 +42,4 @@ while (rep <= 11250000) {
   };
   rep := rep + 1
 };
-printfloat x[7]
+print "%f\n", x[7]

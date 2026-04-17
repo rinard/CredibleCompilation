@@ -726,14 +726,9 @@ theorem execSymbolic_sound (ss : SymStore) (sam : SymArrayMem) (instr : TAC)
       rw [ha, hb, hc]
     · rw [ssGet_ssSet_other _ _ _ _ hvd, hrepr]
       exact (Store.update_other σ dest v _ hvd).symm
-  | printInt x =>
+  | print _ _ =>
     simp only [execSymbolic]
-    have := step_det _ (Step.printInt hinstr)
-    have hσ' : σ' = σ := (Cfg.run.inj this).2.1.symm
-    rw [hσ']; exact hrepr v
-  | printFloat x =>
-    simp only [execSymbolic]
-    have := step_det _ (Step.printFloat hinstr)
+    have := step_det _ (Step.print hinstr)
     have hσ' : σ' = σ := (Cfg.run.inj this).2.1.symm
     rw [hσ']; exact hrepr v
 
@@ -954,8 +949,7 @@ theorem step_run_instr {p : Prog} {pc pc' : Label} {σ σ' : Store} {am am' : Ar
   | intToFloat h _ => exact ⟨_, h⟩
   | floatToInt h _ => exact ⟨_, h⟩
   | floatUnary h _ => exact ⟨_, h⟩
-  | printInt h => exact ⟨_, h⟩
-  | printFloat h => exact ⟨_, h⟩
+  | print h => exact ⟨_, h⟩
 
 /-- A step target is always in the successors list. -/
 theorem step_successor {p : Prog} {pc pc' : Label} {σ σ' : Store} {am am' : ArrayMem}
@@ -979,8 +973,7 @@ theorem step_successor {p : Prog} {pc pc' : Label} {σ σ' : Store} {am am' : Ar
   | intToFloat h _ => have := instr_eq h; subst this; simp [successors]
   | floatToInt h _ => have := instr_eq h; subst this; simp [successors]
   | floatUnary h _ => have := instr_eq h; subst this; simp [successors]
-  | printInt h => have := instr_eq h; subst this; simp [successors]
-  | printFloat h => have := instr_eq h; subst this; simp [successors]
+  | print h => have := instr_eq h; subst this; simp [successors]
 
 private theorem and_true_split {a b : Bool} (h : (a && b) = true) :
     a = true ∧ b = true := by
@@ -1066,8 +1059,7 @@ private def instrDests (instr : TAC) : List Var :=
   | .fternop x _ a b c => [x, a, b, c]
   | .arrLoad x _ idx _ => [x, idx]
   | .arrStore _ idx val _ => [idx, val]
-  | .printInt v    => [v]
-  | .printFloat v  => [v]
+  | .print _ vs   => vs
   | .ifgoto b _    => b.vars
   | _              => []
 
@@ -1148,8 +1140,7 @@ private theorem execSymbolic_preserves_var (ss : SymStore) (sam : SymArrayMem)
   | arrLoad x _ idx _ =>
     simp [instrDests] at hv; simp only [execSymbolic]; exact ssGet_ssSet_other ss x v _ hv.1
   | arrStore _ _ _ _ => rfl
-  | printInt _ => rfl
-  | printFloat _ => rfl
+  | print _ _ => rfl
 
 /-- If v is not the dest of any instruction in the program, execPath preserves ssGet v. -/
 private theorem execPath_preserves_var (orig : Prog) (ss : SymStore) (sam : SymArrayMem)
@@ -1775,16 +1766,10 @@ private theorem execPath_sound_gen (orig : Prog) (ss : SymStore) (sam : SymArray
                 rw [hsrc]
               · rw [ssGet_ssSet_other _ _ _ _ hvd, hrepr]
                 exact (Store.update_other σ x v _ hvd).symm), hinv, hsamCoh, hsamTyped⟩
-          | printInt x =>
+          | print _ _ =>
             simp [computeNextPC] at hnext_opt
             rw [hnext_opt.symm]
-            exact ⟨σ, am, Step.printInt horig_opt,
-              (fun v => by simp only [execSymbolic]; exact hrepr v),
-              hinv, hsamCoh, hsamTyped⟩
-          | printFloat x =>
-            simp [computeNextPC] at hnext_opt
-            rw [hnext_opt.symm]
-            exact ⟨σ, am, Step.printFloat horig_opt,
+            exact ⟨σ, am, Step.print horig_opt,
               (fun v => by simp only [execSymbolic]; exact hrepr v),
               hinv, hsamCoh, hsamTyped⟩
         | none =>
@@ -2165,8 +2150,7 @@ private theorem branchInfo_of_step {prog : Prog} {pc pc' : Label} {σ σ' : Stor
       | intToFloat h _ => exact absurd (hinstr.symm.trans h) (by simp)
       | floatToInt h _ => exact absurd (hinstr.symm.trans h) (by simp)
       | floatUnary h _ => exact absurd (hinstr.symm.trans h) (by simp)
-      | printInt h => exact absurd (hinstr.symm.trans h) (by simp)
-      | printFloat h => exact absurd (hinstr.symm.trans h) (by simp)
+      | print h => exact absurd (hinstr.symm.trans h) (by simp)
     · simp [hguard] at hbi
   | _ => simp [transBranchInfo] at hbi
 
@@ -2603,8 +2587,7 @@ private theorem branchInfo_of_step_with_rel {prog : Prog} {pc pc' : Label} {σ_t
         | intToFloat h _ => exact absurd (hinstr.symm.trans h) (by simp)
         | floatToInt h _ => exact absurd (hinstr.symm.trans h) (by simp)
         | floatUnary h _ => exact absurd (hinstr.symm.trans h) (by simp)
-        | printInt h => exact absurd (hinstr.symm.trans h) (by simp)
-        | printFloat h => exact absurd (hinstr.symm.trans h) (by simp)
+        | print h => exact absurd (hinstr.symm.trans h) (by simp)
       · simp [hguard] at hbi
   | _ => simp [branchInfoWithRel] at hbi
 
@@ -3542,8 +3525,7 @@ theorem checkDivPreservationExec_sound (dc : ECertificate)
       | intToFloat => simp at hpc
       | floatToInt => simp at hpc
       | floatUnary => simp at hpc
-      | printInt => simp at hpc
-      | printFloat => simp at hpc
+      | print => simp at hpc
   | arrLoad_boundsError hinstr hidx_val hbnd_fail =>
     rename_i idxVal arr _ idx _
     -- Extract bounds-preservation checker info for pc_t
@@ -3723,9 +3705,7 @@ theorem checkSuccessorsInBounds_sound (dc : ECertificate)
       have := hall pc hpc; simp [hi, successors] at this; exact this
     | floatUnary hi _ =>
       have := hall pc hpc; simp [hi, successors] at this; exact this
-    | printInt hi =>
-      have := hall pc hpc; simp [hi, successors] at this; exact this
-    | printFloat hi =>
+    | print hi =>
       have := hall pc hpc; simp [hi, successors] at this; exact this
 
 theorem soundness_bridge

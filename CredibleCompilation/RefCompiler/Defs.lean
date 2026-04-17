@@ -191,8 +191,7 @@ def Stmt.intSafe (fuel : Nat) (σ : Store) (am : ArrayMem) (decls : List (ArrayN
   | .label _ => True
   | .goto _ => True
   | .ifgoto b _ => ∀ v ∈ b.exprFreeVars, ∃ n, σ v = .int n
-  | .printint e => ∀ v ∈ e.freeVars, ∃ n, σ v = .int n
-  | .printfloat e => ∀ v ∈ e.freeVars, ∃ n, σ v = .int n
+  | .print _ args => ∀ e ∈ args, ∀ v ∈ e.freeVars, ∃ n, σ v = .int n
 
 -- § 2. Compiler definitions are in WhileLang.lean (compileExpr, compileBool, compileStmt).
 -- This module provides proofs and infrastructure about them.

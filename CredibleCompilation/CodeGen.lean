@@ -62,8 +62,7 @@ private def collectVars (p : Prog) : List Var :=
                             let acc := if acc.contains a then acc else acc ++ [a]
                             let acc := if acc.contains b then acc else acc ++ [b]
                             if acc.contains c then acc else acc ++ [c]
-    | .printInt v      => if acc.contains v then acc else acc ++ [v]
-    | .printFloat v    => if acc.contains v then acc else acc ++ [v]
+    | .print _ vs      => vs.foldl (fun a v => if a.contains v then a else a ++ [v]) acc
     | .goto _          => acc
     | .ifgoto _ _      => acc
     | .halt            => acc
@@ -128,6 +127,22 @@ private def ppFReg : ArmFReg → String
   | .d4 => "d4" | .d5 => "d5" | .d6 => "d6" | .d7 => "d7"
   | .d8 => "d8" | .d9 => "d9" | .d10 => "d10" | .d11 => "d11"
   | .d12 => "d12" | .d13 => "d13" | .d14 => "d14" | .d15 => "d15"
+
+/-- Generate ARM load + store lines for one printf argument at stack offset `i*8`. -/
+private def genPrintArgLoad (tyCtx : TyCtx) (layout : VarLayout)
+    (varMap : List (Var × Nat)) (i : Nat) (v : Var) : List String :=
+  let storeInstr := "  str " ++ (if tyCtx v == .float then "d0" else "x1") ++
+    ", [sp, #" ++ toString (i * 8) ++ "]"
+  if tyCtx v == .float then
+    let loadLine := match layout v with
+      | some (.freg reg) => s!"  fmov d0, {ppFReg reg}"
+      | _ => loadVarFP varMap v "d0"
+    loadLine :: storeInstr :: []
+  else
+    let loadLine := match layout v with
+      | some (.ireg reg) => s!"  mov x1, {ppReg reg}"
+      | _ => loadVar varMap v "x1"
+    loadLine :: storeInstr :: []
 
 private def ppCond : Cond → String
   | .eq => "eq" | .ne => "ne" | .lt => "lt" | .le => "le" | .gt => "gt" | .ge => "ge"
@@ -403,7 +418,7 @@ private def instrLength (layout : VarLayout) (arrayDecls : List (ArrayName × Na
     (liveVars : List Var := []) (varMap : List (Var × Nat) := []) : Nat :=
   -- Print instructions are handled by unverified string-level codegen
   match instr with
-  | .printInt _ | .printFloat _ =>
+  | .print _ _ =>
     -- saves + 1 placeholder + restores
     1 + callSaveRestoreLen liveVars layout varMap
   | _ =>
@@ -622,7 +637,7 @@ def verifiedGenerateAsm (p : Prog) : Except String VerifiedAsmResult := do
         let safe := isBoundsSafe p.arrayDecls intervals pc instr
         -- Print instructions are handled by unverified string-level codegen
         -- Generate placeholder no-ops for pcMap sizing
-        let isPrint := match instr with | .printInt _ | .printFloat _ => true | _ => false
+        let isPrint := match instr with | .print _ _ => true | _ => false
         if isPrint then
           let live := liveOut.getD pc ([] : List Var)
           let (saves, restores) := genCallSaveRestore live layout varMap
@@ -942,8 +957,7 @@ private theorem verifiedGenInstr_length_pcMap_indep {layout : VarLayout}
   | intToFloat _ _ | floatToInt _ _ | floatUnary _ _ _ | fternop _ _ _ _ _ =>
     have : some l₁ = some l₂ := by rw [← h₁, ← h₂]; simp [verifiedGenInstr]
     exact congrArg _ (Option.some.inj this)
-  | printInt _ => simp [verifiedGenInstr] at h₁
-  | printFloat _ => simp [verifiedGenInstr] at h₂
+  | print _ _ => simp [verifiedGenInstr] at h₁
 
 /-- instrLength equals the length of the generated instruction list (including
     save/restore wrapping at call sites). -/
@@ -1264,8 +1278,7 @@ private theorem step_run_or_terminal {p : Prog} {pc : Nat} {σ : Store}
   | floatToInt_typeError _ _ => exact .inr fun _ h => Step.no_step_from_typeError h
   | floatUnary_typeError _ _ => exact .inr fun _ h => Step.no_step_from_typeError h
   | fternop_typeError _ _ => exact .inr fun _ h => Step.no_step_from_typeError h
-  | printInt _ => exact .inl ⟨_, _, _, rfl, hts⟩
-  | printFloat _ => exact .inl ⟨_, _, _, rfl, hts⟩
+  | print _ => exact .inl ⟨_, _, _, rfl, hts⟩
 
 /-- Whole-program backward simulation for `verifiedGenerateAsm`.
 
@@ -1456,42 +1469,26 @@ def generateAsm (p : Prog) : Except String String := do
   let body := (List.range r.bodyPerPC.size).flatMap fun pc =>
     let tacInstr := p.code.getD pc .halt
     match tacInstr with
-    | .printInt v =>
+    | .print fmt vs =>
       let live := (DAEOpt.analyzeLiveness p).getD pc ([] : List Var)
       let (saves, _) := genCallSaveRestore live r.layout r.varMap
       let saveLines := ppInstrs lbl saves
-      let isOnStack := match r.layout v with | some (.stack _) => true | _ => false
-      let loadLine := if isOnStack then loadVar r.varMap v "x1"
-        else match r.layout v with
-          | some (.ireg reg) => s!"  mov x1, {ppReg reg}"
-          | _ => loadVar r.varMap v "x1"
+      -- Load each argument onto the stack for variadic printf
+      let stackSize := max 16 (((vs.length * 8 + 15) / 16) * 16)
+      let loadLines := (List.range vs.length).flatMap fun i =>
+        genPrintArgLoad p.tyCtx r.layout r.varMap i (vs.getD i "")
       let restoreLines := ppInstrs lbl (genCallSaveRestore live r.layout r.varMap).2
-      ([s!".L{pc}:"] ++ saveLines ++
-      [s!"  // printint {v}",
-       loadLine,
-       "  sub sp, sp, #16",
-       "  str x1, [sp]",
-       "  adrp x0, .Lfmt_printint@PAGE",
-       "  add x0, x0, .Lfmt_printint@PAGEOFF",
+      let fmtLabel := s!".Lfmt_print_{pc}"
+      let fmtComment := fmt.foldl (fun acc c => match c with
+          | '\n' => acc ++ "\\n" | '\t' => acc ++ "\\t" | c => acc ++ c.toString) ""
+      let subSp := "  sub sp, sp, #" ++ toString stackSize
+      let addSp := "  add sp, sp, #" ++ toString stackSize
+      (s!".L{pc}:" :: saveLines ++
+      s!"  // print \"{fmtComment}\"" :: subSp :: loadLines ++
+      [s!"  adrp x0, {fmtLabel}@PAGE",
+       s!"  add x0, x0, {fmtLabel}@PAGEOFF",
        "  bl _printf",
-       "  add sp, sp, #16"] ++ restoreLines)
-    | .printFloat v =>
-      let live := (DAEOpt.analyzeLiveness p).getD pc ([] : List Var)
-      let (saves, _) := genCallSaveRestore live r.layout r.varMap
-      let saveLines := ppInstrs lbl saves
-      let loadLine := match r.layout v with
-        | some (.freg reg) => s!"  fmov d0, {ppFReg reg}"
-        | _ => loadVarFP r.varMap v "d0"
-      let restoreLines := ppInstrs lbl (genCallSaveRestore live r.layout r.varMap).2
-      ([s!".L{pc}:"] ++ saveLines ++
-      [s!"  // printfloat {v}",
-       loadLine,
-       "  sub sp, sp, #16",
-       "  str d0, [sp]",
-       "  adrp x0, .Lfmt_printfloat@PAGE",
-       "  add x0, x0, .Lfmt_printfloat@PAGEOFF",
-       "  bl _printf",
-       "  add sp, sp, #16"] ++ restoreLines)
+       addSp] ++ restoreLines)
     | _ =>
       [s!".L{pc}:"] ++ ppInstrs lbl ((r.bodyPerPC[pc]!))
   -- Print observable variables at halt (loads from stack, safe after saveRegs)
@@ -1564,10 +1561,22 @@ def generateAsm (p : Prog) : Except String String := do
      "  .asciz \"error: division by zero\\n\"",
      ".Lbounds_msg:",
      "  .asciz \"error: array index out of bounds\\n\"",
-     ".Lfmt_printint:",
-     "  .asciz \"%ld\\n\"",
-     ".Lfmt_printfloat:",
-     "  .asciz \"%f\\n\""] ++
+     ""] ++
+    -- Per-instruction format strings for print statements
+    (List.range p.code.size).filterMap (fun pc =>
+      match p.code.getD pc .halt with
+      | .print fmt _ =>
+        -- Re-escape special characters for .asciz directive
+        let escaped := fmt.foldl (fun acc c =>
+          match c with
+          | '\n' => acc ++ "\\n"
+          | '\t' => acc ++ "\\t"
+          | '\\' => acc ++ "\\\\"
+          | '"'  => acc ++ "\\\""
+          | c    => acc ++ c.toString) ""
+        some s!".Lfmt_print_{pc}:\n  .asciz \"{escaped}\""
+      | _ => none) ++
+    [""] ++
     p.observable.map fun v =>
      s!".Lname_{v}:\n  .asciz \"{v}\""
   -- Emit .data section for each array (size × 8 bytes, zero-initialized)

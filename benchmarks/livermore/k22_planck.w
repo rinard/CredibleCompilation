@@ -69,4 +69,4 @@ while (rep <= 760000) {
   };
   rep := rep + 1
 };
-printfloat w[51]
+print "%f\n", w[51]

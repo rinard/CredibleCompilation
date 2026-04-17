@@ -49,4 +49,4 @@ while (rep <= 30088000) {
   };
   rep := rep + 1
 };
-printfloat b5[51]
+print "%f\n", b5[51]

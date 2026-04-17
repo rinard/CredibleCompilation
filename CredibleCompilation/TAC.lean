@@ -44,8 +44,7 @@ inductive TAC where
   | floatToInt : Var → Var → TAC                          -- x := floatToInt(y)
   | floatUnary : Var → FloatUnaryOp → Var → TAC            -- x := op(y) (float)
   | fternop  : Var → FloatTernOp → Var → Var → Var → TAC -- x := op(a, b, c) (float ternary)
-  | printInt   : Var → TAC                                -- print integer variable
-  | printFloat : Var → TAC                                -- print float variable
+  | print     : String → List Var → TAC                   -- print fmt_string [args]
   deriving Repr, DecidableEq
 
 /-- Variables referenced by a TAC instruction (destination + operands). -/
@@ -64,14 +63,13 @@ def TAC.vars : TAC → List Var
   | .goto _             => []
   | .ifgoto be _        => be.vars
   | .halt               => []
-  | .printInt v         => [v]
-  | .printFloat v       => [v]
+  | .print _ vs         => vs
 
 /-- A scalar instruction is one that does not touch ArrayMem. -/
 def TAC.isScalar : TAC → Bool
   | .const .. | .copy .. | .binop .. | .boolop .. | .goto .. | .ifgoto .. | .halt => true
   | .fbinop .. | .intToFloat .. | .floatToInt .. | .floatUnary .. | .fternop .. => true
-  | .printInt .. | .printFloat .. => true
+  | .print .. => true
   | .arrLoad .. | .arrStore .. => false
 
 /-- A program: TAC code together with its type context and observable variables. -/
@@ -278,10 +276,7 @@ inductive Step (p : Prog) : Cfg → Cfg → Prop where
       (σ a).typeOf ≠ .float ∨ (σ b).typeOf ≠ .float ∨ (σ c).typeOf ≠ .float →
       Step p (.run pc σ am) (.typeError σ am)
 
-  | printInt : p[pc]? = some (.printInt v) →
-      Step p (.run pc σ am) (.run (pc + 1) σ am)
-
-  | printFloat : p[pc]? = some (.printFloat v) →
+  | print : p[pc]? = some (.print fmt vs) →
       Step p (.run pc σ am) (.run (pc + 1) σ am)
 
 
@@ -297,8 +292,7 @@ def TAC.successors (instr : TAC) (pc : Label) : List Label :=
   | .goto l        => [l]
   | .ifgoto _ l    => [l, pc + 1]
   | .halt          => []
-  | .printInt _    => [pc + 1]
-  | .printFloat _  => [pc + 1]
+  | .print _ _     => [pc + 1]
 
 /-- A step from `Cfg.run pc σ am` to `Cfg.run pc' σ' am'` implies `pc'` is
     a successor of the instruction at `pc`. -/
@@ -320,8 +314,7 @@ theorem Step.mem_successors {p : Prog} {pc pc' : Nat} {σ σ' : Store} {am am' :
   | floatToInt h _     => exact ⟨_, h, by simp [TAC.successors]⟩
   | floatUnary h _     => exact ⟨_, h, by simp [TAC.successors]⟩
   | fternop h _ _ _    => exact ⟨_, h, by simp [TAC.successors]⟩
-  | printInt h         => exact ⟨_, h, by simp [TAC.successors]⟩
-  | printFloat h       => exact ⟨_, h, by simp [TAC.successors]⟩
+  | print h            => exact ⟨_, h, by simp [TAC.successors]⟩
 
 /-- A step from an in-bounds PC to a run-config stays in-bounds.
     This is the Prop-level condition for totality. -/
@@ -504,8 +497,7 @@ theorem Step.store_congr {p : Prog} {pc : Nat} {σ τ : Store} {am : ArrayMem} {
     · rcases hr with hm | hr
       · right; left; simp [Value.typeOf] at hm ⊢; rwa [← hagree]
       · right; right; simp [Value.typeOf] at hr ⊢; rwa [← hagree]
-  | printInt h  => exact ⟨_, .printInt h⟩
-  | printFloat h => exact ⟨_, .printFloat h⟩
+  | print h     => exact ⟨_, .print h⟩
 
 -- ============================================================
 -- § 10. Observable output at a configuration

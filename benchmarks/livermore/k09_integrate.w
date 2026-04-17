@@ -45,4 +45,4 @@ while (rep <= 60639000) {
   };
   rep := rep + 1
 };
-printfloat px[(1 - 1) * 101 + 51]
+print "%f\n", px[(1 - 1) * 101 + 51]

@@ -222,8 +222,7 @@ def renameInstr (coloring : List (Var × String)) (instr : TAC) : TAC :=
   | .goto l          => .goto l
   | .ifgoto be l     => .ifgoto (renameBoolExpr coloring be) l
   | .halt            => .halt
-  | .printInt v      => .printInt (r v)
-  | .printFloat v    => .printFloat (r v)
+  | .print fmt vs    => .print fmt (vs.map r)
 where
   renameBoolExpr (coloring : List (Var × String)) (be : BoolExpr) : BoolExpr :=
     let r := renameVar coloring

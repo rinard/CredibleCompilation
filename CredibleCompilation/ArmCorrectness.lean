@@ -1818,9 +1818,7 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
     exact ⟨s, .refl, trivial⟩
   | arrStore_boundsError hinstr hidx hval hbounds =>
     exact ⟨s, .refl, trivial⟩
-  | printInt hinstr =>
-    exact sorry  -- unverified: print not modeled in ARM semantics
-  | printFloat hinstr =>
+  | print hinstr =>
     exact sorry  -- unverified: print not modeled in ARM semantics
   | const hinstr =>
     rename_i x v

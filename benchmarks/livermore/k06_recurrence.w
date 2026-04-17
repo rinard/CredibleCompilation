@@ -32,4 +32,4 @@ while (rep <= 2781000) {
   };
   rep := rep + 1
 };
-printfloat w[64]
+print "%f\n", w[64]

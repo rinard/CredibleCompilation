@@ -114,5 +114,5 @@ while (rep <= 694000) {
   };
   rep := rep + 1
 };
-printint k2;
-printint k3
+print "%ld\n", k2;
+print "%ld\n", k3

@@ -147,11 +147,51 @@ for name in "${KERNELS[@]}"; do
     fi
   fi
 
-  # Check WL compiled, ran with exit code 0, and produced output
+  # Check WL compiled, ran with exit code 0, produced output, and values match C
   if [ -x "$FAST_DIR/${name}_wl" ]; then
-    if $wl_ok && [ -f "$FAST_DIR/${name}_wl.out" ] && [ -s "$FAST_DIR/${name}_wl.out" ]; then
-      match="ok"
-      ((pass++))
+    if $wl_ok && [ -f "$FAST_DIR/${name}_wl.out" ] && [ -s "$FAST_DIR/${name}_wl.out" ] \
+       && [ -f "$FAST_DIR/${name}_c_O2.out" ] && [ -s "$FAST_DIR/${name}_c_O2.out" ]; then
+      out_c=$(cat "$FAST_DIR/${name}_c_O2.out")
+      out_w=$(cat "$FAST_DIR/${name}_wl.out")
+      match=$(python3 -c "
+import re, sys
+c_out = '''$out_c'''
+w_out = '''$out_w'''
+num_re = r'[-+]?[0-9]*\.?[0-9]+(?:[eE][-+]?[0-9]+)?'
+c_nums = []
+for line in c_out.strip().splitlines():
+    if line.startswith('elapsed'): continue
+    for part in line.split('=')[1:]:
+        m = re.search(num_re, part)
+        if m: c_nums.append(m.group())
+w_nums = []
+for line in w_out.strip().splitlines():
+    if '=' in line: break
+    m = re.fullmatch(r'\s*(' + num_re + r')\s*', line)
+    if m: w_nums.append(m.group(1))
+if not c_nums or not w_nums:
+    print('ok?')
+    sys.exit()
+n = min(len(c_nums), len(w_nums))
+c_vals = [float(x) for x in c_nums[-n:]]
+w_vals = [float(x) for x in w_nums[-n:]]
+ok = True
+for c, w in zip(c_vals, w_vals):
+    if c == 0 and w == 0: continue
+    if abs(c) < 1e-15 and abs(w) < 1e-15: continue
+    if abs(c - w) / max(abs(c), abs(w), 1e-15) >= 1e-4:
+        print(f'MISMATCH c={c} w={w}')
+        ok = False; break
+if ok: print('ok')
+")
+      if [[ "$match" == ok* ]]; then
+        ((pass++))
+      else
+        ((fail++))
+      fi
+    elif ! $wl_ok; then
+      match="FAIL(run)"
+      ((fail++))
     else
       match="FAIL"
       ((fail++))

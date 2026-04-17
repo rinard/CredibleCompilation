@@ -951,8 +951,7 @@ def verifiedGenInstr (layout : VarLayout) (pcMap : Nat → Nat) (instr : TAC)
         | .fmsub => ArmInstr.fmsubR dst_reg b_reg c_reg a_reg
       some (vLoadVarFP layout a a_reg ++ vLoadVarFP layout b b_reg ++
         vLoadVarFP layout c c_reg ++ [fpInstr] ++ vStoreVarFP layout dst dst_reg)
-  | .printInt _ => none     -- handled by unverified codegen path
-  | .printFloat _ => none   -- handled by unverified codegen path
+  | .print _ _ => none      -- handled by unverified codegen path
 
 -- ============================================================
 -- § 9. CodeAt and helper lemmas
