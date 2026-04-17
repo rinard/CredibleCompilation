@@ -73,6 +73,42 @@ private def collectVars (p : Prog) : List Var :=
 private def buildVarMap (vars : List Var) : List (Var × Nat) :=
   (List.range vars.length).zip vars |>.map fun (i, v) => (v, (i + 1) * 8)
 
+private theorem mem_fst_of_mem_zip {a : α} {b : β} {l1 : List α} {l2 : List β}
+    (h : (a, b) ∈ l1.zip l2) : a ∈ l1 := by
+  induction l1 generalizing l2 with
+  | nil => simp at h
+  | cons _ _ ih =>
+    cases l2 with
+    | nil => simp at h
+    | cons _ tl =>
+      simp [List.zip_cons_cons] at h
+      exact h.elim (fun ⟨h, _⟩ => h ▸ .head _) (fun h => .tail _ (ih h))
+
+/-- The offsets produced by `buildVarMap` are pairwise distinct.
+    Offsets are (i+1)*8 for i in [0, vars.length), which are injective. -/
+private theorem buildVarMap_offsets_nodup (vars : List Var) :
+    ((buildVarMap vars).map Prod.snd).Nodup := by
+  simp only [buildVarMap, List.map_map]
+  rw [List.Nodup, List.pairwise_map]
+  -- Suffices: fst components of zip are pairwise distinct
+  suffices List.Pairwise (fun a b => a.1 ≠ b.1) ((List.range vars.length).zip vars) by
+    exact this.imp fun {a b} h heq => h (by
+      show a.1 = b.1
+      have : (a.1 + 1) * 8 = (b.1 + 1) * 8 := heq
+      omega)
+  -- Prove: zip preserves pairwise-distinctness on first components
+  have hND := List.nodup_range (n := vars.length)
+  rw [List.Nodup] at hND
+  generalize List.range vars.length = ns at hND
+  induction hND generalizing vars with
+  | nil => simp
+  | cons hmem _ ih =>
+    cases vars with
+    | nil => simp
+    | cons v tl =>
+      simp only [List.zip_cons_cons, List.pairwise_cons]
+      exact ⟨fun ⟨x, w⟩ hm => hmem x (mem_fst_of_mem_zip hm), ih tl⟩
+
 private def lookupVar (varMap : List (Var × Nat)) (v : Var) : Option Nat :=
   varMap.find? (fun (x, _) => x == v) |>.map Prod.snd
 
@@ -1486,7 +1522,47 @@ private theorem step_simulation {p : Prog} {r : VerifiedAsmResult}
     (hTS : TypedStore p.tyCtx σ) :
     ∃ s', ArmSteps r.bodyFlat s s' ∧
           ExtSimRel r.layout r.pcMap cfg' s' := by
-  sorry -- TODO: update for call-site save/restore strategy (save→havoc→restore preserves ExtSimRel)
+  -- Case split: lib-call, print, or normal instruction
+  by_cases hLib : isLibCallTAC p[pc] = true
+  · -- Lib-call case (floatUnary non-native, fpow): needs save/restore reasoning
+    sorry
+  · by_cases hPrint : ∃ fmt vs, p[pc] = .print fmt vs
+    · -- Print case: unverified codegen, needs save/restore reasoning
+      sorry
+    · -- Normal case: delegate to ext_backward_simulation
+      have hNotPrint : ∀ fmt vs, p[pc] ≠ .print fmt vs := by
+        intro fmt vs h; exact hPrint ⟨fmt, vs, h⟩
+      have hNotLib : isLibCallTAC p[pc] = false := by
+        cases h : isLibCallTAC p[pc] <;> simp_all
+      -- Get instrs from instrGen
+      obtain ⟨safe, hSome⟩ := spec.instrGen pc hPC hNotLib hNotPrint
+      -- Get pcMap = buildPcMap lengths with element-wise equality
+      obtain ⟨lengths, hLSz, hPcMap, hLenEq⟩ := spec.pcMapLengths
+      have hpcB : pc < r.bodyPerPC.size := spec.bodySize ▸ hPC
+      -- CodeAt from codeAt_of_bodyFlat
+      have hCodeAt : CodeAt r.bodyFlat (r.pcMap pc) (r.bodyPerPC[pc]'hpcB) := by
+        rw [hPcMap]; exact codeAt_of_bodyFlat r.bodyPerPC lengths hLSz hLenEq pc hpcB
+      -- hPcNext from buildPcMap_succ
+      have hPcNext : ∀ σ' am', cfg' = .run (pc + 1) σ' am' →
+          r.pcMap (pc + 1) = r.pcMap pc + (r.bodyPerPC[pc]'hpcB).length := by
+        intro _ _ _
+        rw [hPcMap, buildPcMap_succ lengths pc (by rw [hLSz]; exact hpcB)]
+        congr 1; exact hLenEq pc (by rw [hLSz]; exact hpcB) hpcB
+      -- hNCSL/hNCSLBin: vacuously true (not a lib-call)
+      have hNCSL : ∀ x op y, p[pc] = .floatUnary x op y →
+          op.isNative = false → NoCallerSavedLayout r.layout := by
+        intro x op y heq hNN
+        simp [isLibCallTAC, heq, hNN] at hNotLib
+      have hNCSLBin : ∀ x y z, p[pc] = .fbinop x .fpow y z →
+          NoCallerSavedLayout r.layout := by
+        intro x y z heq
+        simp [isLibCallTAC, heq] at hNotLib
+      exact ext_backward_simulation p r.bodyFlat r.layout r.pcMap
+        r.haltS r.divS r.boundsS p.arrayDecls safe
+        hStep hRel hPC spec.wellTypedProg hTS spec.wellTypedLayout
+        p[pc] (Prog.getElem?_eq_getElem hPC)
+        (r.bodyPerPC[pc]'hpcB) hSome hCodeAt hPcNext
+        (spec.layoutComplete pc hPC) rfl hNCSL hNCSLBin
 
 -- ──────────────────────────────────────────────────────────────
 -- Multi-step simulation (main theorem)

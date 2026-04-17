@@ -1657,3 +1657,144 @@ theorem CodeAt.append_right {prog : ArmProg} {startPC : Nat} {l1 l2 : List ArmIn
   simp at this
   rw [show startPC + l1.length + i = startPC + (l1.length + i) from by omega]
   exact this
+
+-- ============================================================
+-- § 10. Instruction-level save/restore bridge
+-- ============================================================
+
+/-- `applyCallerSaves` is independent of the `pc` field. -/
+theorem applyCallerSaves_pc_irrelevant (entries : List CallerSaveEntry) (s : ArmState) (p : Nat) :
+    applyCallerSaves entries {s with pc := p} = {applyCallerSaves entries s with pc := p} := by
+  induction entries generalizing s p with
+  | nil => simp [applyCallerSaves]
+  | cons e rest ih =>
+    cases e with
+    | ireg r off =>
+      simp only [applyCallerSaves]
+      -- setStack on {s with pc := p} = {setStack on s with pc := p}
+      have : (({s with pc := p}).setStack off (({s with pc := p}).regs r)) =
+        {s.setStack off (s.regs r) with pc := p} := by
+        simp [ArmState.setStack]
+      rw [this]; exact ih _ _
+    | freg r off =>
+      simp only [applyCallerSaves]
+      have : (({s with pc := p}).setStack off (({s with pc := p}).fregs r)) =
+        {s.setStack off (s.fregs r) with pc := p} := by
+        simp [ArmState.setStack]
+      rw [this]; exact ih _ _
+
+/-- `applyCallerRestores` is independent of the `pc` field. -/
+theorem applyCallerRestores_pc_irrelevant (entries : List CallerSaveEntry) (s : ArmState) (p : Nat) :
+    applyCallerRestores entries {s with pc := p} = {applyCallerRestores entries s with pc := p} := by
+  induction entries generalizing s p with
+  | nil => simp [applyCallerRestores]
+  | cons e rest ih =>
+    cases e with
+    | ireg r off =>
+      simp only [applyCallerRestores]
+      have : (({s with pc := p}).setReg r (({s with pc := p}).stack off)) =
+        {s.setReg r (s.stack off) with pc := p} := by
+        simp [ArmState.setReg]
+      rw [this]; exact ih _ _
+    | freg r off =>
+      simp only [applyCallerRestores]
+      have : (({s with pc := p}).setFReg r (({s with pc := p}).stack off)) =
+        {s.setFReg r (s.stack off) with pc := p} := by
+        simp [ArmState.setFReg]
+      rw [this]; exact ih _ _
+
+/-- Convert CallerSaveEntry list to save instructions (str/fstr). -/
+def entriesToSaves : List CallerSaveEntry → List ArmInstr
+  | [] => []
+  | .ireg r off :: rest => .str r off :: entriesToSaves rest
+  | .freg r off :: rest => .fstr r off :: entriesToSaves rest
+
+/-- Convert CallerSaveEntry list to restore instructions (ldr/fldr). -/
+def entriesToRestores : List CallerSaveEntry → List ArmInstr
+  | [] => []
+  | .ireg r off :: rest => .ldr r off :: entriesToRestores rest
+  | .freg r off :: rest => .fldr r off :: entriesToRestores rest
+
+@[simp] theorem entriesToSaves_length (entries : List CallerSaveEntry) :
+    (entriesToSaves entries).length = entries.length := by
+  induction entries with
+  | nil => rfl
+  | cons e _ ih => cases e <;> simp [entriesToSaves, ih]
+
+@[simp] theorem entriesToRestores_length (entries : List CallerSaveEntry) :
+    (entriesToRestores entries).length = entries.length := by
+  induction entries with
+  | nil => rfl
+  | cons e _ ih => cases e <;> simp [entriesToRestores, ih]
+
+/-- Executing save instructions produces the same state as applyCallerSaves
+    (plus PC advancement). -/
+theorem armSteps_saves (prog : ArmProg) (entries : List CallerSaveEntry) (s : ArmState)
+    (hCode : CodeAt prog s.pc (entriesToSaves entries)) :
+    ArmSteps prog s {applyCallerSaves entries s with pc := s.pc + entries.length} := by
+  induction entries generalizing s with
+  | nil => simp [applyCallerSaves]; exact .refl
+  | cons e rest ih =>
+    cases e with
+    | ireg r off =>
+      simp only [applyCallerSaves]
+      have step1 := ArmStep.str r off hCode.head
+      have hIH := ih (s.setStack off (s.regs r) |>.nextPC) hCode.tail
+      have hNP : (s.setStack off (s.regs r)).nextPC =
+        {s.setStack off (s.regs r) with pc := s.pc + 1} := by
+        simp [ArmState.nextPC, ArmState.setStack]
+      rw [hNP] at hIH; rw [applyCallerSaves_pc_irrelevant] at hIH; dsimp only at hIH
+      refine (ArmSteps.single step1).trans ?_
+      rw [hNP]; dsimp only
+      simp only [List.length_cons]
+      rw [show s.pc + (rest.length + 1) = s.pc + 1 + rest.length by omega]
+      exact hIH
+    | freg r off =>
+      simp only [applyCallerSaves]
+      have step1 := ArmStep.fstr r off hCode.head
+      have hIH := ih (s.setStack off (s.fregs r) |>.nextPC) hCode.tail
+      have hNP : (s.setStack off (s.fregs r)).nextPC =
+        {s.setStack off (s.fregs r) with pc := s.pc + 1} := by
+        simp [ArmState.nextPC, ArmState.setStack]
+      rw [hNP] at hIH; rw [applyCallerSaves_pc_irrelevant] at hIH; dsimp only at hIH
+      refine (ArmSteps.single step1).trans ?_
+      rw [hNP]; dsimp only
+      simp only [List.length_cons]
+      rw [show s.pc + (rest.length + 1) = s.pc + 1 + rest.length by omega]
+      exact hIH
+
+/-- Executing restore instructions produces the same state as applyCallerRestores
+    (plus PC advancement). -/
+theorem armSteps_restores (prog : ArmProg) (entries : List CallerSaveEntry) (s : ArmState)
+    (hCode : CodeAt prog s.pc (entriesToRestores entries)) :
+    ArmSteps prog s {applyCallerRestores entries s with pc := s.pc + entries.length} := by
+  induction entries generalizing s with
+  | nil => simp [applyCallerRestores]; exact .refl
+  | cons e rest ih =>
+    cases e with
+    | ireg r off =>
+      simp only [applyCallerRestores]
+      have step1 := ArmStep.ldr r off hCode.head
+      have hIH := ih (s.setReg r (s.stack off) |>.nextPC) hCode.tail
+      have hNP : (s.setReg r (s.stack off)).nextPC =
+        {s.setReg r (s.stack off) with pc := s.pc + 1} := by
+        simp [ArmState.nextPC, ArmState.setReg]
+      rw [hNP] at hIH; rw [applyCallerRestores_pc_irrelevant] at hIH; dsimp only at hIH
+      refine (ArmSteps.single step1).trans ?_
+      rw [hNP]; dsimp only
+      simp only [List.length_cons]
+      rw [show s.pc + (rest.length + 1) = s.pc + 1 + rest.length by omega]
+      exact hIH
+    | freg r off =>
+      simp only [applyCallerRestores]
+      have step1 := ArmStep.fldr r off hCode.head
+      have hIH := ih (s.setFReg r (s.stack off) |>.nextPC) hCode.tail
+      have hNP : (s.setFReg r (s.stack off)).nextPC =
+        {s.setFReg r (s.stack off) with pc := s.pc + 1} := by
+        simp [ArmState.nextPC, ArmState.setFReg]
+      rw [hNP] at hIH; rw [applyCallerRestores_pc_irrelevant] at hIH; dsimp only at hIH
+      refine (ArmSteps.single step1).trans ?_
+      rw [hNP]; dsimp only
+      simp only [List.length_cons]
+      rw [show s.pc + (rest.length + 1) = s.pc + 1 + rest.length by omega]
+      exact hIH
