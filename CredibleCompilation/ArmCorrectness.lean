@@ -1743,6 +1743,7 @@ theorem eff_freg_val_preserved (layout : VarLayout) (v : Var) (σ : Store)
 -- § verifiedGenInstr_correct
 -- ============================================================
 
+set_option maxHeartbeats 400000 in
 /-- Single TAC instruction backward simulation for the verified codegen.
     Analogous to `genInstr_correct` but uses `ExtStateRel`/`VarLayout`
     and supports register-allocated variables. -/
@@ -3662,7 +3663,310 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
           · show s4.pc = pcMap (pc + 1)
             have := hPcNext _ _ rfl; rw [show dst_reg = ArmReg.x0 from hDR] at this
             simp [hBS] at this; omega
-    | bool => sorry
+    | bool =>
+      -- idx is int-typed, so not in freg
+      have hNotFregIdx : ∀ r, layout idx ≠ some (.freg r) :=
+        hWTL.int_not_freg (by have := hTS idx; rw [hidx] at this; exact this.symm)
+      -- dst is bool-typed, so not in freg
+      have hNotFregDst : ∀ r, layout dst ≠ some (.freg r) := by
+        have hwti := hWT pc hPC_bound
+        rw [Prog.getElem?_eq_getElem hPC_bound |>.symm.trans hinstr |> Option.some.inj] at hwti
+        cases hwti with
+        | arrLoad hx _ _ => exact hWTL.bool_not_freg hx
+      let idx_reg := match layout idx with | some (.ireg r) => r | _ => ArmReg.x1
+      let dst_reg := match layout dst with | some (.ireg r) => r | _ => ArmReg.x0
+      have hInstrs : instrs = vLoadVar layout idx idx_reg ++
+          ((if boundsSafe then [] else
+            [.cmpImm idx_reg (arraySizeBv arrayDecls arr), .bCond .hs boundsLabel]) ++
+          .arrLd dst_reg arr idx_reg :: .cmpImm dst_reg 0 :: .cset dst_reg .ne ::
+          vStoreVar layout dst dst_reg) := by
+        simp [verifiedGenInstr, hSS, hII] at hSome; exact hSome.symm
+      rw [hInstrs] at hCodeInstr hPcNext
+      have hCodeA := hCodeInstr.append_left
+      have hCodeBCD := hCodeInstr.append_right
+      -- vLoadVar idx into idx_reg
+      obtain ⟨s1, hSteps1, hX1_1, hRel1, _, hPC1, hAM1, hRegs1⟩ :=
+        vLoadVar_eff_exec prog layout idx σ s (pcMap pc) .x1 hStateRel hScratch hPcRel
+          hNotFregIdx (Or.inr (Or.inl rfl)) (hMapped idx (by simp [heq, TAC.vars])) hCodeA
+      have hIdxVal : s1.regs idx_reg = idxVal := by rw [hX1_1, hidx]; simp [Value.encode]
+      -- The bool normalization value: cmpImm dst 0 + cset dst .ne produces canonical 0/1
+      -- Value.ofBitVec .bool bv = .bool (bv != 0), encode (.bool b) = if b then 1 else 0
+      -- Flags.mk v 0 |>.condHolds .ne = (v != 0), so cset result = encode (ofBitVec .bool rawBv)
+      let boolVal := Value.ofBitVec .bool (am.read arr idxVal)
+      -- Helper: the cset normalization result equals the bool encoding
+      -- After arrLd puts rawBv in dst_reg, cmpImm dst_reg 0 sets flags, cset dst_reg .ne
+      -- produces (if rawBv != 0 then 1 else 0) = boolVal.encode
+      have hNormEnc : ∀ (rawBv : BitVec 64), rawBv = am.read arr idxVal →
+          (if (Flags.mk rawBv 0).condHolds .ne then (1 : BitVec 64) else 0) = boolVal.encode := by
+        intro rawBv hrw; subst hrw
+        simp [Flags.condHolds, Value.ofBitVec, Value.encode, boolVal, bne, BEq.beq]
+      -- Helper: for the ireg case, ExtStateRel after the double setReg (arrLd then cset)
+      -- The cset overwrites arrLd's write, so we only need hRel1 for non-dst locations
+      have hRelAfterCset : ∀ (sPre : ArmState),
+          ExtStateRel layout σ sPre →
+          (∀ r, layout dst = some (.ireg r) → sPre.regs r = (σ dst).encode) →
+          (∀ fr, layout dst = some (.freg fr) → sPre.fregs fr = (σ dst).encode) →
+          (∀ off, layout dst = some (.stack off) → sPre.stack off = (σ dst).encode) →
+          ∀ r_dst, layout dst = some (.ireg r_dst) →
+          ExtStateRel layout (σ[dst ↦ boolVal]) (sPre.setReg r_dst boolVal.encode) := by
+        intro sPre hRelPre _ _ _ r_dst hDstLoc
+        exact ExtStateRel.update_ireg hRelPre hInjective hDstLoc
+      cases hBS : boundsSafe with
+      | true =>
+        simp [hBS] at hCodeBCD
+        -- arrLd dst_reg arr idx_reg
+        have hCodeArrLd := hCodeBCD.head; rw [← hPC1] at hCodeArrLd
+        have hStepsArrLd : ArmSteps prog s1
+            (s1.setReg dst_reg (s1.arrayMem arr (s1.regs idx_reg)) |>.nextPC) :=
+          .single (.arrLd dst_reg arr idx_reg hCodeArrLd)
+        let sA := s1.setReg dst_reg (s1.arrayMem arr (s1.regs idx_reg)) |>.nextPC
+        have hDstValA : sA.regs dst_reg = am.read arr idxVal := by
+          simp [sA, ArmState.setReg, ArmState.nextPC, ArrayMem.read, hIdxVal, hAM1, hArrayMem]
+        -- cmpImm dst_reg 0
+        have hPCA : sA.pc = pcMap pc + (vLoadVar layout idx idx_reg).length + 1 := by
+          simp [sA, ArmState.setReg, ArmState.nextPC]; rw [hPC1]
+        have hCodeCmpImm := hCodeBCD.tail.head; rw [← hPCA] at hCodeCmpImm
+        have hStepsCmp : ArmSteps prog sA
+            { sA with flags := Flags.mk (sA.regs dst_reg) 0, pc := sA.pc + 1 } :=
+          .single (.cmpRI dst_reg 0 hCodeCmpImm)
+        let sB := { sA with flags := Flags.mk (sA.regs dst_reg) 0, pc := sA.pc + 1 }
+        -- cset dst_reg .ne
+        have hPCB : sB.pc = pcMap pc + (vLoadVar layout idx idx_reg).length + 2 := by
+          show sA.pc + 1 = _; rw [hPCA]
+        have hCodeCset := hCodeBCD.tail.tail.head; rw [← hPCB] at hCodeCset
+        have hStepsCset : ArmSteps prog sB
+            (sB.setReg dst_reg (if sB.flags.condHolds .ne then (1 : BitVec 64) else 0) |>.nextPC) :=
+          .single (.cset dst_reg .ne hCodeCset)
+        let s3 := sB.setReg dst_reg (if sB.flags.condHolds .ne then (1 : BitVec 64) else 0) |>.nextPC
+        -- The cset result matches boolVal.encode
+        have hCsetEq : (if sB.flags.condHolds .ne then (1 : BitVec 64) else 0) = boolVal.encode :=
+          hNormEnc _ hDstValA
+        have hDstVal : s3.regs dst_reg = boolVal.encode := by
+          simp only [s3, ArmState.nextPC, ArmState.setReg, beq_self_eq_true, ite_true]
+          exact hCsetEq
+        -- vStoreVar + final ExtSimRel
+        by_cases hDIR : ∃ r, layout dst = some (.ireg r)
+        · obtain ⟨r_dst, hDstLoc⟩ := hDIR
+          have hDR : dst_reg = r_dst := by
+            change (match layout dst with | some (.ireg r) => r | _ => .x0) = r_dst; rw [hDstLoc]
+          have hStore : vStoreVar layout dst dst_reg = [] := by simp [vStoreVar, hDstLoc, hDR]
+          -- ExtStateRel: the cset's setReg overwrites the arrLd's setReg on dst_reg.
+          -- For w = dst: s3.regs r_dst = boolVal.encode (hDstVal).
+          -- For w ≠ dst: s3 agrees with s1 on all other locations (both setRegs
+          -- only touched dst_reg, cmpImm only changed flags/pc).
+          have hRel4 : ExtStateRel layout (σ[dst ↦ boolVal]) s3 := by
+            intro w loc hW
+            by_cases hwv : w = dst
+            · subst hwv; rw [hDstLoc] at hW; cases hW
+              simp [Store.update]; exact hDR ▸ hDstVal
+            · rw [Store.update_other σ dst w boolVal hwv]
+              match loc, hW with
+              | .stack off, hW =>
+                show s3.stack off = (σ w).encode
+                have : s3.stack off = s1.stack off := by
+                  simp [s3, sB, sA, ArmState.setReg, ArmState.nextPC]
+                rw [this]; exact hRel1 w (.stack off) hW
+              | .ireg r', hW =>
+                show s3.regs r' = (σ w).encode
+                have hne : r' ≠ r_dst := fun heq =>
+                  hwv (hInjective w dst (.ireg r') (hW) (heq ▸ hDstLoc))
+                have hne' : r' ≠ dst_reg := hDR ▸ hne
+                have : s3.regs r' = s1.regs r' := by
+                  simp [s3, sB, sA, ArmState.nextPC, ArmState.setReg, beq_iff_eq, hne']
+                rw [this]; exact hRel1 w (.ireg r') hW
+              | .freg r', hW =>
+                show s3.fregs r' = (σ w).encode
+                have : s3.fregs r' = s1.fregs r' := by
+                  simp [s3, sB, sA, ArmState.setReg, ArmState.nextPC]
+                rw [this]; exact hRel1 w (.freg r') hW
+          have hAM3 : s3.arrayMem = am := by
+            simp [s3, sB, sA, ArmState.setReg, ArmState.nextPC, hAM1, hArrayMem]
+          refine ⟨s3, hSteps1.trans (hStepsArrLd.trans (hStepsCmp.trans hStepsCset)),
+            ⟨hRel4, ?_, hAM3⟩⟩
+          · show s3.pc = pcMap (pc + 1)
+            have hPC_s3 : s3.pc = pcMap pc + (vLoadVar layout idx idx_reg).length + 3 := by
+              simp [s3, sB, ArmState.setReg, ArmState.nextPC]; rw [hPCA]
+            have := hPcNext _ _ rfl; simp [hStore, hBS] at this; rw [hPC_s3]; omega
+        · have hDR : dst_reg = .x0 := by
+            change (match layout dst with | some (.ireg r) => r | _ => .x0) = .x0
+            split
+            · next r h => exact absurd ⟨r, h⟩ hDIR
+            · rfl
+          -- dst not in ireg �� dst_reg = x0 (scratch). Both setRegs (arrLd + cset) only
+          -- touched x0, which is scratch-safe, so ExtStateRel layout σ is preserved.
+          have hRel3 : ExtStateRel layout σ s3 := by
+            intro w loc hW
+            match loc, hW with
+            | .stack off, hW =>
+              show s3.stack off = (σ w).encode
+              have : s3.stack off = s1.stack off := by
+                simp [s3, sB, sA, ArmState.setReg, ArmState.nextPC]
+              rw [this]; exact hRel1 w (.stack off) hW
+            | .ireg r', hW =>
+              show s3.regs r' = (σ w).encode
+              have hne : r' ≠ .x0 := fun heq => hScratch.not_x0 w (heq ▸ hW)
+              have hne' : r' ≠ dst_reg := hDR ▸ hne
+              have : s3.regs r' = s1.regs r' := by
+                simp [s3, sB, sA, ArmState.nextPC, ArmState.setReg, beq_iff_eq, hne']
+              rw [this]; exact hRel1 w (.ireg r') hW
+            | .freg r', hW =>
+              show s3.fregs r' = (σ w).encode
+              have : s3.fregs r' = s1.fregs r' := by
+                simp [s3, sB, sA, ArmState.setReg, ArmState.nextPC]
+              rw [this]; exact hRel1 w (.freg r') hW
+          have hVal3 : s3.regs .x0 = boolVal.encode := by rw [← hDR]; exact hDstVal
+          have hPC4 : s3.pc = pcMap pc + (vLoadVar layout idx idx_reg).length + 3 := by
+            simp [s3, sB, ArmState.setReg, ArmState.nextPC]; rw [hPCA]
+          have hCodeStore : CodeAt prog s3.pc (vStoreVar layout dst .x0) := by
+            rw [← hDR, hPC4]; exact hCodeBCD.tail.tail.tail
+          obtain ⟨s4, hSteps4, hRel4, hPC5, hAM4⟩ :=
+            vStoreVar_exec prog layout dst boolVal σ s3
+              s3.pc hRel3 hInjective hScratch rfl hVal3 hCodeStore hNotFregDst
+          have hAM_final : s4.arrayMem = am := by
+            rw [hAM4]; simp [s3, sB, sA, ArmState.setReg, ArmState.nextPC, hAM1, hArrayMem]
+          refine ⟨s4, hSteps1.trans (hStepsArrLd.trans (hStepsCmp.trans (hStepsCset.trans hSteps4))),
+            ⟨hRel4, ?_, hAM_final⟩⟩
+          · show s4.pc = pcMap (pc + 1)
+            have := hPcNext _ _ rfl; rw [show dst_reg = ArmReg.x0 from hDR] at this
+            simp [hBS] at this; omega
+      | false =>
+        simp [hBS] at hCodeBCD
+        -- cmpImm idx_reg size
+        have hCmp := hCodeBCD.head; rw [← hPC1] at hCmp
+        have hStepsCmp : ArmSteps prog s1
+            { s1 with flags := Flags.mk (s1.regs idx_reg) (arraySizeBv arrayDecls arr), pc := s1.pc + 1 } :=
+          .single (.cmpRI idx_reg (arraySizeBv arrayDecls arr) hCmp)
+        let s2 := { s1 with flags := Flags.mk (s1.regs idx_reg) (arraySizeBv arrayDecls arr), pc := s1.pc + 1 }
+        -- bCond .hs falls through
+        have hBoundsAD : idxVal < arraySizeBv arrayDecls arr := by
+          rw [hAD]; exact hbounds
+        have hCondFalse : s2.flags.condHolds .hs = false := by
+          simp only [s2, Flags.condHolds, hIdxVal]
+          cases h : decide (arraySizeBv arrayDecls arr ≤ idxVal) <;> simp_all <;> bv_omega
+        have hPC2 : s2.pc = pcMap pc + (vLoadVar layout idx idx_reg).length + 1 := by
+          show s1.pc + 1 = _; rw [hPC1]
+        have hBCond := hCodeBCD.tail.head; rw [← hPC2] at hBCond
+        have hStepsBCond : ArmSteps prog s2 s2.nextPC :=
+          .single (.bCond_fall .hs boundsLabel hBCond hCondFalse)
+        -- arrLd dst_reg arr idx_reg
+        have hRel2 : ExtStateRel layout σ s2.nextPC := hRel1.nextPC
+        have hIdxVal2 : s2.nextPC.regs idx_reg = idxVal := by
+          simp [ArmState.nextPC, s2]; exact hIdxVal
+        have hAM2 : s2.nextPC.arrayMem = am := by
+          simp [ArmState.nextPC, s2, hAM1, hArrayMem]
+        have hPC3 : s2.nextPC.pc = pcMap pc + (vLoadVar layout idx idx_reg).length + 2 := by
+          simp [ArmState.nextPC, s2]; rw [hPC1]
+        have hCodeArrLd := hCodeBCD.tail.tail.head; rw [← hPC3] at hCodeArrLd
+        have hStepsArrLd : ArmSteps prog s2.nextPC
+            (s2.nextPC.setReg dst_reg (s2.nextPC.arrayMem arr (s2.nextPC.regs idx_reg)) |>.nextPC) :=
+          .single (.arrLd dst_reg arr idx_reg hCodeArrLd)
+        let sA := s2.nextPC.setReg dst_reg (s2.nextPC.arrayMem arr (s2.nextPC.regs idx_reg)) |>.nextPC
+        have hDstValA : sA.regs dst_reg = am.read arr idxVal := by
+          simp [sA, ArmState.setReg, ArmState.nextPC, s2, ArrayMem.read]
+          rw [hIdxVal]; rw [hAM1, hArrayMem]
+        -- cmpImm dst_reg 0
+        have hPCA : sA.pc = pcMap pc + (vLoadVar layout idx idx_reg).length + 3 := by
+          simp [sA, ArmState.setReg, ArmState.nextPC, s2]; rw [hPC1]
+        have hCodeCmpImm := hCodeBCD.tail.tail.tail.head; rw [← hPCA] at hCodeCmpImm
+        have hStepsCmpB : ArmSteps prog sA
+            { sA with flags := Flags.mk (sA.regs dst_reg) 0, pc := sA.pc + 1 } :=
+          .single (.cmpRI dst_reg 0 hCodeCmpImm)
+        let sB := { sA with flags := Flags.mk (sA.regs dst_reg) 0, pc := sA.pc + 1 }
+        -- cset dst_reg .ne
+        have hPCB : sB.pc = pcMap pc + (vLoadVar layout idx idx_reg).length + 4 := by
+          show sA.pc + 1 = _; rw [hPCA]
+        have hCodeCset := hCodeBCD.tail.tail.tail.tail.head; rw [← hPCB] at hCodeCset
+        have hStepsCset : ArmSteps prog sB
+            (sB.setReg dst_reg (if sB.flags.condHolds .ne then (1 : BitVec 64) else 0) |>.nextPC) :=
+          .single (.cset dst_reg .ne hCodeCset)
+        let s3 := sB.setReg dst_reg (if sB.flags.condHolds .ne then (1 : BitVec 64) else 0) |>.nextPC
+        -- The cset result matches boolVal.encode
+        have hCsetEq : (if sB.flags.condHolds .ne then (1 : BitVec 64) else 0) = boolVal.encode :=
+          hNormEnc _ hDstValA
+        have hDstVal : s3.regs dst_reg = boolVal.encode := by
+          simp only [s3, ArmState.nextPC, ArmState.setReg, beq_self_eq_true, ite_true]
+          exact hCsetEq
+        -- vStoreVar + final ExtSimRel
+        by_cases hDIR : ∃ r, layout dst = some (.ireg r)
+        · obtain ⟨r_dst, hDstLoc⟩ := hDIR
+          have hDR : dst_reg = r_dst := by
+            change (match layout dst with | some (.ireg r) => r | _ => .x0) = r_dst; rw [hDstLoc]
+          have hStore : vStoreVar layout dst dst_reg = [] := by simp [vStoreVar, hDstLoc, hDR]
+          have hRel4 : ExtStateRel layout (σ[dst ↦ boolVal]) s3 := by
+            intro w loc hW
+            by_cases hwv : w = dst
+            · subst hwv; rw [hDstLoc] at hW; cases hW
+              simp [Store.update]; exact hDR ▸ hDstVal
+            · rw [Store.update_other σ dst w boolVal hwv]
+              match loc, hW with
+              | .stack off, hW =>
+                show s3.stack off = (σ w).encode
+                have : s3.stack off = s1.stack off := by
+                  simp [s3, sB, sA, ArmState.setReg, ArmState.nextPC, s2]
+                rw [this]; exact hRel1 w (.stack off) hW
+              | .ireg r', hW =>
+                show s3.regs r' = (σ w).encode
+                have hne : r' ≠ r_dst := fun heq =>
+                  hwv (hInjective w dst (.ireg r') (hW) (heq ▸ hDstLoc))
+                have hne' : r' ≠ dst_reg := hDR ▸ hne
+                have : s3.regs r' = s1.regs r' := by
+                  simp [s3, sB, sA, ArmState.nextPC, ArmState.setReg, beq_iff_eq, hne', s2]
+                rw [this]; exact hRel1 w (.ireg r') hW
+              | .freg r', hW =>
+                show s3.fregs r' = (σ w).encode
+                have : s3.fregs r' = s1.fregs r' := by
+                  simp [s3, sB, sA, ArmState.setReg, ArmState.nextPC, s2]
+                rw [this]; exact hRel1 w (.freg r') hW
+          have hAM3 : s3.arrayMem = am := by
+            simp [s3, sB, sA, ArmState.setReg, ArmState.nextPC, s2, hAM1, hArrayMem]
+          refine ⟨s3, ((hSteps1.trans hStepsCmp).trans hStepsBCond).trans
+            (hStepsArrLd.trans (hStepsCmpB.trans hStepsCset)),
+            ⟨hRel4, ?_, hAM3⟩⟩
+          · show s3.pc = pcMap (pc + 1)
+            have hPC_s3 : s3.pc = pcMap pc + (vLoadVar layout idx idx_reg).length + 5 := by
+              simp [s3, sB, ArmState.setReg, ArmState.nextPC]; rw [hPCA]
+            have := hPcNext _ _ rfl; simp [hStore, hBS] at this; rw [hPC_s3]; omega
+        · have hDR : dst_reg = .x0 := by
+            change (match layout dst with | some (.ireg r) => r | _ => .x0) = .x0
+            split
+            · next r h => exact absurd ⟨r, h⟩ hDIR
+            · rfl
+          have hRel3 : ExtStateRel layout σ s3 := by
+            intro w loc hW
+            match loc, hW with
+            | .stack off, hW =>
+              show s3.stack off = (σ w).encode
+              have : s3.stack off = s1.stack off := by
+                simp [s3, sB, sA, ArmState.setReg, ArmState.nextPC, s2]
+              rw [this]; exact hRel1 w (.stack off) hW
+            | .ireg r', hW =>
+              show s3.regs r' = (σ w).encode
+              have hne : r' ≠ .x0 := fun heq => hScratch.not_x0 w (heq ▸ hW)
+              have hne' : r' ≠ dst_reg := hDR ▸ hne
+              have : s3.regs r' = s1.regs r' := by
+                simp [s3, sB, sA, ArmState.nextPC, ArmState.setReg, beq_iff_eq, hne', s2]
+              rw [this]; exact hRel1 w (.ireg r') hW
+            | .freg r', hW =>
+              show s3.fregs r' = (σ w).encode
+              have : s3.fregs r' = s1.fregs r' := by
+                simp [s3, sB, sA, ArmState.setReg, ArmState.nextPC, s2]
+              rw [this]; exact hRel1 w (.freg r') hW
+          have hVal3 : s3.regs .x0 = boolVal.encode := by rw [← hDR]; exact hDstVal
+          have hPC4 : s3.pc = pcMap pc + (vLoadVar layout idx idx_reg).length + 5 := by
+            simp [s3, sB, ArmState.setReg, ArmState.nextPC]; rw [hPCA]
+          have hCodeStore : CodeAt prog s3.pc (vStoreVar layout dst .x0) := by
+            rw [← hDR]; rw [hPC4]; exact hCodeBCD.tail.tail.tail.tail.tail
+          obtain ⟨s4, hSteps4, hRel4, hPC5, hAM4⟩ :=
+            vStoreVar_exec prog layout dst boolVal σ s3
+              s3.pc hRel3 hInjective hScratch rfl hVal3 hCodeStore hNotFregDst
+          have hAM_final : s4.arrayMem = am := by
+            rw [hAM4]; simp [s3, sB, sA, ArmState.setReg, ArmState.nextPC, s2, hAM1, hArrayMem]
+          refine ⟨s4, ((hSteps1.trans hStepsCmp).trans hStepsBCond).trans
+            (hStepsArrLd.trans (hStepsCmpB.trans (hStepsCset.trans hSteps4))),
+            ⟨hRel4, ?_, hAM_final⟩⟩
+          · show s4.pc = pcMap (pc + 1)
+            have := hPcNext _ _ rfl; rw [show dst_reg = ArmReg.x0 from hDR] at this
+            simp [hBS] at this; omega
     | float =>
       -- idx is int-typed, so not in freg
       have hNotFregIdx : ∀ r, layout idx ≠ some (.freg r) :=

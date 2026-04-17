@@ -920,7 +920,7 @@ execution `p ⊩ Cfg.run pc σ am ⟶* cfg'` starting from an ARM state satisfyi
 `ExtSimRel` is simulated by `ArmSteps` preserving `ExtSimRel`.
 
 **Known sorrys that propagate:**
-- 2 sorrys from `verifiedGenInstr_correct` (arrLoad, arrStore)
+- 0 sorrys from `verifiedGenInstr_correct` (arrLoad bool case closed)
 -/
 
 /-- The flat ARM body: all per-PC instruction lists concatenated. -/
@@ -2122,8 +2122,7 @@ private theorem step_run_or_terminal {p : Prog} {pc : Nat} {σ : Store}
     at each step, using `step_run_or_terminal` to classify the
     intermediate config, and `type_preservation` for `TypedStore`.
 
-    **Propagated sorrys:** 2 from `verifiedGenInstr_correct` (arrLoad,
-    arrStore). -/
+    **Propagated sorrys:** 0 from `verifiedGenInstr_correct`. -/
 theorem tacToArm_refinement {p : Prog} {r : VerifiedAsmResult}
     (hGen : verifiedGenerateAsm p = .ok r)
     {pc : Nat} {σ : Store} {am : ArrayMem}
@@ -2199,7 +2198,7 @@ theorem initial_extSimRel (layout : VarLayout) (pcMap : Nat → Nat)
     `Store.typedInit` assigns each variable the zero value of its declared type
     (`Value.ofBitVec (Γ v) 0`), so `TypedStore` holds for any type context.
 
-    **Propagated sorrys:** 2 from `verifiedGenInstr_correct` (arrLoad, arrStore). -/
+    **Propagated sorrys:** 0 from `verifiedGenInstr_correct`. -/
 private theorem typedInit_encode (Γ : TyCtx) (v : Var) :
     (Store.typedInit Γ v).encode = 0 := by
   simp [Store.typedInit, Value.ofBitVec, Value.encode]
