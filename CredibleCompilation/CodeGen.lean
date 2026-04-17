@@ -405,6 +405,14 @@ private def callSaveRestoreLen (liveVars : List Var) (layout : VarLayout)
   let (saves, restores) := genCallSaveRestore liveVars layout varMap
   saves.length + restores.length
 
+/-- Remove the destination variable of an instruction from a live-variable list.
+    At a call site `x := f(...)`, x's old value is dead (being overwritten),
+    so it must not be saved/restored — the call produces x's new value. -/
+private def removeDest (instr : TAC) (live : List Var) : List Var :=
+  match DAEOpt.instrDef instr with
+  | some x => live.filter (· != x)
+  | none => live
+
 -- ============================================================
 -- § 2d. pcMap and bounds-safe computation
 -- ============================================================
@@ -420,13 +428,15 @@ private def instrLength (layout : VarLayout) (arrayDecls : List (ArrayName × Na
   match instr with
   | .print _ _ =>
     -- saves + 1 placeholder + restores
-    1 + callSaveRestoreLen liveVars layout varMap
+    let live := removeDest instr liveVars
+    1 + callSaveRestoreLen live layout varMap
   | _ =>
   let baseLen := match verifiedGenInstr layout (fun _ => 0) instr haltS divS boundsS arrayDecls boundsSafe with
     | some l => l.length
     | none => 0
   if isLibCallTAC instr then
-    baseLen + callSaveRestoreLen liveVars layout varMap
+    let live := removeDest instr liveVars
+    baseLen + callSaveRestoreLen live layout varMap
   else baseLen
 
 /-- Build a pcMap (TAC PC → cumulative ARM instruction offset) as a prefix sum. -/
@@ -639,7 +649,7 @@ def verifiedGenerateAsm (p : Prog) : Except String VerifiedAsmResult := do
         -- Generate placeholder no-ops for pcMap sizing
         let isPrint := match instr with | .print _ _ => true | _ => false
         if isPrint then
-          let live := liveOut.getD pc ([] : List Var)
+          let live := removeDest instr (liveOut.getD pc ([] : List Var))
           let (saves, restores) := genCallSaveRestore live layout varMap
           -- Use saves + 1 placeholder + restores to get correct length
           some (arr.push (saves ++ [ArmInstr.b 0] ++ restores))
@@ -649,7 +659,7 @@ def verifiedGenerateAsm (p : Prog) : Except String VerifiedAsmResult := do
         | some armInstrs =>
           let armInstrs' :=
             if isLibCallTAC instr then
-              let live := liveOut.getD pc ([] : List Var)
+              let live := removeDest instr (liveOut.getD pc ([] : List Var))
               let (saves, restores) := genCallSaveRestore live layout varMap
               saves ++ armInstrs ++ restores
             else armInstrs
@@ -1470,7 +1480,7 @@ def generateAsm (p : Prog) : Except String String := do
     let tacInstr := p.code.getD pc .halt
     match tacInstr with
     | .print fmt vs =>
-      let live := (DAEOpt.analyzeLiveness p).getD pc ([] : List Var)
+      let live := removeDest tacInstr ((DAEOpt.analyzeLiveness p).getD pc ([] : List Var))
       let (saves, _) := genCallSaveRestore live r.layout r.varMap
       let saveLines := ppInstrs lbl saves
       -- Load each argument onto the stack for variadic printf
