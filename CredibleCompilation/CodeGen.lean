@@ -1089,6 +1089,61 @@ private theorem instrLength_eq_length {layout : VarLayout} {pcMap : Nat → Nat}
     split at h <;> simp_all
 
 
+/-- The list pushed by `bodyGenStep` has length equal to `instrLength`. -/
+private theorem bodyGenStep_length {code : Array TAC} {layout : VarLayout}
+    {pcMap : Nat → Nat} {liveOut : Array (List Var)} {varMap : List (Var × Nat)}
+    {intervals : Array (Option BoundsOpt.IMap)}
+    {arrayDecls : List (ArrayName × Nat × VarTy)}
+    {haltS divS boundsS : Nat} {arr : Array (List ArmInstr)} {pc : Nat}
+    {instrs : List ArmInstr}
+    (hStep : bodyGenStep code layout pcMap liveOut varMap intervals arrayDecls
+      haltS divS boundsS (some arr) pc = some (arr.push instrs))
+    (hpc : pc < code.size) :
+    instrs.length = instrLength layout arrayDecls
+      (isBoundsSafe arrayDecls intervals pc (code.getD pc .halt))
+      (code.getD pc .halt) haltS divS boundsS (liveOut.getD pc ([] : List Var)) varMap := by
+  -- Normalize getD to getElem in goal
+  have hGetD : code.getD pc .halt = code[pc] := by simp [Array.getD, hpc]
+  have hGetDL : liveOut.getD pc ([] : List Var) =
+    if h : pc < liveOut.size then liveOut[pc] else [] := by simp [Array.getD]
+  rw [hGetD, hGetDL]
+  -- Unfold bodyGenStep in hypothesis
+  simp only [bodyGenStep, Array.getD, hpc, dite_true] at hStep
+  -- Case split: print vs non-print (isPrint match)
+  split at hStep
+  · -- .print match
+    rename_i fmt vs heq
+    split at hStep
+    · -- isPrint = true
+      have heqI : code[pc] = TAC.print fmt vs := heq
+      have := Array.push_inj (Option.some.inj hStep); subst this
+      simp_all [instrLength, callSaveRestoreLen, List.length_append]; omega
+    · -- isPrint = false for .print: contradiction
+      rename_i h; exact absurd rfl h
+  · -- non-.print match
+    rename_i heqPrint
+    split at hStep
+    · -- isPrint = true for non-print: contradiction
+      rename_i h; simp at h
+    · -- isPrint = false: the real non-print case
+      simp at hStep
+      split at hStep
+      · simp at hStep  -- verifiedGenInstr = none: contradiction
+      · rename_i armInstrs hGenInstr
+        -- Use instrLength_eq_length to relate instrLength to verifiedGenInstr output
+        rw [instrLength_eq_length hGenInstr]
+        split at hStep
+        · -- lib-call case
+          rename_i hLib
+          have hInstrs := Array.push_inj (Option.some.inj hStep)
+          simp only [hLib, ite_true]; rw [← hInstrs]; simp [List.length_append]
+        · -- non-lib-call case
+          rename_i hNotLib
+          have hInstrs := Array.push_inj (Option.some.inj hStep)
+          have hNotLib' : isLibCallTAC code[pc] = false := by
+            cases h : isLibCallTAC code[pc] <;> simp_all
+          simp [hNotLib', hInstrs]
+
 /-- A successful `verifiedGenerateAsm` call satisfies `GenAsmSpec`. -/
 theorem verifiedGenerateAsm_spec {p : Prog} {r : VerifiedAsmResult}
     (hGen : verifiedGenerateAsm p = .ok r) : GenAsmSpec p r := by
@@ -1152,11 +1207,54 @@ theorem verifiedGenerateAsm_spec {p : Prog} {r : VerifiedAsmResult}
               rw [this] at hStep; simp at hStep
               exact ⟨_, (Array.push_inj hStep) ▸ hGenInstr⟩
         case pcMapLengths =>
-          sorry
+          -- Witness: the inline lengthsArr from codegen; pcMap = buildPcMap _ is rfl
+          refine ⟨_, ?_, rfl, ?_⟩
+          · -- size: lengthsArr.size = bodyPerPC.size (both = p.code.size)
+            simp [List.length_map, List.length_range, hBSz]
+          · -- element equality: lengthsArr[i] = bodyPerPC[i].length
+            intro i hL hB
+            -- lengthsArr[i] = instrLength at pc i
+            -- bodyPerPC[i].length = instrLength at pc i (by bodyGenStep_length)
+            have hpcCode : i < p.code.size := by rw [← hBSz]; exact hB
+            have hContent := by
+              apply foldl_push_content _ _ heqFold i hB
+              · intro; rfl
+              · intro arr pc; exact bodyGenStep_push _ _ _ _ _ _ _ _ _ _ arr pc
+            obtain ⟨mid, _, hStep⟩ := hContent
+            rw [bodyGenStep_length hStep hpcCode]
+            -- Now: instrLength ... = instrLength ... (should be rfl or simp)
+            simp [List.getElem_toArray, List.getElem_map]
         case layoutComplete =>
-          sorry
+          intro pc hpc v hv
+          exact checkWellTypedLayout_instrMapped ‹_› (by simp [Prog.size_eq] at hpc; exact hpc) hv
         case callSiteSaveRestore =>
-          sorry
+          intro pc hpc hLib
+          have hpcB : pc < bodyPerPC.size := by rw [hBSz]; simp [Prog.size_eq] at hpc; exact hpc
+          have hpcCode : pc < p.code.size := by simp [Prog.size_eq] at hpc; exact hpc
+          have hContent := by
+            apply foldl_push_content _ _ heqFold pc hpcB
+            · intro; rfl
+            · intro arr pc; exact bodyGenStep_push _ _ _ _ _ _ _ _ _ _ arr pc
+          obtain ⟨mid, _, hStep⟩ := hContent
+          simp only [bodyGenStep, Array.getD, show pc < p.code.size from hpcCode,
+            dite_true] at hStep
+          -- Not a print (lib-call TACs are floatUnary/fpow, not print)
+          split at hStep <;> split at hStep
+          · -- print, isTrue: print is not a lib-call
+            simp_all [isLibCallTAC]
+          · simp_all  -- print, isFalse
+          · simp_all  -- non-print, isTrue
+          · -- non-print, isFalse: the real case
+            simp at hStep
+            split at hStep
+            · simp at hStep  -- verifiedGenInstr = none: contradiction
+            · rename_i armInstrs hGenInstr
+              -- isLibCallTAC is true
+              rw [show isLibCallTAC p.code[pc] = true from hLib] at hStep
+              simp only [ite_true] at hStep
+              have hEq := (Array.push_inj (Option.some.inj hStep)).symm
+              rw [← List.append_assoc] at hEq
+              exact ⟨armInstrs, _, _, hGenInstr, hEq⟩
 
 
 
