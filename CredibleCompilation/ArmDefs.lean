@@ -241,6 +241,10 @@ inductive ArmInstr where
   | asrR     : ArmReg → ArmReg → ArmReg → ArmInstr
   /-- `b label` — unconditional branch. -/
   | b        : Nat → ArmInstr
+  /-- Print library call (`bl _printf`): havocs all caller-saved registers.
+      Carries pre-computed assembly lines for the printf body (sub sp, arg
+      loads, adrp/add for format string, bl _printf, add sp). -/
+  | printCall : List String → ArmInstr
   /-- `b.cc label` — conditional branch based on flags. -/
   | bCond    : Cond → Nat → ArmInstr
   /-- Load from global array: `dst ← arrayMem[arr][idxReg]`. -/

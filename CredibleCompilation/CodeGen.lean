@@ -263,6 +263,7 @@ private def ppInstr (lbl : Nat → String) (afterFcmp : Bool)
     [s!"  asr {ppReg rd}, {ppReg rn}, {ppReg rm}"]
   | .b target =>
     [s!"  b {lbl target}"]
+  | .printCall lines => lines
   | .bCond c target =>
     [s!"  b.{if afterFcmp then ppCondFloat c else ppCond c} {lbl target}"]
   | .arrLd dst arr idxReg =>
@@ -435,11 +436,13 @@ def genCallSaveRestore (liveVars : List Var) (layout : VarLayout)
     | .inr (r, off) => ArmInstr.fldr r off
   (saves, restores)
 
-/-- Number of save/restore instructions for a call site, given liveness. -/
-private def callSaveRestoreLen (liveVars : List Var) (layout : VarLayout)
+/-- Number of save/restore instructions for a call site.
+    Uses `genCallerSaveAll` (saves ALL caller-saved registers in layout,
+    not just live ones) so `callerSave_composition` coverage is satisfied. -/
+private def callSaveRestoreLen (layout : VarLayout)
     (varMap : List (Var × Nat)) : Nat :=
-  let (saves, restores) := genCallSaveRestore liveVars layout varMap
-  saves.length + restores.length
+  let entries := genCallerSaveAll layout varMap
+  (entriesToSaves entries).length + (entriesToRestores entries).length
 
 /-- Remove the destination variable of an instruction from a live-variable list.
     At a call site `x := f(...)`, x's old value is dead (being overwritten),
@@ -455,24 +458,21 @@ private def removeDest (instr : TAC) (live : List Var) : List Var :=
 
 /-- Compute instruction length for a TAC instruction.
     `pcMap` does not affect instruction count (only branch target values).
-    `liveVars` is the liveness at this PC (for call-site save/restore sizing). -/
+    Save/restore uses `genCallerSaveAll` (all caller-saved regs, not just live). -/
 private def instrLength (layout : VarLayout) (arrayDecls : List (ArrayName × Nat × VarTy))
     (boundsSafe : Bool) (instr : TAC)
     (haltS divS boundsS : Nat)
-    (liveVars : List Var := []) (varMap : List (Var × Nat) := []) : Nat :=
-  -- Print instructions are handled by unverified string-level codegen
+    (varMap : List (Var × Nat) := []) : Nat :=
   match instr with
   | .print _ _ =>
-    -- saves + 1 placeholder + restores
-    let live := removeDest instr liveVars
-    1 + callSaveRestoreLen live layout varMap
+    -- saves + 1 printCall + restores
+    1 + callSaveRestoreLen layout varMap
   | _ =>
   let baseLen := match verifiedGenInstr layout (fun _ => 0) instr haltS divS boundsS arrayDecls boundsSafe with
     | some l => l.length
     | none => 0
   if isLibCallTAC instr then
-    let live := removeDest instr liveVars
-    baseLen + callSaveRestoreLen live layout varMap
+    baseLen + callSaveRestoreLen layout varMap
   else baseLen
 
 /-- Build a pcMap (TAC PC → cumulative ARM instruction offset) as a prefix sum. -/
@@ -635,6 +635,25 @@ private def genVerifiedCalleeSave (intRegs : List Nat) (floatRegs : List Nat)
   ) ([], [], baseOffset + intRegs.length * 8)
   (intSaves ++ floatSaves, intRestores ++ floatRestores)
 
+/-- Build the pre-computed assembly lines for a `printCall` instruction.
+    These are emitted by `ppInstr` and model the printf calling convention:
+    sub sp, arg loads, adrp/add for format string, bl _printf, add sp. -/
+private def genPrintCallLines (tyCtx : TyCtx) (layout : VarLayout)
+    (varMap : List (Var × Nat)) (pc : Nat) (fmt : String) (vs : List Var) : List String :=
+  let stackSize := max 16 (((vs.length * 8 + 15) / 16) * 16)
+  let fmtComment := fmt.foldl (fun acc c => match c with
+    | '\n' => acc ++ "\\n" | '\t' => acc ++ "\\t" | c => acc ++ c.toString) ""
+  let loadLines := (List.range vs.length).flatMap fun i =>
+    genPrintArgLoad tyCtx layout varMap i (vs.getD i "")
+  let comment := "  // print " ++ "\"" ++ fmtComment ++ "\""
+  let fmtLabel := ".Lfmt_print_" ++ toString pc
+  let subSp := "  sub sp, sp, #" ++ toString stackSize
+  let addSp := "  add sp, sp, #" ++ toString stackSize
+  let adrp := "  adrp x0, " ++ fmtLabel ++ "@PAGE"
+  let addX0 := "  add x0, x0, " ++ fmtLabel ++ "@PAGEOFF"
+  let bl := "  bl _printf"
+  comment :: subSp :: loadLines ++ [adrp, addX0, bl, addSp]
+
 /-- Step function for pass-2 body generation. For each TAC instruction,
     generates (and possibly wraps) ARM instructions, pushing onto the accumulator.
     Returns `none` if verifiedGenInstr fails; propagates `none` from previous steps. -/
@@ -642,7 +661,7 @@ private def bodyGenStep (code : Array TAC) (layout : VarLayout) (pcMap : Nat →
     (liveOut : Array (List Var)) (varMap : List (Var × Nat))
     (intervals : Array (Option BoundsOpt.IMap))
     (arrayDecls : List (ArrayName × Nat × VarTy))
-    (haltS divS boundsS : Nat)
+    (haltS divS boundsS : Nat) (tyCtx : TyCtx)
     (acc : Option (Array (List ArmInstr))) (pc : Nat)
     : Option (Array (List ArmInstr)) :=
   match acc with
@@ -652,18 +671,20 @@ private def bodyGenStep (code : Array TAC) (layout : VarLayout) (pcMap : Nat →
     let safe := isBoundsSafe arrayDecls intervals pc instr
     let isPrint := match instr with | .print _ _ => true | _ => false
     if isPrint then
-      let live := removeDest instr (liveOut.getD pc ([] : List Var))
-      let (saves, restores) := genCallSaveRestore live layout varMap
-      some (arr.push (saves ++ [ArmInstr.b (pcMap (pc + 1))] ++ restores))
+      let (fmt, vs) := match instr with | .print f v => (f, v) | _ => ("", [])
+      let entries := genCallerSaveAll layout varMap
+      let saves := entriesToSaves entries
+      let restores := entriesToRestores entries
+      let printLines := genPrintCallLines tyCtx layout varMap pc fmt vs
+      some (arr.push (saves ++ [ArmInstr.printCall printLines] ++ restores))
     else
     match verifiedGenInstr layout pcMap instr haltS divS boundsS arrayDecls safe with
     | none => none
     | some armInstrs =>
       let armInstrs' :=
         if isLibCallTAC instr then
-          let live := removeDest instr (liveOut.getD pc ([] : List Var))
-          let (saves, restores) := genCallSaveRestore live layout varMap
-          saves ++ armInstrs ++ restores
+          let entries := genCallerSaveAll layout varMap
+          entriesToSaves entries ++ armInstrs ++ entriesToRestores entries
         else armInstrs
       some (arr.push armInstrs')
 
@@ -696,8 +717,7 @@ def verifiedGenerateAsm (p : Prog) : Except String VerifiedAsmResult := do
     let lengths := (List.range p.code.size).map fun pc =>
       let instr := p.code.getD pc .halt
       let safe := isBoundsSafe p.arrayDecls intervals pc instr
-      let live := liveOut.getD pc ([] : List Var)
-      instrLength layout p.arrayDecls safe instr haltS divS boundsS live varMap
+      instrLength layout p.arrayDecls safe instr haltS divS boundsS varMap
     let lengthsArr := lengths.toArray
     -- Build real pcMap and reverse map
     let pcMap := buildPcMap lengthsArr
@@ -707,7 +727,7 @@ def verifiedGenerateAsm (p : Prog) : Except String VerifiedAsmResult := do
     -- Pass 2: generate instructions with real pcMap
     -- For library call sites, wrap with save/restore of live caller-saved registers.
     let bodyResult := (List.range p.code.size).foldl
-        (bodyGenStep p.code layout pcMap liveOut varMap intervals p.arrayDecls haltS divS boundsS)
+        (bodyGenStep p.code layout pcMap liveOut varMap intervals p.arrayDecls haltS divS boundsS p.tyCtx)
         (some (Array.mkEmpty p.code.size))
     match bodyResult with
     | none => .error "verifiedGenInstr failed (layout or type mismatch)"
@@ -785,7 +805,7 @@ structure GenAsmSpec (p : Prog) (r : VerifiedAsmResult) : Prop where
   /-- Every variable referenced by an instruction has a layout entry. -/
   layoutComplete : ∀ pc (hpc : pc < p.size), ∀ v, v ∈ (p[pc]).vars → r.layout v ≠ none
   /-- At library call sites, bodyPerPC wraps verifiedGenInstr output with
-      save/restore of live caller-saved registers. -/
+      save/restore of all caller-saved registers (via genCallerSaveAll). -/
   callSiteSaveRestore : ∀ pc (hpc : pc < p.size),
     isLibCallTAC p[pc] = true →
     ∃ baseInstrs saves restores,
@@ -793,6 +813,15 @@ structure GenAsmSpec (p : Prog) (r : VerifiedAsmResult) : Prop where
         r.haltS r.divS r.boundsS p.arrayDecls (isBoundsSafe p.arrayDecls (BoundsOpt.analyzeIntervals p) pc p[pc]) =
         some baseInstrs ∧
       r.bodyPerPC[pc]'(bodySize ▸ hpc) = saves ++ baseInstrs ++ restores
+  /-- At print sites, bodyPerPC = entriesToSaves entries ++ [printCall _] ++ entriesToRestores entries
+      where entries = genCallerSaveAll layout varMap. -/
+  printSaveRestore : ∀ pc (hpc : pc < p.size),
+    (∃ fmt vs, p[pc] = .print fmt vs) →
+    ∃ lines,
+      r.bodyPerPC[pc]'(bodySize ▸ hpc) =
+        entriesToSaves (genCallerSaveAll r.layout r.varMap) ++
+        [ArmInstr.printCall lines] ++
+        entriesToRestores (genCallerSaveAll r.layout r.varMap)
 
 /-- If lookup returns some, the key-value pair is in the list. -/
 private theorem lookup_mem {v : String} {loc : VarLoc}
@@ -987,19 +1016,19 @@ private theorem foldl_push_content
     (pcMap : Nat → Nat) (liveOut : Array (List Var))
     (varMap : List (Var × Nat)) (intervals : Array (Option BoundsOpt.IMap))
     (arrayDecls : List (ArrayName × Nat × VarTy))
-    (haltS divS boundsS : Nat) (pc : Nat) :
+    (haltS divS boundsS : Nat) (tyCtx : TyCtx) (pc : Nat) :
     bodyGenStep code layout pcMap liveOut varMap intervals arrayDecls
-      haltS divS boundsS none pc = none := rfl
+      haltS divS boundsS tyCtx none pc = none := rfl
 
 theorem bodyGenStep_push (code : Array TAC) (layout : VarLayout)
     (pcMap : Nat → Nat) (liveOut : Array (List Var))
     (varMap : List (Var × Nat)) (intervals : Array (Option BoundsOpt.IMap))
     (arrayDecls : List (ArrayName × Nat × VarTy))
-    (haltS divS boundsS : Nat) (arr : Array (List ArmInstr)) (pc : Nat) :
+    (haltS divS boundsS : Nat) (tyCtx : TyCtx) (arr : Array (List ArmInstr)) (pc : Nat) :
     bodyGenStep code layout pcMap liveOut varMap intervals arrayDecls
-      haltS divS boundsS (some arr) pc = none ∨
+      haltS divS boundsS tyCtx (some arr) pc = none ∨
     ∃ instrs, bodyGenStep code layout pcMap liveOut varMap intervals arrayDecls
-      haltS divS boundsS (some arr) pc = some (arr.push instrs) := by
+      haltS divS boundsS tyCtx (some arr) pc = some (arr.push instrs) := by
   simp only [bodyGenStep]
   split <;> split <;> simp_all
   -- print case: push (simp_all removed the Or, leaving ∃)
@@ -1046,13 +1075,12 @@ private theorem verifiedGenInstr_length_pcMap_indep {layout : VarLayout}
 private theorem instrLength_eq_length {layout : VarLayout} {pcMap : Nat → Nat} {instr : TAC}
     {haltS divS boundsS : Nat} {arrayDecls : List (ArrayName × Nat × VarTy)}
     {safe : Bool} {instrs : List ArmInstr}
-    {liveVars : List Var} {varMap : List (Var × Nat)}
+    {varMap : List (Var × Nat)}
     (h : verifiedGenInstr layout pcMap instr haltS divS boundsS arrayDecls safe = some instrs) :
-    instrLength layout arrayDecls safe instr haltS divS boundsS liveVars varMap =
+    instrLength layout arrayDecls safe instr haltS divS boundsS varMap =
       (if isLibCallTAC instr then
-        let live := removeDest instr liveVars
-        let (saves, restores) := genCallSaveRestore live layout varMap
-        (saves ++ instrs ++ restores).length
+        let entries := genCallerSaveAll layout varMap
+        (entriesToSaves entries ++ instrs ++ entriesToRestores entries).length
       else instrs.length) := by
   -- Print case: verifiedGenInstr returns none, contradicting h
   -- Non-print: instrLength uses dummy pcMap (fun _ => 0); equate lengths via pcMap-independence
@@ -1090,7 +1118,7 @@ private theorem instrLength_eq_length {layout : VarLayout} {pcMap : Nat → Nat}
     simp only [instrLength, isLibCallTAC, verifiedGenInstr] at *
     split at h <;> simp_all
   | fbinop x fop y z =>
-    simp only [instrLength, isLibCallTAC, removeDest, callSaveRestoreLen]
+    simp only [instrLength, isLibCallTAC, callSaveRestoreLen]
     generalize hd : verifiedGenInstr layout (fun _ => 0)
       (.fbinop x fop y z) haltS divS boundsS arrayDecls safe = dr
     cases dr with
@@ -1100,7 +1128,8 @@ private theorem instrLength_eq_length {layout : VarLayout} {pcMap : Nat → Nat}
     | some dl =>
       have hLen := verifiedGenInstr_length_pcMap_ind layout (.fbinop x fop y z) haltS divS boundsS
           arrayDecls safe _ pcMap dl instrs hd h
-      simp only [hLen, List.length_append]; cases fop <;> simp_all [Nat.add_assoc, Nat.add_comm]
+      simp only [hLen, List.length_append]
+      cases fop <;> simp_all [Nat.add_comm] <;> omega
   | intToFloat x y =>
     simp only [instrLength, isLibCallTAC, verifiedGenInstr] at *
     split at h <;> simp_all
@@ -1108,7 +1137,7 @@ private theorem instrLength_eq_length {layout : VarLayout} {pcMap : Nat → Nat}
     simp only [instrLength, isLibCallTAC, verifiedGenInstr] at *
     split at h <;> simp_all
   | floatUnary x op y =>
-    simp only [instrLength, isLibCallTAC, removeDest, callSaveRestoreLen]
+    simp only [instrLength, isLibCallTAC, callSaveRestoreLen]
     generalize hd : verifiedGenInstr layout (fun _ => 0)
       (.floatUnary x op y) haltS divS boundsS arrayDecls safe = dr
     cases dr with
@@ -1119,7 +1148,7 @@ private theorem instrLength_eq_length {layout : VarLayout} {pcMap : Nat → Nat}
       have hLen := verifiedGenInstr_length_pcMap_ind layout (.floatUnary x op y) haltS divS boundsS
           arrayDecls safe _ pcMap dl instrs hd h
       simp only [hLen, List.length_append]
-      cases op.isNative <;> simp_all [Nat.add_assoc, Nat.add_comm]
+      cases op.isNative <;> simp_all [Nat.add_comm] <;> omega
   | fternop x op a b c =>
     simp only [instrLength, isLibCallTAC, verifiedGenInstr] at *
     split at h <;> simp_all
@@ -1130,19 +1159,18 @@ private theorem bodyGenStep_length {code : Array TAC} {layout : VarLayout}
     {pcMap : Nat → Nat} {liveOut : Array (List Var)} {varMap : List (Var × Nat)}
     {intervals : Array (Option BoundsOpt.IMap)}
     {arrayDecls : List (ArrayName × Nat × VarTy)}
-    {haltS divS boundsS : Nat} {arr : Array (List ArmInstr)} {pc : Nat}
+    {haltS divS boundsS : Nat} {tyCtx : TyCtx}
+    {arr : Array (List ArmInstr)} {pc : Nat}
     {instrs : List ArmInstr}
     (hStep : bodyGenStep code layout pcMap liveOut varMap intervals arrayDecls
-      haltS divS boundsS (some arr) pc = some (arr.push instrs))
+      haltS divS boundsS tyCtx (some arr) pc = some (arr.push instrs))
     (hpc : pc < code.size) :
     instrs.length = instrLength layout arrayDecls
       (isBoundsSafe arrayDecls intervals pc (code.getD pc .halt))
-      (code.getD pc .halt) haltS divS boundsS (liveOut.getD pc ([] : List Var)) varMap := by
+      (code.getD pc .halt) haltS divS boundsS varMap := by
   -- Normalize getD to getElem in goal
   have hGetD : code.getD pc .halt = code[pc] := by simp [Array.getD, hpc]
-  have hGetDL : liveOut.getD pc ([] : List Var) =
-    if h : pc < liveOut.size then liveOut[pc] else [] := by simp [Array.getD]
-  rw [hGetD, hGetDL]
+  rw [hGetD]
   -- Unfold bodyGenStep in hypothesis
   simp only [bodyGenStep, Array.getD, hpc, dite_true] at hStep
   -- Case split: print vs non-print (isPrint match)
@@ -1204,12 +1232,13 @@ theorem verifiedGenerateAsm_spec {p : Prog} {r : VerifiedAsmResult}
         have hBSz : bodyPerPC.size = p.code.size := by
           apply foldl_push_size _ _ heqFold
           · intro; rfl
-          · intro arr pc; exact bodyGenStep_push _ _ _ _ _ _ _ _ _ _ arr pc
+          · intro arr pc; exact bodyGenStep_push _ _ _ _ _ _ _ _ _ _ _ arr pc
         refine ⟨
           checkWellTypedProg_sound ‹_›,
           checkWellTypedLayout_wellTyped ‹_›,
           by simp [Prog.size_eq]; exact hBSz,
-          ?instrGen, ?pcMapLengths, ?layoutComplete, ?callSiteSaveRestore⟩
+          ?instrGen, ?pcMapLengths, ?layoutComplete, ?callSiteSaveRestore,
+          ?printSaveRestore⟩
         case instrGen =>
           intro pc hpc hNotLib hNotPrint
           have hpcB : pc < bodyPerPC.size := by rw [hBSz]; simp [Prog.size_eq] at hpc; exact hpc
@@ -1218,7 +1247,7 @@ theorem verifiedGenerateAsm_spec {p : Prog} {r : VerifiedAsmResult}
           have hContent := by
             apply foldl_push_content _ _ heqFold pc hpcB
             · intro; rfl
-            · intro arr pc; exact bodyGenStep_push _ _ _ _ _ _ _ _ _ _ arr pc
+            · intro arr pc; exact bodyGenStep_push _ _ _ _ _ _ _ _ _ _ _ arr pc
           obtain ⟨mid, _, hStep⟩ := hContent
           -- Unfold bodyGenStep; simplify getD to getElem
           simp only [bodyGenStep, Array.getD, show pc < p.code.size from hpcCode,
@@ -1255,7 +1284,7 @@ theorem verifiedGenerateAsm_spec {p : Prog} {r : VerifiedAsmResult}
             have hContent := by
               apply foldl_push_content _ _ heqFold i hB
               · intro; rfl
-              · intro arr pc; exact bodyGenStep_push _ _ _ _ _ _ _ _ _ _ arr pc
+              · intro arr pc; exact bodyGenStep_push _ _ _ _ _ _ _ _ _ _ _ arr pc
             obtain ⟨mid, _, hStep⟩ := hContent
             rw [bodyGenStep_length hStep hpcCode]
             -- Now: instrLength ... = instrLength ... (should be rfl or simp)
@@ -1270,7 +1299,7 @@ theorem verifiedGenerateAsm_spec {p : Prog} {r : VerifiedAsmResult}
           have hContent := by
             apply foldl_push_content _ _ heqFold pc hpcB
             · intro; rfl
-            · intro arr pc; exact bodyGenStep_push _ _ _ _ _ _ _ _ _ _ arr pc
+            · intro arr pc; exact bodyGenStep_push _ _ _ _ _ _ _ _ _ _ _ arr pc
           obtain ⟨mid, _, hStep⟩ := hContent
           simp only [bodyGenStep, Array.getD, show pc < p.code.size from hpcCode,
             dite_true] at hStep
@@ -1291,7 +1320,34 @@ theorem verifiedGenerateAsm_spec {p : Prog} {r : VerifiedAsmResult}
               have hEq := (Array.push_inj (Option.some.inj hStep)).symm
               rw [← List.append_assoc] at hEq
               exact ⟨armInstrs, _, _, hGenInstr, hEq⟩
-
+        case printSaveRestore =>
+          intro pc hpc ⟨fmt, vs, hPrint⟩
+          have hpcB : pc < bodyPerPC.size := by rw [hBSz]; simp [Prog.size_eq] at hpc; exact hpc
+          have hpcCode : pc < p.code.size := by simp [Prog.size_eq] at hpc; exact hpc
+          have hContent := by
+            apply foldl_push_content _ _ heqFold pc hpcB
+            · intro; rfl
+            · intro arr pc; exact bodyGenStep_push _ _ _ _ _ _ _ _ _ _ _ arr pc
+          obtain ⟨mid, _, hStep⟩ := hContent
+          simp only [bodyGenStep, Array.getD, show pc < p.code.size from hpcCode,
+            dite_true] at hStep
+          -- Print case: isPrint = true
+          split at hStep <;> split at hStep
+          · -- print, isTrue: extract entriesToSaves ++ [printCall] ++ entriesToRestores
+            have hEq := (Array.push_inj (Option.some.inj hStep)).symm
+            exact ⟨_, hEq⟩
+          · -- print, isFalse: contradiction
+            rename_i h; exact absurd rfl h
+          · -- non-print, isTrue: contradiction (p[pc] is .print)
+            rename_i heq h
+            have hPE : p[pc] = TAC.print fmt vs := hPrint
+            simp [Prog.getElem_eq] at hPE
+            simp_all
+          · -- non-print, isFalse
+            rename_i heq h
+            have hPE : p[pc] = TAC.print fmt vs := hPrint
+            simp [Prog.getElem_eq] at hPE
+            simp_all
 
 
 -- ──────────────────────────────────────────────────────────────
@@ -1527,8 +1583,128 @@ private theorem step_simulation {p : Prog} {r : VerifiedAsmResult}
   · -- Lib-call case (floatUnary non-native, fpow): needs save/restore reasoning
     sorry
   · by_cases hPrint : ∃ fmt vs, p[pc] = .print fmt vs
-    · -- Print case: unverified codegen, needs save/restore reasoning
-      sorry
+    · -- Print case: save/restore around printCall (havoc)
+      obtain ⟨fmt, vs, hPrintEq⟩ := hPrint
+      -- Get bodyPerPC structure from GenAsmSpec
+      obtain ⟨lines, hBody⟩ :=
+        spec.printSaveRestore pc hPC ⟨fmt, vs, hPrintEq⟩
+      -- Get pcMap/lengths infrastructure
+      obtain ⟨lengths, hLSz, hPcMap, hLenEq⟩ := spec.pcMapLengths
+      have hpcB : pc < r.bodyPerPC.size := spec.bodySize ▸ hPC
+      -- CodeAt for the full bodyPerPC[pc] block
+      have hCodeAt : CodeAt r.bodyFlat (r.pcMap pc) (r.bodyPerPC[pc]'hpcB) := by
+        rw [hPcMap]; exact codeAt_of_bodyFlat r.bodyPerPC lengths hLSz hLenEq pc hpcB
+      rw [hBody] at hCodeAt
+      -- Abbreviate entries
+      let entries := genCallerSaveAll r.layout r.varMap
+      -- Split CodeAt into three parts: (saves ++ [printCall]) ++ restores
+      have hCodeSP := hCodeAt.append_left
+        (l2 := entriesToRestores entries)
+      have hCodeRestores := hCodeAt.append_right
+        (l1 := entriesToSaves entries ++ [ArmInstr.printCall lines])
+      have hCodeSaves := hCodeSP.append_left (l2 := [ArmInstr.printCall lines])
+      have hCodePrint := hCodeSP.append_right (l1 := entriesToSaves entries)
+      -- Extract ExtStateRel components
+      obtain ⟨hStateRel, hPcRel, hArrayMem⟩ := hRel
+      -- Print step: cfg' = .run (pc+1) σ am
+      have hCfg : cfg' = .run (pc + 1) σ am := by
+        have hInstr : p[pc]? = some (.print fmt vs) :=
+          Prog.getElem?_eq_getElem hPC ▸ congrArg some hPrintEq
+        cases hStep <;> simp_all
+      subst hCfg
+      -- hPcNext: pcMap(pc+1) = pcMap(pc) + bodyPerPC[pc].length
+      have hPcNext : r.pcMap (pc + 1) = r.pcMap pc + (r.bodyPerPC[pc]'hpcB).length := by
+        rw [hPcMap, buildPcMap_succ lengths pc (by rw [hLSz]; exact hpcB)]
+        congr 1; exact hLenEq pc (by rw [hLSz]; exact hpcB) hpcB
+      -- Rewrite s.pc to r.pcMap pc using PcRel
+      have hSPC : s.pc = r.pcMap pc := hPcRel
+      -- Step 1: saves
+      have hStepSaves := armSteps_saves r.bodyFlat entries s
+        (hSPC ▸ hCodeSaves)
+      -- Step 2: printCall
+      have hPrintCode : r.bodyFlat[s.pc + entries.length]? =
+          some (ArmInstr.printCall lines) := by
+        have := hCodePrint 0 (by simp)
+        simp only [List.getElem_cons_zero, entriesToSaves_length] at this
+        rw [hSPC]; exact this
+      -- Pick arbitrary havoc values (callerSave_composition handles any)
+      let newRegs : ArmReg → BitVec 64 := fun _ => 0
+      let newFregs : ArmFReg → BitVec 64 := fun _ => 0
+      have hStepPrint1 : ArmStep r.bodyFlat
+          {applyCallerSaves entries s with pc := s.pc + entries.length}
+          ({applyCallerSaves entries s with pc := s.pc + entries.length}.havocCallerSaved newRegs newFregs |>.nextPC) :=
+        .printCall lines newRegs newFregs hPrintCode
+      -- Step 3: restores
+      have hRestorePC : s.pc + (entriesToSaves entries).length + 1 =
+          r.pcMap pc + (entriesToSaves entries ++ [ArmInstr.printCall lines]).length := by
+        simp [entriesToSaves_length, hSPC]; omega
+      have hRestoreCode : CodeAt r.bodyFlat
+          (s.pc + entries.length + 1) (entriesToRestores entries) := by
+        rw [show s.pc + entries.length + 1 =
+            s.pc + (entriesToSaves entries).length + 1 by simp [entriesToSaves_length]]
+        rw [hRestorePC]; exact hCodeRestores
+      -- The state after printCall
+      let s_mid := {applyCallerSaves entries s with pc := s.pc + entries.length}.havocCallerSaved newRegs newFregs |>.nextPC
+      have hMidPC : s_mid.pc = s.pc + entries.length + 1 := by
+        simp [s_mid, ArmState.nextPC, ArmState.havocCallerSaved]
+      have hStepRestores := armSteps_restores r.bodyFlat entries s_mid
+        (hMidPC ▸ hRestoreCode)
+      -- Compose all three: saves → printCall → restores
+      let s_final := {applyCallerRestores entries s_mid with
+        pc := s_mid.pc + entries.length}
+      have hAllSteps : ArmSteps r.bodyFlat s s_final :=
+        hStepSaves.trans ((ArmSteps.single hStepPrint1).trans hStepRestores)
+      -- Prove ExtSimRel for the final state
+      refine ⟨s_final, hAllSteps, ?_, ?_, ?_⟩
+      · -- ExtStateRel: callerSave_composition on the logical state, then
+        -- transfer to s_final via pc-independence.
+        -- First, get the logical result
+        let s_havoc := (applyCallerSaves entries s).havocCallerSaved newRegs newFregs
+        have hCSC := @ExtStateRel.callerSave_composition _ _ _
+          hStateRel entries newRegs newFregs
+          (sorry : ∀ e ∈ entries, ∀ v, r.layout v ≠ some (.stack e.off))       -- hFresh
+          (sorry : (entries.map CallerSaveEntry.off).Nodup)                      -- hNodup
+          (sorry : ∀ v ir, r.layout v = some (.ireg ir) → ir.isCallerSaved = true →
+            ∃ off, CallerSaveEntry.ireg ir off ∈ entries)                          -- hCoversIreg
+          (sorry : ∀ v fr, r.layout v = some (.freg fr) → fr.isCallerSaved = true →
+            ∃ off, CallerSaveEntry.freg fr off ∈ entries)                          -- hCoversFreg
+          (sorry : ∀ ir off1 off2, CallerSaveEntry.ireg ir off1 ∈ entries →
+            CallerSaveEntry.ireg ir off2 ∈ entries → off1 = off2)                  -- hUniqIreg
+          (sorry : ∀ fr off1 off2, CallerSaveEntry.freg fr off1 ∈ entries →
+            CallerSaveEntry.freg fr off2 ∈ entries → off1 = off2)                  -- hUniqFreg
+          (sorry : ∀ ir off, CallerSaveEntry.ireg ir off ∈ entries →
+            ir.isCallerSaved = true)                                               -- hAllCSIreg
+          (sorry : ∀ fr off, CallerSaveEntry.freg fr off ∈ entries →
+            fr.isCallerSaved = true)                                               -- hAllCSFreg
+        -- hCSC : ExtStateRel layout σ (applyCallerRestores entries s_havoc)
+        -- s_final = {applyCallerRestores entries s_mid with pc := ...}
+        -- s_mid = {s_havoc with pc := ...}
+        -- Use pc-irrelevance to relate
+        have : applyCallerRestores entries s_mid =
+            {applyCallerRestores entries s_havoc with
+             pc := s_mid.pc} := by
+          rw [show s_mid = {s_havoc with pc := s_mid.pc} from by
+            simp [s_mid, s_havoc, ArmState.nextPC, ArmState.havocCallerSaved]]
+          exact applyCallerRestores_pc_irrelevant entries s_havoc s_mid.pc
+        show ExtStateRel r.layout σ s_final
+        rw [show s_final = {applyCallerRestores entries s_mid with
+            pc := s_mid.pc + entries.length} from rfl]
+        rw [this]
+        exact hCSC.withPC _
+      · -- PcRel: s_final.pc = pcMap (pc + 1)
+        show s_mid.pc + entries.length = r.pcMap (pc + 1)
+        rw [hBody] at hPcNext
+        rw [hMidPC, hPcNext, hSPC]
+        simp only [List.length_append, entriesToSaves_length, entriesToRestores_length,
+                   List.length_cons, List.length_nil]
+        simp only [show entries = genCallerSaveAll r.layout r.varMap from rfl]
+        omega
+      · -- ArrayMem preserved (saves/havoc/restores don't touch arrayMem)
+        show (applyCallerRestores entries s_mid).arrayMem = am
+        rw [applyCallerRestores_arrayMem]
+        simp [s_mid, ArmState.nextPC, ArmState.havocCallerSaved,
+              applyCallerSaves_arrayMem]
+        exact hArrayMem
     · -- Normal case: delegate to ext_backward_simulation
       have hNotPrint : ∀ fmt vs, p[pc] ≠ .print fmt vs := by
         intro fmt vs h; exact hPrint ⟨fmt, vs, h⟩
@@ -1819,33 +1995,10 @@ def generateAsm (p : Prog) : Except String String := do
   ]
   -- Pretty-print init instructions
   let initLines := ppInstrs lbl r.initInstrs.toList
-  -- Pretty-print body with TAC PC labels
-  -- Print instructions get special string-level codegen (inline printf call)
+  -- Pretty-print body with TAC PC labels (uniform for all instructions,
+  -- including print — printCall in bodyPerPC carries pre-computed printf lines)
   let body := (List.range r.bodyPerPC.size).flatMap fun pc =>
-    let tacInstr := p.code.getD pc .halt
-    match tacInstr with
-    | .print fmt vs =>
-      let live := removeDest tacInstr ((DAEOpt.analyzeLiveness p).getD pc ([] : List Var))
-      let (saves, _) := genCallSaveRestore live r.layout r.varMap
-      let saveLines := ppInstrs lbl saves
-      -- Load each argument onto the stack for variadic printf
-      let stackSize := max 16 (((vs.length * 8 + 15) / 16) * 16)
-      let loadLines := (List.range vs.length).flatMap fun i =>
-        genPrintArgLoad p.tyCtx r.layout r.varMap i (vs.getD i "")
-      let restoreLines := ppInstrs lbl (genCallSaveRestore live r.layout r.varMap).2
-      let fmtLabel := s!".Lfmt_print_{pc}"
-      let fmtComment := fmt.foldl (fun acc c => match c with
-          | '\n' => acc ++ "\\n" | '\t' => acc ++ "\\t" | c => acc ++ c.toString) ""
-      let subSp := "  sub sp, sp, #" ++ toString stackSize
-      let addSp := "  add sp, sp, #" ++ toString stackSize
-      (s!".L{pc}:" :: saveLines ++
-      s!"  // print \"{fmtComment}\"" :: subSp :: loadLines ++
-      [s!"  adrp x0, {fmtLabel}@PAGE",
-       s!"  add x0, x0, {fmtLabel}@PAGEOFF",
-       "  bl _printf",
-       addSp] ++ restoreLines)
-    | _ =>
-      [s!".L{pc}:"] ++ ppInstrs lbl ((r.bodyPerPC[pc]!))
+    [s!".L{pc}:"] ++ ppInstrs lbl ((r.bodyPerPC[pc]!))
   -- Print observable variables at halt (loads from stack, safe after saveRegs)
   let printCode := p.observable.flatMap fun v =>
     let isFloat := p.tyCtx v == .float

@@ -139,6 +139,13 @@ inductive ArmStep (prog : ArmProg) : ArmState → ArmState → Prop where
     prog[s.pc]? = some (.b lbl) →
     ArmStep prog s { s with pc := lbl }
 
+  /-- Print library call: havocs all caller-saved registers to arbitrary
+      values (models `bl _printf`). -/
+  | printCall (lines : List String)
+    (newRegs : ArmReg → BitVec 64) (newFregs : ArmFReg → BitVec 64) :
+    prog[s.pc]? = some (.printCall lines) →
+    ArmStep prog s (s.havocCallerSaved newRegs newFregs |>.nextPC)
+
   | arrLd (dst : ArmReg) (arr : ArrayName) (idxReg : ArmReg) :
     prog[s.pc]? = some (.arrLd dst arr idxReg) →
     ArmStep prog s (s.setReg dst (s.arrayMem arr (s.regs idxReg)) |>.nextPC)
@@ -826,6 +833,24 @@ theorem applyCallerSaves_fregs (entries : List CallerSaveEntry) (s : ArmState) (
   | [] => rfl
   | .ireg _ _ :: tl => simp [applyCallerSaves, applyCallerSaves_fregs tl, ArmState.setStack]
   | .freg _ _ :: tl => simp [applyCallerSaves, applyCallerSaves_fregs tl, ArmState.setStack]
+
+/-- Saves don't change arrayMem. -/
+theorem applyCallerSaves_arrayMem (entries : List CallerSaveEntry) (s : ArmState) :
+    (applyCallerSaves entries s).arrayMem = s.arrayMem := by
+  match entries with
+  | [] => rfl
+  | .ireg _ _ :: tl => simp [applyCallerSaves, applyCallerSaves_arrayMem tl, ArmState.setStack]
+  | .freg _ _ :: tl => simp [applyCallerSaves, applyCallerSaves_arrayMem tl, ArmState.setStack]
+
+/-- Restores don't change arrayMem. -/
+theorem applyCallerRestores_arrayMem (entries : List CallerSaveEntry) (s : ArmState) :
+    (applyCallerRestores entries s).arrayMem = s.arrayMem := by
+  match entries with
+  | [] => rfl
+  | .ireg _ _ :: tl =>
+    simp [applyCallerRestores, applyCallerRestores_arrayMem tl, ArmState.setReg]
+  | .freg _ _ :: tl =>
+    simp [applyCallerRestores, applyCallerRestores_arrayMem tl, ArmState.setFReg]
 
 /-- Restores don't change the stack. -/
 theorem applyCallerRestores_stack (entries : List CallerSaveEntry) (s : ArmState) (off : Nat) :
