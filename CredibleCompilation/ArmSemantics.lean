@@ -656,6 +656,118 @@ theorem ExtStateRel.havocCallerSaved_preserved
     have hcs := hNCS.2 v r hloc
     simp [ArmState.havocCallerSaved, hcs]; exact hRel v (.freg r) hloc
 
+/-- Caller-save round-trip for integer registers:
+    str r off → havocCallerSaved → ldr r off restores the original value.
+    The final state's register `r` equals `(σ v).encode`. -/
+theorem callerSave_str_havoc_ldr_ireg
+    {layout : VarLayout} {σ : Store} {s : ArmState}
+    {v : Var} {r : ArmReg} {off : Nat}
+    {newRegs : ArmReg → BitVec 64} {newFregs : ArmFReg → BitVec 64}
+    (hRel : ExtStateRel layout σ s)
+    (hLoc : layout v = some (.ireg r))
+    (hCS : r.isCallerSaved = true) :
+    let s₁ := s.setStack off (s.regs r)
+    let s₂ := s₁.havocCallerSaved newRegs newFregs
+    let s₃ := s₂.setReg r (s₂.stack off)
+    s₃.regs r = (σ v).encode := by
+  simp [ArmState.setReg, ArmState.setStack, ArmState.havocCallerSaved]
+  exact hRel v (.ireg r) hLoc
+
+/-- Caller-save round-trip for float registers:
+    fstr fr off → havocCallerSaved → fldr fr off restores the original value.
+    The final state's float register `fr` equals `(σ v).encode`. -/
+theorem callerSave_fstr_havoc_fldr_freg
+    {layout : VarLayout} {σ : Store} {s : ArmState}
+    {v : Var} {fr : ArmFReg} {off : Nat}
+    {newRegs : ArmReg → BitVec 64} {newFregs : ArmFReg → BitVec 64}
+    (hRel : ExtStateRel layout σ s)
+    (hLoc : layout v = some (.freg fr))
+    (hCS : fr.isCallerSaved = true) :
+    let s₁ := s.setStack off (s.fregs fr)
+    let s₂ := s₁.havocCallerSaved newRegs newFregs
+    let s₃ := s₂.setFReg fr (s₂.stack off)
+    s₃.fregs fr = (σ v).encode := by
+  simp [ArmState.setFReg, ArmState.setStack, ArmState.havocCallerSaved]
+  exact hRel v (.freg fr) hLoc
+
+/-- Writing to a stack offset not used by any variable preserves ExtStateRel. -/
+theorem ExtStateRel.setStack_fresh {layout : VarLayout} {σ : Store} {arm : ArmState}
+    (h : ExtStateRel layout σ arm) {off : Nat} {val : BitVec 64}
+    (hFresh : ∀ v, layout v ≠ some (.stack off)) :
+    ExtStateRel layout σ (arm.setStack off val) := by
+  intro w loc hW
+  match loc with
+  | .stack off' =>
+    have hne : off' ≠ off := fun heq =>
+      hFresh w (heq ▸ hW)
+    simp [ArmState.setStack, beq_iff_eq, hne]; exact h w (.stack off') hW
+  | .ireg r => exact h w (.ireg r) hW
+  | .freg r => exact h w (.freg r) hW
+
+/-- Full ExtStateRel preservation through ireg caller-save round-trip:
+    str r off → havocCallerSaved → ldr r off preserves ExtStateRel
+    when the save slot is fresh and no layout variable uses a caller-saved register. -/
+theorem ExtStateRel.callerSave_roundtrip_ireg
+    {layout : VarLayout} {σ : Store} {s : ArmState}
+    {r : ArmReg} {off : Nat}
+    {newRegs : ArmReg → BitVec 64} {newFregs : ArmFReg → BitVec 64}
+    (hRel : ExtStateRel layout σ s)
+    (hNCS : NoCallerSavedLayout layout)
+    (hFresh : ∀ v, layout v ≠ some (.stack off)) :
+    ExtStateRel layout σ
+      (let sh := (s.setStack off (s.regs r)).havocCallerSaved newRegs newFregs
+       sh.setReg r (sh.stack off)) := by
+  intro w loc hW
+  match loc with
+  | .stack off' =>
+    have hne : off' ≠ off := fun heq => hFresh w (heq ▸ hW)
+    simp [ArmState.setReg, ArmState.havocCallerSaved, ArmState.setStack, beq_iff_eq, hne]
+    exact hRel w (.stack off') hW
+  | .ireg r' =>
+    have hcs := hNCS.1 w r' hW
+    by_cases hrr : r' = r
+    · subst hrr
+      simp [ArmState.setReg, ArmState.havocCallerSaved, ArmState.setStack]
+      exact hRel w (.ireg r') hW
+    · simp [ArmState.setReg, beq_iff_eq, hrr, ArmState.havocCallerSaved, hcs]
+      exact hRel w (.ireg r') hW
+  | .freg r' =>
+    have hcs := hNCS.2 w r' hW
+    simp [ArmState.setReg, ArmState.havocCallerSaved, hcs]
+    exact hRel w (.freg r') hW
+
+/-- Full ExtStateRel preservation through freg caller-save round-trip:
+    fstr fr off → havocCallerSaved → fldr fr off preserves ExtStateRel
+    when the save slot is fresh and no layout variable uses a caller-saved register. -/
+theorem ExtStateRel.callerSave_roundtrip_freg
+    {layout : VarLayout} {σ : Store} {s : ArmState}
+    {fr : ArmFReg} {off : Nat}
+    {newRegs : ArmReg → BitVec 64} {newFregs : ArmFReg → BitVec 64}
+    (hRel : ExtStateRel layout σ s)
+    (hNCS : NoCallerSavedLayout layout)
+    (hFresh : ∀ v, layout v ≠ some (.stack off)) :
+    ExtStateRel layout σ
+      (let sh := (s.setStack off (s.fregs fr)).havocCallerSaved newRegs newFregs
+       sh.setFReg fr (sh.stack off)) := by
+  intro w loc hW
+  match loc with
+  | .stack off' =>
+    have hne : off' ≠ off := fun heq => hFresh w (heq ▸ hW)
+    simp [ArmState.setFReg, ArmState.havocCallerSaved, ArmState.setStack, beq_iff_eq, hne]
+    exact hRel w (.stack off') hW
+  | .ireg r' =>
+    have hcs := hNCS.1 w r' hW
+    simp [ArmState.setFReg, ArmState.havocCallerSaved, hcs]
+    exact hRel w (.ireg r') hW
+  | .freg r' =>
+    have hcs := hNCS.2 w r' hW
+    by_cases hrr : r' = fr
+    · subst hrr
+      simp [ArmState.setFReg, ArmState.havocCallerSaved, ArmState.setStack]
+      exact hRel w (.freg r') hW
+    · simp [ArmState.setFReg, beq_iff_eq, hrr, ArmState.havocCallerSaved, hcs]
+      exact hRel w (.freg r') hW
+
 -- ============================================================
 -- § 8. Formal instruction generation
 -- ============================================================
@@ -1038,6 +1150,14 @@ theorem ArmSteps.one_then {prog : ArmProg} {s s' s'' : ArmState}
 
 @[simp] theorem ArmState.setStack_arrayMem (s : ArmState) (off : Nat) (v : BitVec 64) :
     (s.setStack off v).arrayMem = s.arrayMem := rfl
+
+@[simp] theorem ArmState.setStack_stack_same (s : ArmState) (off : Nat) (v : BitVec 64) :
+    (s.setStack off v).stack off = v := by
+  simp [setStack]
+
+@[simp] theorem ArmState.setStack_stack_other (s : ArmState) (off off' : Nat) (v : BitVec 64) (h : off' ≠ off) :
+    (s.setStack off v).stack off' = s.stack off' := by
+  simp [setStack, beq_iff_eq, h]
 
 -- setReg preserves fregs
 @[simp] theorem ArmState.setReg_fregs (s : ArmState) (r : ArmReg) (v : BitVec 64) :

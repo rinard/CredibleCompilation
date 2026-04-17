@@ -181,6 +181,14 @@ def ArmState.havocCallerSaved (s : ArmState)
     regs := fun r => if r.isCallerSaved then newRegs r else s.regs r
     fregs := fun r => if r.isCallerSaved then newFregs r else s.fregs r }
 
+@[simp] theorem ArmState.havocCallerSaved_stack (s : ArmState)
+    (newRegs : ArmReg → BitVec 64) (newFregs : ArmFReg → BitVec 64) :
+    (s.havocCallerSaved newRegs newFregs).stack = s.stack := rfl
+
+@[simp] theorem ArmState.havocCallerSaved_pc (s : ArmState)
+    (newRegs : ArmReg → BitVec 64) (newFregs : ArmFReg → BitVec 64) :
+    (s.havocCallerSaved newRegs newFregs).pc = s.pc := rfl
+
 -- ============================================================
 -- § 4. ARM64 instructions
 -- ============================================================
