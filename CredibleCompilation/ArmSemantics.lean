@@ -768,6 +768,70 @@ theorem ExtStateRel.callerSave_roundtrip_freg
     · simp [ArmState.setFReg, beq_iff_eq, hrr, ArmState.havocCallerSaved, hcs]
       exact hRel w (.freg r') hW
 
+-- § 7b. Caller-save composition (N-variable round-trip)
+-- ============================================================
+
+/-- An entry describing a single caller-saved register to save/restore,
+    paired with the stack offset used as a scratch save slot. -/
+inductive CallerSaveEntry where
+  | ireg : ArmReg → Nat → CallerSaveEntry
+  | freg : ArmFReg → Nat → CallerSaveEntry
+  deriving DecidableEq
+
+/-- The stack offset of a save entry. -/
+def CallerSaveEntry.off : CallerSaveEntry → Nat
+  | .ireg _ o => o
+  | .freg _ o => o
+
+/-- Apply all saves: store each caller-saved register to its save slot. -/
+def applyCallerSaves : List CallerSaveEntry → ArmState → ArmState
+  | [], s => s
+  | .ireg r off :: rest, s => applyCallerSaves rest (s.setStack off (s.regs r))
+  | .freg r off :: rest, s => applyCallerSaves rest (s.setStack off (s.fregs r))
+
+/-- Apply all restores: load each save slot back into its register. -/
+def applyCallerRestores : List CallerSaveEntry → ArmState → ArmState
+  | [], s => s
+  | .ireg r off :: rest, s => applyCallerRestores rest (s.setReg r (s.stack off))
+  | .freg r off :: rest, s => applyCallerRestores rest (s.setFReg r (s.stack off))
+
+/-- Build the save list from a layout: every variable in a caller-saved register
+    gets an entry, with save offset looked up from varMap.
+    Variables not found in varMap are silently skipped. -/
+def genCallerSaveAll (layout : VarLayout) (varMap : List (Var × Nat)) : List CallerSaveEntry :=
+  layout.entries.filterMap fun (v, loc) =>
+    match loc with
+    | .ireg r =>
+      if r.isCallerSaved then
+        (varMap.find? (fun (x, _) => x == v)).map fun (_, off) => .ireg r off
+      else none
+    | .freg r =>
+      if r.isCallerSaved then
+        (varMap.find? (fun (x, _) => x == v)).map fun (_, off) => .freg r off
+      else none
+    | .stack _ => none
+
+/-- Saving all caller-saved registers to fresh stack slots preserves ExtStateRel.
+    "Fresh" means no save offset coincides with any layout stack slot. -/
+theorem ExtStateRel.applyCallerSaves_preserved
+    {layout : VarLayout} {σ : Store} {s : ArmState}
+    (hRel : ExtStateRel layout σ s)
+    (entries : List CallerSaveEntry)
+    (hFresh : ∀ e ∈ entries, ∀ v, layout v ≠ some (.stack e.off)) :
+    ExtStateRel layout σ (applyCallerSaves entries s) := by
+  match entries with
+  | [] => exact hRel
+  | .ireg r off :: tl =>
+    simp only [applyCallerSaves]
+    exact applyCallerSaves_preserved
+      (setStack_fresh hRel (hFresh _ (.head _)))
+      tl (fun e he => hFresh e (.tail _ he))
+  | .freg r off :: tl =>
+    simp only [applyCallerSaves]
+    exact applyCallerSaves_preserved
+      (setStack_fresh hRel (hFresh _ (.head _)))
+      tl (fun e he => hFresh e (.tail _ he))
+
 -- ============================================================
 -- § 8. Formal instruction generation
 -- ============================================================
