@@ -955,14 +955,18 @@ structure GenAsmSpec (p : Prog) (r : VerifiedAsmResult) : Prop where
   /-- Every variable referenced by an instruction has a layout entry. -/
   layoutComplete : ∀ pc (hpc : pc < p.size), ∀ v, v ∈ (p[pc]).vars → r.layout v ≠ none
   /-- At library call sites, bodyPerPC wraps verifiedGenInstr output with
-      save/restore of all caller-saved registers (via genCallerSaveAll). -/
+      save/restore of caller-saved registers excluding the destination
+      (via callerSaveEntries). -/
   callSiteSaveRestore : ∀ pc (hpc : pc < p.size),
     isLibCallTAC p[pc] = true →
-    ∃ baseInstrs saves restores,
+    ∃ baseInstrs,
       verifiedGenInstr r.layout r.pcMap p[pc]
         r.haltS r.divS r.boundsS p.arrayDecls (isBoundsSafe p.arrayDecls (BoundsOpt.analyzeIntervals p) pc p[pc]) =
         some baseInstrs ∧
-      r.bodyPerPC[pc]'(bodySize ▸ hpc) = saves ++ baseInstrs ++ restores
+      r.bodyPerPC[pc]'(bodySize ▸ hpc) =
+        entriesToSaves (callerSaveEntries r.layout r.varMap (DAEOpt.instrDef p[pc])) ++
+        baseInstrs ++
+        entriesToRestores (callerSaveEntries r.layout r.varMap (DAEOpt.instrDef p[pc]))
   /-- At print sites, bodyPerPC = entriesToSaves entries ++ [printCall _] ++ entriesToRestores entries
       where entries = genCallerSaveAll layout varMap. -/
   printSaveRestore : ∀ pc (hpc : pc < p.size),
@@ -1477,7 +1481,7 @@ theorem verifiedGenerateAsm_spec {p : Prog} {r : VerifiedAsmResult}
                 simp only [ite_true] at hStep
                 have hEq := (Array.push_inj (Option.some.inj hStep)).symm
                 rw [← List.append_assoc] at hEq
-                exact ⟨armInstrs, _, _, hGenInstr, hEq⟩
+                exact ⟨armInstrs, hGenInstr, hEq⟩
           case printSaveRestore =>
             intro pc hpc ⟨fmt, vs, hPrint⟩
             have hpcB : pc < bodyPerPC.size := by rw [hBSz]; simp [Prog.size_eq] at hpc; exact hpc
@@ -1740,19 +1744,121 @@ private theorem step_simulation {p : Prog} {r : VerifiedAsmResult}
           ExtSimRel r.layout r.pcMap cfg' s' := by
   -- Case split: lib-call, print, or normal instruction
   by_cases hLib : isLibCallTAC p[pc] = true
-  · -- Lib-call case (floatUnary non-native, fpow): save/restore around computation.
-    -- bodyPerPC = saves ++ baseInstrs ++ restores where:
-    --   entries = callerSaveEntries layout varMap (instrDef p[pc])  (excludes dst)
-    --   saves = entriesToSaves entries, restores = entriesToRestores entries
-    --   baseInstrs from verifiedGenInstr (load, compute+havoc, store)
-    -- Proof outline:
-    --   1. armSteps_saves on filtered entries
-    --   2. ArmSteps for baseInstrs (floatUnaryLibCall/callBinF + vLoad/vStore)
-    --   3. armSteps_restores on filtered entries
-    --   4. For ExtStateRel(σ', s_final): non-dst caller-saved vars restored from
-    --      stack, dst var has result from base instrs (not overwritten by restore).
-    --      Needs a callerSave_composition variant that handles σ → σ' with dst excluded.
-    sorry
+  · -- Lib-call case: save/restore around computation (excludes destination)
+    -- Determine cfg' early (before infrastructure, to avoid simp_all pollution)
+    have hCfgRun : ∃ σ', cfg' = .run (pc + 1) σ' am := by
+      have : pc < p.code.size := by simp [Prog.size_eq] at hPC; exact hPC
+      cases hStep <;> simp_all [isLibCallTAC]
+      -- Remaining: type-error cases (impossible under TypedStore, but need WTP proof)
+      all_goals sorry
+    obtain ⟨σ', hCfg⟩ := hCfgRun; subst hCfg
+    -- Get bodyPerPC = saves ++ baseInstrs ++ restores
+    obtain ⟨baseInstrs, hGenInstr, hBody⟩ :=
+      spec.callSiteSaveRestore pc hPC hLib
+    -- Infrastructure
+    obtain ⟨lengths, hLSz, hPcMap, hLenEq⟩ := spec.pcMapLengths
+    have hpcB : pc < r.bodyPerPC.size := spec.bodySize ▸ hPC
+    have hCodeAt : CodeAt r.bodyFlat (r.pcMap pc) (r.bodyPerPC[pc]'hpcB) := by
+      rw [hPcMap]; exact codeAt_of_bodyFlat r.bodyPerPC lengths hLSz hLenEq pc hpcB
+    rw [hBody] at hCodeAt
+    -- Abbreviate entries
+    let entries := callerSaveEntries r.layout r.varMap (DAEOpt.instrDef p[pc])
+    -- Split CodeAt: saves ++ baseInstrs ++ restores
+    have hCodeSB := hCodeAt.append_left (l2 := entriesToRestores entries)
+    have hCodeRestores := hCodeAt.append_right
+      (l1 := entriesToSaves entries ++ baseInstrs)
+    have hCodeSaves := hCodeSB.append_left (l2 := baseInstrs)
+    have hCodeBase := hCodeSB.append_right (l1 := entriesToSaves entries)
+    -- Extract ExtStateRel components
+    obtain ⟨hStateRel, hPcRel, hArrayMem⟩ := hRel
+    have hSPC : s.pc = r.pcMap pc := hPcRel
+    -- hPcNext
+    have hPcNext : r.pcMap (pc + 1) = r.pcMap pc + (r.bodyPerPC[pc]'hpcB).length := by
+      rw [hPcMap, buildPcMap_succ lengths pc (by rw [hLSz]; exact hpcB)]
+      congr 1; exact hLenEq pc (by rw [hLSz]; exact hpcB) hpcB
+    -- Step 1: saves
+    have hStepSaves := armSteps_saves r.bodyFlat entries s (hSPC ▸ hCodeSaves)
+    let s_saved := {applyCallerSaves entries s with pc := s.pc + entries.length}
+    have hSavedPC : s_saved.pc = r.pcMap pc + (entriesToSaves entries).length := by
+      simp [s_saved, entriesToSaves_length, hSPC]
+    -- Base instruction ArmSteps: step through vLoadVarFP, lib-call, vStoreVarFP
+    -- s_mid: the state after saves + base instructions, before restores
+    -- Key properties: save slots preserved, dst has result, others untouched
+    have hBaseExists : ∃ s_mid : ArmState,
+        ArmSteps r.bodyFlat s_saved s_mid ∧
+        s_mid.pc = s_saved.pc + baseInstrs.length ∧
+        s_mid.arrayMem = am ∧
+        -- Save slots preserved through base instructions
+        (∀ e ∈ entries, s_mid.stack e.off = (applyCallerSaves entries s).stack e.off) ∧
+        -- Non-entry ireg vars have σ' values
+        (∀ v ir, r.layout v = some (.ireg ir) →
+          (∀ off, CallerSaveEntry.ireg ir off ∉ entries) → s_mid.regs ir = (σ' v).encode) ∧
+        -- Non-entry freg vars have σ' values
+        (∀ v fr, r.layout v = some (.freg fr) →
+          (∀ off, CallerSaveEntry.freg fr off ∉ entries) → s_mid.fregs fr = (σ' v).encode) ∧
+        -- Stack vars have σ' values
+        (∀ v off, r.layout v = some (.stack off) → s_mid.stack off = (σ' v).encode) ∧
+        -- Entry vars unchanged: σ'(v) = σ(v)
+        (∀ v ir, r.layout v = some (.ireg ir) →
+          (∃ off, CallerSaveEntry.ireg ir off ∈ entries) → σ' v = σ v) ∧
+        (∀ v fr, r.layout v = some (.freg fr) →
+          (∃ off, CallerSaveEntry.freg fr off ∈ entries) → σ' v = σ v) := by
+      sorry
+    obtain ⟨s_mid, hBaseSteps, hMidPC, hMidAM, hSaveSlots, hNEI, hNEF, hSV, hEIU, hEFU⟩ :=
+      hBaseExists
+    -- Step 3: restores
+    have hRestorePC : s_mid.pc =
+        r.pcMap pc + (entriesToSaves entries ++ baseInstrs).length := by
+      rw [hMidPC, hSavedPC]; simp [List.length_append]; omega
+    have hRestoreCode : CodeAt r.bodyFlat s_mid.pc (entriesToRestores entries) := by
+      rw [hRestorePC]; exact hCodeRestores
+    have hStepRestores := armSteps_restores r.bodyFlat entries s_mid hRestoreCode
+    -- Compose all three
+    let s_final := {applyCallerRestores entries s_mid with
+      pc := s_mid.pc + entries.length}
+    have hAllSteps : ArmSteps r.bodyFlat s s_final :=
+      hStepSaves.trans (hBaseSteps.trans hStepRestores)
+    -- Prove ExtSimRel for the final state
+    obtain ⟨hFresh, hNodup, hCoversIreg, hCoversFreg, hUniqIreg, hUniqFreg⟩ :=
+      spec.callerSaveSpec
+    refine ⟨s_final, hAllSteps, ?_, ?_, ?_⟩
+    · -- ExtStateRel via callerSave_composition_excluding
+      -- entries ⊆ genCallerSaveAll (callerSaveEntries filters genCallerSaveAll)
+      have hEntriesSub : entries.Sublist (genCallerSaveAll r.layout r.varMap) := by
+        show (callerSaveEntries r.layout r.varMap (DAEOpt.instrDef p[pc])).Sublist _
+        unfold callerSaveEntries
+        cases DAEOpt.instrDef p[pc] with
+        | none => exact List.Sublist.refl _
+        | some _ => exact List.filter_sublist
+      have hSubset : ∀ e, e ∈ entries → e ∈ genCallerSaveAll r.layout r.varMap :=
+        fun e he => hEntriesSub.subset he
+      -- Nodup on entries (sublist of nodup list)
+      have hNodupE : (entries.map CallerSaveEntry.off).Nodup :=
+        hNodup.sublist (hEntriesSub.map _)
+      have hCSCE := ExtStateRel.callerSave_composition_excluding
+        hStateRel entries s_mid
+        (fun e he v hv => hFresh e (hSubset e he) v hv)
+        hNodupE
+        (fun r o1 o2 h1 h2 => hUniqIreg r o1 o2 (hSubset _ h1) (hSubset _ h2))
+        (fun r o1 o2 h1 h2 => hUniqFreg r o1 o2 (hSubset _ h1) (hSubset _ h2))
+        (fun ir off h => genCallerSaveAll_allCS_ireg (hSubset _ h))
+        (fun fr off h => genCallerSaveAll_allCS_freg (hSubset _ h))
+        hSaveSlots hNEI hNEF hSV hEIU hEFU
+      -- hCSCE : ExtStateRel layout σ' (applyCallerRestores entries s_mid)
+      -- s_final = {applyCallerRestores entries s_mid with pc := ...}
+      show ExtStateRel r.layout σ' s_final
+      exact hCSCE.withPC _
+    · -- PcRel: s_final.pc = pcMap (pc + 1)
+      show s_mid.pc + entries.length = r.pcMap (pc + 1)
+      rw [hBody] at hPcNext
+      rw [hMidPC, hSavedPC, hPcNext]
+      simp only [List.length_append, entriesToSaves_length, entriesToRestores_length,
+        show entries = callerSaveEntries r.layout r.varMap (DAEOpt.instrDef p[pc]) from rfl]
+      omega
+    · -- ArrayMem preserved
+      show (applyCallerRestores entries s_mid).arrayMem = am
+      rw [applyCallerRestores_arrayMem]
+      exact hMidAM
   · by_cases hPrint : ∃ fmt vs, p[pc] = .print fmt vs
     · -- Print case: save/restore around printCall (havoc)
       obtain ⟨fmt, vs, hPrintEq⟩ := hPrint

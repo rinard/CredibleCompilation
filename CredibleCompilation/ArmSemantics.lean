@@ -1204,6 +1204,82 @@ theorem ExtStateRel.callerSave_composition
         applyCallerSaves_fregs]
       exact hRel v (.freg r) hLoc
 
+/-- **Caller-save composition with destination exclusion.**
+    Like `callerSave_composition` but for lib-call sites where:
+    - entries exclude the destination variable's register
+    - the middle operation changes σ to σ' (updating dst)
+    - s_mid is the state after saves + base instructions (before restores)
+
+    For non-dst variables with entries: save slots hold pre-save values,
+    restores reload them, and σ'(v) = σ(v).
+    For dst and callee-saved variables: s_mid already has the right values. -/
+theorem ExtStateRel.callerSave_composition_excluding
+    {layout : VarLayout} {σ σ' : Store} {s : ArmState}
+    (hRel : ExtStateRel layout σ s)
+    (entries : List CallerSaveEntry)
+    (s_mid : ArmState)
+    (hFresh : ∀ e ∈ entries, ∀ v, layout v ≠ some (.stack e.off))
+    (hNodup : (entries.map CallerSaveEntry.off).Nodup)
+    (hUniqIreg : ∀ r off1 off2, CallerSaveEntry.ireg r off1 ∈ entries →
+      CallerSaveEntry.ireg r off2 ∈ entries → off1 = off2)
+    (hUniqFreg : ∀ r off1 off2, CallerSaveEntry.freg r off1 ∈ entries →
+      CallerSaveEntry.freg r off2 ∈ entries → off1 = off2)
+    (hAllCSIreg : ∀ r off, CallerSaveEntry.ireg r off ∈ entries → r.isCallerSaved = true)
+    (hAllCSFreg : ∀ r off, CallerSaveEntry.freg r off ∈ entries → r.isCallerSaved = true)
+    -- Save slots in s_mid still hold the values written by applyCallerSaves
+    (hSaveSlots : ∀ e ∈ entries, s_mid.stack e.off = (applyCallerSaves entries s).stack e.off)
+    -- Variables whose registers are NOT in entries already have σ' values in s_mid
+    (hNonEntryIreg : ∀ v r, layout v = some (.ireg r) →
+      (∀ off, CallerSaveEntry.ireg r off ∉ entries) → s_mid.regs r = (σ' v).encode)
+    (hNonEntryFreg : ∀ v r, layout v = some (.freg r) →
+      (∀ off, CallerSaveEntry.freg r off ∉ entries) → s_mid.fregs r = (σ' v).encode)
+    -- Stack variables have σ' values in s_mid
+    (hStackVars : ∀ v off, layout v = some (.stack off) → s_mid.stack off = (σ' v).encode)
+    -- Variables WITH entries are unchanged: σ'(v) = σ(v)
+    (hEntryIregUnchanged : ∀ v r, layout v = some (.ireg r) →
+      (∃ off, CallerSaveEntry.ireg r off ∈ entries) → σ' v = σ v)
+    (hEntryFregUnchanged : ∀ v r, layout v = some (.freg r) →
+      (∃ off, CallerSaveEntry.freg r off ∈ entries) → σ' v = σ v) :
+    ExtStateRel layout σ' (applyCallerRestores entries s_mid) := by
+  intro v loc hLoc
+  match loc with
+  | .stack off =>
+    show (applyCallerRestores entries s_mid).stack off = (σ' v).encode
+    rw [applyCallerRestores_stack]
+    exact hStackVars v off hLoc
+  | .ireg r =>
+    show (applyCallerRestores entries s_mid).regs r = (σ' v).encode
+    by_cases hIn : ∃ off, CallerSaveEntry.ireg r off ∈ entries
+    · -- Has entry: restore from save slot → σ(v) = σ'(v)
+      obtain ⟨saveOff, hMem⟩ := hIn
+      have hUn := fun off' hm => hUniqIreg r off' saveOff hm hMem
+      rw [applyCallerRestores_regs_at entries _ hMem hUn]
+      have := hSaveSlots (.ireg r saveOff) hMem
+      simp only [CallerSaveEntry.off] at this
+      rw [this, applyCallerSaves_stack_ireg entries s hMem hNodup,
+          hEntryIregUnchanged v r hLoc ⟨saveOff, hMem⟩]
+      exact hRel v (.ireg r) hLoc
+    · -- No entry: s_mid already has σ'(v)
+      have hNotIn : ∀ off, CallerSaveEntry.ireg r off ∉ entries :=
+        fun off hm => hIn ⟨off, hm⟩
+      rw [applyCallerRestores_regs_other entries _ r hNotIn]
+      exact hNonEntryIreg v r hLoc hNotIn
+  | .freg r =>
+    show (applyCallerRestores entries s_mid).fregs r = (σ' v).encode
+    by_cases hIn : ∃ off, CallerSaveEntry.freg r off ∈ entries
+    · obtain ⟨saveOff, hMem⟩ := hIn
+      have hUn := fun off' hm => hUniqFreg r off' saveOff hm hMem
+      rw [applyCallerRestores_fregs_at entries _ hMem hUn]
+      have := hSaveSlots (.freg r saveOff) hMem
+      simp only [CallerSaveEntry.off] at this
+      rw [this, applyCallerSaves_stack_freg entries s hMem hNodup,
+          hEntryFregUnchanged v r hLoc ⟨saveOff, hMem⟩]
+      exact hRel v (.freg r) hLoc
+    · have hNotIn : ∀ off, CallerSaveEntry.freg r off ∉ entries :=
+        fun off hm => hIn ⟨off, hm⟩
+      rw [applyCallerRestores_fregs_other entries _ r hNotIn]
+      exact hNonEntryFreg v r hLoc hNotIn
+
 -- ============================================================
 -- § 8. Formal instruction generation
 -- ============================================================
