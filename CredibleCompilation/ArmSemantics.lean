@@ -811,6 +811,64 @@ def genCallerSaveAll (layout : VarLayout) (varMap : List (Var × Nat)) : List Ca
       else none
     | .stack _ => none
 
+/-- Saves don't change integer registers. -/
+theorem applyCallerSaves_regs (entries : List CallerSaveEntry) (s : ArmState) (r : ArmReg) :
+    (applyCallerSaves entries s).regs r = s.regs r := by
+  match entries with
+  | [] => rfl
+  | .ireg _ _ :: tl => simp [applyCallerSaves, applyCallerSaves_regs tl, ArmState.setStack]
+  | .freg _ _ :: tl => simp [applyCallerSaves, applyCallerSaves_regs tl, ArmState.setStack]
+
+/-- Saves don't change floating-point registers. -/
+theorem applyCallerSaves_fregs (entries : List CallerSaveEntry) (s : ArmState) (r : ArmFReg) :
+    (applyCallerSaves entries s).fregs r = s.fregs r := by
+  match entries with
+  | [] => rfl
+  | .ireg _ _ :: tl => simp [applyCallerSaves, applyCallerSaves_fregs tl, ArmState.setStack]
+  | .freg _ _ :: tl => simp [applyCallerSaves, applyCallerSaves_fregs tl, ArmState.setStack]
+
+/-- Restores don't change the stack. -/
+theorem applyCallerRestores_stack (entries : List CallerSaveEntry) (s : ArmState) (off : Nat) :
+    (applyCallerRestores entries s).stack off = s.stack off := by
+  match entries with
+  | [] => rfl
+  | .ireg _ _ :: tl => simp [applyCallerRestores, applyCallerRestores_stack tl, ArmState.setReg]
+  | .freg _ _ :: tl => simp [applyCallerRestores, applyCallerRestores_stack tl, ArmState.setFReg]
+
+/-- Restores don't change integer registers not in the restore list. -/
+theorem applyCallerRestores_regs_other (entries : List CallerSaveEntry) (s : ArmState)
+    (r : ArmReg) (hNot : ∀ off, .ireg r off ∉ entries) :
+    (applyCallerRestores entries s).regs r = s.regs r := by
+  match entries with
+  | [] => rfl
+  | .ireg r' off :: tl =>
+    have hne : r' ≠ r := fun h => by subst h; exact hNot off (.head _)
+    show (applyCallerRestores tl (s.setReg r' (s.stack off))).regs r = s.regs r
+    rw [applyCallerRestores_regs_other tl _ r (fun o hm => hNot o (.tail _ hm))]
+    simp only [ArmState.setReg]
+    split <;> simp_all
+  | .freg _ off :: tl =>
+    show (applyCallerRestores tl (s.setFReg _ (s.stack off))).regs r = s.regs r
+    rw [applyCallerRestores_regs_other tl _ r (fun o hm => hNot o (.tail _ hm))]
+    simp [ArmState.setFReg]
+
+/-- Restores don't change floating-point registers not in the restore list. -/
+theorem applyCallerRestores_fregs_other (entries : List CallerSaveEntry) (s : ArmState)
+    (r : ArmFReg) (hNot : ∀ off, .freg r off ∉ entries) :
+    (applyCallerRestores entries s).fregs r = s.fregs r := by
+  match entries with
+  | [] => rfl
+  | .ireg _ off :: tl =>
+    show (applyCallerRestores tl (s.setReg _ (s.stack off))).fregs r = s.fregs r
+    rw [applyCallerRestores_fregs_other tl _ r (fun o hm => hNot o (.tail _ hm))]
+    simp [ArmState.setReg]
+  | .freg r' off :: tl =>
+    have hne : r' ≠ r := fun h => by subst h; exact hNot off (.head _)
+    show (applyCallerRestores tl (s.setFReg r' (s.stack off))).fregs r = s.fregs r
+    rw [applyCallerRestores_fregs_other tl _ r (fun o hm => hNot o (.tail _ hm))]
+    simp only [ArmState.setFReg]
+    split <;> simp_all
+
 /-- Saving all caller-saved registers to fresh stack slots preserves ExtStateRel.
     "Fresh" means no save offset coincides with any layout stack slot. -/
 theorem ExtStateRel.applyCallerSaves_preserved
@@ -831,6 +889,229 @@ theorem ExtStateRel.applyCallerSaves_preserved
     exact applyCallerSaves_preserved
       (setStack_fresh hRel (hFresh _ (.head _)))
       tl (fun e he => hFresh e (.tail _ he))
+
+/-- Saves don't change stack slots whose offset doesn't appear in any entry. -/
+theorem applyCallerSaves_stack_other (entries : List CallerSaveEntry) (s : ArmState)
+    (off : Nat) (hNot : ∀ e ∈ entries, e.off ≠ off) :
+    (applyCallerSaves entries s).stack off = s.stack off := by
+  induction entries generalizing s with
+  | nil => rfl
+  | cons hd tl ih =>
+    have hTl := fun e he => hNot e (.tail _ he)
+    have hHd := hNot hd (.head _)
+    cases hd with
+    | ireg r off' =>
+      unfold applyCallerSaves
+      rw [ih _ hTl]; simp only [ArmState.setStack]; split <;> simp_all [CallerSaveEntry.off]
+    | freg r off' =>
+      unfold applyCallerSaves
+      rw [ih _ hTl]; simp only [ArmState.setStack]; split <;> simp_all [CallerSaveEntry.off]
+
+/-- After saves with distinct offsets, the slot of an ireg entry holds the original register value. -/
+theorem applyCallerSaves_stack_ireg (entries : List CallerSaveEntry) (s : ArmState)
+    {r : ArmReg} {off : Nat} (hmem : CallerSaveEntry.ireg r off ∈ entries)
+    (hNodup : (entries.map CallerSaveEntry.off).Nodup) :
+    (applyCallerSaves entries s).stack off = s.regs r := by
+  match entries with
+  | [] => nomatch hmem
+  | .ireg r' off' :: tl =>
+    simp only [List.map, List.nodup_cons] at hNodup
+    obtain ⟨hNotIn, hNodupTl⟩ := hNodup
+    cases hmem with
+    | head =>
+      show (applyCallerSaves tl (s.setStack off (s.regs r))).stack off = s.regs r
+      have hOther : ∀ e ∈ tl, e.off ≠ off := by
+        intro e he hEq; exact hNotIn (List.mem_map.mpr ⟨e, he, hEq⟩)
+      rw [applyCallerSaves_stack_other tl _ off hOther]
+      simp [ArmState.setStack]
+    | tail _ htl =>
+      show (applyCallerSaves tl (s.setStack off' (s.regs r'))).stack off = s.regs r
+      rw [applyCallerSaves_stack_ireg tl _ htl hNodupTl]
+      simp [ArmState.setStack]
+  | .freg _ off' :: tl =>
+    simp only [List.map, List.nodup_cons] at hNodup
+    obtain ⟨_, hNodupTl⟩ := hNodup
+    cases hmem with
+    | tail _ htl =>
+      show (applyCallerSaves tl (s.setStack off' (s.fregs _))).stack off = s.regs r
+      rw [applyCallerSaves_stack_ireg tl _ htl hNodupTl]
+      simp [ArmState.setStack]
+
+/-- After saves with distinct offsets, the slot of a freg entry holds the original register value. -/
+theorem applyCallerSaves_stack_freg (entries : List CallerSaveEntry) (s : ArmState)
+    {r : ArmFReg} {off : Nat} (hmem : CallerSaveEntry.freg r off ∈ entries)
+    (hNodup : (entries.map CallerSaveEntry.off).Nodup) :
+    (applyCallerSaves entries s).stack off = s.fregs r := by
+  match entries with
+  | [] => nomatch hmem
+  | .freg r' off' :: tl =>
+    simp only [List.map, List.nodup_cons] at hNodup
+    obtain ⟨hNotIn, hNodupTl⟩ := hNodup
+    cases hmem with
+    | head =>
+      show (applyCallerSaves tl (s.setStack off (s.fregs r))).stack off = s.fregs r
+      have hOther : ∀ e ∈ tl, e.off ≠ off := by
+        intro e he hEq; exact hNotIn (List.mem_map.mpr ⟨e, he, hEq⟩)
+      rw [applyCallerSaves_stack_other tl _ off hOther]
+      simp [ArmState.setStack]
+    | tail _ htl =>
+      show (applyCallerSaves tl (s.setStack off' (s.fregs r'))).stack off = s.fregs r
+      rw [applyCallerSaves_stack_freg tl _ htl hNodupTl]
+      simp [ArmState.setStack]
+  | .ireg _ off' :: tl =>
+    simp only [List.map, List.nodup_cons] at hNodup
+    obtain ⟨_, hNodupTl⟩ := hNodup
+    cases hmem with
+    | tail _ htl =>
+      show (applyCallerSaves tl (s.setStack off' (s.regs _))).stack off = s.fregs r
+      rw [applyCallerSaves_stack_freg tl _ htl hNodupTl]
+      simp [ArmState.setStack]
+
+/-- After restores, an ireg holds the value from its save slot,
+    provided all entries for that register use the same offset. -/
+theorem applyCallerRestores_regs_at (entries : List CallerSaveEntry) (s : ArmState)
+    {r : ArmReg} {off : Nat} (hmem : CallerSaveEntry.ireg r off ∈ entries)
+    (hUniq : ∀ off', CallerSaveEntry.ireg r off' ∈ entries → off' = off) :
+    (applyCallerRestores entries s).regs r = s.stack off := by
+  match entries with
+  | [] => nomatch hmem
+  | .ireg r' off' :: tl =>
+    by_cases hr : r' = r
+    · -- head restores to r; by hUniq, off' = off
+      have hoff := hUniq off' (hr ▸ .head _)
+      show (applyCallerRestores tl (s.setReg r' (s.stack off'))).regs r = s.stack off
+      rw [hr, hoff]
+      -- goal: (applyCallerRestores tl (s.setReg r (s.stack off))).regs r = s.stack off
+      have hUniqTl : ∀ o, CallerSaveEntry.ireg r o ∈ tl → o = off :=
+        fun o hm => hUniq o (.tail _ hm)
+      by_cases hmTl : CallerSaveEntry.ireg r off ∈ tl
+      · rw [applyCallerRestores_regs_at tl _ hmTl hUniqTl]
+        simp [ArmState.setReg]
+      · have hNot : ∀ off2, CallerSaveEntry.ireg r off2 ∉ tl :=
+          fun off2 hm => hmTl (hUniqTl off2 hm ▸ hm)
+        rw [applyCallerRestores_regs_other tl _ r hNot]
+        simp [ArmState.setReg]
+    · -- head restores to r' ≠ r; hmem must be tail
+      have htl : CallerSaveEntry.ireg r off ∈ tl := by
+        cases hmem with
+        | head => simp_all
+        | tail _ h => exact h
+      show (applyCallerRestores tl (s.setReg r' (s.stack off'))).regs r = s.stack off
+      rw [applyCallerRestores_regs_at tl _ htl (fun o hm => hUniq o (.tail _ hm))]
+      simp [ArmState.setReg]
+  | .freg _ _ :: tl =>
+    have htl : CallerSaveEntry.ireg r off ∈ tl := by
+      cases hmem with | tail _ h => exact h
+    show (applyCallerRestores tl (s.setFReg _ (s.stack _))).regs r = s.stack off
+    rw [applyCallerRestores_regs_at tl _ htl (fun o hm => hUniq o (.tail _ hm))]
+    simp [ArmState.setFReg]
+
+/-- After restores, a freg holds the value from its save slot,
+    provided all entries for that register use the same offset. -/
+theorem applyCallerRestores_fregs_at (entries : List CallerSaveEntry) (s : ArmState)
+    {r : ArmFReg} {off : Nat} (hmem : CallerSaveEntry.freg r off ∈ entries)
+    (hUniq : ∀ off', CallerSaveEntry.freg r off' ∈ entries → off' = off) :
+    (applyCallerRestores entries s).fregs r = s.stack off := by
+  match entries with
+  | [] => nomatch hmem
+  | .freg r' off' :: tl =>
+    by_cases hr : r' = r
+    · have hoff := hUniq off' (hr ▸ .head _)
+      show (applyCallerRestores tl (s.setFReg r' (s.stack off'))).fregs r = s.stack off
+      rw [hr, hoff]
+      have hUniqTl : ∀ o, CallerSaveEntry.freg r o ∈ tl → o = off :=
+        fun o hm => hUniq o (.tail _ hm)
+      by_cases hmTl : CallerSaveEntry.freg r off ∈ tl
+      · rw [applyCallerRestores_fregs_at tl _ hmTl hUniqTl]
+        simp [ArmState.setFReg]
+      · have hNot : ∀ off2, CallerSaveEntry.freg r off2 ∉ tl :=
+          fun off2 hm => hmTl (hUniqTl off2 hm ▸ hm)
+        rw [applyCallerRestores_fregs_other tl _ r hNot]
+        simp [ArmState.setFReg]
+    · have htl : CallerSaveEntry.freg r off ∈ tl := by
+        cases hmem with
+        | head => simp_all
+        | tail _ h => exact h
+      show (applyCallerRestores tl (s.setFReg r' (s.stack off'))).fregs r = s.stack off
+      rw [applyCallerRestores_fregs_at tl _ htl (fun o hm => hUniq o (.tail _ hm))]
+      simp [ArmState.setFReg]
+  | .ireg _ _ :: tl =>
+    have htl : CallerSaveEntry.freg r off ∈ tl := by
+      cases hmem with | tail _ h => exact h
+    show (applyCallerRestores tl (s.setReg _ (s.stack _))).fregs r = s.stack off
+    rw [applyCallerRestores_fregs_at tl _ htl (fun o hm => hUniq o (.tail _ hm))]
+    simp [ArmState.setReg]
+
+/-- **Caller-save composition theorem.**
+    Saving all caller-saved registers, havocing, then restoring preserves
+    ExtStateRel — without requiring NoCallerSavedLayout.
+
+    Hypotheses:
+    - `hFresh`: save offsets don't collide with layout stack slots
+    - `hNodup`: save offsets are pairwise distinct
+    - `hAllCS`: every entry is for a caller-saved register
+    - `hCoversIreg`/`hCoversFReg`: every layout variable in a caller-saved
+      register has a corresponding entry
+    - `hUniqIreg`/`hUniqFreg`: each register appears with a unique offset -/
+theorem ExtStateRel.callerSave_composition
+    {layout : VarLayout} {σ : Store} {s : ArmState}
+    (hRel : ExtStateRel layout σ s)
+    (entries : List CallerSaveEntry)
+    {newRegs : ArmReg → BitVec 64} {newFregs : ArmFReg → BitVec 64}
+    (hFresh : ∀ e ∈ entries, ∀ v, layout v ≠ some (.stack e.off))
+    (hNodup : (entries.map CallerSaveEntry.off).Nodup)
+    (hCoversIreg : ∀ v r, layout v = some (.ireg r) → r.isCallerSaved = true →
+      ∃ off, CallerSaveEntry.ireg r off ∈ entries)
+    (hCoversFreg : ∀ v r, layout v = some (.freg r) → r.isCallerSaved = true →
+      ∃ off, CallerSaveEntry.freg r off ∈ entries)
+    (hUniqIreg : ∀ r off1 off2, CallerSaveEntry.ireg r off1 ∈ entries →
+      CallerSaveEntry.ireg r off2 ∈ entries → off1 = off2)
+    (hUniqFreg : ∀ r off1 off2, CallerSaveEntry.freg r off1 ∈ entries →
+      CallerSaveEntry.freg r off2 ∈ entries → off1 = off2)
+    (hAllCSIreg : ∀ r off, CallerSaveEntry.ireg r off ∈ entries → r.isCallerSaved = true)
+    (hAllCSFreg : ∀ r off, CallerSaveEntry.freg r off ∈ entries → r.isCallerSaved = true) :
+    ExtStateRel layout σ
+      (applyCallerRestores entries
+        ((applyCallerSaves entries s).havocCallerSaved newRegs newFregs)) := by
+  -- Add hypothesis: entries only contain caller-saved registers
+  -- (needed for callee-saved case; add as explicit hypothesis)
+  intro v loc hLoc
+  match loc with
+  | .stack off =>
+    simp only [applyCallerRestores_stack, ArmState.havocCallerSaved_stack]
+    rw [applyCallerSaves_stack_other entries s off (fun e he hEq =>
+      hFresh e he v (hEq ▸ hLoc))]
+    exact hRel v (.stack off) hLoc
+  | .ireg r =>
+    by_cases hcs : r.isCallerSaved
+    · -- Caller-saved: was saved, havoc'd, restored
+      obtain ⟨saveOff, hMem⟩ := hCoversIreg v r hLoc hcs
+      have hUn := fun off' hm => hUniqIreg r off' saveOff hm hMem
+      simp only [applyCallerRestores_regs_at entries _ hMem hUn,
+        ArmState.havocCallerSaved_stack,
+        applyCallerSaves_stack_ireg entries s hMem hNodup]
+      exact hRel v (.ireg r) hLoc
+    · -- Callee-saved: untouched by havoc, no entry restores to it
+      have hNotIn : ∀ off, CallerSaveEntry.ireg r off ∉ entries := by
+        intro off hm; exact absurd (hAllCSIreg r off hm) (by simp [hcs])
+      simp only [applyCallerRestores_regs_other entries _ r hNotIn,
+        ArmState.havocCallerSaved, hcs, ite_false,
+        applyCallerSaves_regs]
+      exact hRel v (.ireg r) hLoc
+  | .freg r =>
+    by_cases hcs : r.isCallerSaved
+    · obtain ⟨saveOff, hMem⟩ := hCoversFreg v r hLoc hcs
+      have hUn := fun off' hm => hUniqFreg r off' saveOff hm hMem
+      simp only [applyCallerRestores_fregs_at entries _ hMem hUn,
+        ArmState.havocCallerSaved_stack,
+        applyCallerSaves_stack_freg entries s hMem hNodup]
+      exact hRel v (.freg r) hLoc
+    · have hNotIn : ∀ off, CallerSaveEntry.freg r off ∉ entries := by
+        intro off hm; exact absurd (hAllCSFreg r off hm) (by simp [hcs])
+      simp only [applyCallerRestores_fregs_other entries _ r hNotIn,
+        ArmState.havocCallerSaved, hcs, ite_false,
+        applyCallerSaves_fregs]
+      exact hRel v (.freg r) hLoc
 
 -- ============================================================
 -- § 8. Formal instruction generation
