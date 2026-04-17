@@ -1758,7 +1758,16 @@ private theorem step_simulation {p : Prog} {r : VerifiedAsmResult}
         rw [hInstr] at hWTI
         cases hWTI <;> simp_all [TypedStore]
       }
-    obtain ⟨σ', hCfg⟩ := hCfgRun; subst hCfg
+    obtain ⟨σ', hCfg⟩ := hCfgRun
+    -- TAC-level: lib-call only modifies the destination variable
+    -- Prove before subst to avoid am-dependency issues in cases hStep
+    have hDstOnly : ∀ v, DAEOpt.instrDef p[pc] ≠ some v → σ' v = σ v := by
+      have : pc < p.code.size := by simp [Prog.size_eq] at hPC; exact hPC
+      -- cases hStep with cfg' still abstract (avoids am = am.write unification)
+      intro v hne
+      cases hStep <;> simp_all [isLibCallTAC, DAEOpt.instrDef]
+      all_goals (rw [← ‹_ = σ'›]; simp [Store.update]; intro h; exact absurd h.symm ‹_›)
+    subst hCfg
     -- Get bodyPerPC = saves ++ baseInstrs ++ restores
     obtain ⟨baseInstrs, hGenInstr, hBody⟩ :=
       spec.callSiteSaveRestore pc hPC hLib
@@ -1788,30 +1797,44 @@ private theorem step_simulation {p : Prog} {r : VerifiedAsmResult}
     let s_saved := {applyCallerSaves entries s with pc := s.pc + entries.length}
     have hSavedPC : s_saved.pc = r.pcMap pc + (entriesToSaves entries).length := by
       simp [s_saved, entriesToSaves_length, hSPC]
-    -- Base instruction ArmSteps: step through vLoadVarFP, lib-call, vStoreVarFP
-    -- s_mid: the state after saves + base instructions, before restores
-    -- Key properties: save slots preserved, dst has result, others untouched
+    -- Entry vars (non-dst caller-saved) are unchanged by the TAC step.
+    -- An entry var's register is in callerSaveEntries, which excludes the dst.
+    -- So the var ≠ dst, and hDstOnly gives σ'(v) = σ(v).
+    have hEIU : ∀ v ir, r.layout v = some (.ireg ir) →
+        (∃ off, CallerSaveEntry.ireg ir off ∈ entries) → σ' v = σ v := by
+      intro v ir hLoc ⟨off, hMem⟩
+      apply hDstOnly; intro hContra
+      -- hContra : DAEOpt.instrDef p[pc] = some v
+      -- hMem : .ireg ir off ∈ callerSaveEntries ... (some v)
+      -- callerSaveEntries filters out entries matching layout v's register
+      -- Since layout v = .ireg ir, the filter removes .ireg ir entries
+      show False
+      simp only [show entries = callerSaveEntries r.layout r.varMap (DAEOpt.instrDef p[pc]) from rfl,
+        callerSaveEntries, hContra] at hMem
+      rw [List.mem_filter] at hMem
+      simp [hLoc] at hMem
+    have hEFU : ∀ v fr, r.layout v = some (.freg fr) →
+        (∃ off, CallerSaveEntry.freg fr off ∈ entries) → σ' v = σ v := by
+      intro v fr hLoc ⟨off, hMem⟩
+      apply hDstOnly; intro hContra
+      show False
+      simp only [show entries = callerSaveEntries r.layout r.varMap (DAEOpt.instrDef p[pc]) from rfl,
+        callerSaveEntries, hContra] at hMem
+      rw [List.mem_filter] at hMem
+      simp [hLoc] at hMem
+    -- ARM-level: base instruction stepping + state properties
     have hBaseExists : ∃ s_mid : ArmState,
         ArmSteps r.bodyFlat s_saved s_mid ∧
         s_mid.pc = s_saved.pc + baseInstrs.length ∧
         s_mid.arrayMem = am ∧
-        -- Save slots preserved through base instructions
         (∀ e ∈ entries, s_mid.stack e.off = (applyCallerSaves entries s).stack e.off) ∧
-        -- Non-entry ireg vars have σ' values
         (∀ v ir, r.layout v = some (.ireg ir) →
           (∀ off, CallerSaveEntry.ireg ir off ∉ entries) → s_mid.regs ir = (σ' v).encode) ∧
-        -- Non-entry freg vars have σ' values
         (∀ v fr, r.layout v = some (.freg fr) →
           (∀ off, CallerSaveEntry.freg fr off ∉ entries) → s_mid.fregs fr = (σ' v).encode) ∧
-        -- Stack vars have σ' values
-        (∀ v off, r.layout v = some (.stack off) → s_mid.stack off = (σ' v).encode) ∧
-        -- Entry vars unchanged: σ'(v) = σ(v)
-        (∀ v ir, r.layout v = some (.ireg ir) →
-          (∃ off, CallerSaveEntry.ireg ir off ∈ entries) → σ' v = σ v) ∧
-        (∀ v fr, r.layout v = some (.freg fr) →
-          (∃ off, CallerSaveEntry.freg fr off ∈ entries) → σ' v = σ v) := by
+        (∀ v off, r.layout v = some (.stack off) → s_mid.stack off = (σ' v).encode) := by
       sorry
-    obtain ⟨s_mid, hBaseSteps, hMidPC, hMidAM, hSaveSlots, hNEI, hNEF, hSV, hEIU, hEFU⟩ :=
+    obtain ⟨s_mid, hBaseSteps, hMidPC, hMidAM, hSaveSlots, hNEI, hNEF, hSV⟩ :=
       hBaseExists
     -- Step 3: restores
     have hRestorePC : s_mid.pc =
