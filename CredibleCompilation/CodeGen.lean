@@ -1749,8 +1749,15 @@ private theorem step_simulation {p : Prog} {r : VerifiedAsmResult}
     have hCfgRun : ∃ σ', cfg' = .run (pc + 1) σ' am := by
       have : pc < p.code.size := by simp [Prog.size_eq] at hPC; exact hPC
       cases hStep <;> simp_all [isLibCallTAC]
-      -- Remaining: type-error cases (impossible under TypedStore, but need WTP proof)
-      all_goals sorry
+      -- Remaining: type-error cases — impossible under TypedStore + WellTypedProg
+      -- WellTypedInstr gives Γ y = .float; TypedStore gives (σ y).typeOf = Γ y = .float
+      all_goals {
+        rename_i hInstr hTypeErr
+        have hWTI := spec.wellTypedProg pc hPC
+        rw [show p[pc] = p.code[pc] from rfl] at hWTI
+        rw [hInstr] at hWTI
+        cases hWTI <;> simp_all [TypedStore]
+      }
     obtain ⟨σ', hCfg⟩ := hCfgRun; subst hCfg
     -- Get bodyPerPC = saves ++ baseInstrs ++ restores
     obtain ⟨baseInstrs, hGenInstr, hBody⟩ :=
