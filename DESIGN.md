@@ -3,6 +3,15 @@
 Record of key design decisions for CredibleCompilation.
 
 ---
+Useful prompts:
+  a) Is there an abstraction that would simplify the proofs?
+  b) Are there probes or blockers that would help derisk the plan?
+  c) Are there any blockers to the current plan?
+  d) Can you take another look at the plan and see if there are issues to be addressed?
+  e) Should I execute the plan in this session or a new session?
+  f) Give me a prompt for the new session. 
+  g) Isolate failing goal and focus on that - try different alternatives quickly. 
+  h) when it looks like it is thrashing, ask what is the problem - basically have it explain what is going on. This makes it reflect and apparently helps it get enough context to come up with a solution instead of thrashing. 
 
 0) Initial certificate prompt:
 
@@ -260,3 +269,5 @@ No new sorrys expected.
 Want me to implement it?
 
   p) Plan implemented, built, and tested at 2:50
+
+Copy Propagation Implementation
