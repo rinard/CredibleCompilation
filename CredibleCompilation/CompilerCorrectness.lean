@@ -431,7 +431,20 @@ theorem Stmt.interp_tmpAgree (s : Stmt) (fuel : Nat) (σ τ : Store) (am : Array
       simp only [Stmt.interp]; rw [← hsafe]; simp [‹_ = true›]
     · simp at h
   | print fmt args =>
-    sorry
+    simp only [Stmt.interp] at h
+    split at h
+    · obtain ⟨rfl, rfl⟩ := h
+      unfold Stmt.tmpFree Stmt.allVars at htf
+      refine ⟨τ, am, ?_, hagree, rfl⟩
+      simp only [Stmt.interp]
+      have : (args.all fun e => e.isSafe τ am decls) = true := by
+        rw [List.all_eq_true]
+        intro e he
+        have := (List.all_eq_true.mp ‹_ = true›) e he
+        rwa [SExpr.isSafe_tmpAgree e σ τ am decls hagree
+          (fun v hv => htf v (List.mem_flatMap.mpr ⟨e, he, hv⟩))] at this
+      simp [this]
+    · simp at h
 
 -- ============================================================
 -- § 4. Safety (division + bounds)
@@ -648,7 +661,13 @@ theorem Stmt.interp_some_implies_safe (s : Stmt) (fuel : Nat)
     · simp only [Stmt.safe]; exact SBool.isSafe_implies_safe b σ am decls ‹_›
     · simp at h
   | print fmt args =>
-    sorry
+    intro h; simp only [Stmt.interp] at h
+    split at h <;> simp at h
+    rename_i hs
+    simp only [Stmt.safe]
+    intro e he
+    exact SExpr.isSafe_implies_safe e σ am decls
+      (List.all_eq_true.mp hs e he)
 
 -- ============================================================
 -- § 4b. Integer typing (all arithmetic-position variables have int values)
@@ -1027,7 +1046,12 @@ private theorem checkStmt_declared {lookup : Var → Option VarTy}
     intro v hv; simp [Stmt.allVars] at hv
     exact checkSBool_declared h v hv
   | print fmt args =>
-    sorry
+    simp [Program.checkStmt, List.all_eq_true, Bool.or_eq_true] at h
+    intro v hv; simp [Stmt.allVars] at hv
+    obtain ⟨e, he, hv⟩ := hv
+    rcases h e he with hc | hc
+    · exact checkSExpr_declared hc v hv
+    · exact checkExpr_declared hc v hv
 
 /-- **Bridge lemma**: A type-checked program's body is tmp-free — no variable
     in the source program uses the compiler-reserved `__t` prefix. -/
@@ -1173,7 +1197,10 @@ theorem Stmt.interp_preserves_typedStore
     · obtain ⟨rfl, _⟩ := Option.some.inj hinterp; exact hts
     · simp at hinterp
   | print fmt args =>
-    sorry
+    simp only [Stmt.interp] at hinterp
+    split at hinterp
+    · obtain ⟨rfl, _⟩ := Option.some.inj hinterp; exact hts
+    · simp at hinterp
 
 -- ============================================================
 -- § 4e. Bridge: typeCheck + TypedStore → typedVars
@@ -1302,7 +1329,12 @@ theorem checkStmt_typedVars
     simp only [Stmt.typedVars]
     exact checkSBool_typedVars hcompat hchk hts
   | print fmt args =>
-    sorry
+    simp [Program.checkStmt, List.all_eq_true, Bool.or_eq_true] at hchk
+    simp only [Stmt.typedVars]
+    intro e he
+    rcases hchk e he with hc | hc
+    · exact (checkExpr_typedVars (am := am) hcompat hc hts).1
+    · exact (checkExpr_typedVars (am := am) hcompat hc hts).1
 
 /-- **Bridge lemma**: A type-checked program with a well-typed store satisfies typedVars. -/
 theorem Program.typeCheck_typedVars (prog : Program) (h : prog.typeCheck = true)

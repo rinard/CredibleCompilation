@@ -1819,7 +1819,8 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
   | arrStore_boundsError hinstr hidx hval hbounds =>
     exact ⟨s, .refl, trivial⟩
   | print hinstr =>
-    exact sorry  -- unverified: print not modeled in ARM semantics
+    have heq : instr = .print _ _ := Option.some.inj (hInstr.symm.trans hinstr)
+    rw [heq] at hSome; simp [verifiedGenInstr] at hSome
   | const hinstr =>
     rename_i x v
     have heq : instr = .const x v := Option.some.inj (hInstr.symm.trans hinstr)
