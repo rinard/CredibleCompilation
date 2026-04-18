@@ -556,6 +556,60 @@ theorem end_to_end_correctness {p p_opt : Prog} {r : VerifiedAsmResult}
     exact tacToArm_correctness hGen hHalt
 
 -- ============================================================
+-- § 5b. Pipeline preserves tyCtx (shared helper)
+-- ============================================================
+
+private theorem pipeline_tyCtx_eq {p p_opt : Prog}
+    (hOpt : optimizePipeline p = .ok p_opt)
+    (hty_dce : ∀ q, (DCEOpt.optimize q).orig.tyCtx = (DCEOpt.optimize q).trans.tyCtx)
+    (hty_licm : ∀ q, (LICMOpt.optimize q).orig.tyCtx = (LICMOpt.optimize q).trans.tyCtx)
+    (hty_cp : ∀ q, (ConstPropOpt.optimize q).orig.tyCtx = (ConstPropOpt.optimize q).trans.tyCtx)
+    (hty_dae : ∀ q, (DAEOpt.optimize q).orig.tyCtx = (DAEOpt.optimize q).trans.tyCtx)
+    (hty_fma : ∀ q, (FMAFusionOpt.optimize q).orig.tyCtx = (FMAFusionOpt.optimize q).trans.tyCtx)
+    (hty_cse : ∀ q, (CSEOpt.optimize q).orig.tyCtx = (CSEOpt.optimize q).trans.tyCtx)
+    (hty_ch : ∀ q, (ConstHoistOpt.optimize q).orig.tyCtx = (ConstHoistOpt.optimize q).trans.tyCtx)
+    (hty_ph : ∀ q, (PeepholeOpt.optimize q).orig.tyCtx = (PeepholeOpt.optimize q).trans.tyCtx)
+    (hty_ra : ∀ q, (RegAllocOpt.optimize q).orig.tyCtx = (RegAllocOpt.optimize q).trans.tyCtx)
+    (htyO_dce : ∀ q, (DCEOpt.optimize q).orig.tyCtx = q.tyCtx)
+    (htyO_licm : ∀ q, (LICMOpt.optimize q).orig.tyCtx = q.tyCtx)
+    (htyO_cp : ∀ q, (ConstPropOpt.optimize q).orig.tyCtx = q.tyCtx)
+    (htyO_dae : ∀ q, (DAEOpt.optimize q).orig.tyCtx = q.tyCtx)
+    (htyO_fma : ∀ q, (FMAFusionOpt.optimize q).orig.tyCtx = q.tyCtx)
+    (htyO_cse : ∀ q, (CSEOpt.optimize q).orig.tyCtx = q.tyCtx)
+    (htyO_ch : ∀ q, (ConstHoistOpt.optimize q).orig.tyCtx = q.tyCtx)
+    (htyO_ph : ∀ q, (PeepholeOpt.optimize q).orig.tyCtx = q.tyCtx)
+    (htyO_ra : ∀ q, (RegAllocOpt.optimize q).orig.tyCtx = q.tyCtx) :
+    p_opt.tyCtx = p.tyCtx := by
+  have bind_ok' : ∀ {α β : Type} {x : Except String α} {f : α → Except String β} {b : β},
+      Except.bind x f = .ok b → ∃ a, x = .ok a ∧ f a = .ok b := by
+    intro α β x f b h; cases x with | error e => simp [Except.bind] at h | ok a => exact ⟨a, rfl, h⟩
+  unfold optimizePipeline at hOpt; simp only [bind] at hOpt
+  obtain ⟨q1, hq1, hOpt⟩ := bind_ok' hOpt
+  obtain ⟨q2, hq2, hOpt⟩ := bind_ok' hOpt
+  obtain ⟨q3, hq3, hOpt⟩ := bind_ok' hOpt
+  obtain ⟨q4, hq4, hOpt⟩ := bind_ok' hOpt
+  obtain ⟨q5, hq5, hOpt⟩ := bind_ok' hOpt
+  obtain ⟨q6, hq6, hOpt⟩ := bind_ok' hOpt
+  obtain ⟨q7, hq7, hOpt⟩ := bind_ok' hOpt
+  obtain ⟨q8, hq8, hOpt⟩ := bind_ok' hOpt
+  obtain ⟨q9, hq9, hOpt⟩ := bind_ok' hOpt
+  obtain ⟨q10, hq10, hq11⟩ := bind_ok' hOpt
+  have hT := fun {n pass q q'} (h : applyPass n pass q = .ok q') => (applyPass_sound h).2.1
+  calc p_opt.tyCtx
+      = (RegAllocOpt.optimize q10).trans.tyCtx := by rw [← hT hq11]
+    _ = q10.tyCtx := by rw [← htyO_ra q10, hty_ra q10]
+    _ = q9.tyCtx := by rw [← hT hq10, ← hty_dce q9, htyO_dce q9]
+    _ = q8.tyCtx := by rw [← hT hq9, ← hty_ph q8, htyO_ph q8]
+    _ = q7.tyCtx := by rw [← hT hq8, ← hty_ch q7, htyO_ch q7]
+    _ = q6.tyCtx := by rw [← hT hq7, ← hty_cse q6, htyO_cse q6]
+    _ = q5.tyCtx := by rw [← hT hq6, ← hty_fma q5, htyO_fma q5]
+    _ = q4.tyCtx := by rw [← hT hq5, ← hty_dae q4, htyO_dae q4]
+    _ = q3.tyCtx := by rw [← hT hq4, ← hty_dce q3, htyO_dce q3]
+    _ = q2.tyCtx := by rw [← hT hq3, ← hty_cp q2, htyO_cp q2]
+    _ = q1.tyCtx := by rw [← hT hq2, ← hty_licm q1, htyO_licm q1]
+    _ = p.tyCtx := by rw [← hT hq1, ← hty_dce p, htyO_dce p]
+
+-- ============================================================
 -- § 6. Full end-to-end: While source → ARM
 -- ============================================================
 
@@ -649,3 +703,106 @@ theorem while_to_arm_correctness
     have hntw := hnt ⟨w, ty⟩ hp
     simp only [Bool.and_eq_true, Bool.not_eq_true'] at hntw
     exact hobs_src w hntw.1 hntw.2⟩
+
+-- ============================================================
+-- § 7. End-to-end error preservation
+-- ============================================================
+
+/-- **End-to-end error preservation: optimized TAC → original TAC.**
+
+    If the optimization pipeline succeeds and the optimized TAC reaches an
+    error (division by zero or out-of-bounds array access), then the original
+    (unoptimized) TAC also has an error execution.
+
+    Note: the source-level claim (source is unsafe at some fuel) requires
+    additionally that the original TAC errors from `ArrayMem.init`, which
+    would need AM-preserving versions of the pass soundness lemmas. -/
+theorem error_preservation_tac {p p_opt : Prog}
+    (hOpt : optimizePipeline p = .ok p_opt)
+    (hty_dce : ∀ q, (DCEOpt.optimize q).orig.tyCtx = (DCEOpt.optimize q).trans.tyCtx)
+    (hty_licm : ∀ q, (LICMOpt.optimize q).orig.tyCtx = (LICMOpt.optimize q).trans.tyCtx)
+    (hty_cp : ∀ q, (ConstPropOpt.optimize q).orig.tyCtx = (ConstPropOpt.optimize q).trans.tyCtx)
+    (hty_dae : ∀ q, (DAEOpt.optimize q).orig.tyCtx = (DAEOpt.optimize q).trans.tyCtx)
+    (hty_fma : ∀ q, (FMAFusionOpt.optimize q).orig.tyCtx = (FMAFusionOpt.optimize q).trans.tyCtx)
+    (hty_cse : ∀ q, (CSEOpt.optimize q).orig.tyCtx = (CSEOpt.optimize q).trans.tyCtx)
+    (hty_ch : ∀ q, (ConstHoistOpt.optimize q).orig.tyCtx = (ConstHoistOpt.optimize q).trans.tyCtx)
+    (hty_ph : ∀ q, (PeepholeOpt.optimize q).orig.tyCtx = (PeepholeOpt.optimize q).trans.tyCtx)
+    (hty_ra : ∀ q, (RegAllocOpt.optimize q).orig.tyCtx = (RegAllocOpt.optimize q).trans.tyCtx)
+    (htyO_dce : ∀ q, (DCEOpt.optimize q).orig.tyCtx = q.tyCtx)
+    (htyO_licm : ∀ q, (LICMOpt.optimize q).orig.tyCtx = q.tyCtx)
+    (htyO_cp : ∀ q, (ConstPropOpt.optimize q).orig.tyCtx = q.tyCtx)
+    (htyO_dae : ∀ q, (DAEOpt.optimize q).orig.tyCtx = q.tyCtx)
+    (htyO_fma : ∀ q, (FMAFusionOpt.optimize q).orig.tyCtx = q.tyCtx)
+    (htyO_cse : ∀ q, (CSEOpt.optimize q).orig.tyCtx = q.tyCtx)
+    (htyO_ch : ∀ q, (ConstHoistOpt.optimize q).orig.tyCtx = q.tyCtx)
+    (htyO_ph : ∀ q, (PeepholeOpt.optimize q).orig.tyCtx = q.tyCtx)
+    (htyO_ra : ∀ q, (RegAllocOpt.optimize q).orig.tyCtx = q.tyCtx)
+    {σ_err : Store} {am_err : ArrayMem}
+    (hErr : p_opt ⊩ Cfg.run 0 (Store.typedInit p_opt.tyCtx) ArrayMem.init ⟶*
+            Cfg.error σ_err am_err) :
+    ∃ σ_o am_o am_o',
+      p ⊩ Cfg.run 0 (Store.typedInit p.tyCtx) am_o ⟶* Cfg.error σ_o am_o' := by
+  have hts : TypedStore p.tyCtx (Store.typedInit p.tyCtx) := TypedStore.typedInit _
+  have hTyOpt : p_opt.tyCtx = p.tyCtx :=
+    pipeline_tyCtx_eq hOpt hty_dce hty_licm hty_cp hty_dae hty_fma hty_cse hty_ch hty_ph hty_ra
+      htyO_dce htyO_licm htyO_cp htyO_dae htyO_fma htyO_cse htyO_ch htyO_ph htyO_ra
+  have hbeh : program_behavior p_opt (Store.typedInit p.tyCtx) (.errors σ_err) :=
+    ⟨ArrayMem.init, am_err, hTyOpt ▸ hErr⟩
+  exact optimizePipeline_preserves_behavior hOpt
+    hty_dce hty_licm hty_cp hty_dae hty_fma hty_cse hty_ch hty_ph hty_ra
+    htyO_dce htyO_licm htyO_cp htyO_dae htyO_fma htyO_cse htyO_ch htyO_ph htyO_ra
+    _ hts (.errors σ_err) hbeh
+
+-- ============================================================
+-- § 8. End-to-end divergence preservation: While source → ARM
+-- ============================================================
+
+/-- **End-to-end divergence preservation: While source → optimized TAC.**
+
+    If a well-typed While program is compiled, optimized, and the optimized
+    TAC diverges, then the source program diverges at all fuels. -/
+theorem while_to_arm_divergence_preservation
+    (prog : Program) (htcs : prog.typeCheckStrict = true)
+    {p_opt : Prog}
+    (hOpt : optimizePipeline prog.compileToTAC = .ok p_opt)
+    (hty_dce : ∀ q, (DCEOpt.optimize q).orig.tyCtx = (DCEOpt.optimize q).trans.tyCtx)
+    (hty_licm : ∀ q, (LICMOpt.optimize q).orig.tyCtx = (LICMOpt.optimize q).trans.tyCtx)
+    (hty_cp : ∀ q, (ConstPropOpt.optimize q).orig.tyCtx = (ConstPropOpt.optimize q).trans.tyCtx)
+    (hty_dae : ∀ q, (DAEOpt.optimize q).orig.tyCtx = (DAEOpt.optimize q).trans.tyCtx)
+    (hty_fma : ∀ q, (FMAFusionOpt.optimize q).orig.tyCtx = (FMAFusionOpt.optimize q).trans.tyCtx)
+    (hty_cse : ∀ q, (CSEOpt.optimize q).orig.tyCtx = (CSEOpt.optimize q).trans.tyCtx)
+    (hty_ch : ∀ q, (ConstHoistOpt.optimize q).orig.tyCtx = (ConstHoistOpt.optimize q).trans.tyCtx)
+    (hty_ph : ∀ q, (PeepholeOpt.optimize q).orig.tyCtx = (PeepholeOpt.optimize q).trans.tyCtx)
+    (hty_ra : ∀ q, (RegAllocOpt.optimize q).orig.tyCtx = (RegAllocOpt.optimize q).trans.tyCtx)
+    (htyO_dce : ∀ q, (DCEOpt.optimize q).orig.tyCtx = q.tyCtx)
+    (htyO_licm : ∀ q, (LICMOpt.optimize q).orig.tyCtx = q.tyCtx)
+    (htyO_cp : ∀ q, (ConstPropOpt.optimize q).orig.tyCtx = q.tyCtx)
+    (htyO_dae : ∀ q, (DAEOpt.optimize q).orig.tyCtx = q.tyCtx)
+    (htyO_fma : ∀ q, (FMAFusionOpt.optimize q).orig.tyCtx = q.tyCtx)
+    (htyO_cse : ∀ q, (CSEOpt.optimize q).orig.tyCtx = q.tyCtx)
+    (htyO_ch : ∀ q, (ConstHoistOpt.optimize q).orig.tyCtx = q.tyCtx)
+    (htyO_ph : ∀ q, (PeepholeOpt.optimize q).orig.tyCtx = q.tyCtx)
+    (htyO_ra : ∀ q, (RegAllocOpt.optimize q).orig.tyCtx = q.tyCtx)
+    {f : Nat → Cfg}
+    (hDiv : IsInfiniteExec p_opt f)
+    (hf0 : f 0 = Cfg.run 0 (Store.typedInit p_opt.tyCtx) ArrayMem.init) :
+    ∀ fuel, prog.interp fuel = none := by
+  have htc := Program.typeCheckStrict_typeCheck prog htcs
+  have hts : TypedStore prog.compileToTAC.tyCtx (Store.typedInit prog.compileToTAC.tyCtx) :=
+    TypedStore.typedInit _
+  have hInitEq : Store.typedInit prog.compileToTAC.tyCtx = prog.initStore := by
+    rw [Program.compileToTAC_tyCtx_eq prog htc]; exact Program.typedInit_eq_initStore prog htc
+  have hTyOpt : p_opt.tyCtx = prog.compileToTAC.tyCtx :=
+    pipeline_tyCtx_eq hOpt hty_dce hty_licm hty_cp hty_dae hty_fma hty_cse hty_ch hty_ph hty_ra
+      htyO_dce htyO_licm htyO_cp htyO_dae htyO_fma htyO_cse htyO_ch htyO_ph htyO_ra
+  have hbeh : program_behavior p_opt (Store.typedInit prog.compileToTAC.tyCtx) .diverges :=
+    ⟨f, hDiv, hTyOpt ▸ hf0⟩
+  have hsound := optimizePipeline_preserves_behavior hOpt
+    hty_dce hty_licm hty_cp hty_dae hty_fma hty_cse hty_ch hty_ph hty_ra
+    htyO_dce htyO_licm htyO_cp htyO_dae htyO_fma htyO_cse htyO_ch htyO_ph htyO_ra
+    _ hts .diverges hbeh
+  simp only at hsound
+  obtain ⟨g, hinf, hg0⟩ := hsound
+  have hdiv_init : program_behavior_init prog.compileToTAC prog.initStore .diverges :=
+    ⟨g, hinf, hInitEq ▸ hg0⟩
+  exact whileToTAC_refinement prog htcs .diverges hdiv_init
