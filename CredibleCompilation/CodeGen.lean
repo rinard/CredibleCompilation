@@ -1767,6 +1767,44 @@ private theorem step_simulation {p : Prog} {r : VerifiedAsmResult}
       intro v hne
       cases hStep <;> simp_all [isLibCallTAC, DAEOpt.instrDef]
       all_goals (rw [← ‹_ = σ'›]; simp [Store.update]; intro h; exact absurd h.symm ‹_›)
+    -- TAC result: σ' = σ[dst ↦ result] (before subst, to avoid am-dependency)
+    have hLibStep : ∀ x op y, p.code[pc] = .floatUnary x op y →
+        ∃ f, σ y = .float f ∧ σ' x = .float (op.eval f) := by
+      have hpc : pc < p.code.size := by simp [Prog.size_eq] at hPC; exact hPC
+      intro x' op' y' hI
+      have hI' : p[pc]? = some (.floatUnary x' op' y') := by
+        simp [Prog.getElem?_code, Array.getElem?_eq_getElem hpc, hI]
+      cases hStep with
+      | floatUnary hinstr hy =>
+        have := Option.some.inj (hI'.symm.trans hinstr)
+        rcases this with ⟨rfl, rfl, rfl⟩
+        exact ⟨_, hy, by cases hCfg; simp [Store.update_self]⟩
+      | floatUnary_typeError hinstr hne =>
+        have := Option.some.inj (hI'.symm.trans hinstr)
+        rcases this with ⟨rfl, rfl, rfl⟩
+        have hWTI := spec.wellTypedProg pc hPC
+        rw [show p[pc] = p.code[pc] from rfl, hI] at hWTI
+        cases hWTI <;> simp_all [TypedStore]
+      | _ => exfalso; simp_all [Prog.getElem?_code]
+    have hLibStepBin : ∀ x y z, p.code[pc] = .fbinop x .fpow y z →
+        ∃ fy fz, σ y = .float fy ∧ σ z = .float fz ∧
+          σ' x = .float (FloatBinOp.eval .fpow fy fz) := by
+      have hpc : pc < p.code.size := by simp [Prog.size_eq] at hPC; exact hPC
+      intro x' y' z' hI
+      have hI' : p[pc]? = some (.fbinop x' .fpow y' z') := by
+        simp [Prog.getElem?_code, Array.getElem?_eq_getElem hpc, hI]
+      cases hStep with
+      | fbinop hinstr hy hz =>
+        have := Option.some.inj (hI'.symm.trans hinstr)
+        rcases this with ⟨rfl, rfl, rfl, rfl⟩
+        exact ⟨_, _, hy, hz, by cases hCfg; simp [Store.update_self]⟩
+      | fbinop_typeError hinstr hne =>
+        have := Option.some.inj (hI'.symm.trans hinstr)
+        rcases this with ⟨rfl, rfl, rfl, rfl⟩
+        have hWTI := spec.wellTypedProg pc hPC
+        rw [show p[pc] = p.code[pc] from rfl, hI] at hWTI
+        cases hWTI <;> simp_all [TypedStore]
+      | _ => exfalso; simp_all [Prog.getElem?_code]
     subst hCfg
     -- Get bodyPerPC = saves ++ baseInstrs ++ restores
     obtain ⟨baseInstrs, hGenInstr, hBody⟩ :=
@@ -1833,7 +1871,729 @@ private theorem step_simulation {p : Prog} {r : VerifiedAsmResult}
         (∀ v fr, r.layout v = some (.freg fr) →
           (∀ off, CallerSaveEntry.freg fr off ∉ entries) → s_mid.fregs fr = (σ' v).encode) ∧
         (∀ v off, r.layout v = some (.stack off) → s_mid.stack off = (σ' v).encode) := by
-      sorry
+      -- Step 0: ExtStateRel for s_saved
+      have hEntriesSub' : entries.Sublist (genCallerSaveAll r.layout r.varMap) := by
+        show (callerSaveEntries r.layout r.varMap (DAEOpt.instrDef p[pc])).Sublist _
+        unfold callerSaveEntries
+        cases DAEOpt.instrDef p[pc] with
+        | none => exact List.Sublist.refl _
+        | some _ => exact List.filter_sublist
+      have hRelSaved : ExtStateRel r.layout σ s_saved := by
+        show ExtStateRel r.layout σ {applyCallerSaves entries s with pc := s.pc + entries.length}
+        intro v loc hv
+        exact ExtStateRel.applyCallerSaves_preserved hStateRel entries
+          (fun e he v' => spec.callerSaveSpec.1 e (hEntriesSub'.subset he) v') v loc hv
+      -- Step 1: case-split on p[pc]
+      cases hInstr : p.code[pc] with
+      | floatUnary x op y =>
+        -- Step 2: unfold verifiedGenInstr for floatUnary
+        rw [show p[pc] = p.code[pc] from rfl, hInstr] at hGenInstr
+        have hSS : r.layout.scratchSafe = true := by
+          cases h : r.layout.scratchSafe
+          · simp [verifiedGenInstr, h] at hGenInstr
+          · rfl
+        have hII : r.layout.isInjective = true := by
+          cases h : r.layout.isInjective
+          · simp [verifiedGenInstr, hSS, h] at hGenInstr
+          · rfl
+        have hScratch : ExtScratchSafe r.layout := VarLayout.scratchSafe_spec r.layout hSS
+        have hInjective : VarLayoutInjective r.layout := VarLayout.isInjective_spec r.layout hII
+        have hNotIregY : ∀ ir, r.layout y ≠ some (.ireg ir) := by
+          intro ir h; have := hGenInstr; simp [verifiedGenInstr, hSS, hII, h] at this
+        have hNotIregX : ∀ ir, r.layout x ≠ some (.ireg ir) := by
+          intro ir h; have := hGenInstr
+          simp only [verifiedGenInstr, hSS, hII, Bool.not_true, Bool.false_or, h] at this
+          split at this <;> simp_all
+        let src_reg := match r.layout y with | some (.freg r) => r | _ => ArmFReg.d0
+        let dst_reg := match r.layout x with | some (.freg r) => r | _ => ArmFReg.d0
+        have hInstrs : baseInstrs =
+            vLoadVarFP r.layout y src_reg ++ [.floatUnaryInstr op dst_reg src_reg] ++
+            vStoreVarFP r.layout x dst_reg := by
+          simp only [verifiedGenInstr, hSS, hII, Bool.not_true, Bool.false_or] at hGenInstr
+          split at hGenInstr
+          · simp_all
+          · exact (Option.some.inj hGenInstr).symm
+        -- Phase A: load y into src_reg
+        rw [hInstrs] at hCodeBase
+        have hCodeLoad := hCodeBase.append_left.append_left
+          (l2 := [.floatUnaryInstr op dst_reg src_reg])
+        have hMappedY : r.layout y ≠ none := by
+          have := spec.layoutComplete pc (by simp [Prog.size_eq] at hPC; exact hPC) y
+          rw [show p[pc] = p.code[pc] from rfl, hInstr] at this
+          exact this (by simp [TAC.vars])
+        obtain ⟨s1, hSteps1, hSR1, hRel1, hRegs1, hPC1, hAM1, hFregs1, hStack1⟩ :=
+          vLoadVarFP_eff_exec r.bodyFlat r.layout y σ s_saved
+            (r.pcMap pc + (entriesToSaves entries).length) .d0
+            hRelSaved hScratch hSavedPC hNotIregY (Or.inl rfl) hMappedY hCodeLoad
+        -- Phase B: havoc (floatUnaryLibCall)
+        have hCodeMid := hCodeBase.append_left.append_right
+          (l1 := vLoadVarFP r.layout y src_reg)
+        have hCall : r.bodyFlat[s1.pc]? = some (.floatUnaryInstr op dst_reg src_reg) := by
+          rw [hPC1]; exact hCodeMid.head
+        have hNotNat : op.isNative = false := by
+          rw [show p[pc] = p.code[pc] from rfl, hInstr] at hLib
+          cases op <;> simp [isLibCallTAC, FloatUnaryOp.isNative] at hLib ⊢
+        let newRegs : ArmReg → BitVec 64 := fun _ => 0
+        let newFregs : ArmFReg → BitVec 64 := fun _ => 0
+        let s2 := s1.havocCallerSaved newRegs newFregs |>.setFReg dst_reg (op.eval (s1.fregs src_reg)) |>.nextPC
+        have hSteps2 : ArmSteps r.bodyFlat s1 s2 :=
+          .single (.floatUnaryLibCall op dst_reg src_reg newRegs newFregs hCall hNotNat)
+        -- Phase C: store dst_reg into x (manual, ExtStateRel broken)
+        have hPC2 : s2.pc = s1.pc + 1 := by
+          simp [s2, ArmState.nextPC, ArmState.setFReg, ArmState.havocCallerSaved]
+        have hCodeStore : CodeAt r.bodyFlat s2.pc (vStoreVarFP r.layout x dst_reg) := by
+          have h := hCodeBase.append_right
+            (l1 := vLoadVarFP r.layout y src_reg ++ [.floatUnaryInstr op dst_reg src_reg])
+          rw [hPC2, hPC1]; simp [List.length_append] at h ⊢; exact h
+        -- Step through vStoreVarFP and compose
+        -- Shared facts for all sub-cases
+        have hPC1' : s1.pc = r.pcMap pc + (entriesToSaves entries).length +
+            (vLoadVarFP r.layout y src_reg).length := hPC1
+        have hAM2 : s2.arrayMem = s1.arrayMem := by
+          simp [s2, ArmState.nextPC, ArmState.setFReg, ArmState.havocCallerSaved]
+        have hAMChain : s2.arrayMem = am := by
+          rw [hAM2, hAM1]; simp [s_saved, applyCallerSaves_arrayMem, hArrayMem]
+        -- Non-entry ireg: shared across all sub-cases (store doesn't touch iregs)
+        have hNEI_shared : ∀ v ir, r.layout v = some (.ireg ir) →
+            (∀ off, CallerSaveEntry.ireg ir off ∉ entries) → s2.regs ir = (σ' v).encode := by
+          intro v ir hLoc hNE
+          -- s2.regs ir = (havocCallerSaved ...).regs ir (setFReg/nextPC don't touch regs)
+          have : s2.regs ir = (s1.havocCallerSaved newRegs newFregs).regs ir := by
+            simp [s2, ArmState.nextPC, ArmState.setFReg]
+          rw [this]
+          -- ir must be callee-saved (otherwise genCallerSaveAll has an entry, which
+          -- passes the callerSaveEntries filter since layout x isn't ireg)
+          have hCS : ir.isCallerSaved = false := by
+            cases hcs : ir.isCallerSaved with
+            | false => rfl
+            | true =>
+            obtain ⟨_, _, hCoversIreg, _⟩ := spec.callerSaveSpec
+            obtain ⟨coff, hMem⟩ := hCoversIreg v ir hLoc hcs
+            -- hMem : .ireg ir coff ∈ genCallerSaveAll
+            -- Show it passes the callerSaveEntries filter (layout x isn't ireg)
+            have hInE : CallerSaveEntry.ireg ir coff ∈ entries := by
+              show _ ∈ callerSaveEntries r.layout r.varMap (DAEOpt.instrDef p[pc])
+              rw [show p[pc] = p.code[pc] from rfl, hInstr]
+              simp only [callerSaveEntries, DAEOpt.instrDef]
+              rw [List.mem_filter]
+              refine ⟨hMem, ?_⟩
+              rcases hlx2 : r.layout x with _ | ⟨off2 | ir2 | fr2⟩ <;> simp [hlx2]
+              exact absurd hlx2 (hNotIregX ir2)
+            exact absurd hInE (hNE coff)
+          -- Callee-saved: havocCallerSaved preserves ir
+          show (fun r => if r.isCallerSaved then newRegs r else s1.regs r) ir = _
+          simp [hCS]
+          -- s1.regs = s_saved.regs = s.regs (load doesn't touch iregs)
+          rw [hRegs1]; simp [s_saved, applyCallerSaves_regs]
+          -- s.regs ir = (σ v).encode by hStateRel
+          have hVal := hStateRel v (.ireg ir) hLoc; simp at hVal; rw [hVal]
+          -- σ' v = σ v since dst (x) is not v (x is freg/stack, v is ireg)
+          have hne : DAEOpt.instrDef p[pc] ≠ some v := by
+            rw [show p[pc] = p.code[pc] from rfl, hInstr]; simp [DAEOpt.instrDef]
+            intro h; rw [← h] at hLoc; exact absurd hLoc (hNotIregX ir)
+          rw [hDstOnly v hne]
+        -- Save slots: s2.stack = (applyCallerSaves entries s).stack
+        have hStack2 : s2.stack = (applyCallerSaves entries s).stack := by
+          simp [s2, ArmState.nextPC, ArmState.setFReg, ArmState.havocCallerSaved_stack, hStack1, s_saved]
+        -- TAC result: extract σ' x and connect to ARM
+        obtain ⟨f, hfy, hσx⟩ := hLibStep x op y hInstr
+        -- ARM result: s2.fregs dst_reg = op.eval f = (σ' x).encode
+        have hSR1' : s1.fregs src_reg = (σ y).encode := hSR1
+        have hArmResult : s2.fregs dst_reg = (σ' x).encode := by
+          simp [s2, ArmState.nextPC, ArmState.setFReg, ArmState.havocCallerSaved]
+          rw [hSR1', hfy, hσx]; simp [Value.encode]
+        rcases hlx : r.layout x with _ | ⟨off | ir | fr⟩
+        · -- none: vStoreVarFP = [], s_mid = s2
+          have hSS2 : ∀ e ∈ entries, s2.stack e.off = (applyCallerSaves entries s).stack e.off :=
+            fun e _ => by rw [hStack2]
+          refine ⟨s2, hSteps1.trans hSteps2, ?_, hAMChain, hSS2, hNEI_shared, ?_, ?_⟩
+          · -- PC
+            rw [hPC2, hPC1', hSavedPC, hInstrs]; simp [vStoreVarFP, hlx, List.length_append]; omega
+          · -- non-entry freg
+            intro v fr hLoc hNE
+            -- dst_reg = .d0 (layout x = none), so fr ≠ .d0 by scratchSafe
+            have hDR : dst_reg = .d0 := by simp [dst_reg, hlx]
+            have hfrne : fr ≠ ArmFReg.d0 := fun h => absurd (h ▸ hLoc) (hScratch.not_d0 v)
+            -- s2.fregs fr = (havocCallerSaved ...).fregs fr (setFReg only changed .d0)
+            have : s2.fregs fr = (s1.havocCallerSaved newRegs newFregs).fregs fr := by
+              simp [s2, ArmState.nextPC, ArmState.setFReg, hDR, hfrne]
+            rw [this]
+            -- fr callee-saved (same argument as ireg)
+            have hCS : fr.isCallerSaved = false := by
+              cases hcs : fr.isCallerSaved with
+              | false => rfl
+              | true =>
+              obtain ⟨_, _, _, hCoversFreg, _⟩ := spec.callerSaveSpec
+              obtain ⟨coff, hMem⟩ := hCoversFreg v fr hLoc hcs
+              have hInE : CallerSaveEntry.freg fr coff ∈ entries := by
+                show _ ∈ callerSaveEntries r.layout r.varMap (DAEOpt.instrDef p[pc])
+                rw [show p[pc] = p.code[pc] from rfl, hInstr]
+                simp only [callerSaveEntries, DAEOpt.instrDef]
+                rw [List.mem_filter]
+                exact ⟨hMem, by simp [hlx]⟩
+              exact absurd hInE (hNE coff)
+            show (fun r => if r.isCallerSaved then newFregs r else s1.fregs r) fr = _
+            simp [hCS]
+            -- s1.fregs fr preserved from load (fr ≠ src_reg or fr = src_reg)
+            -- Use hRel1 (ExtStateRel for s1) since load preserves it
+            have hVal := hRel1 v (.freg fr) hLoc; simp at hVal; rw [hVal]
+            -- σ' v = σ v (v ≠ x since layout x = none)
+            have hne : DAEOpt.instrDef p[pc] ≠ some v := by
+              rw [show p[pc] = p.code[pc] from rfl, hInstr]; simp [DAEOpt.instrDef]
+              intro h; rw [← h] at hLoc; simp [hlx] at hLoc
+            rw [hDstOnly v hne]
+          · -- stack vars
+            intro v off' hLoc
+            rw [hStack2]
+            have hVal := hRelSaved v (.stack off') hLoc; simp at hVal; rw [hVal]
+            have hne : DAEOpt.instrDef p[pc] ≠ some v := by
+              rw [show p[pc] = p.code[pc] from rfl, hInstr]; simp [DAEOpt.instrDef]
+              intro h; rw [← h] at hLoc; simp [hlx] at hLoc
+            rw [hDstOnly v hne]
+        · -- stack off: vStoreVarFP = [.fstr dst_reg off]
+          simp [vStoreVarFP, hlx] at hCodeStore
+          have hFstr : r.bodyFlat[s2.pc]? = some (.fstr dst_reg off) := hCodeStore.head
+          let s3 := (s2.setStack off (s2.fregs dst_reg)).nextPC
+          have hSteps3 : ArmSteps r.bodyFlat s2 s3 :=
+            .single (.fstr dst_reg off hFstr)
+          have hRegs3 : s3.regs = s2.regs := by simp [s3, ArmState.nextPC, ArmState.setStack]
+          have hNEI3 : ∀ v ir, r.layout v = some (.ireg ir) →
+              (∀ off, CallerSaveEntry.ireg ir off ∉ entries) → s3.regs ir = (σ' v).encode :=
+            fun v ir hLoc hNE => hRegs3 ▸ hNEI_shared v ir hLoc hNE
+          have hSS3 : ∀ e ∈ entries, s3.stack e.off = (applyCallerSaves entries s).stack e.off := by
+            intro e he
+            simp [s3, ArmState.nextPC, ArmState.setStack]
+            -- e.off ≠ off because off is a layout offset for x, and save slots are fresh
+            have hne : e.off ≠ off := by
+              intro heq
+              exact spec.callerSaveSpec.1 e (hEntriesSub'.subset he) x (heq ▸ hlx)
+            simp [hne, hStack2]
+          refine ⟨s3, hSteps1.trans (hSteps2.trans hSteps3), ?_, ?_, hSS3, hNEI3, ?_, ?_⟩
+          · -- PC
+            simp [s3, ArmState.nextPC, ArmState.setStack]
+            rw [hPC2, hPC1', hSavedPC, hInstrs]; simp [vStoreVarFP, hlx, List.length_append]; omega
+          · -- arrayMem
+            simp [s3, ArmState.nextPC, ArmState.setStack, hAMChain]
+          · -- non-entry freg (s3.fregs = s2.fregs since setStack doesn't touch fregs)
+            intro v fr hLoc hNE
+            have hFregs3 : s3.fregs = s2.fregs := by simp [s3, ArmState.nextPC, ArmState.setStack]
+            rw [hFregs3]
+            -- dst_reg = .d0 (layout x = stack, not freg)
+            have hDR : dst_reg = .d0 := by simp [dst_reg, hlx]
+            have hfrne : fr ≠ ArmFReg.d0 := fun h => absurd (h ▸ hLoc) (hScratch.not_d0 v)
+            have : s2.fregs fr = (s1.havocCallerSaved newRegs newFregs).fregs fr := by
+              simp [s2, ArmState.nextPC, ArmState.setFReg, hDR, hfrne]
+            rw [this]
+            have hCS : fr.isCallerSaved = false := by
+              cases hcs : fr.isCallerSaved with
+              | false => rfl
+              | true =>
+              obtain ⟨_, _, _, hCoversFreg, _⟩ := spec.callerSaveSpec
+              obtain ⟨coff, hMem⟩ := hCoversFreg v fr hLoc hcs
+              have hInE : CallerSaveEntry.freg fr coff ∈ entries := by
+                show _ ∈ callerSaveEntries r.layout r.varMap (DAEOpt.instrDef p[pc])
+                rw [show p[pc] = p.code[pc] from rfl, hInstr]
+                simp only [callerSaveEntries, DAEOpt.instrDef]
+                rw [List.mem_filter]
+                exact ⟨hMem, by simp [hlx]⟩
+              exact absurd hInE (hNE coff)
+            show (fun r => if r.isCallerSaved then newFregs r else s1.fregs r) fr = _
+            simp [hCS]
+            have hVal := hRel1 v (.freg fr) hLoc; simp at hVal; rw [hVal]
+            have hne : DAEOpt.instrDef p[pc] ≠ some v := by
+              rw [show p[pc] = p.code[pc] from rfl, hInstr]; simp [DAEOpt.instrDef]
+              intro h; subst h; rw [hlx] at hLoc; cases hLoc
+            rw [hDstOnly v hne]
+          · -- stack vars
+            intro v off' hLoc
+            simp [s3, ArmState.nextPC, ArmState.setStack]
+            by_cases hvo : off' = off
+            · -- v maps to same offset as x → v = x by injectivity
+              have hvx : v = x := hInjective v x (.stack off) (hvo ▸ hLoc) hlx
+              subst hvx
+              simp [hvo]; exact hArmResult
+            · -- different offset → use s2.stack
+              simp [hvo, hStack2]
+              have hVal := hRelSaved v (.stack off') hLoc; simp at hVal; rw [hVal]
+              have hvx : v ≠ x := by
+                intro h; subst h; rw [hlx] at hLoc; cases hLoc; exact hvo rfl
+              have hne : DAEOpt.instrDef p[pc] ≠ some v := by
+                rw [show p[pc] = p.code[pc] from rfl, hInstr]; simp [DAEOpt.instrDef]; exact hvx.symm
+              rw [hDstOnly v hne]
+        · -- ireg: impossible
+          exact absurd hlx (hNotIregX ir)
+        · -- freg r: vStoreVarFP = fmovRR or []
+          by_cases hEq : fr == dst_reg
+          · -- fr = dst_reg: vStoreVarFP = [], s_mid = s2
+            simp [vStoreVarFP, hlx, hEq] at hCodeStore
+            have hSS2 : ∀ e ∈ entries, s2.stack e.off = (applyCallerSaves entries s).stack e.off :=
+              fun e _ => by rw [hStack2]
+            refine ⟨s2, hSteps1.trans hSteps2, ?_, hAMChain, hSS2, hNEI_shared, ?_, ?_⟩
+            · -- PC
+              rw [hPC2, hPC1', hSavedPC, hInstrs]
+              simp [vStoreVarFP, hlx, hEq, List.length_append]; omega
+            · -- non-entry freg (s_mid = s2, dst_reg = fr)
+              intro v fr' hLoc hNE
+              have hDR : dst_reg = fr := by simp [dst_reg, hlx]
+              by_cases hff : fr' = fr
+              · -- fr' = fr = dst_reg → v = x by injectivity
+                subst hff; have := hInjective v x _ hLoc hlx; subst this
+                rw [hDR] at hArmResult; exact hArmResult
+              · -- fr' ≠ fr → setFReg didn't touch fr'
+                have : s2.fregs fr' = (s1.havocCallerSaved newRegs newFregs).fregs fr' := by
+                  simp [s2, ArmState.nextPC, ArmState.setFReg, hDR, hff]
+                rw [this]
+                have hCS : fr'.isCallerSaved = false := by
+                  cases hcs : fr'.isCallerSaved with
+                  | false => rfl
+                  | true =>
+                  obtain ⟨_, _, _, hCoversFreg, _⟩ := spec.callerSaveSpec
+                  obtain ⟨coff, hMem⟩ := hCoversFreg v fr' hLoc hcs
+                  have hInE : CallerSaveEntry.freg fr' coff ∈ entries := by
+                    show _ ∈ callerSaveEntries r.layout r.varMap (DAEOpt.instrDef p[pc])
+                    rw [show p[pc] = p.code[pc] from rfl, hInstr]
+                    simp only [callerSaveEntries, DAEOpt.instrDef]
+                    rw [List.mem_filter]
+                    refine ⟨hMem, ?_⟩; simp [hlx, hff]
+                  exact absurd hInE (hNE coff)
+                show (fun r => if r.isCallerSaved then newFregs r else s1.fregs r) fr' = _
+                simp [hCS]
+                have hVal := hRel1 v (.freg fr') hLoc; simp at hVal; rw [hVal]
+                have hne : DAEOpt.instrDef p[pc] ≠ some v := by
+                  rw [show p[pc] = p.code[pc] from rfl, hInstr]; simp [DAEOpt.instrDef]
+                  intro h; subst h; rw [hlx] at hLoc; cases hLoc; exact hff rfl
+                rw [hDstOnly v hne]
+            · -- stack vars
+              intro v off' hLoc; rw [hStack2]
+              have hVal := hRelSaved v (.stack off') hLoc; simp at hVal; rw [hVal]
+              have hne : DAEOpt.instrDef p[pc] ≠ some v := by
+                rw [show p[pc] = p.code[pc] from rfl, hInstr]; simp [DAEOpt.instrDef]
+                intro h; subst h; rw [hlx] at hLoc; cases hLoc
+              rw [hDstOnly v hne]
+          · -- fr ≠ dst_reg: vStoreVarFP = [.fmovRR fr dst_reg]
+            simp [vStoreVarFP, hlx, hEq] at hCodeStore
+            have hFmov : r.bodyFlat[s2.pc]? = some (.fmovRR fr dst_reg) := hCodeStore.head
+            let s3 := (s2.setFReg fr (s2.fregs dst_reg)).nextPC
+            have hSteps3 : ArmSteps r.bodyFlat s2 s3 :=
+              .single (.fmovRR fr dst_reg hFmov)
+            have hRegs3 : s3.regs = s2.regs := by simp [s3, ArmState.nextPC, ArmState.setFReg]
+            have hNEI3 : ∀ v ir, r.layout v = some (.ireg ir) →
+                (∀ off, CallerSaveEntry.ireg ir off ∉ entries) → s3.regs ir = (σ' v).encode :=
+              fun v ir hLoc hNE => hRegs3 ▸ hNEI_shared v ir hLoc hNE
+            have hStack3 : s3.stack = s2.stack := by simp [s3, ArmState.nextPC, ArmState.setFReg]
+            have hSS3 : ∀ e ∈ entries, s3.stack e.off = (applyCallerSaves entries s).stack e.off :=
+              fun e _ => by rw [hStack3, hStack2]
+            refine ⟨s3, hSteps1.trans (hSteps2.trans hSteps3), ?_, ?_, hSS3, hNEI3, ?_, ?_⟩
+            · -- PC
+              simp [s3, ArmState.nextPC, ArmState.setFReg]
+              rw [hPC2, hPC1', hSavedPC, hInstrs]
+              simp [vStoreVarFP, hlx, hEq, List.length_append]; omega
+            · -- arrayMem
+              simp [s3, ArmState.nextPC, ArmState.setFReg, hAMChain]
+            · -- non-entry freg (s3 = setFReg fr ... of s2)
+              intro v fr' hLoc hNE
+              have hDR : dst_reg = fr := by simp [dst_reg, hlx]
+              by_cases hff : fr' = fr
+              · -- fr' = fr → v = x, s3.fregs fr = s2.fregs dst_reg = (σ' x).encode
+                have hvx := hInjective v x _ (hff ▸ hLoc) hlx; subst hvx
+                simp [s3, ArmState.nextPC, ArmState.setFReg, hff]
+                exact hArmResult
+              · -- fr' ≠ fr → s3.fregs fr' = s2.fregs fr'
+                have : s3.fregs fr' = s2.fregs fr' := by
+                  simp [s3, ArmState.nextPC, ArmState.setFReg, hff]
+                rw [this]
+                have : s2.fregs fr' = (s1.havocCallerSaved newRegs newFregs).fregs fr' := by
+                  simp [s2, ArmState.nextPC, ArmState.setFReg, hDR, hff]
+                rw [this]
+                have hCS : fr'.isCallerSaved = false := by
+                  cases hcs : fr'.isCallerSaved with
+                  | false => rfl
+                  | true =>
+                  obtain ⟨_, _, _, hCoversFreg, _⟩ := spec.callerSaveSpec
+                  obtain ⟨coff, hMem⟩ := hCoversFreg v fr' hLoc hcs
+                  have hInE : CallerSaveEntry.freg fr' coff ∈ entries := by
+                    show _ ∈ callerSaveEntries r.layout r.varMap (DAEOpt.instrDef p[pc])
+                    rw [show p[pc] = p.code[pc] from rfl, hInstr]
+                    simp only [callerSaveEntries, DAEOpt.instrDef]
+                    rw [List.mem_filter]
+                    refine ⟨hMem, ?_⟩; simp [hlx, hff]
+                  exact absurd hInE (hNE coff)
+                show (fun r => if r.isCallerSaved then newFregs r else s1.fregs r) fr' = _
+                simp [hCS]
+                have hVal := hRel1 v (.freg fr') hLoc; simp at hVal; rw [hVal]
+                have hne : DAEOpt.instrDef p[pc] ≠ some v := by
+                  rw [show p[pc] = p.code[pc] from rfl, hInstr]; simp [DAEOpt.instrDef]
+                  intro h; subst h; rw [hlx] at hLoc; cases hLoc; exact hff rfl
+                rw [hDstOnly v hne]
+            · -- stack vars
+              intro v off' hLoc; rw [hStack3, hStack2]
+              have hVal := hRelSaved v (.stack off') hLoc; simp at hVal; rw [hVal]
+              have hne : DAEOpt.instrDef p[pc] ≠ some v := by
+                rw [show p[pc] = p.code[pc] from rfl, hInstr]; simp [DAEOpt.instrDef]
+                intro h; subst h; rw [hlx] at hLoc; cases hLoc
+              rw [hDstOnly v hne]
+      | fbinop x fop y z =>
+        cases fop with
+        | fpow =>
+          -- Step 2: unfold verifiedGenInstr for fbinop fpow
+          rw [show p[pc] = p.code[pc] from rfl, hInstr] at hGenInstr
+          have hSS : r.layout.scratchSafe = true := by
+            cases h : r.layout.scratchSafe
+            · simp [verifiedGenInstr, h] at hGenInstr
+            · rfl
+          have hII : r.layout.isInjective = true := by
+            cases h : r.layout.isInjective
+            · simp [verifiedGenInstr, hSS, h] at hGenInstr
+            · rfl
+          have hScratch : ExtScratchSafe r.layout := VarLayout.scratchSafe_spec r.layout hSS
+          have hInjective : VarLayoutInjective r.layout := VarLayout.isInjective_spec r.layout hII
+          have hNotIregY : ∀ ir, r.layout y ≠ some (.ireg ir) := by
+            intro ir h; have := hGenInstr; simp [verifiedGenInstr, hSS, hII, h] at this
+          have hNotIregZ : ∀ ir, r.layout z ≠ some (.ireg ir) := by
+            intro ir h; have := hGenInstr; simp [verifiedGenInstr, hSS, hII, h] at this
+          have hNotIregX : ∀ ir, r.layout x ≠ some (.ireg ir) := by
+            intro ir h; have := hGenInstr; simp [verifiedGenInstr, hSS, hII, h] at this
+          let lv_reg := match r.layout y with | some (.freg r) => r | _ => ArmFReg.d1
+          let rv_reg := match r.layout z with | some (.freg r) => r | _ => ArmFReg.d2
+          let dst_reg := match r.layout x with | some (.freg r) => r | _ => ArmFReg.d0
+          have hInstrs : baseInstrs =
+              vLoadVarFP r.layout y lv_reg ++ vLoadVarFP r.layout z rv_reg ++
+              [.callBinF .fpow dst_reg lv_reg rv_reg] ++
+              vStoreVarFP r.layout x dst_reg := by
+            have h := hGenInstr
+            simp only [verifiedGenInstr, hSS, hII, Bool.not_true, Bool.false_or] at h
+            -- Eliminate ireg branches by case-splitting each layout
+            rcases hly : r.layout y with _ | ⟨ir | fr | off⟩
+            all_goals rcases hlz : r.layout z with _ | ⟨ir | fr | off⟩
+            all_goals rcases hlx : r.layout x with _ | ⟨ir | fr | off⟩
+            all_goals (try { exact absurd hly (hNotIregY _) })
+            all_goals (try { exact absurd hlz (hNotIregZ _) })
+            all_goals (try { exact absurd hlx (hNotIregX _) })
+            all_goals (simp [hly, hlz, hlx, lv_reg, rv_reg, dst_reg] at h ⊢; exact h.symm)
+          -- Phase A: load y into lv_reg, then z into rv_reg
+          rw [hInstrs] at hCodeBase
+          have hCodeLoad1 := hCodeBase.append_left.append_left.append_left
+            (l2 := vLoadVarFP r.layout z rv_reg)
+          have hMappedY : r.layout y ≠ none := by
+            have := spec.layoutComplete pc (by simp [Prog.size_eq] at hPC; exact hPC) y
+            rw [show p[pc] = p.code[pc] from rfl, hInstr] at this
+            exact this (by simp [TAC.vars])
+          obtain ⟨s1, hSteps1, hSR1, hRel1, hRegs1, hPC1, hAM1, hFregs1, hStack1⟩ :=
+            vLoadVarFP_eff_exec r.bodyFlat r.layout y σ s_saved
+              (r.pcMap pc + (entriesToSaves entries).length) .d1
+              hRelSaved hScratch hSavedPC hNotIregY (Or.inr (Or.inl rfl)) hMappedY hCodeLoad1
+          -- Second load: z into rv_reg
+          have hCodeLoad2 : CodeAt r.bodyFlat s1.pc (vLoadVarFP r.layout z rv_reg) := by
+            rw [hPC1]
+            exact hCodeBase.append_left.append_left.append_right
+              (l1 := vLoadVarFP r.layout y lv_reg)
+          have hMappedZ : r.layout z ≠ none := by
+            have := spec.layoutComplete pc (by simp [Prog.size_eq] at hPC; exact hPC) z
+            rw [show p[pc] = p.code[pc] from rfl, hInstr] at this
+            exact this (by simp [TAC.vars])
+          obtain ⟨s1b, hSteps1b, hSR1b, hRel1b, hRegs1b, hPC1b, hAM1b, hFregs1b, hStack1b⟩ :=
+            vLoadVarFP_eff_exec r.bodyFlat r.layout z σ s1
+              s1.pc .d2
+              hRel1 hScratch rfl hNotIregZ (Or.inr (Or.inr rfl)) hMappedZ hCodeLoad2
+          -- Phase B: havoc (callBinF)
+          have hCodeMid := hCodeBase.append_left.append_right
+            (l1 := vLoadVarFP r.layout y lv_reg ++ vLoadVarFP r.layout z rv_reg)
+          have hPC1' : s1.pc = r.pcMap pc + (entriesToSaves entries).length +
+              (vLoadVarFP r.layout y lv_reg).length := hPC1
+          have hPC1b' : s1b.pc = s1.pc + (vLoadVarFP r.layout z rv_reg).length := hPC1b
+          have hCall : r.bodyFlat[s1b.pc]? = some (.callBinF .fpow dst_reg lv_reg rv_reg) := by
+            rw [hPC1b', hPC1']
+            have hIdx : r.pcMap pc + (entriesToSaves entries).length +
+                (vLoadVarFP r.layout y lv_reg).length + (vLoadVarFP r.layout z rv_reg).length =
+              r.pcMap pc + (entriesToSaves entries).length +
+                (vLoadVarFP r.layout y lv_reg ++ vLoadVarFP r.layout z rv_reg).length := by
+              simp [List.length_append]; omega
+            rw [hIdx]; exact hCodeMid.head
+          let newRegs : ArmReg → BitVec 64 := fun _ => 0
+          let newFregs : ArmFReg → BitVec 64 := fun _ => 0
+          let s2 := s1b.havocCallerSaved newRegs newFregs |>.setFReg dst_reg
+            (FloatBinOp.eval .fpow (s1b.fregs lv_reg) (s1b.fregs rv_reg)) |>.nextPC
+          have hSteps2 : ArmSteps r.bodyFlat s1b s2 :=
+            .single (.callBinF .fpow dst_reg lv_reg rv_reg newRegs newFregs hCall)
+          -- Phase C setup: shared facts
+          have hPC2 : s2.pc = s1b.pc + 1 := by
+            simp [s2, ArmState.nextPC, ArmState.setFReg, ArmState.havocCallerSaved]
+          have hAM2 : s2.arrayMem = s1b.arrayMem := by
+            simp [s2, ArmState.nextPC, ArmState.setFReg, ArmState.havocCallerSaved]
+          have hAMChain : s2.arrayMem = am := by
+            rw [hAM2, hAM1b, hAM1]; simp [s_saved, applyCallerSaves_arrayMem, hArrayMem]
+          have hStack2 : s2.stack = (applyCallerSaves entries s).stack := by
+            simp [s2, ArmState.nextPC, ArmState.setFReg, ArmState.havocCallerSaved_stack,
+              hStack1b, hStack1, s_saved]
+          -- TAC result
+          obtain ⟨fy, fz, hfy, hfz, hσx⟩ := hLibStepBin x y z hInstr
+          have hSR1' : s1.fregs lv_reg = (σ y).encode := hSR1
+          have hSR1b' : s1b.fregs rv_reg = (σ z).encode := hSR1b
+          -- s1b.fregs lv_reg = (σ y).encode (preserved across second load)
+          have hLvPreserved : s1b.fregs lv_reg = (σ y).encode := by
+            rcases hly : r.layout y with _ | ⟨offy | iry | fry⟩
+            · exact absurd hly hMappedY
+            · -- y in stack: lv_reg = .d1, second load didn't touch .d1
+              simp [lv_reg, hly]
+              have : (ArmFReg.d1 : ArmFReg) ≠ rv_reg := by
+                rcases hlz : r.layout z with _ | ⟨_ | _ | frz⟩ <;>
+                  simp [rv_reg, hlz, ArmFReg.d1]
+                exact fun h => absurd (h ▸ hlz) (hScratch.not_d1 z)
+              rw [hFregs1b _ this]
+              have := hSR1'; simp [lv_reg, hly] at this; exact this
+            · exact absurd hly (hNotIregY iry)
+            · -- y in freg: use hRel1b (ExtStateRel preserved)
+              have : lv_reg = fry := by simp [lv_reg, hly]
+              rw [this]; exact hRel1b y (.freg fry) hly
+          have hArmResult : s2.fregs dst_reg = (σ' x).encode := by
+            simp [s2, ArmState.nextPC, ArmState.setFReg, ArmState.havocCallerSaved]
+            rw [hLvPreserved, hSR1b', hfy, hfz, hσx]; simp [Value.encode]
+          -- Non-entry ireg: shared (store doesn't touch iregs)
+          have hNEI_shared : ∀ v ir, r.layout v = some (.ireg ir) →
+              (∀ off, CallerSaveEntry.ireg ir off ∉ entries) → s2.regs ir = (σ' v).encode := by
+            intro v ir hLoc hNE
+            have : s2.regs ir = (s1b.havocCallerSaved newRegs newFregs).regs ir := by
+              simp [s2, ArmState.nextPC, ArmState.setFReg]
+            rw [this]
+            have hCS : ir.isCallerSaved = false := by
+              cases hcs : ir.isCallerSaved with
+              | false => rfl
+              | true =>
+              obtain ⟨_, _, hCoversIreg, _⟩ := spec.callerSaveSpec
+              obtain ⟨coff, hMem⟩ := hCoversIreg v ir hLoc hcs
+              have hInE : CallerSaveEntry.ireg ir coff ∈ entries := by
+                show _ ∈ callerSaveEntries r.layout r.varMap (DAEOpt.instrDef p[pc])
+                rw [show p[pc] = p.code[pc] from rfl, hInstr]
+                simp only [callerSaveEntries, DAEOpt.instrDef]
+                rw [List.mem_filter]
+                refine ⟨hMem, ?_⟩
+                rcases hlx2 : r.layout x with _ | ⟨off2 | ir2 | fr2⟩ <;> simp [hlx2]
+                exact absurd hlx2 (hNotIregX ir2)
+              exact absurd hInE (hNE coff)
+            show (fun r => if r.isCallerSaved then newRegs r else s1b.regs r) ir = _
+            simp [hCS]
+            rw [hRegs1b, hRegs1]; simp [s_saved, applyCallerSaves_regs]
+            have hVal := hStateRel v (.ireg ir) hLoc; simp at hVal; rw [hVal]
+            have hne : DAEOpt.instrDef p[pc] ≠ some v := by
+              rw [show p[pc] = p.code[pc] from rfl, hInstr]; simp [DAEOpt.instrDef]
+              intro h; rw [← h] at hLoc; exact absurd hLoc (hNotIregX ir)
+            rw [hDstOnly v hne]
+          -- Phase C: store + CodeAt
+          have hCodeStore : CodeAt r.bodyFlat s2.pc (vStoreVarFP r.layout x dst_reg) := by
+            have h := hCodeBase.append_right
+              (l1 := vLoadVarFP r.layout y lv_reg ++ vLoadVarFP r.layout z rv_reg ++
+                [.callBinF .fpow dst_reg lv_reg rv_reg])
+            rw [hPC2, hPC1b', hPC1']
+            have hIdx : r.pcMap pc + (entriesToSaves entries).length +
+                (vLoadVarFP r.layout y lv_reg).length +
+                (vLoadVarFP r.layout z rv_reg).length + 1 =
+              r.pcMap pc + (entriesToSaves entries).length +
+                (vLoadVarFP r.layout y lv_reg ++ vLoadVarFP r.layout z rv_reg ++
+                  [ArmInstr.callBinF .fpow dst_reg lv_reg rv_reg]).length := by
+              simp [List.length_append]; omega
+            rw [hIdx]; exact h
+          -- rcases on layout x
+          rcases hlx : r.layout x with _ | ⟨off | ir | fr⟩
+          · -- none
+            have hSS2 : ∀ e ∈ entries, s2.stack e.off = (applyCallerSaves entries s).stack e.off :=
+              fun e _ => by rw [hStack2]
+            refine ⟨s2, (hSteps1.trans hSteps1b).trans hSteps2, ?_, hAMChain, hSS2, hNEI_shared, ?_, ?_⟩
+            · rw [hPC2, hPC1b', hPC1', hSavedPC, hInstrs]
+              simp [vStoreVarFP, hlx, List.length_append]; omega
+            · -- non-entry freg
+              intro v fr hLoc hNE
+              have hDR : dst_reg = .d0 := by simp [dst_reg, hlx]
+              have hfrne : fr ≠ ArmFReg.d0 := fun h => absurd (h ▸ hLoc) (hScratch.not_d0 v)
+              have : s2.fregs fr = (s1b.havocCallerSaved newRegs newFregs).fregs fr := by
+                simp [s2, ArmState.nextPC, ArmState.setFReg, hDR, hfrne]
+              rw [this]
+              have hCS : fr.isCallerSaved = false := by
+                cases hcs : fr.isCallerSaved with
+                | false => rfl
+                | true =>
+                obtain ⟨_, _, _, hCoversFreg, _⟩ := spec.callerSaveSpec
+                obtain ⟨coff, hMem⟩ := hCoversFreg v fr hLoc hcs
+                have hInE : CallerSaveEntry.freg fr coff ∈ entries := by
+                  show _ ∈ callerSaveEntries r.layout r.varMap (DAEOpt.instrDef p[pc])
+                  rw [show p[pc] = p.code[pc] from rfl, hInstr]
+                  simp only [callerSaveEntries, DAEOpt.instrDef]
+                  rw [List.mem_filter]
+                  exact ⟨hMem, by simp [hlx]⟩
+                exact absurd hInE (hNE coff)
+              show (fun r => if r.isCallerSaved then newFregs r else s1b.fregs r) fr = _
+              simp [hCS]
+              have hVal := hRel1b v (.freg fr) hLoc; simp at hVal; rw [hVal]
+              have hne : DAEOpt.instrDef p[pc] ≠ some v := by
+                rw [show p[pc] = p.code[pc] from rfl, hInstr]; simp [DAEOpt.instrDef]
+                intro h; subst h; simp [hlx] at hLoc
+              rw [hDstOnly v hne]
+            · -- stack vars
+              intro v off' hLoc
+              rw [hStack2]
+              have hVal := hRelSaved v (.stack off') hLoc; simp at hVal; rw [hVal]
+              have hne : DAEOpt.instrDef p[pc] ≠ some v := by
+                rw [show p[pc] = p.code[pc] from rfl, hInstr]; simp [DAEOpt.instrDef]
+                intro h; subst h; simp [hlx] at hLoc
+              rw [hDstOnly v hne]
+          · -- stack off
+            simp [vStoreVarFP, hlx] at hCodeStore
+            have hFstr : r.bodyFlat[s2.pc]? = some (.fstr dst_reg off) := hCodeStore.head
+            let s3 := (s2.setStack off (s2.fregs dst_reg)).nextPC
+            have hSteps3 : ArmSteps r.bodyFlat s2 s3 := .single (.fstr dst_reg off hFstr)
+            have hRegs3 : s3.regs = s2.regs := by simp [s3, ArmState.nextPC, ArmState.setStack]
+            have hNEI3 := fun v ir hLoc hNE => hRegs3 ▸ hNEI_shared v ir hLoc hNE
+            have hSS3 : ∀ e ∈ entries, s3.stack e.off = (applyCallerSaves entries s).stack e.off := by
+              intro e he; simp [s3, ArmState.nextPC, ArmState.setStack]
+              have hne : e.off ≠ off := by
+                intro heq; exact spec.callerSaveSpec.1 e (hEntriesSub'.subset he) x (heq ▸ hlx)
+              simp [hne, hStack2]
+            refine ⟨s3, (hSteps1.trans hSteps1b).trans (hSteps2.trans hSteps3), ?_, ?_, hSS3, hNEI3, ?_, ?_⟩
+            · simp [s3, ArmState.nextPC, ArmState.setStack]
+              rw [hPC2, hPC1b', hPC1', hSavedPC, hInstrs]
+              simp [vStoreVarFP, hlx, List.length_append]; omega
+            · simp [s3, ArmState.nextPC, ArmState.setStack, hAMChain]
+            · -- non-entry freg
+              intro v fr hLoc hNE
+              have hFregs3 : s3.fregs = s2.fregs := by simp [s3, ArmState.nextPC, ArmState.setStack]
+              rw [hFregs3]
+              have hDR : dst_reg = .d0 := by simp [dst_reg, hlx]
+              have hfrne : fr ≠ ArmFReg.d0 := fun h => absurd (h ▸ hLoc) (hScratch.not_d0 v)
+              have : s2.fregs fr = (s1b.havocCallerSaved newRegs newFregs).fregs fr := by
+                simp [s2, ArmState.nextPC, ArmState.setFReg, hDR, hfrne]
+              rw [this]
+              have hCS : fr.isCallerSaved = false := by
+                cases hcs : fr.isCallerSaved with
+                | false => rfl
+                | true =>
+                obtain ⟨_, _, _, hCoversFreg, _⟩ := spec.callerSaveSpec
+                obtain ⟨coff, hMem⟩ := hCoversFreg v fr hLoc hcs
+                have hInE : CallerSaveEntry.freg fr coff ∈ entries := by
+                  show _ ∈ callerSaveEntries r.layout r.varMap (DAEOpt.instrDef p[pc])
+                  rw [show p[pc] = p.code[pc] from rfl, hInstr]
+                  simp only [callerSaveEntries, DAEOpt.instrDef]
+                  rw [List.mem_filter]; exact ⟨hMem, by simp [hlx]⟩
+                exact absurd hInE (hNE coff)
+              show (fun r => if r.isCallerSaved then newFregs r else s1b.fregs r) fr = _
+              simp [hCS]
+              have hVal := hRel1b v (.freg fr) hLoc; simp at hVal; rw [hVal]
+              have hne : DAEOpt.instrDef p[pc] ≠ some v := by
+                rw [show p[pc] = p.code[pc] from rfl, hInstr]; simp [DAEOpt.instrDef]
+                intro h; subst h; rw [hlx] at hLoc; cases hLoc
+              rw [hDstOnly v hne]
+            · -- stack vars
+              intro v off' hLoc
+              simp [s3, ArmState.nextPC, ArmState.setStack]
+              by_cases hvo : off' = off
+              · have hvx := hInjective v x (.stack off) (hvo ▸ hLoc) hlx; subst hvx
+                simp [hvo]; exact hArmResult
+              · simp [hvo, hStack2]
+                have hVal := hRelSaved v (.stack off') hLoc; simp at hVal; rw [hVal]
+                have hvx : v ≠ x := by
+                  intro h; subst h; rw [hlx] at hLoc; cases hLoc; exact hvo rfl
+                have hne : DAEOpt.instrDef p[pc] ≠ some v := by
+                  rw [show p[pc] = p.code[pc] from rfl, hInstr]; simp [DAEOpt.instrDef]; exact hvx.symm
+                rw [hDstOnly v hne]
+          · exact absurd hlx (hNotIregX ir)
+          · -- freg fr
+            by_cases hEq : fr == dst_reg
+            · -- fr = dst_reg
+              simp [vStoreVarFP, hlx, hEq] at hCodeStore
+              have hSS2 : ∀ e ∈ entries, s2.stack e.off = (applyCallerSaves entries s).stack e.off :=
+                fun e _ => by rw [hStack2]
+              refine ⟨s2, (hSteps1.trans hSteps1b).trans hSteps2, ?_, hAMChain, hSS2, hNEI_shared, ?_, ?_⟩
+              · rw [hPC2, hPC1b', hPC1', hSavedPC, hInstrs]
+                simp [vStoreVarFP, hlx, hEq, List.length_append]; omega
+              · -- non-entry freg
+                intro v fr' hLoc hNE
+                have hDR : dst_reg = fr := by simp [dst_reg, hlx]
+                by_cases hff : fr' = fr
+                · subst hff; have := hInjective v x _ hLoc hlx; subst this
+                  rw [hDR] at hArmResult; exact hArmResult
+                · have : s2.fregs fr' = (s1b.havocCallerSaved newRegs newFregs).fregs fr' := by
+                    simp [s2, ArmState.nextPC, ArmState.setFReg, hDR, hff]
+                  rw [this]
+                  have hCS : fr'.isCallerSaved = false := by
+                    cases hcs : fr'.isCallerSaved with
+                    | false => rfl
+                    | true =>
+                    obtain ⟨_, _, _, hCoversFreg, _⟩ := spec.callerSaveSpec
+                    obtain ⟨coff, hMem⟩ := hCoversFreg v fr' hLoc hcs
+                    have hInE : CallerSaveEntry.freg fr' coff ∈ entries := by
+                      show _ ∈ callerSaveEntries r.layout r.varMap (DAEOpt.instrDef p[pc])
+                      rw [show p[pc] = p.code[pc] from rfl, hInstr]
+                      simp only [callerSaveEntries, DAEOpt.instrDef]
+                      rw [List.mem_filter]; refine ⟨hMem, ?_⟩; simp [hlx, hff]
+                    exact absurd hInE (hNE coff)
+                  show (fun r => if r.isCallerSaved then newFregs r else s1b.fregs r) fr' = _
+                  simp [hCS]
+                  have hVal := hRel1b v (.freg fr') hLoc; simp at hVal; rw [hVal]
+                  have hne : DAEOpt.instrDef p[pc] ≠ some v := by
+                    rw [show p[pc] = p.code[pc] from rfl, hInstr]; simp [DAEOpt.instrDef]
+                    intro h; subst h; rw [hlx] at hLoc; cases hLoc; exact hff rfl
+                  rw [hDstOnly v hne]
+              · -- stack vars
+                intro v off' hLoc; rw [hStack2]
+                have hVal := hRelSaved v (.stack off') hLoc; simp at hVal; rw [hVal]
+                have hne : DAEOpt.instrDef p[pc] ≠ some v := by
+                  rw [show p[pc] = p.code[pc] from rfl, hInstr]; simp [DAEOpt.instrDef]
+                  intro h; subst h; rw [hlx] at hLoc; cases hLoc
+                rw [hDstOnly v hne]
+            · -- fr ≠ dst_reg
+              simp [vStoreVarFP, hlx, hEq] at hCodeStore
+              have hFmov : r.bodyFlat[s2.pc]? = some (.fmovRR fr dst_reg) := hCodeStore.head
+              let s3 := (s2.setFReg fr (s2.fregs dst_reg)).nextPC
+              have hSteps3 : ArmSteps r.bodyFlat s2 s3 := .single (.fmovRR fr dst_reg hFmov)
+              have hRegs3 : s3.regs = s2.regs := by simp [s3, ArmState.nextPC, ArmState.setFReg]
+              have hNEI3 := fun v ir hLoc hNE => hRegs3 ▸ hNEI_shared v ir hLoc hNE
+              have hStack3 : s3.stack = s2.stack := by simp [s3, ArmState.nextPC, ArmState.setFReg]
+              have hSS3 : ∀ e ∈ entries, s3.stack e.off = (applyCallerSaves entries s).stack e.off :=
+                fun e _ => by rw [hStack3, hStack2]
+              refine ⟨s3, (hSteps1.trans hSteps1b).trans (hSteps2.trans hSteps3), ?_, ?_, hSS3, hNEI3, ?_, ?_⟩
+              · simp [s3, ArmState.nextPC, ArmState.setFReg]
+                rw [hPC2, hPC1b', hPC1', hSavedPC, hInstrs]
+                simp [vStoreVarFP, hlx, hEq, List.length_append]; omega
+              · simp [s3, ArmState.nextPC, ArmState.setFReg, hAMChain]
+              · -- non-entry freg
+                intro v fr' hLoc hNE
+                have hDR : dst_reg = fr := by simp [dst_reg, hlx]
+                by_cases hff : fr' = fr
+                · have hvx := hInjective v x _ (hff ▸ hLoc) hlx; subst hvx
+                  simp [s3, ArmState.nextPC, ArmState.setFReg, hff]
+                  exact hArmResult
+                · have : s3.fregs fr' = s2.fregs fr' := by
+                    simp [s3, ArmState.nextPC, ArmState.setFReg, hff]
+                  rw [this]
+                  have : s2.fregs fr' = (s1b.havocCallerSaved newRegs newFregs).fregs fr' := by
+                    simp [s2, ArmState.nextPC, ArmState.setFReg, hDR, hff]
+                  rw [this]
+                  have hCS : fr'.isCallerSaved = false := by
+                    cases hcs : fr'.isCallerSaved with
+                    | false => rfl
+                    | true =>
+                    obtain ⟨_, _, _, hCoversFreg, _⟩ := spec.callerSaveSpec
+                    obtain ⟨coff, hMem⟩ := hCoversFreg v fr' hLoc hcs
+                    have hInE : CallerSaveEntry.freg fr' coff ∈ entries := by
+                      show _ ∈ callerSaveEntries r.layout r.varMap (DAEOpt.instrDef p[pc])
+                      rw [show p[pc] = p.code[pc] from rfl, hInstr]
+                      simp only [callerSaveEntries, DAEOpt.instrDef]
+                      rw [List.mem_filter]; refine ⟨hMem, ?_⟩; simp [hlx, hff]
+                    exact absurd hInE (hNE coff)
+                  show (fun r => if r.isCallerSaved then newFregs r else s1b.fregs r) fr' = _
+                  simp [hCS]
+                  have hVal := hRel1b v (.freg fr') hLoc; simp at hVal; rw [hVal]
+                  have hne : DAEOpt.instrDef p[pc] ≠ some v := by
+                    rw [show p[pc] = p.code[pc] from rfl, hInstr]; simp [DAEOpt.instrDef]
+                    intro h; subst h; rw [hlx] at hLoc; cases hLoc; exact hff rfl
+                  rw [hDstOnly v hne]
+              · -- stack vars
+                intro v off' hLoc; rw [hStack3, hStack2]
+                have hVal := hRelSaved v (.stack off') hLoc; simp at hVal; rw [hVal]
+                have hne : DAEOpt.instrDef p[pc] ≠ some v := by
+                  rw [show p[pc] = p.code[pc] from rfl, hInstr]; simp [DAEOpt.instrDef]
+                  intro h; subst h; rw [hlx] at hLoc; cases hLoc
+                rw [hDstOnly v hne]
+        | _ => simp [isLibCallTAC, show p[pc] = p.code[pc] from rfl, hInstr] at hLib
+      | _ => simp [isLibCallTAC, show p[pc] = p.code[pc] from rfl, hInstr] at hLib
     obtain ⟨s_mid, hBaseSteps, hMidPC, hMidAM, hSaveSlots, hNEI, hNEF, hSV⟩ :=
       hBaseExists
     -- Step 3: restores
