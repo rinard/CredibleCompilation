@@ -34,11 +34,12 @@ def main (args : List String) : IO UInt32 := do
     match parseProgram src with
     | .error e => IO.eprintln s!"parse error: {e}"; return 1
     | .ok prog =>
-      if !prog.typeCheck then IO.eprintln "type check failed"; return 1
+      if !prog.typeCheckStrict then IO.eprintln "type check failed"; return 1
       let tac := prog.compileToTAC
+      let tyCtx := prog.tyCtx
       IO.println s!"TAC size: {tac.size}"
       IO.println s!"LICM hoistable: {LICMOpt.numHoistable tac}"
-      let cert := RegAllocOpt.optimize tac
+      let cert := { RegAllocOpt.optimize tyCtx tac with tyCtx := tyCtx }
       IO.println s!"Trans size: {cert.trans.size}"
       for (name, result) in checkCertificateVerboseExec cert do
         IO.println s!"  {name}: {if result then "ok" else "FAIL"}"
@@ -48,11 +49,12 @@ def main (args : List String) : IO UInt32 := do
     match parseProgram src with
     | .error e => IO.eprintln s!"parse error: {e}"; return 1
     | .ok prog =>
-      if !prog.typeCheck then IO.eprintln "type check failed"; return 1
+      if !prog.typeCheckStrict then IO.eprintln "type check failed"; return 1
       let tac := prog.compileToTAC
-      let tac ← match applyPass "DCE" DCEOpt.optimize tac with
+      let tyCtx := prog.tyCtx
+      let tac ← match applyPass "DCE" tyCtx (DCEOpt.optimize tyCtx) tac with
         | .ok p => pure p | .error e => IO.eprintln e; return 1
-      let cert := LICMOpt.optimize tac
+      let cert := { LICMOpt.optimize tyCtx tac with tyCtx := tyCtx }
       IO.println s!"=== LICM Certificate ==="
       IO.println s!"orig size: {cert.orig.size}  trans size: {cert.trans.size}"
       let inLoop := LICMOpt.findLoopPCs tac

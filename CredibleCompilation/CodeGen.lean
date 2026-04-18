@@ -3241,7 +3241,7 @@ def applyPassesIO (tyCtx : TyCtx) (passes : List (String × (Prog → ECertifica
 
 def compileToAsm (input : String) : Except String String := do
   let prog ← parseProgram input
-  if !prog.typeCheck then .error "program failed type check (frontend)"
+  if !prog.typeCheckStrict then .error "program failed type check (frontend)"
   let tac := prog.compileToTAC
   let tyCtx := prog.tyCtx
   let opt := applyPassesPure tyCtx (standardPasses tyCtx) tac
