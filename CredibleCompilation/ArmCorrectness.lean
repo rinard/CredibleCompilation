@@ -2111,11 +2111,37 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
     · -- Int copy path: y not in freg
       have hNotFregY : ∀ r, layout y ≠ some (.freg r) := fun r h => hYFreg ⟨r, h⟩
       by_cases hXFreg : ∃ r, layout x = some (.freg r)
-      · obtain ⟨rf, hLX⟩ := hXFreg
-        match hLY : layout y with
-        | some (.freg r) => exact absurd hLY (hNotFregY r)
-        | some (.stack _) | some (.ireg _) | none =>
-          have := hSome; simp [verifiedGenInstr, hRC, hII, hLY, hLX] at this
+      · -- non-freg → freg copy: code = vLoadVar y x0 ++ [fmovToFP rf x0]
+        obtain ⟨rf, hLX⟩ := hXFreg
+        have hInstrs : instrs = vLoadVar layout y .x0 ++ [.fmovToFP rf .x0] := by
+          match hLY : layout y with
+          | some (.freg r) => exact absurd hLY (hNotFregY r)
+          | some (.stack _) | some (.ireg _) | none =>
+            have := hSome; simp [verifiedGenInstr, hRC, hII, hLY, hLX] at this
+            exact this.symm
+        rw [hInstrs] at hCodeInstr hPcNext
+        have hCodeL := hCodeInstr.append_left
+        have hCodeR := hCodeInstr.append_right
+        obtain ⟨s1, hSteps1, hX0_1, hRel1, hFregs1, hPC1, hAM1, _⟩ :=
+          vLoadVar_exec prog layout y .x0 σ s (pcMap pc) hStateRel hRegConv hPcRel hCodeL
+            (Or.inl rfl) hNotFregY (hMapped y (by simp [heq, TAC.vars]))
+        -- Execute fmovToFP rf x0
+        have hFmov := hCodeR.head; rw [← hPC1] at hFmov
+        let s2 := (s1.setFReg rf (s1.regs .x0)).nextPC
+        have hSteps2 : ArmSteps prog s1 s2 := .single (.fmovToFP rf .x0 hFmov)
+        have hX0_val : s1.regs .x0 = (σ y).encode := hX0_1
+        have hS2eq : s2 = (s1.setFReg rf (σ y).encode).nextPC := by
+          simp [s2, hX0_val]
+        refine ⟨s2, hSteps1.trans hSteps2, ⟨?_, ?_, ?_⟩⟩
+        · -- ExtStateRel: σ[x ↦ σ y] matches s2
+          rw [hS2eq]
+          exact (ExtStateRel.update_freg hRel1 hInjective hLX).nextPC
+        · -- pc
+          show s2.pc = pcMap (pc + 1)
+          have := hPcNext _ _ rfl; simp at this
+          simp only [s2, ArmState.nextPC, ArmState.setFReg]
+          rw [hPC1, this]; omega
+        · simp [s2, ArmState.nextPC, ArmState.setFReg, hAM1, hArrayMem]
       · have hNotFregX : ∀ r, layout x ≠ some (.freg r) := fun r h => hXFreg ⟨r, h⟩
         have hInstrs : instrs = vLoadVar layout y .x0 ++ vStoreVar layout x .x0 := by
           match hLY : layout y with
