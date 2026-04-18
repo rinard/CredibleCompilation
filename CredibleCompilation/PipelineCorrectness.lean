@@ -122,17 +122,17 @@ private theorem same_obs_of_check (cert : ECertificate)
   simp only [Bool.and_eq_true] at h
   exact beq_iff_eq.mp h.1.1.1.1.1.1.1.1.1.1.1.1.1.1.1.1.1.1.1.2
 
-/-- A single optimization pass preserves halting with fixed initial AM. -/
+/-- A single optimization pass preserves halting with fixed initial AM.
+    The final AM is the same for orig and trans (via determinism). -/
 private theorem applyPass_preserves_halt_am {name : String} {pass : Prog → ECertificate}
     {p p' : Prog}
     (h : applyPass name pass p = .ok p')
     (htyctx : (pass p).orig.tyCtx = (pass p).trans.tyCtx)
     (σ₀ : Store) (hts : TypedStore (pass p).orig.tyCtx σ₀)
-    {σ' : Store} {am₀ : ArrayMem}
-    (hbeh : ∃ am', haltsWithResult p' 0 σ₀ σ' am₀ am') :
-    ∃ σ_orig am_f, haltsWithResult p 0 σ₀ σ_orig am₀ am_f ∧
+    {σ' : Store} {am₀ am' : ArrayMem}
+    (hh : haltsWithResult p' 0 σ₀ σ' am₀ am') :
+    ∃ σ_orig, haltsWithResult p 0 σ₀ σ_orig am₀ am' ∧
       ∀ v ∈ p.observable, σ' v = σ_orig v := by
-  obtain ⟨am', hh⟩ := hbeh
   obtain ⟨hcheck, hTrans, hOrigCode, hOrigObs, hOrigArr⟩ := applyPass_sound h
   have hvalid := soundness_bridge (pass p) hcheck htyctx
   have hTransP : (toPCertificate (pass p)).trans = p' := by simp [toPCertificate]; exact hTrans
@@ -140,15 +140,17 @@ private theorem applyPass_preserves_halt_am {name : String} {pass : Prog → ECe
     simp [toPCertificate, PCertificate.tyCtx]; exact hts
   have hhalt_cert : ∃ am', haltsWithResult (toPCertificate (pass p)).trans 0 σ₀ σ' am₀ am' :=
     ⟨am', hTransP ▸ hh⟩
-  obtain ⟨σ_o, am_f, hconj⟩ :=
+  obtain ⟨σ_o, am_f, hhalt_o, hhalt_t, hobs⟩ :=
     soundness_halt (toPCertificate (pass p)) hvalid σ₀ σ' hts' hhalt_cert
-  have hhalt_o := hconj.1
-  have hobs := hconj.2.2
+  -- am_f = am' by determinism (both are final AM of trans execution)
+  have ham : am_f = am' :=
+    (haltsWithResult_unique (hTransP ▸ hhalt_t : haltsWithResult p' 0 σ₀ σ' am₀ am_f) hh).2
+  subst ham
   have hOC : (toPCertificate (pass p)).orig.code = p.code := by simp [toPCertificate]; exact hOrigCode
   have hOA : (toPCertificate (pass p)).orig.arrayDecls = p.arrayDecls := by simp [toPCertificate]; exact hOrigArr
   have hOO : (toPCertificate (pass p)).observable = p.observable := by
     simp [toPCertificate, PCertificate.observable]; exact hOrigObs
-  exact ⟨σ_o, am_f, Steps_of_code_arrayDecls_eq hOC hOA hhalt_o,
+  exact ⟨σ_o, Steps_of_code_arrayDecls_eq hOC hOA hhalt_o,
     fun v hv => hobs v (hOO ▸ hv)⟩
 
 /-- A single optimization pass preserves errors with fixed initial AM. -/
@@ -245,15 +247,14 @@ theorem applyPassesPure_preserves_halt_am
     (passes : List (String × (Prog → ECertificate)))
     (hSound : ∀ np ∈ passes, TyCtxSound np.2)
     (σ₀ : Store) (hts : TypedStore p.tyCtx σ₀)
-    {σ' : Store} {am₀ : ArrayMem}
-    (hHalt : ∃ am', haltsWithResult (applyPassesPure passes p) 0 σ₀ σ' am₀ am') :
-    ∃ σ_orig am_f, haltsWithResult p 0 σ₀ σ_orig am₀ am_f ∧
+    {σ' : Store} {am₀ am' : ArrayMem}
+    (hHalt : haltsWithResult (applyPassesPure passes p) 0 σ₀ σ' am₀ am') :
+    ∃ σ_orig, haltsWithResult p 0 σ₀ σ_orig am₀ am' ∧
       ∀ v ∈ p.observable, σ' v = σ_orig v := by
-  induction passes generalizing p σ' with
+  induction passes generalizing p σ' am' with
   | nil =>
     simp [applyPassesPure] at hHalt
-    obtain ⟨am', hh⟩ := hHalt
-    exact ⟨σ', am', hh, fun _ _ => rfl⟩
+    exact ⟨σ', hHalt, fun _ _ => rfl⟩
   | cons np rest ih =>
     simp only [applyPassesPure] at hHalt
     obtain ⟨name, pass⟩ := np
@@ -266,12 +267,12 @@ theorem applyPassesPure_preserves_halt_am
       have ⟨_, hTrans, _, _, _⟩ := applyPass_sound hap
       have hty' : p'.tyCtx = p.tyCtx := by rw [← hTrans, ← hS.1, hS.2]
       have hts' : TypedStore p'.tyCtx σ₀ := hty' ▸ hts
-      obtain ⟨σ_mid, am_mid, hHalt_mid, hobs_mid⟩ := ih hRest hts' hHalt
+      obtain ⟨σ_mid, hHalt_mid, hobs_mid⟩ := ih hRest hts' hHalt
       have hts_pass : TypedStore (pass p).orig.tyCtx σ₀ := hS.2 p ▸ hts
-      obtain ⟨σ_orig, am_orig, hHalt_orig, hobs_orig⟩ :=
-        applyPass_preserves_halt_am hap (hS.1 p) σ₀ hts_pass ⟨am_mid, hHalt_mid⟩
+      obtain ⟨σ_orig, hHalt_orig, hobs_orig⟩ :=
+        applyPass_preserves_halt_am hap (hS.1 p) σ₀ hts_pass hHalt_mid
       have hobs_p' := obs_preserved_by_pass name pass p p' hap
-      exact ⟨σ_orig, am_orig, hHalt_orig, fun v hv => by
+      exact ⟨σ_orig, hHalt_orig, fun v hv => by
         rw [hobs_mid v (hobs_p' ▸ hv), hobs_orig v hv]⟩
     · -- Pass failed: identity
       exact ih hRest hts hHalt
@@ -345,6 +346,7 @@ theorem applyPassesPure_preserves_diverge
     any list of certificate-checked passes, and code-generated to ARM,
     and the optimized TAC halts, then:
     1. The source program terminates with matching observable variables
+       and identical final array memory
     2. The ARM program simulates the TAC halt -/
 theorem while_to_arm_correctness
     (prog : Program) (htcs : prog.typeCheckStrict = true)
@@ -357,6 +359,7 @@ theorem while_to_arm_correctness
       (Store.typedInit (applyPassesPure passes prog.compileToTAC).tyCtx) σ_opt ArrayMem.init am_opt) :
     (∃ fuel σ_src am_src,
       prog.interp fuel = some (σ_src, am_src) ∧
+      am_src = am_opt ∧
       ∀ v ∈ prog.compileToTAC.observable, σ_opt v = σ_src v) ∧
     (∃ s', ArmSteps r.bodyFlat
       { regs := fun _ => 0, fregs := fun _ => 0, stack := fun _ => 0,
@@ -368,27 +371,28 @@ theorem while_to_arm_correctness
   have hTyOpt := applyPassesPure_tyCtx_eq passes hSound prog.compileToTAC
   have hts : TypedStore prog.compileToTAC.tyCtx (Store.typedInit prog.compileToTAC.tyCtx) :=
     TypedStore.typedInit _
-  -- Rewrite initial store in hHalt
   have hHalt' : haltsWithResult (applyPassesPure passes prog.compileToTAC) 0
       (Store.typedInit prog.compileToTAC.tyCtx) σ_opt ArrayMem.init am_opt :=
     hTyOpt ▸ hHalt
   -- Part 2: ARM simulation
   refine ⟨?_, tacToArm_correctness hGen (hTyOpt ▸ hHalt)⟩
-  -- Part 1: Pipeline → original TAC halts
-  obtain ⟨σ_tac, am_f, hHalt_tac, hobs_tac⟩ :=
-    applyPassesPure_preserves_halt_am passes hSound _ hts ⟨am_opt, hHalt'⟩
+  -- Part 1: Pipeline → original TAC halts with same final AM
+  obtain ⟨σ_tac, hHalt_tac, hobs_tac⟩ :=
+    applyPassesPure_preserves_halt_am passes hSound _ hts hHalt'
   -- Original TAC halts → source terminates
-  have hHalt_init : haltsWithResult prog.compileToTAC 0 prog.initStore σ_tac ArrayMem.init am_f :=
+  have hHalt_init : haltsWithResult prog.compileToTAC 0 prog.initStore σ_tac ArrayMem.init am_opt :=
     hInitEq ▸ hHalt_tac
   have hbeh_tac : program_behavior_init prog.compileToTAC prog.initStore (.halts σ_tac) :=
-    ⟨am_f, hHalt_init⟩
+    ⟨am_opt, hHalt_init⟩
   have hsrc := whileToTAC_refinement prog htcs (.halts σ_tac) hbeh_tac
   simp only at hsrc
-  obtain ⟨fuel, σ_src, _, am_src, hinterp, _, _, hobs_src⟩ := hsrc
+  obtain ⟨fuel, σ_src, am_h, am_src, hinterp, hHalt_tac2, ham_eq, hobs_src⟩ := hsrc
+  -- am_h = am_opt by determinism, am_h = am_src from whileToTAC_refinement
+  have ham_opt : am_h = am_opt := (haltsWithResult_unique hHalt_tac2 hHalt_init).2
   have hnt : Program.noTmpDecls prog.decls = true := by
     unfold Program.typeCheck at htc; simp only [Bool.and_eq_true] at htc; exact htc.1.2
   have hobs_eq := applyPassesPure_obs_eq passes prog.compileToTAC
-  exact ⟨fuel, σ_src, am_src, hinterp, fun v hv => by
+  exact ⟨fuel, σ_src, am_src, hinterp, ham_opt ▸ ham_eq.symm, fun v hv => by
     rw [hobs_tac v (hobs_eq ▸ hv)]
     have hv' : v ∈ prog.decls.map Prod.fst := by
       have : prog.compileToTAC.observable = prog.decls.map Prod.fst := by
