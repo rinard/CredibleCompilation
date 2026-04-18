@@ -3249,13 +3249,17 @@ def standardPasses (tyCtx : TyCtx) : List (String × (Prog → ECertificate)) :=
 def applyPassesIO (tyCtx : TyCtx) (passes : List (String × (Prog → ECertificate))) (p : Prog) : IO Prog :=
   passes.foldlM (fun p (name, pass) => tryPass name tyCtx pass p) p
 
-def compileToAsm (input : String) : Except String String := do
+def compileToAsmWith (input : String) (noOpt : Bool) : Except String String := do
   let prog ← parseProgram input
   if !prog.typeCheckStrict then .error "program failed type check (frontend)"
   let tac := prog.compileToTAC
   let tyCtx := prog.tyCtx
-  let opt := applyPassesPure tyCtx (standardPasses tyCtx) tac
+  let passes := if noOpt then [] else standardPasses tyCtx
+  let opt := applyPassesPure tyCtx passes tac
   generateAsm tyCtx opt
+
+def compileToAsm (input : String) : Except String String :=
+  compileToAsmWith input false
 
 -- ============================================================
 -- § 7. IO driver: write assembly, assemble, and run

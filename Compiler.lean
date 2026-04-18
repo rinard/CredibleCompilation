@@ -1,15 +1,18 @@
 import CredibleCompilation.CodeGen
 
 def main (args : List String) : IO UInt32 := do
+  -- Parse -O0 flag from anywhere in args
+  let noOpt := args.contains "-O0"
+  let args := args.filter (· != "-O0")
   match args with
   | [inputFile] =>
     let src ← IO.FS.readFile ⟨inputFile⟩
-    match compileToAsm src with
+    match compileToAsmWith src noOpt with
     | .ok asm => IO.print asm; return 0
     | .error e => IO.eprintln s!"error: {e}"; return 1
   | [inputFile, "-o", outputFile] =>
     let src ← IO.FS.readFile ⟨inputFile⟩
-    match compileToAsm src with
+    match compileToAsmWith src noOpt with
     | .ok asm =>
       let asmFile := outputFile ++ ".s"
       IO.FS.writeFile ⟨asmFile⟩ asm
@@ -19,7 +22,7 @@ def main (args : List String) : IO UInt32 := do
     | .error e => IO.eprintln s!"error: {e}"; return 1
   | [inputFile, "-r"] =>
     let src ← IO.FS.readFile ⟨inputFile⟩
-    match compileToAsm src with
+    match compileToAsmWith src noOpt with
     | .ok asm =>
       let asmFile := "/tmp/while_out.s"
       let binFile := "/tmp/while_out"
