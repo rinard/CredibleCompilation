@@ -1344,7 +1344,7 @@ theorem Program.typeCheck_typedVars (prog : Program) (h : prog.typeCheck = true)
   have hchk := h.2
   exact checkStmt_typedVars prog.lookupTy prog.arrayDecls prog.tyCtx σ am prog.body fuel
     (fun x ty hlook => by
-      show (prog.lookupTy x).getD (if x.isFTmp then .float else .int) = ty
+      show (prog.lookupTy x).getD (Program.defaultVarTy x) = ty
       rw [hlook]; rfl) hchk hts
 
 -- ============================================================

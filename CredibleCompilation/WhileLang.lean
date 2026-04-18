@@ -629,11 +629,38 @@ namespace Program
 def lookupTy (prog : Program) (x : Var) : Option VarTy :=
   prog.decls.lookup x
 
-/-- Build a total TyCtx from declarations. Undeclared int temporaries (`__tN`)
-    default to `.int`, float temporaries (`__ftN`) default to `.float`,
-    and all other undeclared variables default to `.int`. -/
+/-- Default type for undeclared variables, derived from naming convention:
+    `__f`-prefixed → `.float`, `__b`-prefixed → `.bool`, else → `.int`.
+    Covers compiler temporaries (`__t`, `__ft`) and register-allocated
+    variables (`__ir`, `__br`, `__fr`). -/
+def defaultVarTy (x : Var) : VarTy :=
+  match x.toList with
+  | '_' :: '_' :: 'f' :: _ => .float
+  | '_' :: '_' :: 'b' :: _ => .bool
+  | _ => .int
+
+theorem defaultVarTy_of_isTmp (x : Var) (h : x.isTmp = true) : defaultVarTy x = .int := by
+  unfold defaultVarTy
+  split
+  · next heq => unfold String.isTmp at h; rw [heq] at h; simp at h
+  · next heq => unfold String.isTmp at h; rw [heq] at h; simp at h
+  · rfl
+
+theorem defaultVarTy_of_isFTmp (x : Var) (h : x.isFTmp = true) : defaultVarTy x = .float := by
+  unfold defaultVarTy
+  split
+  · rfl
+  · next heq => unfold String.isFTmp at h; rw [heq] at h; simp at h
+  · next hf _ =>
+    unfold String.isFTmp at h
+    revert h; split
+    · next heq => exfalso; exact hf _ heq
+    · simp
+
+/-- Build a total TyCtx from declarations. Undeclared variables are typed by
+    naming convention via `defaultVarTy`. -/
 def tyCtx (prog : Program) : TyCtx :=
-  fun x => (prog.lookupTy x).getD (if x.isFTmp then .float else .int)
+  fun x => (prog.lookupTy x).getD (defaultVarTy x)
 
 -- ============================================================
 -- § 5a. Static type checker
@@ -849,10 +876,12 @@ private def initFold (σ : Store) (p : Var × VarTy) : Store :=
   | .bool  => σ[p.1 ↦ .bool false]
   | .float => σ[p.1 ↦ .float (0 : BitVec 64)]
 
-/-- Base store: float temporaries (`__ftN`) default to float zero,
-    everything else defaults to int zero. Matches `tyCtx` defaults. -/
+/-- Base store: defaults match `tyCtx` naming convention via `defaultVarTy`. -/
 private def initStoreBase : Store := fun x =>
-  if x.isFTmp then .float (0 : BitVec 64) else .int (0 : BitVec 64)
+  match x.toList with
+  | '_' :: '_' :: 'f' :: _ => .float (0 : BitVec 64)
+  | '_' :: '_' :: 'b' :: _ => .bool false
+  | _ => .int (0 : BitVec 64)
 
 /-- Build an initial store from declarations with type-appropriate defaults.
     Int variables get 0, bool variables get false, float variables get 0. -/
@@ -932,7 +961,7 @@ theorem initStore_typedStore (prog : Program)
   simp only [initStore, tyCtx, lookupTy]
   show (prog.decls.foldl initFold initStoreBase x).typeOf = _
   rw [initFold_typeOf prog.decls initStoreBase x hnd]
-  simp only [initStoreBase]
+  simp only [initStoreBase, defaultVarTy]
   split <;> simp [Value.typeOf]
 
 /-- typeCheckStrict implies typeCheck. -/
@@ -1223,7 +1252,8 @@ theorem tyCtx_tmp_wt (prog : Program)
     prog.tyCtx (tmpName k) = .int := by
   unfold Program.tyCtx Program.lookupTy
   rw [lookup_none_of_isTmp_wt hnt (tmpName_isTmp_wt k)]
-  simp [tmpName_not_isFTmp]
+  simp only [Option.getD]
+  exact Program.defaultVarTy_of_isTmp _ (tmpName_isTmp_wt k)
 
 -- tyCtx maps float temporaries to .float
 theorem tyCtx_ftmp_wt (prog : Program)
@@ -1231,7 +1261,8 @@ theorem tyCtx_ftmp_wt (prog : Program)
     prog.tyCtx (ftmpName k) = .float := by
   unfold Program.tyCtx Program.lookupTy
   rw [lookup_none_of_isFTmp_wt hnt (ftmpName_isFTmp_wt k)]
-  simp [ftmpName_isFTmp_wt]
+  simp only [Option.getD]
+  exact Program.defaultVarTy_of_isFTmp _ (ftmpName_isFTmp_wt k)
 
 -- If lookupTy x = some ty, then tyCtx x = ty
 theorem tyCtx_of_lookup_wt (prog : Program) (x : Var) (ty : VarTy)
@@ -1792,7 +1823,7 @@ theorem typedInit_eq_initStore (prog : Program) (htc : prog.typeCheck = true) :
         simp [bne] at this
       exact this hlook
     rw [initFold_notMem prog.decls initStoreBase v hmem]
-    simp only [initStoreBase]; split <;> simp [Value.ofBitVec]
+    simp only [initStoreBase, defaultVarTy]; split <;> simp [Value.ofBitVec]
   | some ty =>
     -- v found with type ty: both sides give ty.defaultVal
     simp only [Option.getD]
