@@ -392,6 +392,39 @@ theorem checkWellTypedInstr_sound {Γ : TyCtx} {decls : List (ArrayName × Nat �
   | print _ _ =>
     exact .print
 
+theorem checkExprTy_complete {Γ : TyCtx} {e : Expr} {ty : VarTy}
+    (h : ExprHasTy Γ e ty) : checkExprTy Γ e ty = true := by
+  cases e <;> cases ty <;> simp_all [checkExprTy, ExprHasTy, decide_eq_true_eq]
+
+theorem checkWellTypedBoolExpr_complete {Γ : TyCtx} {b : BoolExpr}
+    (h : WellTypedBoolExpr Γ b) : checkWellTypedBoolExpr Γ b = true := by
+  induction h with
+  | lit => rfl
+  | bvar h => simp [checkWellTypedBoolExpr, decide_eq_true_eq, h]
+  | cmp ha hb => simp [checkWellTypedBoolExpr, checkExprTy_complete ha, checkExprTy_complete hb]
+  | not _ ih => simp [checkWellTypedBoolExpr, ih]
+  | fcmp ha hb => simp [checkWellTypedBoolExpr, checkExprTy_complete ha, checkExprTy_complete hb]
+  | bexpr he => simp [checkWellTypedBoolExpr, checkExprTy_complete he]
+
+theorem checkWellTypedInstr_complete {Γ : TyCtx} {decls : List (ArrayName × Nat × VarTy)} {instr : TAC}
+    (h : WellTypedInstr Γ decls instr) : checkWellTypedInstr Γ decls instr = true := by
+  cases h with
+  | const h => simp [checkWellTypedInstr, decide_eq_true_eq, h]
+  | copy h => simp [checkWellTypedInstr, decide_eq_true_eq, h]
+  | binop hx hy hz => simp [checkWellTypedInstr, decide_eq_true_eq, hx, hy, hz]
+  | boolop hx hbe => simp [checkWellTypedInstr, decide_eq_true_eq, hx, checkWellTypedBoolExpr_complete hbe]
+  | goto => rfl
+  | ifgoto hb => simp [checkWellTypedInstr, checkWellTypedBoolExpr_complete hb]
+  | halt => rfl
+  | arrLoad hx hi hty => simp [checkWellTypedInstr, decide_eq_true_eq, hx, hi, hty]
+  | arrStore hi hv hty => simp [checkWellTypedInstr, decide_eq_true_eq, hi, hv, hty]
+  | fbinop hx hy hz => simp [checkWellTypedInstr, decide_eq_true_eq, hx, hy, hz]
+  | intToFloat hx hy => simp [checkWellTypedInstr, decide_eq_true_eq, hx, hy]
+  | floatToInt hx hy => simp [checkWellTypedInstr, decide_eq_true_eq, hx, hy]
+  | floatUnary hx hy => simp [checkWellTypedInstr, decide_eq_true_eq, hx, hy]
+  | fternop hx ha hb hc => simp [checkWellTypedInstr, decide_eq_true_eq, hx, ha, hb, hc]
+  | print => rfl
+
 /-- Check that every instruction in a program is well-typed. -/
 def checkWellTypedProg (Γ : TyCtx) (p : Prog) : Bool :=
   (List.range p.size).all fun i =>
@@ -407,6 +440,15 @@ theorem checkWellTypedProg_sound {Γ : TyCtx} {p : Prog}
   have hsome : p[i]? = some p[i] := Prog.getElem?_eq_getElem hi
   rw [hsome] at hcheck
   exact checkWellTypedInstr_sound hcheck
+
+theorem checkWellTypedProg_complete {Γ : TyCtx} {p : Prog}
+    (h : WellTypedProg Γ p) : checkWellTypedProg Γ p = true := by
+  show (List.range p.size).all _ = true
+  rw [List.all_eq_true]
+  intro i hi
+  have hpc := List.mem_range.mp hi
+  rw [Prog.getElem?_eq_getElem hpc]
+  exact checkWellTypedInstr_complete (h i hpc)
 
 -- ============================================================
 -- § 11a. Type preservation
