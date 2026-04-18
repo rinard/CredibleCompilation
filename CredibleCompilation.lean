@@ -10,3 +10,5 @@ import CredibleCompilation.PeepholeOpt
 import CredibleCompilation.BoundsOpt
 import CredibleCompilation.WhileLang
 import CredibleCompilation.CompilerCorrectness
+import CredibleCompilation.RefCompiler
+import CredibleCompilation.PipelineCorrectness
