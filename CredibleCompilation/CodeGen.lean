@@ -44,7 +44,8 @@ private def collectVars (p : Prog) : List Var :=
     | .binop x _ y z   => let a := if acc.contains x then acc else acc ++ [x]
                           let b := if a.contains y then a else a ++ [y]
                           if b.contains z then b else b ++ [z]
-    | .boolop x _      => if acc.contains x then acc else acc ++ [x]
+    | .boolop x be     => let a := if acc.contains x then acc else acc ++ [x]
+                          be.vars.foldl (fun a v => if a.contains v then a else a ++ [v]) a
     | .arrLoad x _ idx _ => let a := if acc.contains x then acc else acc ++ [x]
                             if a.contains idx then a else a ++ [idx]
     | .arrStore _ idx val _ => let a := if acc.contains idx then acc else acc ++ [idx]
@@ -64,7 +65,7 @@ private def collectVars (p : Prog) : List Var :=
                             if acc.contains c then acc else acc ++ [c]
     | .print _ vs      => vs.foldl (fun a v => if a.contains v then a else a ++ [v]) acc
     | .goto _          => acc
-    | .ifgoto _ _      => acc
+    | .ifgoto be _     => be.vars.foldl (fun a v => if a.contains v then a else a ++ [v]) acc
     | .halt            => acc
   ) ([] : List Var)
   -- Also add observable variables

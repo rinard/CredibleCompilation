@@ -1154,6 +1154,17 @@ def checkNoRegConventionViolations (p : Prog) : Bool :=
   p.code.all fun instr =>
     instr.vars.all fun v => !violatesRegConvention v
 
+/-- Check that no two distinct variable names would map to the same ARM register.
+    The collision case is `__irN` and `__brN` for the same N — both map to register xN
+    via `varToArmReg`, making the layout non-injective. -/
+def checkNoRegisterCollisions (p : Prog) : Bool :=
+  let vars := (p.code.toList.flatMap TAC.vars).eraseDups
+  vars.all fun v =>
+    if v.startsWith "__ir" then
+      let n := v.drop 4
+      !(vars.any fun w => w == ("__br" ++ n))
+    else true
+
 /-- All arrLoad/arrStore instructions in a program use element type `.int`. -/
 def AllArrayOpsInt (p : Prog) : Prop :=
   ∀ i (h : i < p.size), match p[i] with
@@ -1231,6 +1242,8 @@ def checkCertificateExec (cert : ECertificate) : Bool :=
   checkBoolExprSimpleOps cert.trans &&
   checkNoRegConventionViolations cert.orig &&
   checkNoRegConventionViolations cert.trans &&
+  checkNoRegisterCollisions cert.orig &&
+  checkNoRegisterCollisions cert.trans &&
   checkBoolVarsCoveredExec cert
 
 /-- Verbose check: returns the result of each individual condition. -/
@@ -1260,6 +1273,8 @@ def checkCertificateVerboseExec (cert : ECertificate) : List (String × Bool) :=
     ("bool_expr_simple_ops_trans", checkBoolExprSimpleOps cert.trans),
     ("reg_convention_orig", checkNoRegConventionViolations cert.orig),
     ("reg_convention_trans", checkNoRegConventionViolations cert.trans),
+    ("reg_collision_orig", checkNoRegisterCollisions cert.orig),
+    ("reg_collision_trans", checkNoRegisterCollisions cert.trans),
     ("bool_vars_covered",     checkBoolVarsCoveredExec cert) ]
 
 /-- Observable output of a configuration with respect to an executable certificate.
