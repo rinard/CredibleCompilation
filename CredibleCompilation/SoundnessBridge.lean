@@ -3848,9 +3848,9 @@ theorem exec_checker_correct
     exact ⟨.halts σ_o', ⟨am₀, am_f, ho⟩, ⟨am_f, ⟨am₀, ho⟩, am₀, ht⟩, hobs⟩
   | errors σ_e =>
     obtain ⟨am₀, am_e, hreach⟩ := htrans
-    obtain ⟨σ_o, am_o, am_o', ho⟩ := error_preservation
+    obtain ⟨σ_o, am_o', ho⟩ := error_preservation
       (toPCertificate dc) hvalid σ₀ hts₀ hreach
-    exact ⟨.errors σ_o, ⟨am_o, am_o', ho⟩, trivial⟩
+    exact ⟨.errors σ_o, ⟨am₀, am_o', ho⟩, trivial⟩
   | typeErrors σ_e =>
     obtain ⟨am₀, am_e, hreach⟩ := htrans
     have hwt : WellTypedProg dc.tyCtx dc.trans := by
@@ -3890,9 +3890,9 @@ theorem exec_checker_total
     exact ⟨.halts σ_t, ⟨am₀, am', hb'⟩, .halts σ_o', ⟨am₀, am_f, ho⟩, ⟨am_f, ⟨am₀, ho⟩, am₀, ht⟩, hobs⟩
   | errors σ_e =>
     obtain ⟨am₀, am_e, hreach⟩ := hb
-    obtain ⟨σ_o, am_o, am_o', ho⟩ := error_preservation
+    obtain ⟨σ_o, am_o', ho⟩ := error_preservation
       (toPCertificate dc) hvalid σ₀ hts₀ hreach
-    exact ⟨.errors σ_e, ⟨am₀, am_e, hreach⟩, .errors σ_o, ⟨am_o, am_o', ho⟩, trivial⟩
+    exact ⟨.errors σ_e, ⟨am₀, am_e, hreach⟩, .errors σ_o, ⟨am₀, am_o', ho⟩, trivial⟩
   | typeErrors σ_e =>
     obtain ⟨am₀, am_e, hreach⟩ := hb
     have hwt : WellTypedProg dc.tyCtx dc.trans := by
@@ -3929,7 +3929,7 @@ theorem exec_error_preservation
     (htyctx : dc.orig.tyCtx = dc.trans.tyCtx)
     (σ₀ : Store) (hts₀ : TypedStore dc.tyCtx σ₀) {σ_e : Store} {am₀ am_e : ArrayMem}
     (hreach : dc.trans ⊩ Cfg.run 0 σ₀ am₀ ⟶* Cfg.error σ_e am_e) :
-    ∃ σ_o am_o am_o', dc.orig ⊩ Cfg.run 0 σ₀ am_o ⟶* Cfg.error σ_o am_o' :=
+    ∃ σ_o am_o', dc.orig ⊩ Cfg.run 0 σ₀ am₀ ⟶* Cfg.error σ_o am_o' :=
   error_preservation (toPCertificate dc) (soundness_bridge dc h htyctx) σ₀ hts₀ hreach
 
 /-- **Divergence preservation (executable)**: If the executable checker accepts

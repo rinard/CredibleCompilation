@@ -3193,11 +3193,56 @@ def optimizePipeline (p : Prog) : Except String Prog := do
   let p ← applyPass "DCE" DCEOpt.optimize p
   applyPass "RegAlloc" RegAllocOpt.optimize p
 
+/-- A pass function is tyCtx-sound if it preserves tyCtx between orig and trans,
+    and sets orig.tyCtx = input.tyCtx. -/
+def TyCtxSound (pass : Prog → ECertificate) : Prop :=
+  (∀ q, (pass q).orig.tyCtx = (pass q).trans.tyCtx) ∧
+  (∀ q, (pass q).orig.tyCtx = q.tyCtx)
+
+/-- Try to apply a single optimization pass. If the certificate check fails,
+    print a warning and return the input program unchanged. -/
+def tryPass (name : String) (pass : Prog → ECertificate) (p : Prog) : IO Prog := do
+  match applyPass name pass p with
+  | .ok p' => return p'
+  | .error msg =>
+    IO.eprintln s!"warning: skipping {name} optimization ({msg})"
+    return p
+
+/-- Apply a list of certificate-checked optimization passes resiliently.
+    Each pass is checked by the executable certificate checker; if a check
+    fails, that pass is skipped and the pipeline continues with the
+    unoptimized program. Always succeeds. -/
+def applyPassesPure : List (String × (Prog → ECertificate)) → Prog → Prog
+  | [], p => p
+  | (name, pass) :: rest, p =>
+    let p' := match applyPass name pass p with
+      | .ok p' => p'
+      | .error _ => p
+    applyPassesPure rest p'
+
+/-- The standard optimization pass list. -/
+def standardPasses : List (String × (Prog → ECertificate)) :=
+  [ ("DCE", DCEOpt.optimize),
+    ("LICM", LICMOpt.optimize),
+    ("ConstProp", ConstPropOpt.optimize),
+    ("DCE", DCEOpt.optimize),
+    ("DAE", DAEOpt.optimize),
+    ("FMAFusion", FMAFusionOpt.optimize),
+    ("CSE", CSEOpt.optimize),
+    ("ConstHoist", ConstHoistOpt.optimize),
+    ("Peephole", PeepholeOpt.optimize),
+    ("DCE", DCEOpt.optimize),
+    ("RegAlloc", RegAllocOpt.optimize) ]
+
+/-- IO version of applyPassesPure with warning messages on failures. -/
+def applyPassesIO (passes : List (String × (Prog → ECertificate))) (p : Prog) : IO Prog :=
+  passes.foldlM (fun p (name, pass) => tryPass name pass p) p
+
 def compileToAsm (input : String) : Except String String := do
   let prog ← parseProgram input
   if !prog.typeCheck then .error "program failed type check (frontend)"
   let tac := prog.compileToTAC
-  let opt ← optimizePipeline tac
+  let opt := applyPassesPure standardPasses tac
   generateAsm opt
 
 -- ============================================================

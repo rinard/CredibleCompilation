@@ -5,13 +5,19 @@ import CredibleCompilation.RefCompiler.Refinement
 /-!
 # Pipeline Correctness
 
-Proves that `applyPass` and `optimizePipeline` preserve program semantics.
-Chains `soundness_bridge` (executable checker → prop validity) with
-`credible_compilation_soundness` (prop validity → behavior preservation).
+End-to-end correctness for the credible compilation pipeline:
+While source → TAC → certified optimizations → ARM.
 
-## Sorrys propagated
-- 5 from SoundnessBridge (checkRelConsistency lemmas)
-- 2 from ArmCorrectness (arrLoad, arrStore in verifiedGenInstr_correct)
+The theorems are parameterized over an arbitrary list of certificate-checked
+optimization passes. Each pass either succeeds (certificate validates) and
+transforms the program, or fails and leaves the program unchanged.
+
+## Key theorems
+- `applyPassesPure_preserves_halt_am`: pipeline preserves halting behavior with AM
+- `applyPassesPure_preserves_error_am`: pipeline preserves error behavior with AM
+- `while_to_arm_correctness`: full While→ARM for halting programs
+- `while_to_arm_error_preservation`: full While→ARM for error programs
+- `while_to_arm_divergence_preservation`: full While→ARM for diverging programs
 -/
 
 -- ============================================================
@@ -79,24 +85,6 @@ theorem IsInfiniteExec_of_code_eq {p q : Prog}
     {f} (h : IsInfiniteExec p f) : IsInfiniteExec q f :=
   ⟨h.1, fun n => Step_of_code_arrayDecls_eq hc ha (h.2 n)⟩
 
-/-- `program_behavior` transfers across programs with the same code and arrayDecls. -/
-theorem program_behavior_of_code_eq {p q : Prog}
-    (hc : p.code = q.code) (ha : p.arrayDecls = q.arrayDecls)
-    {σ₀ b} (h : program_behavior p σ₀ b) : program_behavior q σ₀ b := by
-  cases b with
-  | halts σ' =>
-    obtain ⟨am, am', hhalt⟩ := h
-    exact ⟨am, am', Steps_of_code_arrayDecls_eq hc ha hhalt⟩
-  | errors σ' =>
-    obtain ⟨am, am', hsteps⟩ := h
-    exact ⟨am, am', Steps_of_code_arrayDecls_eq hc ha hsteps⟩
-  | typeErrors σ' =>
-    obtain ⟨am, am', hsteps⟩ := h
-    exact ⟨am, am', Steps_of_code_arrayDecls_eq hc ha hsteps⟩
-  | diverges =>
-    obtain ⟨f, hinf, hf0⟩ := h
-    exact ⟨f, IsInfiniteExec_of_code_eq hc ha hinf, hf0⟩
-
 -- ============================================================
 -- § 1. applyPass soundness
 -- ============================================================
@@ -123,55 +111,7 @@ theorem applyPass_sound {name : String} {pass : Prog → ECertificate} {p p' : P
     · simp [hCheck] at h
 
 -- ============================================================
--- § 2. Single-pass behavior preservation
--- ============================================================
-
-/-- A single optimization pass preserves behavior. Uses code-equality transfer
-    so no `hOrigId` needed — only `htyctx` (all passes preserve tyCtx).
-
-    **Propagated sorrys:** depends on SoundnessBridge (5 sorrys). -/
-theorem applyPass_preserves_behavior {name : String} {pass : Prog → ECertificate} {p p' : Prog}
-    (h : applyPass name pass p = .ok p')
-    (htyctx : (pass p).orig.tyCtx = (pass p).trans.tyCtx)
-    (σ₀ : Store) (hts : TypedStore (pass p).orig.tyCtx σ₀)
-    (b : Behavior) (hbeh : program_behavior p' σ₀ b) :
-    match b with
-    | .halts σ' => ∃ σ_orig am am_f,
-        haltsWithResult p 0 σ₀ σ_orig am am_f ∧
-        ∀ v ∈ p.observable, σ' v = σ_orig v
-    | .errors _ => ∃ σ_o am_o am_o', p ⊩ Cfg.run 0 σ₀ am_o ⟶* Cfg.error σ_o am_o'
-    | .typeErrors _ => False
-    | .diverges => ∃ f, IsInfiniteExec p f ∧ f 0 = Cfg.run 0 σ₀ ArrayMem.init := by
-  obtain ⟨hcheck, hTrans, hOrigCode, hOrigObs, hOrigArr⟩ := applyPass_sound h
-  have hvalid := soundness_bridge (pass p) hcheck htyctx
-  have hTransP : (toPCertificate (pass p)).trans = p' := by simp [toPCertificate]; exact hTrans
-  have hbeh' : program_behavior (toPCertificate (pass p)).trans σ₀ b := hTransP ▸ hbeh
-  have hts' : TypedStore (toPCertificate (pass p)).tyCtx σ₀ := by
-    simp [toPCertificate, PCertificate.tyCtx]; exact hts
-  have hsound := credible_compilation_soundness (toPCertificate (pass p)) hvalid σ₀ hts' b hbeh'
-  have hOC : (toPCertificate (pass p)).orig.code = p.code := by simp [toPCertificate]; exact hOrigCode
-  have hOA : (toPCertificate (pass p)).orig.arrayDecls = p.arrayDecls := by simp [toPCertificate]; exact hOrigArr
-  have hOO : (toPCertificate (pass p)).observable = p.observable := by
-    simp [toPCertificate, PCertificate.observable]; exact hOrigObs
-  cases b with
-  | halts σ' =>
-    simp only at hsound ⊢
-    obtain ⟨σ_o, am, am_f, hhalt, hobs⟩ := hsound
-    exact ⟨σ_o, am, am_f,
-      Steps_of_code_arrayDecls_eq hOC hOA hhalt,
-      fun v hv => hobs v (hOO ▸ hv)⟩
-  | errors σ' =>
-    simp only at hsound ⊢
-    obtain ⟨σ_o, am_o, am_o', hsteps⟩ := hsound
-    exact ⟨σ_o, am_o, am_o', Steps_of_code_arrayDecls_eq hOC hOA hsteps⟩
-  | typeErrors σ' => exact hsound
-  | diverges =>
-    simp only at hsound ⊢
-    obtain ⟨f, hinf, hf0⟩ := hsound
-    exact ⟨f, IsInfiniteExec_of_code_eq hOC hOA hinf, hf0⟩
-
--- ============================================================
--- § 3. Pipeline behavior preservation
+-- § 2. Single-pass halt/error/diverge with AM preservation
 -- ============================================================
 
 /-- Extract same_observable from checkCertificateExec. -/
@@ -182,173 +122,7 @@ private theorem same_obs_of_check (cert : ECertificate)
   simp only [Bool.and_eq_true] at h
   exact beq_iff_eq.mp h.1.1.1.1.1.1.1.1.1.1.1.1.1.1.1.1.1.1.1.2
 
-/-- Each optimization pass preserves the observable variable list. -/
-private theorem obs_preserved_by_pass (n : String) (pass : Prog → ECertificate) (q q' : Prog)
-    (hap : applyPass n pass q = .ok q') : q'.observable = q.observable := by
-  obtain ⟨hcheck, hTrans, _, hOrigObs, _⟩ := applyPass_sound hap
-  rw [← hTrans]
-  have hSameObs := same_obs_of_check (pass q) hcheck
-  rw [← hSameObs, hOrigObs]
-
-/-- The full optimization pipeline preserves observable behavior.
-    The tyCtx hypotheses hold for all passes (they set tyCtx := prog.tyCtx).
-
-    **Propagated sorrys:** depends on SoundnessBridge (5 sorrys). -/
-theorem optimizePipeline_preserves_behavior {p p' : Prog}
-    (h : optimizePipeline p = .ok p')
-    (hty_dce : ∀ q, (DCEOpt.optimize q).orig.tyCtx = (DCEOpt.optimize q).trans.tyCtx)
-    (hty_licm : ∀ q, (LICMOpt.optimize q).orig.tyCtx = (LICMOpt.optimize q).trans.tyCtx)
-    (hty_cp : ∀ q, (ConstPropOpt.optimize q).orig.tyCtx = (ConstPropOpt.optimize q).trans.tyCtx)
-    (hty_dae : ∀ q, (DAEOpt.optimize q).orig.tyCtx = (DAEOpt.optimize q).trans.tyCtx)
-    (hty_fma : ∀ q, (FMAFusionOpt.optimize q).orig.tyCtx = (FMAFusionOpt.optimize q).trans.tyCtx)
-    (hty_cse : ∀ q, (CSEOpt.optimize q).orig.tyCtx = (CSEOpt.optimize q).trans.tyCtx)
-    (hty_ch : ∀ q, (ConstHoistOpt.optimize q).orig.tyCtx = (ConstHoistOpt.optimize q).trans.tyCtx)
-    (hty_ph : ∀ q, (PeepholeOpt.optimize q).orig.tyCtx = (PeepholeOpt.optimize q).trans.tyCtx)
-    (hty_ra : ∀ q, (RegAllocOpt.optimize q).orig.tyCtx = (RegAllocOpt.optimize q).trans.tyCtx)
-    (htyO_dce : ∀ q, (DCEOpt.optimize q).orig.tyCtx = q.tyCtx)
-    (htyO_licm : ∀ q, (LICMOpt.optimize q).orig.tyCtx = q.tyCtx)
-    (htyO_cp : ∀ q, (ConstPropOpt.optimize q).orig.tyCtx = q.tyCtx)
-    (htyO_dae : ∀ q, (DAEOpt.optimize q).orig.tyCtx = q.tyCtx)
-    (htyO_fma : ∀ q, (FMAFusionOpt.optimize q).orig.tyCtx = q.tyCtx)
-    (htyO_cse : ∀ q, (CSEOpt.optimize q).orig.tyCtx = q.tyCtx)
-    (htyO_ch : ∀ q, (ConstHoistOpt.optimize q).orig.tyCtx = q.tyCtx)
-    (htyO_ph : ∀ q, (PeepholeOpt.optimize q).orig.tyCtx = q.tyCtx)
-    (htyO_ra : ∀ q, (RegAllocOpt.optimize q).orig.tyCtx = q.tyCtx)
-    (σ₀ : Store) (hts : TypedStore p.tyCtx σ₀)
-    (b : Behavior) (hbeh : program_behavior p' σ₀ b) :
-    match b with
-    | .halts σ' => ∃ σ_orig am am_f,
-        haltsWithResult p 0 σ₀ σ_orig am am_f ∧
-        ∀ v ∈ p.observable, σ' v = σ_orig v
-    | .errors _ => ∃ σ_o am_o am_o', p ⊩ Cfg.run 0 σ₀ am_o ⟶* Cfg.error σ_o am_o'
-    | .typeErrors _ => False
-    | .diverges => ∃ f, IsInfiniteExec p f ∧ f 0 = Cfg.run 0 σ₀ ArrayMem.init := by
-  -- Decompose pipeline: extract each intermediate program from nested Except.bind
-  have bind_ok : ∀ {α β : Type} {x : Except String α} {f : α → Except String β} {b : β},
-      Except.bind x f = .ok b → ∃ a, x = .ok a ∧ f a = .ok b := by
-    intro α β x f b h; cases x with | error e => simp [Except.bind] at h | ok a => exact ⟨a, rfl, h⟩
-  unfold optimizePipeline at h; simp only [bind] at h
-  obtain ⟨p1, h1, h⟩ := bind_ok h
-  obtain ⟨p2, h2, h⟩ := bind_ok h
-  obtain ⟨p3, h3, h⟩ := bind_ok h
-  obtain ⟨p4, h4, h⟩ := bind_ok h
-  obtain ⟨p5, h5, h⟩ := bind_ok h
-  obtain ⟨p6, h6, h⟩ := bind_ok h
-  obtain ⟨p7, h7, h⟩ := bind_ok h
-  obtain ⟨p8, h8, h⟩ := bind_ok h
-  obtain ⟨p9, h9, h⟩ := bind_ok h
-  obtain ⟨p10, h10, h11⟩ := bind_ok h
-  -- Derive tyCtx chain: all intermediate programs have same tyCtx as p
-  have hT := fun {n pass q q'} (h : applyPass n pass q = .ok q') =>
-    (applyPass_sound h).2.1
-  have htyp1 : p1.tyCtx = p.tyCtx := by rw [← hT h1, ← hty_dce p, htyO_dce p]
-  have htyp2 : p2.tyCtx = p.tyCtx := by rw [← hT h2, ← hty_licm p1, htyO_licm p1, htyp1]
-  have htyp3 : p3.tyCtx = p.tyCtx := by rw [← hT h3, ← hty_cp p2, htyO_cp p2, htyp2]
-  have htyp4 : p4.tyCtx = p.tyCtx := by rw [← hT h4, ← hty_dce p3, htyO_dce p3, htyp3]
-  have htyp5 : p5.tyCtx = p.tyCtx := by rw [← hT h5, ← hty_dae p4, htyO_dae p4, htyp4]
-  have htyp6 : p6.tyCtx = p.tyCtx := by rw [← hT h6, ← hty_fma p5, htyO_fma p5, htyp5]
-  have htyp7 : p7.tyCtx = p.tyCtx := by rw [← hT h7, ← hty_cse p6, htyO_cse p6, htyp6]
-  have htyp8 : p8.tyCtx = p.tyCtx := by rw [← hT h8, ← hty_ch p7, htyO_ch p7, htyp7]
-  have htyp9 : p9.tyCtx = p.tyCtx := by rw [← hT h9, ← hty_ph p8, htyO_ph p8, htyp8]
-  have htyp10 : p10.tyCtx = p.tyCtx := by rw [← hT h10, ← hty_dce p9, htyO_dce p9, htyp9]
-  -- Observable chain: all intermediate programs have same observable as p
-  have hobsp1 : p1.observable = p.observable := obs_preserved_by_pass _ _ _ _ h1
-  have hobsp2 : p2.observable = p.observable := by rw [obs_preserved_by_pass _ _ _ _ h2, hobsp1]
-  have hobsp3 : p3.observable = p.observable := by rw [obs_preserved_by_pass _ _ _ _ h3, hobsp2]
-  have hobsp4 : p4.observable = p.observable := by rw [obs_preserved_by_pass _ _ _ _ h4, hobsp3]
-  have hobsp5 : p5.observable = p.observable := by rw [obs_preserved_by_pass _ _ _ _ h5, hobsp4]
-  have hobsp6 : p6.observable = p.observable := by rw [obs_preserved_by_pass _ _ _ _ h6, hobsp5]
-  have hobsp7 : p7.observable = p.observable := by rw [obs_preserved_by_pass _ _ _ _ h7, hobsp6]
-  have hobsp8 : p8.observable = p.observable := by rw [obs_preserved_by_pass _ _ _ _ h8, hobsp7]
-  have hobsp9 : p9.observable = p.observable := by rw [obs_preserved_by_pass _ _ _ _ h9, hobsp8]
-  have hobsp10 : p10.observable = p.observable := by rw [obs_preserved_by_pass _ _ _ _ h10, hobsp9]
-  -- Helper: TypedStore transfer
-  have tsAt : ∀ (pass : Prog → ECertificate) (q : Prog),
-      (pass q).orig.tyCtx = q.tyCtx → q.tyCtx = p.tyCtx →
-      TypedStore (pass q).orig.tyCtx σ₀ := fun _ q hO hq => hO ▸ hq ▸ hts
-  -- Chain backward: apply applyPass_preserves_behavior for each pass
-  -- For each behavior case, chain the results
-  cases b with
-  | halts σ' =>
-    simp only at hbeh ⊢
-    -- Step 11: p' halts → p10 halts with σ₁₀, obs eq on p10.observable
-    have beh11 := applyPass_preserves_behavior h11 (hty_ra _) σ₀ (tsAt _ _ (htyO_ra _) htyp10) (.halts σ') hbeh
-    simp only at beh11
-    obtain ⟨σ₁₀, a₁₀, am₁₀, halt₁₀, obs₁₀⟩ := beh11
-    -- Step 10-1: chain backward
-    have mk_beh : ∀ {q σ am am'}, haltsWithResult q 0 σ₀ σ am am' →
-        program_behavior q σ₀ (.halts σ) := fun h => ⟨_, _, h⟩
-    have beh10 := applyPass_preserves_behavior h10 (hty_dce _) σ₀ (tsAt _ _ (htyO_dce _) htyp9) (.halts σ₁₀) (mk_beh halt₁₀)
-    simp only at beh10; obtain ⟨σ₉, a₉, am₉, halt₉, obs₉⟩ := beh10
-    have beh9 := applyPass_preserves_behavior h9 (hty_ph _) σ₀ (tsAt _ _ (htyO_ph _) htyp8) (.halts σ₉) (mk_beh halt₉)
-    simp only at beh9; obtain ⟨σ₈, a₈, am₈, halt₈, obs₈⟩ := beh9
-    have beh8 := applyPass_preserves_behavior h8 (hty_ch _) σ₀ (tsAt _ _ (htyO_ch _) htyp7) (.halts σ₈) (mk_beh halt₈)
-    simp only at beh8; obtain ⟨σ₇, a₇, am₇, halt₇, obs₇⟩ := beh8
-    have beh7 := applyPass_preserves_behavior h7 (hty_cse _) σ₀ (tsAt _ _ (htyO_cse _) htyp6) (.halts σ₇) (mk_beh halt₇)
-    simp only at beh7; obtain ⟨σ₆, a₆, am₆, halt₆, obs₆⟩ := beh7
-    have beh6 := applyPass_preserves_behavior h6 (hty_fma _) σ₀ (tsAt _ _ (htyO_fma _) htyp5) (.halts σ₆) (mk_beh halt₆)
-    simp only at beh6; obtain ⟨σ₅, a₅, am₅, halt₅, obs₅⟩ := beh6
-    have beh5 := applyPass_preserves_behavior h5 (hty_dae _) σ₀ (tsAt _ _ (htyO_dae _) htyp4) (.halts σ₅) (mk_beh halt₅)
-    simp only at beh5; obtain ⟨σ₄, a₄, am₄, halt₄, obs₄⟩ := beh5
-    have beh4 := applyPass_preserves_behavior h4 (hty_dce _) σ₀ (tsAt _ _ (htyO_dce _) htyp3) (.halts σ₄) (mk_beh halt₄)
-    simp only at beh4; obtain ⟨σ₃, a₃, am₃, halt₃, obs₃⟩ := beh4
-    have beh3 := applyPass_preserves_behavior h3 (hty_cp _) σ₀ (tsAt _ _ (htyO_cp _) htyp2) (.halts σ₃) (mk_beh halt₃)
-    simp only at beh3; obtain ⟨σ₂, a₂, am₂, halt₂, obs₂⟩ := beh3
-    have beh2 := applyPass_preserves_behavior h2 (hty_licm _) σ₀ (tsAt _ _ (htyO_licm _) htyp1) (.halts σ₂) (mk_beh halt₂)
-    simp only at beh2; obtain ⟨σ₁, a₁, am₁, halt₁, obs₁⟩ := beh2
-    have beh1 := applyPass_preserves_behavior h1 (hty_dce _) σ₀ (tsAt _ _ (htyO_dce _) rfl) (.halts σ₁) (mk_beh halt₁)
-    simp only at beh1; obtain ⟨σ₀', a₀, am₀, halt₀, obs₀⟩ := beh1
-    -- Chain observables: σ' v = σ₁₀ v = σ₉ v = ... = σ₀' v for v ∈ p.observable
-    exact ⟨σ₀', a₀, am₀, halt₀, fun v hv => by
-      calc σ' v = σ₁₀ v := obs₁₀ v (hobsp10 ▸ hv)
-        _ = σ₉ v := obs₉ v (hobsp9 ▸ hv)
-        _ = σ₈ v := obs₈ v (hobsp8 ▸ hv)
-        _ = σ₇ v := obs₇ v (hobsp7 ▸ hv)
-        _ = σ₆ v := obs₆ v (hobsp6 ▸ hv)
-        _ = σ₅ v := obs₅ v (hobsp5 ▸ hv)
-        _ = σ₄ v := obs₄ v (hobsp4 ▸ hv)
-        _ = σ₃ v := obs₃ v (hobsp3 ▸ hv)
-        _ = σ₂ v := obs₂ v (hobsp2 ▸ hv)
-        _ = σ₁ v := obs₁ v (hobsp1 ▸ hv)
-        _ = σ₀' v := obs₀ v hv⟩
-  | errors σ' =>
-    simp only at hbeh ⊢
-    -- Each step: p_{i+1} errors → p_i errors
-    have mk_beh : ∀ {q σ am am'}, (q ⊩ Cfg.run 0 σ₀ am ⟶* Cfg.error σ am') →
-        program_behavior q σ₀ (.errors σ) := fun h => ⟨_, _, h⟩
-    obtain ⟨σ₁₀, a₁₀, a₁₀', s₁₀⟩ := applyPass_preserves_behavior h11 (hty_ra _) σ₀ (tsAt _ _ (htyO_ra _) htyp10) (.errors σ') hbeh
-    obtain ⟨σ₉, a₉, a₉', s₉⟩ := applyPass_preserves_behavior h10 (hty_dce _) σ₀ (tsAt _ _ (htyO_dce _) htyp9) (.errors σ₁₀) (mk_beh s₁₀)
-    obtain ⟨σ₈, a₈, a₈', s₈⟩ := applyPass_preserves_behavior h9 (hty_ph _) σ₀ (tsAt _ _ (htyO_ph _) htyp8) (.errors σ₉) (mk_beh s₉)
-    obtain ⟨σ₇, a₇, a₇', s₇⟩ := applyPass_preserves_behavior h8 (hty_ch _) σ₀ (tsAt _ _ (htyO_ch _) htyp7) (.errors σ₈) (mk_beh s₈)
-    obtain ⟨σ₆, a₆, a₆', s₆⟩ := applyPass_preserves_behavior h7 (hty_cse _) σ₀ (tsAt _ _ (htyO_cse _) htyp6) (.errors σ₇) (mk_beh s₇)
-    obtain ⟨σ₅, a₅, a₅', s₅⟩ := applyPass_preserves_behavior h6 (hty_fma _) σ₀ (tsAt _ _ (htyO_fma _) htyp5) (.errors σ₆) (mk_beh s₆)
-    obtain ⟨σ₄, a₄, a₄', s₄⟩ := applyPass_preserves_behavior h5 (hty_dae _) σ₀ (tsAt _ _ (htyO_dae _) htyp4) (.errors σ₅) (mk_beh s₅)
-    obtain ⟨σ₃, a₃, a₃', s₃⟩ := applyPass_preserves_behavior h4 (hty_dce _) σ₀ (tsAt _ _ (htyO_dce _) htyp3) (.errors σ₄) (mk_beh s₄)
-    obtain ⟨σ₂, a₂, a₂', s₂⟩ := applyPass_preserves_behavior h3 (hty_cp _) σ₀ (tsAt _ _ (htyO_cp _) htyp2) (.errors σ₃) (mk_beh s₃)
-    obtain ⟨σ₁, a₁, a₁', s₁⟩ := applyPass_preserves_behavior h2 (hty_licm _) σ₀ (tsAt _ _ (htyO_licm _) htyp1) (.errors σ₂) (mk_beh s₂)
-    obtain ⟨σ₀', a₀, a₀', s₀⟩ := applyPass_preserves_behavior h1 (hty_dce _) σ₀ (tsAt _ _ (htyO_dce _) rfl) (.errors σ₁) (mk_beh s₁)
-    exact ⟨σ₀', a₀, a₀', s₀⟩
-  | typeErrors σ' =>
-    exact applyPass_preserves_behavior h11 (hty_ra _) σ₀ (tsAt _ _ (htyO_ra _) htyp10) (.typeErrors σ') hbeh
-  | diverges =>
-    simp only at hbeh ⊢
-    have mk_beh : ∀ {q f}, IsInfiniteExec q f → f 0 = Cfg.run 0 σ₀ ArrayMem.init →
-        program_behavior q σ₀ .diverges := fun h hf => ⟨_, h, hf⟩
-    obtain ⟨f₁₀, i₁₀, e₁₀⟩ := applyPass_preserves_behavior h11 (hty_ra _) σ₀ (tsAt _ _ (htyO_ra _) htyp10) .diverges hbeh
-    obtain ⟨f₉, i₉, e₉⟩ := applyPass_preserves_behavior h10 (hty_dce _) σ₀ (tsAt _ _ (htyO_dce _) htyp9) .diverges (mk_beh i₁₀ e₁₀)
-    obtain ⟨f₈, i₈, e₈⟩ := applyPass_preserves_behavior h9 (hty_ph _) σ₀ (tsAt _ _ (htyO_ph _) htyp8) .diverges (mk_beh i₉ e₉)
-    obtain ⟨f₇, i₇, e₇⟩ := applyPass_preserves_behavior h8 (hty_ch _) σ₀ (tsAt _ _ (htyO_ch _) htyp7) .diverges (mk_beh i₈ e₈)
-    obtain ⟨f₆, i₆, e₆⟩ := applyPass_preserves_behavior h7 (hty_cse _) σ₀ (tsAt _ _ (htyO_cse _) htyp6) .diverges (mk_beh i₇ e₇)
-    obtain ⟨f₅, i₅, e₅⟩ := applyPass_preserves_behavior h6 (hty_fma _) σ₀ (tsAt _ _ (htyO_fma _) htyp5) .diverges (mk_beh i₆ e₆)
-    obtain ⟨f₄, i₄, e₄⟩ := applyPass_preserves_behavior h5 (hty_dae _) σ₀ (tsAt _ _ (htyO_dae _) htyp4) .diverges (mk_beh i₅ e₅)
-    obtain ⟨f₃, i₃, e₃⟩ := applyPass_preserves_behavior h4 (hty_dce _) σ₀ (tsAt _ _ (htyO_dce _) htyp3) .diverges (mk_beh i₄ e₄)
-    obtain ⟨f₂, i₂, e₂⟩ := applyPass_preserves_behavior h3 (hty_cp _) σ₀ (tsAt _ _ (htyO_cp _) htyp2) .diverges (mk_beh i₃ e₃)
-    obtain ⟨f₁, i₁, e₁⟩ := applyPass_preserves_behavior h2 (hty_licm _) σ₀ (tsAt _ _ (htyO_licm _) htyp1) .diverges (mk_beh i₂ e₂)
-    obtain ⟨f₀, i₀, e₀⟩ := applyPass_preserves_behavior h1 (hty_dce _) σ₀ (tsAt _ _ (htyO_dce _) rfl) .diverges (mk_beh i₁ e₁)
-    exact ⟨f₀, i₀, e₀⟩
-
-/-- Specialization of `applyPass_preserves_behavior` for halts with a fixed
-    initial ArrayMem. The initial AM is preserved through the soundness chain. -/
+/-- A single optimization pass preserves halting with fixed initial AM. -/
 private theorem applyPass_preserves_halt_am {name : String} {pass : Prog → ECertificate}
     {p p' : Prog}
     (h : applyPass name pass p = .ok p')
@@ -362,7 +136,6 @@ private theorem applyPass_preserves_halt_am {name : String} {pass : Prog → ECe
   obtain ⟨hcheck, hTrans, hOrigCode, hOrigObs, hOrigArr⟩ := applyPass_sound h
   have hvalid := soundness_bridge (pass p) hcheck htyctx
   have hTransP : (toPCertificate (pass p)).trans = p' := by simp [toPCertificate]; exact hTrans
-  -- Use soundness_halt directly with explicit am₀
   have hts' : TypedStore (toPCertificate (pass p)).tyCtx σ₀ := by
     simp [toPCertificate, PCertificate.tyCtx]; exact hts
   have hhalt_cert : ∃ am', haltsWithResult (toPCertificate (pass p)).trans 0 σ₀ σ' am₀ am' :=
@@ -378,321 +151,245 @@ private theorem applyPass_preserves_halt_am {name : String} {pass : Prog → ECe
   exact ⟨σ_o, am_f, Steps_of_code_arrayDecls_eq hOC hOA hhalt_o,
     fun v hv => hobs v (hOO ▸ hv)⟩
 
--- ============================================================
--- § 4. End-to-end: TAC → optimized TAC → ARM
--- ============================================================
+/-- A single optimization pass preserves errors with fixed initial AM. -/
+private theorem applyPass_preserves_error_am {name : String} {pass : Prog → ECertificate}
+    {p p' : Prog}
+    (h : applyPass name pass p = .ok p')
+    (htyctx : (pass p).orig.tyCtx = (pass p).trans.tyCtx)
+    (σ₀ : Store) (hts : TypedStore (pass p).orig.tyCtx σ₀)
+    {σ' : Store} {am₀ am' : ArrayMem}
+    (hbeh : p' ⊩ Cfg.run 0 σ₀ am₀ ⟶* Cfg.error σ' am') :
+    ∃ σ_o am_o', p ⊩ Cfg.run 0 σ₀ am₀ ⟶* Cfg.error σ_o am_o' := by
+  obtain ⟨hcheck, hTrans, hOrigCode, _, hOrigArr⟩ := applyPass_sound h
+  have hvalid := soundness_bridge (pass p) hcheck htyctx
+  have hTransP : (toPCertificate (pass p)).trans = p' := by simp [toPCertificate]; exact hTrans
+  have hts' : TypedStore (toPCertificate (pass p)).tyCtx σ₀ := by
+    simp [toPCertificate, PCertificate.tyCtx]; exact hts
+  have herr_cert : (toPCertificate (pass p)).trans ⊩ Cfg.run 0 σ₀ am₀ ⟶* Cfg.error σ' am' :=
+    hTransP ▸ hbeh
+  obtain ⟨σ_o, ⟨am_f, herr_orig⟩⟩ := error_preservation _ hvalid σ₀ hts' herr_cert
+  have hOC : (toPCertificate (pass p)).orig.code = p.code := by simp [toPCertificate]; exact hOrigCode
+  have hOA : (toPCertificate (pass p)).orig.arrayDecls = p.arrayDecls := by simp [toPCertificate]; exact hOrigArr
+  exact ⟨σ_o, am_f, Steps_of_code_arrayDecls_eq hOC hOA herr_orig⟩
 
-/-- ARM codegen correctness: optimized TAC steps are simulated by ARM steps.
+/-- A single optimization pass preserves divergence. -/
+private theorem applyPass_preserves_diverge {name : String} {pass : Prog → ECertificate}
+    {p p' : Prog}
+    (h : applyPass name pass p = .ok p')
+    (htyctx : (pass p).orig.tyCtx = (pass p).trans.tyCtx)
+    (σ₀ : Store) (hts : TypedStore (pass p).orig.tyCtx σ₀)
+    {f : Nat → Cfg}
+    (hinf : IsInfiniteExec p' f) (hf0 : f 0 = Cfg.run 0 σ₀ ArrayMem.init) :
+    ∃ g, IsInfiniteExec p g ∧ g 0 = Cfg.run 0 σ₀ ArrayMem.init := by
+  obtain ⟨hcheck, hTrans, hOrigCode, _, hOrigArr⟩ := applyPass_sound h
+  have hvalid := soundness_bridge (pass p) hcheck htyctx
+  have hTransP : (toPCertificate (pass p)).trans = p' := by simp [toPCertificate]; exact hTrans
+  have hts' : TypedStore (toPCertificate (pass p)).tyCtx σ₀ := by
+    simp [toPCertificate, PCertificate.tyCtx]; exact hts
+  have hinf' : IsInfiniteExec (toPCertificate (pass p)).trans f := hTransP ▸ hinf
+  have hf0' : f 0 = Cfg.run 0 σ₀ ArrayMem.init := hf0
+  obtain ⟨g, hg, hg0⟩ := soundness_diverge _ hvalid f σ₀ hts' hinf' hf0'
+  have hOC : (toPCertificate (pass p)).orig.code = p.code := by simp [toPCertificate]; exact hOrigCode
+  have hOA : (toPCertificate (pass p)).orig.arrayDecls = p.arrayDecls := by simp [toPCertificate]; exact hOrigArr
+  exact ⟨g, IsInfiniteExec_of_code_eq hOC hOA hg, hg0⟩
 
-    **Propagated sorrys:** 2 from ArmCorrectness (arrLoad, arrStore). -/
-theorem pipeline_to_arm_correctness {p : Prog} {r : VerifiedAsmResult}
-    (p_opt : Prog)
-    (_hOpt : optimizePipeline p = .ok p_opt)
-    (hGen : verifiedGenerateAsm p_opt = .ok r)
-    {cfg' : Cfg}
-    (hSteps : p_opt ⊩ Cfg.run 0 (Store.typedInit p_opt.tyCtx) (fun _ _ => 0) ⟶* cfg') :
-    ∃ s', ArmSteps r.bodyFlat
-      { regs := fun _ => 0, fregs := fun _ => 0, stack := fun _ => 0,
-        pc := r.pcMap 0, flags := ⟨0, 0⟩ } s' ∧
-      ExtSimRel r.layout r.pcMap cfg' s' :=
-  tacToArm_correctness hGen hSteps
-
--- ============================================================
--- § 5. Top-level: original TAC → ARM preserves observables
--- ============================================================
-
-/-- **Top-level correctness theorem.** If:
-    1. The optimization pipeline succeeds: `optimizePipeline p = .ok p_opt`
-    2. ARM code generation succeeds: `verifiedGenerateAsm p_opt = .ok r`
-    3. The optimized TAC halts: `p_opt ⊩ run 0 σ₀ am₀ ⟶* halt σ_opt am_opt`
-
-    Then the original TAC program also halts, and the observable variables
-    have the same values in both the original and optimized executions.
-
-    This composes `optimizePipeline_preserves_behavior` (TAC → optimized TAC)
-    with `tacToArm_correctness` (optimized TAC → ARM simulation).
-
-    **Hypotheses on passes:** all passes preserve tyCtx (hty_*, htyO_*).
-    These hold by construction (every pass sets tyCtx := prog.tyCtx).
-
-    **Propagated sorrys:** SoundnessBridge (5), ArmCorrectness (2). -/
-theorem end_to_end_correctness {p p_opt : Prog} {r : VerifiedAsmResult}
-    (hOpt : optimizePipeline p = .ok p_opt)
-    (hGen : verifiedGenerateAsm p_opt = .ok r)
-    -- tyCtx preservation (holds for all passes by construction)
-    (hty_dce : ∀ q, (DCEOpt.optimize q).orig.tyCtx = (DCEOpt.optimize q).trans.tyCtx)
-    (hty_licm : ∀ q, (LICMOpt.optimize q).orig.tyCtx = (LICMOpt.optimize q).trans.tyCtx)
-    (hty_cp : ∀ q, (ConstPropOpt.optimize q).orig.tyCtx = (ConstPropOpt.optimize q).trans.tyCtx)
-    (hty_dae : ∀ q, (DAEOpt.optimize q).orig.tyCtx = (DAEOpt.optimize q).trans.tyCtx)
-    (hty_fma : ∀ q, (FMAFusionOpt.optimize q).orig.tyCtx = (FMAFusionOpt.optimize q).trans.tyCtx)
-    (hty_cse : ∀ q, (CSEOpt.optimize q).orig.tyCtx = (CSEOpt.optimize q).trans.tyCtx)
-    (hty_ch : ∀ q, (ConstHoistOpt.optimize q).orig.tyCtx = (ConstHoistOpt.optimize q).trans.tyCtx)
-    (hty_ph : ∀ q, (PeepholeOpt.optimize q).orig.tyCtx = (PeepholeOpt.optimize q).trans.tyCtx)
-    (hty_ra : ∀ q, (RegAllocOpt.optimize q).orig.tyCtx = (RegAllocOpt.optimize q).trans.tyCtx)
-    (htyO_dce : ∀ q, (DCEOpt.optimize q).orig.tyCtx = q.tyCtx)
-    (htyO_licm : ∀ q, (LICMOpt.optimize q).orig.tyCtx = q.tyCtx)
-    (htyO_cp : ∀ q, (ConstPropOpt.optimize q).orig.tyCtx = q.tyCtx)
-    (htyO_dae : ∀ q, (DAEOpt.optimize q).orig.tyCtx = q.tyCtx)
-    (htyO_fma : ∀ q, (FMAFusionOpt.optimize q).orig.tyCtx = q.tyCtx)
-    (htyO_cse : ∀ q, (CSEOpt.optimize q).orig.tyCtx = q.tyCtx)
-    (htyO_ch : ∀ q, (ConstHoistOpt.optimize q).orig.tyCtx = q.tyCtx)
-    (htyO_ph : ∀ q, (PeepholeOpt.optimize q).orig.tyCtx = q.tyCtx)
-    (htyO_ra : ∀ q, (RegAllocOpt.optimize q).orig.tyCtx = q.tyCtx)
-    -- Optimized program halts
-    {σ_opt : Store} {am_opt : ArrayMem}
-    (hHalt : haltsWithResult p_opt 0 (Store.typedInit p_opt.tyCtx) σ_opt ArrayMem.init am_opt) :
-    -- Then: (1) original TAC halts from ArrayMem.init with same observables
-    (∃ σ_orig am_f,
-      haltsWithResult p 0 (Store.typedInit p.tyCtx) σ_orig ArrayMem.init am_f ∧
-      ∀ v ∈ p.observable, σ_opt v = σ_orig v) ∧
-    -- (2) ARM simulates the optimized TAC halt
-    (∃ s', ArmSteps r.bodyFlat
-      { regs := fun _ => 0, fregs := fun _ => 0, stack := fun _ => 0,
-        pc := r.pcMap 0, flags := ⟨0, 0⟩ } s' ∧
-      ExtSimRel r.layout r.pcMap (.halt σ_opt am_opt) s') := by
-  constructor
-  · -- (1) Pipeline preserves behavior: optimized halt → original halt with same observables
-    -- Need: TypedStore p.tyCtx (Store.typedInit p.tyCtx)
-    have hts : TypedStore p.tyCtx (Store.typedInit p.tyCtx) := TypedStore.typedInit p.tyCtx
-    -- Need: TypedStore p.tyCtx (Store.typedInit p_opt.tyCtx) — but p_opt.tyCtx may differ
-    -- Actually optimizePipeline preserves tyCtx, so p_opt.tyCtx = p.tyCtx
-    -- Derive from the pipeline decomposition
-    have hTyOpt : p_opt.tyCtx = p.tyCtx := by
-      have bind_ok' : ∀ {α β : Type} {x : Except String α} {f : α → Except String β} {b : β},
-          Except.bind x f = .ok b → ∃ a, x = .ok a ∧ f a = .ok b := by
-        intro α β x f b h; cases x with | error e => simp [Except.bind] at h | ok a => exact ⟨a, rfl, h⟩
-      unfold optimizePipeline at hOpt; simp only [bind] at hOpt
-      obtain ⟨q1, hq1, hOpt⟩ := bind_ok' hOpt
-      obtain ⟨q2, hq2, hOpt⟩ := bind_ok' hOpt
-      obtain ⟨q3, hq3, hOpt⟩ := bind_ok' hOpt
-      obtain ⟨q4, hq4, hOpt⟩ := bind_ok' hOpt
-      obtain ⟨q5, hq5, hOpt⟩ := bind_ok' hOpt
-      obtain ⟨q6, hq6, hOpt⟩ := bind_ok' hOpt
-      obtain ⟨q7, hq7, hOpt⟩ := bind_ok' hOpt
-      obtain ⟨q8, hq8, hOpt⟩ := bind_ok' hOpt
-      obtain ⟨q9, hq9, hOpt⟩ := bind_ok' hOpt
-      obtain ⟨q10, hq10, hq11⟩ := bind_ok' hOpt
-      have hT := fun {n pass q q'} (h : applyPass n pass q = .ok q') => (applyPass_sound h).2.1
-      calc p_opt.tyCtx
-          = (RegAllocOpt.optimize q10).trans.tyCtx := by rw [← hT hq11]
-        _ = q10.tyCtx := by rw [← htyO_ra q10, hty_ra q10]
-        _ = q9.tyCtx := by rw [← hT hq10, ← hty_dce q9, htyO_dce q9]
-        _ = q8.tyCtx := by rw [← hT hq9, ← hty_ph q8, htyO_ph q8]
-        _ = q7.tyCtx := by rw [← hT hq8, ← hty_ch q7, htyO_ch q7]
-        _ = q6.tyCtx := by rw [← hT hq7, ← hty_cse q6, htyO_cse q6]
-        _ = q5.tyCtx := by rw [← hT hq6, ← hty_fma q5, htyO_fma q5]
-        _ = q4.tyCtx := by rw [← hT hq5, ← hty_dae q4, htyO_dae q4]
-        _ = q3.tyCtx := by rw [← hT hq4, ← hty_dce q3, htyO_dce q3]
-        _ = q2.tyCtx := by rw [← hT hq3, ← hty_cp q2, htyO_cp q2]
-        _ = q1.tyCtx := by rw [← hT hq2, ← hty_licm q1, htyO_licm q1]
-        _ = p.tyCtx := by rw [← hT hq1, ← hty_dce p, htyO_dce p]
-    -- Use applyPass_preserves_halt_am to thread ArrayMem.init through the pipeline
-    have bind_ok' : ∀ {α β : Type} {x : Except String α} {f : α → Except String β} {b : β},
-        Except.bind x f = .ok b → ∃ a, x = .ok a ∧ f a = .ok b := by
-      intro α β x f b h; cases x with | error e => simp [Except.bind] at h | ok a => exact ⟨a, rfl, h⟩
-    unfold optimizePipeline at hOpt; simp only [bind] at hOpt
-    obtain ⟨q1, h1, hOpt'⟩ := bind_ok' hOpt
-    obtain ⟨q2, h2, hOpt'⟩ := bind_ok' hOpt'
-    obtain ⟨q3, h3, hOpt'⟩ := bind_ok' hOpt'
-    obtain ⟨q4, h4, hOpt'⟩ := bind_ok' hOpt'
-    obtain ⟨q5, h5, hOpt'⟩ := bind_ok' hOpt'
-    obtain ⟨q6, h6, hOpt'⟩ := bind_ok' hOpt'
-    obtain ⟨q7, h7, hOpt'⟩ := bind_ok' hOpt'
-    obtain ⟨q8, h8, hOpt'⟩ := bind_ok' hOpt'
-    obtain ⟨q9, h9, hOpt'⟩ := bind_ok' hOpt'
-    obtain ⟨q10, h10, h11⟩ := bind_ok' hOpt'
-    have hT := fun {n pass q q'} (h : applyPass n pass q = .ok q') => (applyPass_sound h).2.1
-    have htyp1 : q1.tyCtx = p.tyCtx := by rw [← hT h1, ← hty_dce p, htyO_dce p]
-    have htyp2 : q2.tyCtx = p.tyCtx := by rw [← hT h2, ← hty_licm q1, htyO_licm q1, htyp1]
-    have htyp3 : q3.tyCtx = p.tyCtx := by rw [← hT h3, ← hty_cp q2, htyO_cp q2, htyp2]
-    have htyp4 : q4.tyCtx = p.tyCtx := by rw [← hT h4, ← hty_dce q3, htyO_dce q3, htyp3]
-    have htyp5 : q5.tyCtx = p.tyCtx := by rw [← hT h5, ← hty_dae q4, htyO_dae q4, htyp4]
-    have htyp6 : q6.tyCtx = p.tyCtx := by rw [← hT h6, ← hty_fma q5, htyO_fma q5, htyp5]
-    have htyp7 : q7.tyCtx = p.tyCtx := by rw [← hT h7, ← hty_cse q6, htyO_cse q6, htyp6]
-    have htyp8 : q8.tyCtx = p.tyCtx := by rw [← hT h8, ← hty_ch q7, htyO_ch q7, htyp7]
-    have htyp9 : q9.tyCtx = p.tyCtx := by rw [← hT h9, ← hty_ph q8, htyO_ph q8, htyp8]
-    have htyp10 : q10.tyCtx = p.tyCtx := by rw [← hT h10, ← hty_dce q9, htyO_dce q9, htyp9]
-    have tsAt : ∀ (pass : Prog → ECertificate) (q : Prog),
-        (pass q).orig.tyCtx = q.tyCtx → q.tyCtx = p.tyCtx →
-        TypedStore (pass q).orig.tyCtx (Store.typedInit p.tyCtx) :=
-      fun _ q hO hq => hO ▸ hq ▸ hts
-    -- Chain: thread ArrayMem.init backward through each pass
-    have hobsp1 : q1.observable = p.observable := obs_preserved_by_pass _ _ _ _ h1
-    have hobsp2 : q2.observable = p.observable := by rw [obs_preserved_by_pass _ _ _ _ h2, hobsp1]
-    have hobsp3 : q3.observable = p.observable := by rw [obs_preserved_by_pass _ _ _ _ h3, hobsp2]
-    have hobsp4 : q4.observable = p.observable := by rw [obs_preserved_by_pass _ _ _ _ h4, hobsp3]
-    have hobsp5 : q5.observable = p.observable := by rw [obs_preserved_by_pass _ _ _ _ h5, hobsp4]
-    have hobsp6 : q6.observable = p.observable := by rw [obs_preserved_by_pass _ _ _ _ h6, hobsp5]
-    have hobsp7 : q7.observable = p.observable := by rw [obs_preserved_by_pass _ _ _ _ h7, hobsp6]
-    have hobsp8 : q8.observable = p.observable := by rw [obs_preserved_by_pass _ _ _ _ h8, hobsp7]
-    have hobsp9 : q9.observable = p.observable := by rw [obs_preserved_by_pass _ _ _ _ h9, hobsp8]
-    have hobsp10 : q10.observable = p.observable := by rw [obs_preserved_by_pass _ _ _ _ h10, hobsp9]
-    have hHalt' : haltsWithResult p_opt 0 (Store.typedInit p.tyCtx) σ_opt ArrayMem.init am_opt :=
-      hTyOpt ▸ hHalt
-    obtain ⟨σ₁₀, am₁₀, h₁₀, obs₁₀⟩ := applyPass_preserves_halt_am h11 (hty_ra _) _ (tsAt _ _ (htyO_ra _) htyp10) ⟨am_opt, hHalt'⟩
-    obtain ⟨σ₉, am₉, h₉, obs₉⟩ := applyPass_preserves_halt_am h10 (hty_dce _) _ (tsAt _ _ (htyO_dce _) htyp9) ⟨am₁₀, h₁₀⟩
-    obtain ⟨σ₈, am₈, h₈, obs₈⟩ := applyPass_preserves_halt_am h9 (hty_ph _) _ (tsAt _ _ (htyO_ph _) htyp8) ⟨am₉, h₉⟩
-    obtain ⟨σ₇, am₇, h₇, obs₇⟩ := applyPass_preserves_halt_am h8 (hty_ch _) _ (tsAt _ _ (htyO_ch _) htyp7) ⟨am₈, h₈⟩
-    obtain ⟨σ₆, am₆, h₆, obs₆⟩ := applyPass_preserves_halt_am h7 (hty_cse _) _ (tsAt _ _ (htyO_cse _) htyp6) ⟨am₇, h₇⟩
-    obtain ⟨σ₅, am₅, h₅, obs₅⟩ := applyPass_preserves_halt_am h6 (hty_fma _) _ (tsAt _ _ (htyO_fma _) htyp5) ⟨am₆, h₆⟩
-    obtain ⟨σ₄, am₄, h₄, obs₄⟩ := applyPass_preserves_halt_am h5 (hty_dae _) _ (tsAt _ _ (htyO_dae _) htyp4) ⟨am₅, h₅⟩
-    obtain ⟨σ₃, am₃, h₃, obs₃⟩ := applyPass_preserves_halt_am h4 (hty_dce _) _ (tsAt _ _ (htyO_dce _) htyp3) ⟨am₄, h₄⟩
-    obtain ⟨σ₂, am₂, h₂, obs₂⟩ := applyPass_preserves_halt_am h3 (hty_cp _) _ (tsAt _ _ (htyO_cp _) htyp2) ⟨am₃, h₃⟩
-    obtain ⟨σ₁, am₁, h₁, obs₁⟩ := applyPass_preserves_halt_am h2 (hty_licm _) _ (tsAt _ _ (htyO_licm _) htyp1) ⟨am₂, h₂⟩
-    obtain ⟨σ₀', am₀, h₀, obs₀⟩ := applyPass_preserves_halt_am h1 (hty_dce _) _ (tsAt _ _ (htyO_dce _) rfl) ⟨am₁, h₁⟩
-    exact ⟨σ₀', am₀, h₀, fun v hv => by
-      calc σ_opt v = σ₁₀ v := obs₁₀ v (hobsp10 ▸ hv)
-        _ = σ₉ v := obs₉ v (hobsp9 ▸ hv)
-        _ = σ₈ v := obs₈ v (hobsp8 ▸ hv)
-        _ = σ₇ v := obs₇ v (hobsp7 ▸ hv)
-        _ = σ₆ v := obs₆ v (hobsp6 ▸ hv)
-        _ = σ₅ v := obs₅ v (hobsp5 ▸ hv)
-        _ = σ₄ v := obs₄ v (hobsp4 ▸ hv)
-        _ = σ₃ v := obs₃ v (hobsp3 ▸ hv)
-        _ = σ₂ v := obs₂ v (hobsp2 ▸ hv)
-        _ = σ₁ v := obs₁ v (hobsp1 ▸ hv)
-        _ = σ₀' v := obs₀ v hv⟩
-  · -- (2) ARM simulation: direct from tacToArm_correctness
-    exact tacToArm_correctness hGen hHalt
+/-- Each pass preserves observable variable list. -/
+private theorem obs_preserved_by_pass (n : String) (pass : Prog → ECertificate) (q q' : Prog)
+    (hap : applyPass n pass q = .ok q') : q'.observable = q.observable := by
+  obtain ⟨hcheck, hTrans, _, hOrigObs, _⟩ := applyPass_sound hap
+  rw [← hTrans]
+  have hSameObs := same_obs_of_check (pass q) hcheck
+  rw [← hSameObs, hOrigObs]
 
 -- ============================================================
--- § 5b. Pipeline preserves tyCtx (shared helper)
+-- § 3. applyPassesPure: inductive soundness
 -- ============================================================
 
-private theorem pipeline_tyCtx_eq {p p_opt : Prog}
-    (hOpt : optimizePipeline p = .ok p_opt)
-    (hty_dce : ∀ q, (DCEOpt.optimize q).orig.tyCtx = (DCEOpt.optimize q).trans.tyCtx)
-    (hty_licm : ∀ q, (LICMOpt.optimize q).orig.tyCtx = (LICMOpt.optimize q).trans.tyCtx)
-    (hty_cp : ∀ q, (ConstPropOpt.optimize q).orig.tyCtx = (ConstPropOpt.optimize q).trans.tyCtx)
-    (hty_dae : ∀ q, (DAEOpt.optimize q).orig.tyCtx = (DAEOpt.optimize q).trans.tyCtx)
-    (hty_fma : ∀ q, (FMAFusionOpt.optimize q).orig.tyCtx = (FMAFusionOpt.optimize q).trans.tyCtx)
-    (hty_cse : ∀ q, (CSEOpt.optimize q).orig.tyCtx = (CSEOpt.optimize q).trans.tyCtx)
-    (hty_ch : ∀ q, (ConstHoistOpt.optimize q).orig.tyCtx = (ConstHoistOpt.optimize q).trans.tyCtx)
-    (hty_ph : ∀ q, (PeepholeOpt.optimize q).orig.tyCtx = (PeepholeOpt.optimize q).trans.tyCtx)
-    (hty_ra : ∀ q, (RegAllocOpt.optimize q).orig.tyCtx = (RegAllocOpt.optimize q).trans.tyCtx)
-    (htyO_dce : ∀ q, (DCEOpt.optimize q).orig.tyCtx = q.tyCtx)
-    (htyO_licm : ∀ q, (LICMOpt.optimize q).orig.tyCtx = q.tyCtx)
-    (htyO_cp : ∀ q, (ConstPropOpt.optimize q).orig.tyCtx = q.tyCtx)
-    (htyO_dae : ∀ q, (DAEOpt.optimize q).orig.tyCtx = q.tyCtx)
-    (htyO_fma : ∀ q, (FMAFusionOpt.optimize q).orig.tyCtx = q.tyCtx)
-    (htyO_cse : ∀ q, (CSEOpt.optimize q).orig.tyCtx = q.tyCtx)
-    (htyO_ch : ∀ q, (ConstHoistOpt.optimize q).orig.tyCtx = q.tyCtx)
-    (htyO_ph : ∀ q, (PeepholeOpt.optimize q).orig.tyCtx = q.tyCtx)
-    (htyO_ra : ∀ q, (RegAllocOpt.optimize q).orig.tyCtx = q.tyCtx) :
-    p_opt.tyCtx = p.tyCtx := by
-  have bind_ok' : ∀ {α β : Type} {x : Except String α} {f : α → Except String β} {b : β},
-      Except.bind x f = .ok b → ∃ a, x = .ok a ∧ f a = .ok b := by
-    intro α β x f b h; cases x with | error e => simp [Except.bind] at h | ok a => exact ⟨a, rfl, h⟩
-  unfold optimizePipeline at hOpt; simp only [bind] at hOpt
-  obtain ⟨q1, hq1, hOpt⟩ := bind_ok' hOpt
-  obtain ⟨q2, hq2, hOpt⟩ := bind_ok' hOpt
-  obtain ⟨q3, hq3, hOpt⟩ := bind_ok' hOpt
-  obtain ⟨q4, hq4, hOpt⟩ := bind_ok' hOpt
-  obtain ⟨q5, hq5, hOpt⟩ := bind_ok' hOpt
-  obtain ⟨q6, hq6, hOpt⟩ := bind_ok' hOpt
-  obtain ⟨q7, hq7, hOpt⟩ := bind_ok' hOpt
-  obtain ⟨q8, hq8, hOpt⟩ := bind_ok' hOpt
-  obtain ⟨q9, hq9, hOpt⟩ := bind_ok' hOpt
-  obtain ⟨q10, hq10, hq11⟩ := bind_ok' hOpt
-  have hT := fun {n pass q q'} (h : applyPass n pass q = .ok q') => (applyPass_sound h).2.1
-  calc p_opt.tyCtx
-      = (RegAllocOpt.optimize q10).trans.tyCtx := by rw [← hT hq11]
-    _ = q10.tyCtx := by rw [← htyO_ra q10, hty_ra q10]
-    _ = q9.tyCtx := by rw [← hT hq10, ← hty_dce q9, htyO_dce q9]
-    _ = q8.tyCtx := by rw [← hT hq9, ← hty_ph q8, htyO_ph q8]
-    _ = q7.tyCtx := by rw [← hT hq8, ← hty_ch q7, htyO_ch q7]
-    _ = q6.tyCtx := by rw [← hT hq7, ← hty_cse q6, htyO_cse q6]
-    _ = q5.tyCtx := by rw [← hT hq6, ← hty_fma q5, htyO_fma q5]
-    _ = q4.tyCtx := by rw [← hT hq5, ← hty_dae q4, htyO_dae q4]
-    _ = q3.tyCtx := by rw [← hT hq4, ← hty_dce q3, htyO_dce q3]
-    _ = q2.tyCtx := by rw [← hT hq3, ← hty_cp q2, htyO_cp q2]
-    _ = q1.tyCtx := by rw [← hT hq2, ← hty_licm q1, htyO_licm q1]
-    _ = p.tyCtx := by rw [← hT hq1, ← hty_dce p, htyO_dce p]
+/-- `applyPassesPure` preserves tyCtx across all passes. -/
+theorem applyPassesPure_tyCtx_eq
+    (passes : List (String × (Prog → ECertificate)))
+    (hSound : ∀ np ∈ passes, TyCtxSound np.2) (p : Prog) :
+    (applyPassesPure passes p).tyCtx = p.tyCtx := by
+  induction passes generalizing p with
+  | nil => rfl
+  | cons np rest ih =>
+    simp only [applyPassesPure]
+    obtain ⟨name, pass⟩ := np
+    have hS := hSound (name, pass) (List.mem_cons_self ..)
+    have hRest : ∀ np ∈ rest, TyCtxSound np.2 :=
+      fun np' h => hSound np' (List.mem_cons_of_mem _ h)
+    split
+    · -- applyPass succeeded: p' = cert.trans, tyCtx preserved
+      rename_i p' hap
+      have ⟨_, hTrans, _, _, _⟩ := applyPass_sound hap
+      rw [ih hRest _, ← hTrans, ← hS.1, hS.2]
+    · -- applyPass failed: identity
+      exact ih hRest _
+
+/-- `applyPassesPure` preserves observable variables across all passes. -/
+theorem applyPassesPure_obs_eq
+    (passes : List (String × (Prog → ECertificate)))
+    (p : Prog) :
+    (applyPassesPure passes p).observable = p.observable := by
+  induction passes generalizing p with
+  | nil => rfl
+  | cons np rest ih =>
+    simp only [applyPassesPure]
+    obtain ⟨name, pass⟩ := np
+    split
+    · rename_i p' hap; rw [ih _, obs_preserved_by_pass name pass p p' hap]
+    · exact ih _
+
+/-- `applyPassesPure` preserves halting behavior with fixed initial AM. -/
+theorem applyPassesPure_preserves_halt_am
+    (passes : List (String × (Prog → ECertificate)))
+    (hSound : ∀ np ∈ passes, TyCtxSound np.2)
+    (σ₀ : Store) (hts : TypedStore p.tyCtx σ₀)
+    {σ' : Store} {am₀ : ArrayMem}
+    (hHalt : ∃ am', haltsWithResult (applyPassesPure passes p) 0 σ₀ σ' am₀ am') :
+    ∃ σ_orig am_f, haltsWithResult p 0 σ₀ σ_orig am₀ am_f ∧
+      ∀ v ∈ p.observable, σ' v = σ_orig v := by
+  induction passes generalizing p σ' with
+  | nil =>
+    simp [applyPassesPure] at hHalt
+    obtain ⟨am', hh⟩ := hHalt
+    exact ⟨σ', am', hh, fun _ _ => rfl⟩
+  | cons np rest ih =>
+    simp only [applyPassesPure] at hHalt
+    obtain ⟨name, pass⟩ := np
+    have hS := hSound (name, pass) (List.mem_cons_self ..)
+    have hRest : ∀ np ∈ rest, TyCtxSound np.2 :=
+      fun np' h => hSound np' (List.mem_cons_of_mem _ h)
+    split at hHalt
+    · -- Pass succeeded
+      rename_i p' hap
+      have ⟨_, hTrans, _, _, _⟩ := applyPass_sound hap
+      have hty' : p'.tyCtx = p.tyCtx := by rw [← hTrans, ← hS.1, hS.2]
+      have hts' : TypedStore p'.tyCtx σ₀ := hty' ▸ hts
+      obtain ⟨σ_mid, am_mid, hHalt_mid, hobs_mid⟩ := ih hRest hts' hHalt
+      have hts_pass : TypedStore (pass p).orig.tyCtx σ₀ := hS.2 p ▸ hts
+      obtain ⟨σ_orig, am_orig, hHalt_orig, hobs_orig⟩ :=
+        applyPass_preserves_halt_am hap (hS.1 p) σ₀ hts_pass ⟨am_mid, hHalt_mid⟩
+      have hobs_p' := obs_preserved_by_pass name pass p p' hap
+      exact ⟨σ_orig, am_orig, hHalt_orig, fun v hv => by
+        rw [hobs_mid v (hobs_p' ▸ hv), hobs_orig v hv]⟩
+    · -- Pass failed: identity
+      exact ih hRest hts hHalt
+
+/-- `applyPassesPure` preserves error behavior with fixed initial AM. -/
+theorem applyPassesPure_preserves_error_am
+    (passes : List (String × (Prog → ECertificate)))
+    (hSound : ∀ np ∈ passes, TyCtxSound np.2)
+    (σ₀ : Store) (hts : TypedStore p.tyCtx σ₀)
+    {σ' : Store} {am₀ am' : ArrayMem}
+    (hErr : (applyPassesPure passes p) ⊩ Cfg.run 0 σ₀ am₀ ⟶* Cfg.error σ' am') :
+    ∃ σ_o am_o', p ⊩ Cfg.run 0 σ₀ am₀ ⟶* Cfg.error σ_o am_o' := by
+  induction passes generalizing p σ' am' with
+  | nil =>
+    simp [applyPassesPure] at hErr
+    exact ⟨σ', am', hErr⟩
+  | cons np rest ih =>
+    simp only [applyPassesPure] at hErr
+    obtain ⟨name, pass⟩ := np
+    have hS := hSound (name, pass) (List.mem_cons_self ..)
+    have hRest : ∀ np ∈ rest, TyCtxSound np.2 :=
+      fun np' h => hSound np' (List.mem_cons_of_mem _ h)
+    split at hErr
+    · rename_i p' hap
+      have hty' : p'.tyCtx = p.tyCtx := by
+        have ⟨_, hTrans, _, _, _⟩ := applyPass_sound hap
+        rw [← hTrans, ← hS.1, hS.2]
+      have hts' : TypedStore p'.tyCtx σ₀ := hty' ▸ hts
+      obtain ⟨σ_mid, am_mid, hErr_mid⟩ := ih hRest hts' hErr
+      have hts_pass : TypedStore (pass p).orig.tyCtx σ₀ := hS.2 p ▸ hts
+      exact applyPass_preserves_error_am hap (hS.1 p) σ₀ hts_pass hErr_mid
+    · exact ih hRest hts hErr
+
+/-- `applyPassesPure` preserves divergence. -/
+theorem applyPassesPure_preserves_diverge
+    (passes : List (String × (Prog → ECertificate)))
+    (hSound : ∀ np ∈ passes, TyCtxSound np.2)
+    (σ₀ : Store) (hts : TypedStore p.tyCtx σ₀)
+    {f : Nat → Cfg}
+    (hinf : IsInfiniteExec (applyPassesPure passes p) f)
+    (hf0 : f 0 = Cfg.run 0 σ₀ ArrayMem.init) :
+    ∃ g, IsInfiniteExec p g ∧ g 0 = Cfg.run 0 σ₀ ArrayMem.init := by
+  induction passes generalizing p f with
+  | nil =>
+    simp [applyPassesPure] at hinf
+    exact ⟨f, hinf, hf0⟩
+  | cons np rest ih =>
+    simp only [applyPassesPure] at hinf
+    obtain ⟨name, pass⟩ := np
+    have hS := hSound (name, pass) (List.mem_cons_self ..)
+    have hRest : ∀ np ∈ rest, TyCtxSound np.2 :=
+      fun np' h => hSound np' (List.mem_cons_of_mem _ h)
+    split at hinf
+    · rename_i p' hap
+      have hty' : p'.tyCtx = p.tyCtx := by
+        have ⟨_, hTrans, _, _, _⟩ := applyPass_sound hap
+        rw [← hTrans, ← hS.1, hS.2]
+      have hts' : TypedStore p'.tyCtx σ₀ := hty' ▸ hts
+      obtain ⟨g, hg, hg0⟩ := ih hRest hts' hinf hf0
+      have hts_pass : TypedStore (pass p).orig.tyCtx σ₀ := hS.2 p ▸ hts
+      exact applyPass_preserves_diverge hap (hS.1 p) σ₀ hts_pass hg hg0
+    · exact ih hRest hts hinf hf0
 
 -- ============================================================
--- § 6. Full end-to-end: While source → ARM
+-- § 4. Full end-to-end: While source → ARM (halts)
 -- ============================================================
 
-/-- **Full end-to-end correctness: While source → optimized TAC → ARM.**
+/-- **Full end-to-end correctness (halts): While source → ARM.**
 
-    If a well-typed While program is compiled to TAC, optimized, and
-    code-generated to ARM, and the optimized TAC halts with store `σ_opt`,
-    then:
-    1. The source program terminates (at some fuel) with store `σ_src`
-    2. Observable variables agree: `σ_opt v = σ_src v` for non-temp `v`
-    3. The ARM program simulates the TAC halt
-
-    This composes `whileToTAC_refinement` (source → TAC),
-    `optimizePipeline_preserves_behavior` (TAC → optimized TAC), and
-    `tacToArm_correctness` (optimized TAC → ARM).
-
-    **Propagated sorrys:** SoundnessBridge (5), ArmCorrectness (2). -/
+    If a well-typed While program is compiled to TAC, optimized through
+    any list of certificate-checked passes, and code-generated to ARM,
+    and the optimized TAC halts, then:
+    1. The source program terminates with matching observable variables
+    2. The ARM program simulates the TAC halt -/
 theorem while_to_arm_correctness
     (prog : Program) (htcs : prog.typeCheckStrict = true)
-    {p_opt : Prog} {r : VerifiedAsmResult}
-    (hOpt : optimizePipeline prog.compileToTAC = .ok p_opt)
-    (hGen : verifiedGenerateAsm p_opt = .ok r)
-    -- tyCtx preservation hypotheses (hold by construction for all passes)
-    (hty_dce : ∀ q, (DCEOpt.optimize q).orig.tyCtx = (DCEOpt.optimize q).trans.tyCtx)
-    (hty_licm : ∀ q, (LICMOpt.optimize q).orig.tyCtx = (LICMOpt.optimize q).trans.tyCtx)
-    (hty_cp : ∀ q, (ConstPropOpt.optimize q).orig.tyCtx = (ConstPropOpt.optimize q).trans.tyCtx)
-    (hty_dae : ∀ q, (DAEOpt.optimize q).orig.tyCtx = (DAEOpt.optimize q).trans.tyCtx)
-    (hty_fma : ∀ q, (FMAFusionOpt.optimize q).orig.tyCtx = (FMAFusionOpt.optimize q).trans.tyCtx)
-    (hty_cse : ∀ q, (CSEOpt.optimize q).orig.tyCtx = (CSEOpt.optimize q).trans.tyCtx)
-    (hty_ch : ∀ q, (ConstHoistOpt.optimize q).orig.tyCtx = (ConstHoistOpt.optimize q).trans.tyCtx)
-    (hty_ph : ∀ q, (PeepholeOpt.optimize q).orig.tyCtx = (PeepholeOpt.optimize q).trans.tyCtx)
-    (hty_ra : ∀ q, (RegAllocOpt.optimize q).orig.tyCtx = (RegAllocOpt.optimize q).trans.tyCtx)
-    (htyO_dce : ∀ q, (DCEOpt.optimize q).orig.tyCtx = q.tyCtx)
-    (htyO_licm : ∀ q, (LICMOpt.optimize q).orig.tyCtx = q.tyCtx)
-    (htyO_cp : ∀ q, (ConstPropOpt.optimize q).orig.tyCtx = q.tyCtx)
-    (htyO_dae : ∀ q, (DAEOpt.optimize q).orig.tyCtx = q.tyCtx)
-    (htyO_fma : ∀ q, (FMAFusionOpt.optimize q).orig.tyCtx = q.tyCtx)
-    (htyO_cse : ∀ q, (CSEOpt.optimize q).orig.tyCtx = q.tyCtx)
-    (htyO_ch : ∀ q, (ConstHoistOpt.optimize q).orig.tyCtx = q.tyCtx)
-    (htyO_ph : ∀ q, (PeepholeOpt.optimize q).orig.tyCtx = q.tyCtx)
-    (htyO_ra : ∀ q, (RegAllocOpt.optimize q).orig.tyCtx = q.tyCtx)
-    -- Optimized TAC halts
+    (passes : List (String × (Prog → ECertificate)))
+    (hSound : ∀ np ∈ passes, TyCtxSound np.2)
+    {r : VerifiedAsmResult}
+    (hGen : verifiedGenerateAsm (applyPassesPure passes prog.compileToTAC) = .ok r)
     {σ_opt : Store} {am_opt : ArrayMem}
-    (hHalt : haltsWithResult p_opt 0 (Store.typedInit p_opt.tyCtx) σ_opt ArrayMem.init am_opt) :
-    -- Then: source program terminates with matching observables
+    (hHalt : haltsWithResult (applyPassesPure passes prog.compileToTAC) 0
+      (Store.typedInit (applyPassesPure passes prog.compileToTAC).tyCtx) σ_opt ArrayMem.init am_opt) :
     (∃ fuel σ_src am_src,
       prog.interp fuel = some (σ_src, am_src) ∧
       ∀ v ∈ prog.compileToTAC.observable, σ_opt v = σ_src v) ∧
-    -- And: ARM simulates the halt
     (∃ s', ArmSteps r.bodyFlat
       { regs := fun _ => 0, fregs := fun _ => 0, stack := fun _ => 0,
         pc := r.pcMap 0, flags := ⟨0, 0⟩ } s' ∧
       ExtSimRel r.layout r.pcMap (.halt σ_opt am_opt) s') := by
-  -- Part 2: ARM simulation (independent of source)
-  refine ⟨?_, tacToArm_correctness hGen hHalt⟩
-  -- Part 1: Source terminates with matching observables
-  -- Step A: optimized TAC halts → original TAC halts with same observables
-  -- Bridge: Store.typedInit (used by end_to_end_correctness) vs prog.initStore (used by whileToTAC)
   have htc := Program.typeCheckStrict_typeCheck prog htcs
   have hInitEq : Store.typedInit prog.compileToTAC.tyCtx = prog.initStore := by
     rw [Program.compileToTAC_tyCtx_eq prog htc]; exact Program.typedInit_eq_initStore prog htc
-  -- end_to_end_correctness now gives ArrayMem.init as initial AM
-  have ⟨σ_tac, am_f, hHalt_tac, hobs_tac⟩ :=
-    (end_to_end_correctness hOpt hGen
-      hty_dce hty_licm hty_cp hty_dae hty_fma hty_cse hty_ch hty_ph hty_ra
-      htyO_dce htyO_licm htyO_cp htyO_dae htyO_fma htyO_cse htyO_ch htyO_ph htyO_ra
-      hHalt).1
-  -- Step B: TAC halts → source terminates (whileToTAC_refinement)
-  -- Rewrite initial store; initial AM is already ArrayMem.init
+  have hTyOpt := applyPassesPure_tyCtx_eq passes hSound prog.compileToTAC
+  have hts : TypedStore prog.compileToTAC.tyCtx (Store.typedInit prog.compileToTAC.tyCtx) :=
+    TypedStore.typedInit _
+  -- Rewrite initial store in hHalt
+  have hHalt' : haltsWithResult (applyPassesPure passes prog.compileToTAC) 0
+      (Store.typedInit prog.compileToTAC.tyCtx) σ_opt ArrayMem.init am_opt :=
+    hTyOpt ▸ hHalt
+  -- Part 2: ARM simulation
+  refine ⟨?_, tacToArm_correctness hGen (hTyOpt ▸ hHalt)⟩
+  -- Part 1: Pipeline → original TAC halts
+  obtain ⟨σ_tac, am_f, hHalt_tac, hobs_tac⟩ :=
+    applyPassesPure_preserves_halt_am passes hSound _ hts ⟨am_opt, hHalt'⟩
+  -- Original TAC halts → source terminates
   have hHalt_init : haltsWithResult prog.compileToTAC 0 prog.initStore σ_tac ArrayMem.init am_f :=
     hInitEq ▸ hHalt_tac
   have hbeh_tac : program_behavior_init prog.compileToTAC prog.initStore (.halts σ_tac) :=
     ⟨am_f, hHalt_init⟩
   have hsrc := whileToTAC_refinement prog htcs (.halts σ_tac) hbeh_tac
   simp only at hsrc
-  obtain ⟨fuel, σ_src, am_h, am_src, hinterp, _, _, hobs_src⟩ := hsrc
-  -- Chain: σ_opt v = σ_tac v (from pipeline) and σ_tac v = σ_src v (from whileToTAC)
-  -- For v ∈ observable = prog.decls.map Prod.fst, v is not tmp/ftmp (from noTmpDecls)
+  obtain ⟨fuel, σ_src, _, am_src, hinterp, _, _, hobs_src⟩ := hsrc
   have hnt : Program.noTmpDecls prog.decls = true := by
     unfold Program.typeCheck at htc; simp only [Bool.and_eq_true] at htc; exact htc.1.2
+  have hobs_eq := applyPassesPure_obs_eq passes prog.compileToTAC
   exact ⟨fuel, σ_src, am_src, hinterp, fun v hv => by
-    rw [hobs_tac v hv]
-    -- v ∈ observable = prog.decls.map Prod.fst, so ¬isTmp ∧ ¬isFTmp
+    rw [hobs_tac v (hobs_eq ▸ hv)]
     have hv' : v ∈ prog.decls.map Prod.fst := by
       have : prog.compileToTAC.observable = prog.decls.map Prod.fst := by
         simp [Program.compileToTAC]
@@ -705,104 +402,72 @@ theorem while_to_arm_correctness
     exact hobs_src w hntw.1 hntw.2⟩
 
 -- ============================================================
--- § 7. End-to-end error preservation
+-- § 5. Full end-to-end: While source → ARM (errors)
 -- ============================================================
 
-/-- **End-to-end error preservation: optimized TAC → original TAC.**
+/-- **Full end-to-end error preservation: While source → ARM.**
 
-    If the optimization pipeline succeeds and the optimized TAC reaches an
-    error (division by zero or out-of-bounds array access), then the original
-    (unoptimized) TAC also has an error execution.
-
-    Note: the source-level claim (source is unsafe at some fuel) requires
-    additionally that the original TAC errors from `ArrayMem.init`, which
-    would need AM-preserving versions of the pass soundness lemmas. -/
-theorem error_preservation_tac {p p_opt : Prog}
-    (hOpt : optimizePipeline p = .ok p_opt)
-    (hty_dce : ∀ q, (DCEOpt.optimize q).orig.tyCtx = (DCEOpt.optimize q).trans.tyCtx)
-    (hty_licm : ∀ q, (LICMOpt.optimize q).orig.tyCtx = (LICMOpt.optimize q).trans.tyCtx)
-    (hty_cp : ∀ q, (ConstPropOpt.optimize q).orig.tyCtx = (ConstPropOpt.optimize q).trans.tyCtx)
-    (hty_dae : ∀ q, (DAEOpt.optimize q).orig.tyCtx = (DAEOpt.optimize q).trans.tyCtx)
-    (hty_fma : ∀ q, (FMAFusionOpt.optimize q).orig.tyCtx = (FMAFusionOpt.optimize q).trans.tyCtx)
-    (hty_cse : ∀ q, (CSEOpt.optimize q).orig.tyCtx = (CSEOpt.optimize q).trans.tyCtx)
-    (hty_ch : ∀ q, (ConstHoistOpt.optimize q).orig.tyCtx = (ConstHoistOpt.optimize q).trans.tyCtx)
-    (hty_ph : ∀ q, (PeepholeOpt.optimize q).orig.tyCtx = (PeepholeOpt.optimize q).trans.tyCtx)
-    (hty_ra : ∀ q, (RegAllocOpt.optimize q).orig.tyCtx = (RegAllocOpt.optimize q).trans.tyCtx)
-    (htyO_dce : ∀ q, (DCEOpt.optimize q).orig.tyCtx = q.tyCtx)
-    (htyO_licm : ∀ q, (LICMOpt.optimize q).orig.tyCtx = q.tyCtx)
-    (htyO_cp : ∀ q, (ConstPropOpt.optimize q).orig.tyCtx = q.tyCtx)
-    (htyO_dae : ∀ q, (DAEOpt.optimize q).orig.tyCtx = q.tyCtx)
-    (htyO_fma : ∀ q, (FMAFusionOpt.optimize q).orig.tyCtx = q.tyCtx)
-    (htyO_cse : ∀ q, (CSEOpt.optimize q).orig.tyCtx = q.tyCtx)
-    (htyO_ch : ∀ q, (ConstHoistOpt.optimize q).orig.tyCtx = q.tyCtx)
-    (htyO_ph : ∀ q, (PeepholeOpt.optimize q).orig.tyCtx = q.tyCtx)
-    (htyO_ra : ∀ q, (RegAllocOpt.optimize q).orig.tyCtx = q.tyCtx)
-    {σ_err : Store} {am_err : ArrayMem}
-    (hErr : p_opt ⊩ Cfg.run 0 (Store.typedInit p_opt.tyCtx) ArrayMem.init ⟶*
-            Cfg.error σ_err am_err) :
-    ∃ σ_o am_o am_o',
-      p ⊩ Cfg.run 0 (Store.typedInit p.tyCtx) am_o ⟶* Cfg.error σ_o am_o' := by
-  have hts : TypedStore p.tyCtx (Store.typedInit p.tyCtx) := TypedStore.typedInit _
-  have hTyOpt : p_opt.tyCtx = p.tyCtx :=
-    pipeline_tyCtx_eq hOpt hty_dce hty_licm hty_cp hty_dae hty_fma hty_cse hty_ch hty_ph hty_ra
-      htyO_dce htyO_licm htyO_cp htyO_dae htyO_fma htyO_cse htyO_ch htyO_ph htyO_ra
-  have hbeh : program_behavior p_opt (Store.typedInit p.tyCtx) (.errors σ_err) :=
-    ⟨ArrayMem.init, am_err, hTyOpt ▸ hErr⟩
-  exact optimizePipeline_preserves_behavior hOpt
-    hty_dce hty_licm hty_cp hty_dae hty_fma hty_cse hty_ch hty_ph hty_ra
-    htyO_dce htyO_licm htyO_cp htyO_dae htyO_fma htyO_cse htyO_ch htyO_ph htyO_ra
-    _ hts (.errors σ_err) hbeh
-
--- ============================================================
--- § 8. End-to-end divergence preservation: While source → ARM
--- ============================================================
-
-/-- **End-to-end divergence preservation: While source → optimized TAC.**
-
-    If a well-typed While program is compiled, optimized, and the optimized
-    TAC diverges, then the source program diverges at all fuels. -/
-theorem while_to_arm_divergence_preservation
+    If the optimized TAC reaches an error (division by zero or array
+    out-of-bounds), then the source program is unsafe at some fuel,
+    and the ARM program simulates the error execution. -/
+theorem while_to_arm_error_preservation
     (prog : Program) (htcs : prog.typeCheckStrict = true)
-    {p_opt : Prog}
-    (hOpt : optimizePipeline prog.compileToTAC = .ok p_opt)
-    (hty_dce : ∀ q, (DCEOpt.optimize q).orig.tyCtx = (DCEOpt.optimize q).trans.tyCtx)
-    (hty_licm : ∀ q, (LICMOpt.optimize q).orig.tyCtx = (LICMOpt.optimize q).trans.tyCtx)
-    (hty_cp : ∀ q, (ConstPropOpt.optimize q).orig.tyCtx = (ConstPropOpt.optimize q).trans.tyCtx)
-    (hty_dae : ∀ q, (DAEOpt.optimize q).orig.tyCtx = (DAEOpt.optimize q).trans.tyCtx)
-    (hty_fma : ∀ q, (FMAFusionOpt.optimize q).orig.tyCtx = (FMAFusionOpt.optimize q).trans.tyCtx)
-    (hty_cse : ∀ q, (CSEOpt.optimize q).orig.tyCtx = (CSEOpt.optimize q).trans.tyCtx)
-    (hty_ch : ∀ q, (ConstHoistOpt.optimize q).orig.tyCtx = (ConstHoistOpt.optimize q).trans.tyCtx)
-    (hty_ph : ∀ q, (PeepholeOpt.optimize q).orig.tyCtx = (PeepholeOpt.optimize q).trans.tyCtx)
-    (hty_ra : ∀ q, (RegAllocOpt.optimize q).orig.tyCtx = (RegAllocOpt.optimize q).trans.tyCtx)
-    (htyO_dce : ∀ q, (DCEOpt.optimize q).orig.tyCtx = q.tyCtx)
-    (htyO_licm : ∀ q, (LICMOpt.optimize q).orig.tyCtx = q.tyCtx)
-    (htyO_cp : ∀ q, (ConstPropOpt.optimize q).orig.tyCtx = q.tyCtx)
-    (htyO_dae : ∀ q, (DAEOpt.optimize q).orig.tyCtx = q.tyCtx)
-    (htyO_fma : ∀ q, (FMAFusionOpt.optimize q).orig.tyCtx = q.tyCtx)
-    (htyO_cse : ∀ q, (CSEOpt.optimize q).orig.tyCtx = q.tyCtx)
-    (htyO_ch : ∀ q, (ConstHoistOpt.optimize q).orig.tyCtx = q.tyCtx)
-    (htyO_ph : ∀ q, (PeepholeOpt.optimize q).orig.tyCtx = q.tyCtx)
-    (htyO_ra : ∀ q, (RegAllocOpt.optimize q).orig.tyCtx = q.tyCtx)
-    {f : Nat → Cfg}
-    (hDiv : IsInfiniteExec p_opt f)
-    (hf0 : f 0 = Cfg.run 0 (Store.typedInit p_opt.tyCtx) ArrayMem.init) :
-    ∀ fuel, prog.interp fuel = none := by
+    (passes : List (String × (Prog → ECertificate)))
+    (hSound : ∀ np ∈ passes, TyCtxSound np.2)
+    {r : VerifiedAsmResult}
+    (hGen : verifiedGenerateAsm (applyPassesPure passes prog.compileToTAC) = .ok r)
+    {σ_err : Store} {am_err : ArrayMem}
+    (hErr : (applyPassesPure passes prog.compileToTAC) ⊩
+      Cfg.run 0 (Store.typedInit (applyPassesPure passes prog.compileToTAC).tyCtx)
+        ArrayMem.init ⟶* Cfg.error σ_err am_err) :
+    (∃ fuel, ¬ prog.body.safe fuel prog.initStore ArrayMem.init prog.arrayDecls) ∧
+    (∃ s', ArmSteps r.bodyFlat
+      { regs := fun _ => 0, fregs := fun _ => 0, stack := fun _ => 0,
+        pc := r.pcMap 0, flags := ⟨0, 0⟩ } s' ∧
+      ExtSimRel r.layout r.pcMap (.error σ_err am_err) s') := by
   have htc := Program.typeCheckStrict_typeCheck prog htcs
-  have hts : TypedStore prog.compileToTAC.tyCtx (Store.typedInit prog.compileToTAC.tyCtx) :=
-    TypedStore.typedInit _
   have hInitEq : Store.typedInit prog.compileToTAC.tyCtx = prog.initStore := by
     rw [Program.compileToTAC_tyCtx_eq prog htc]; exact Program.typedInit_eq_initStore prog htc
-  have hTyOpt : p_opt.tyCtx = prog.compileToTAC.tyCtx :=
-    pipeline_tyCtx_eq hOpt hty_dce hty_licm hty_cp hty_dae hty_fma hty_cse hty_ch hty_ph hty_ra
-      htyO_dce htyO_licm htyO_cp htyO_dae htyO_fma htyO_cse htyO_ch htyO_ph htyO_ra
-  have hbeh : program_behavior p_opt (Store.typedInit prog.compileToTAC.tyCtx) .diverges :=
-    ⟨f, hDiv, hTyOpt ▸ hf0⟩
-  have hsound := optimizePipeline_preserves_behavior hOpt
-    hty_dce hty_licm hty_cp hty_dae hty_fma hty_cse hty_ch hty_ph hty_ra
-    htyO_dce htyO_licm htyO_cp htyO_dae htyO_fma htyO_cse htyO_ch htyO_ph htyO_ra
-    _ hts .diverges hbeh
-  simp only at hsound
-  obtain ⟨g, hinf, hg0⟩ := hsound
+  have hTyOpt := applyPassesPure_tyCtx_eq passes hSound prog.compileToTAC
+  have hts : TypedStore prog.compileToTAC.tyCtx (Store.typedInit prog.compileToTAC.tyCtx) :=
+    TypedStore.typedInit _
+  -- ARM simulation
+  refine ⟨?_, tacToArm_correctness hGen (hTyOpt ▸ hErr)⟩
+  -- Pipeline → original TAC errors from ArrayMem.init
+  obtain ⟨σ_o, am_o', hErr_tac⟩ :=
+    applyPassesPure_preserves_error_am passes hSound _ hts (hTyOpt ▸ hErr)
+  -- Original TAC errors → source is unsafe
+  have hErr_init : program_behavior_init prog.compileToTAC prog.initStore (.errors σ_o) :=
+    ⟨am_o', hInitEq ▸ hErr_tac⟩
+  exact whileToTAC_refinement prog htcs (.errors σ_o) hErr_init
+
+-- ============================================================
+-- § 6. Full end-to-end: While source → ARM (diverges)
+-- ============================================================
+
+/-- **Full end-to-end divergence preservation: While source → ARM.**
+
+    If the optimized TAC diverges, then the source program diverges
+    at all fuels. -/
+theorem while_to_arm_divergence_preservation
+    (prog : Program) (htcs : prog.typeCheckStrict = true)
+    (passes : List (String × (Prog → ECertificate)))
+    (hSound : ∀ np ∈ passes, TyCtxSound np.2)
+    {f : Nat → Cfg}
+    (hDiv : IsInfiniteExec (applyPassesPure passes prog.compileToTAC) f)
+    (hf0 : f 0 = Cfg.run 0
+      (Store.typedInit (applyPassesPure passes prog.compileToTAC).tyCtx) ArrayMem.init) :
+    ∀ fuel, prog.interp fuel = none := by
+  have htc := Program.typeCheckStrict_typeCheck prog htcs
+  have hInitEq : Store.typedInit prog.compileToTAC.tyCtx = prog.initStore := by
+    rw [Program.compileToTAC_tyCtx_eq prog htc]; exact Program.typedInit_eq_initStore prog htc
+  have hTyOpt := applyPassesPure_tyCtx_eq passes hSound prog.compileToTAC
+  have hts : TypedStore prog.compileToTAC.tyCtx (Store.typedInit prog.compileToTAC.tyCtx) :=
+    TypedStore.typedInit _
+  -- Pipeline → original TAC diverges
+  obtain ⟨g, hg, hg0⟩ :=
+    applyPassesPure_preserves_diverge passes hSound _ hts hDiv (hTyOpt ▸ hf0)
+  -- Original TAC diverges → source diverges
   have hdiv_init : program_behavior_init prog.compileToTAC prog.initStore .diverges :=
-    ⟨g, hinf, hInitEq ▸ hg0⟩
+    ⟨g, hg, hInitEq ▸ hg0⟩
   exact whileToTAC_refinement prog htcs .diverges hdiv_init

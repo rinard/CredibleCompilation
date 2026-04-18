@@ -859,13 +859,13 @@ private theorem steps_to_error_decompose {p : Prog} {pc₀ : Nat} {σ₀ σ_e : 
 theorem error_preservation (cert : PCertificate) (hvalid : PCertificateValid cert)
     (σ₀ : Store) (hts₀ : TypedStore cert.tyCtx σ₀) {σ_e : Store} {am₀ am_e : ArrayMem}
     (hreach : cert.trans ⊩ Cfg.run 0 σ₀ am₀ ⟶* Cfg.error σ_e am_e) :
-    ∃ σ_o am_o am_o', cert.orig ⊩ Cfg.run 0 σ₀ am_o ⟶* Cfg.error σ_o am_o' := by
+    ∃ σ_o am_o', cert.orig ⊩ Cfg.run 0 σ₀ am₀ ⟶* Cfg.error σ_o am_o' := by
   obtain ⟨pc_t, σ_t, am_t, hrun, herr, rfl⟩ := steps_to_error_decompose hreach
   obtain ⟨pc_o, σ_o, a2, horig_prefix, hpc_eq, hrel, _, hinv_t, hinv_o, hts_o⟩ := simulation_trace hvalid hts₀ hrun
   have hpc := steps_run_in_bounds hvalid.step_closed hvalid.step_closed.1 hrun
   rw [← hpc_eq] at horig_prefix
   obtain ⟨σ_o', am_o', horig_err⟩ := hvalid.error_pres pc_t σ_t σ_o am_t a2 hpc hrel hinv_t (hpc_eq ▸ hinv_o) hts_o herr
-  exact ⟨σ_o', am₀, am_o', Steps.trans horig_prefix horig_err⟩
+  exact ⟨σ_o', am_o', Steps.trans horig_prefix horig_err⟩
 
 -- ============================================================
 -- § Divergence preservation
@@ -895,7 +895,10 @@ theorem credible_compilation_soundness (cert : PCertificate) (hvalid : PCertific
     obtain ⟨am, am', h⟩ := htrans
     obtain ⟨σ_o, am_f, hhalt, _, hobs⟩ := soundness_halt cert hvalid σ₀ σ_t' hts₀ (am₀ := am) ⟨am', h⟩
     exact ⟨σ_o, am, am_f, hhalt, hobs⟩
-  | errors σ_e => obtain ⟨am, am', h⟩ := htrans; exact error_preservation cert hvalid σ₀ hts₀ h
+  | errors σ_e =>
+    obtain ⟨am, am', h⟩ := htrans
+    obtain ⟨σ_o, am_o', ho⟩ := error_preservation cert hvalid σ₀ hts₀ h
+    exact ⟨σ_o, am, am_o', ho⟩
   | typeErrors σ_e =>
     obtain ⟨am, am', h⟩ := htrans
     have hwt : WellTypedProg cert.tyCtx cert.trans := by
@@ -921,7 +924,8 @@ theorem credible_compilation_total (cert : PCertificate) (hvalid : PCertificateV
     exact ⟨σ_o, am, am_f, hhalt, hobs⟩
   | errors σ_e =>
     obtain ⟨am, am', h⟩ := hb
-    exact error_preservation cert hvalid σ₀ hts₀ h
+    obtain ⟨σ_o, am_o', ho⟩ := error_preservation cert hvalid σ₀ hts₀ h
+    exact ⟨σ_o, am, am_o', ho⟩
   | typeErrors σ_e =>
     obtain ⟨am, am', h⟩ := hb
     have hwt : WellTypedProg cert.tyCtx cert.trans := by
