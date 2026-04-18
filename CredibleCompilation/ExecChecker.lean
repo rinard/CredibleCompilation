@@ -1185,7 +1185,7 @@ theorem AllArrayOpsInt.arrStore_int {p : Prog} {pc : Nat} {arr : ArrayName}
 /-- Check all certificate conditions. Returns `true` iff the certificate is valid. -/
 def checkCertificateExec (cert : ECertificate) : Bool :=
   checkWellTypedProg cert.orig.tyCtx cert.orig &&
-  checkWellTypedProg cert.trans.tyCtx cert.trans &&
+  checkWellTypedProg cert.orig.tyCtx cert.trans &&
   (cert.orig.observable == cert.trans.observable) &&
   checkStartCorrespondenceExec cert &&
   checkInvariantsAtStartExec cert &&
@@ -1210,7 +1210,7 @@ def checkCertificateExec (cert : ECertificate) : Bool :=
 /-- Verbose check: returns the result of each individual condition. -/
 def checkCertificateVerboseExec (cert : ECertificate) : List (String × Bool) :=
   [ ("well_typed_orig",       checkWellTypedProg cert.orig.tyCtx cert.orig),
-    ("well_typed_trans",      checkWellTypedProg cert.trans.tyCtx cert.trans),
+    ("well_typed_trans",      checkWellTypedProg cert.orig.tyCtx cert.trans),
     ("same_observable",       cert.orig.observable == cert.trans.observable),
     ("start_correspondence",  checkStartCorrespondenceExec cert),
     ("invariants_at_start",   checkInvariantsAtStartExec cert),

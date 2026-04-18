@@ -127,14 +127,13 @@ private theorem same_obs_of_check (cert : ECertificate)
 private theorem applyPass_preserves_halt_am {name : String} {pass : Prog → ECertificate}
     {p p' : Prog}
     (h : applyPass name pass p = .ok p')
-    (htyctx : (pass p).orig.tyCtx = (pass p).trans.tyCtx)
     (σ₀ : Store) (hts : TypedStore (pass p).orig.tyCtx σ₀)
     {σ' : Store} {am₀ am' : ArrayMem}
     (hh : haltsWithResult p' 0 σ₀ σ' am₀ am') :
     ∃ σ_orig, haltsWithResult p 0 σ₀ σ_orig am₀ am' ∧
       ∀ v ∈ p.observable, σ' v = σ_orig v := by
   obtain ⟨hcheck, hTrans, hOrigCode, hOrigObs, hOrigArr⟩ := applyPass_sound h
-  have hvalid := soundness_bridge (pass p) hcheck htyctx
+  have hvalid := soundness_bridge (pass p) hcheck
   have hTransP : (toPCertificate (pass p)).trans = p' := by simp [toPCertificate]; exact hTrans
   have hts' : TypedStore (toPCertificate (pass p)).tyCtx σ₀ := by
     simp [toPCertificate, PCertificate.tyCtx]; exact hts
@@ -157,13 +156,12 @@ private theorem applyPass_preserves_halt_am {name : String} {pass : Prog → ECe
 private theorem applyPass_preserves_error_am {name : String} {pass : Prog → ECertificate}
     {p p' : Prog}
     (h : applyPass name pass p = .ok p')
-    (htyctx : (pass p).orig.tyCtx = (pass p).trans.tyCtx)
     (σ₀ : Store) (hts : TypedStore (pass p).orig.tyCtx σ₀)
     {σ' : Store} {am₀ am' : ArrayMem}
     (hbeh : p' ⊩ Cfg.run 0 σ₀ am₀ ⟶* Cfg.error σ' am') :
     ∃ σ_o am_o', p ⊩ Cfg.run 0 σ₀ am₀ ⟶* Cfg.error σ_o am_o' := by
   obtain ⟨hcheck, hTrans, hOrigCode, _, hOrigArr⟩ := applyPass_sound h
-  have hvalid := soundness_bridge (pass p) hcheck htyctx
+  have hvalid := soundness_bridge (pass p) hcheck
   have hTransP : (toPCertificate (pass p)).trans = p' := by simp [toPCertificate]; exact hTrans
   have hts' : TypedStore (toPCertificate (pass p)).tyCtx σ₀ := by
     simp [toPCertificate, PCertificate.tyCtx]; exact hts
@@ -178,13 +176,12 @@ private theorem applyPass_preserves_error_am {name : String} {pass : Prog → EC
 private theorem applyPass_preserves_diverge {name : String} {pass : Prog → ECertificate}
     {p p' : Prog}
     (h : applyPass name pass p = .ok p')
-    (htyctx : (pass p).orig.tyCtx = (pass p).trans.tyCtx)
     (σ₀ : Store) (hts : TypedStore (pass p).orig.tyCtx σ₀)
     {f : Nat → Cfg}
     (hinf : IsInfiniteExec p' f) (hf0 : f 0 = Cfg.run 0 σ₀ ArrayMem.init) :
     ∃ g, IsInfiniteExec p g ∧ g 0 = Cfg.run 0 σ₀ ArrayMem.init := by
   obtain ⟨hcheck, hTrans, hOrigCode, _, hOrigArr⟩ := applyPass_sound h
-  have hvalid := soundness_bridge (pass p) hcheck htyctx
+  have hvalid := soundness_bridge (pass p) hcheck
   have hTransP : (toPCertificate (pass p)).trans = p' := by simp [toPCertificate]; exact hTrans
   have hts' : TypedStore (toPCertificate (pass p)).tyCtx σ₀ := by
     simp [toPCertificate, PCertificate.tyCtx]; exact hts
@@ -270,7 +267,7 @@ theorem applyPassesPure_preserves_halt_am
       obtain ⟨σ_mid, hHalt_mid, hobs_mid⟩ := ih hRest hts' hHalt
       have hts_pass : TypedStore (pass p).orig.tyCtx σ₀ := hS.2 p ▸ hts
       obtain ⟨σ_orig, hHalt_orig, hobs_orig⟩ :=
-        applyPass_preserves_halt_am hap (hS.1 p) σ₀ hts_pass hHalt_mid
+        applyPass_preserves_halt_am hap σ₀ hts_pass hHalt_mid
       have hobs_p' := obs_preserved_by_pass name pass p p' hap
       exact ⟨σ_orig, hHalt_orig, fun v hv => by
         rw [hobs_mid v (hobs_p' ▸ hv), hobs_orig v hv]⟩
@@ -303,7 +300,7 @@ theorem applyPassesPure_preserves_error_am
       have hts' : TypedStore p'.tyCtx σ₀ := hty' ▸ hts
       obtain ⟨σ_mid, am_mid, hErr_mid⟩ := ih hRest hts' hErr
       have hts_pass : TypedStore (pass p).orig.tyCtx σ₀ := hS.2 p ▸ hts
-      exact applyPass_preserves_error_am hap (hS.1 p) σ₀ hts_pass hErr_mid
+      exact applyPass_preserves_error_am hap σ₀ hts_pass hErr_mid
     · exact ih hRest hts hErr
 
 /-- `applyPassesPure` preserves divergence. -/
@@ -333,7 +330,7 @@ theorem applyPassesPure_preserves_diverge
       have hts' : TypedStore p'.tyCtx σ₀ := hty' ▸ hts
       obtain ⟨g, hg, hg0⟩ := ih hRest hts' hinf hf0
       have hts_pass : TypedStore (pass p).orig.tyCtx σ₀ := hS.2 p ▸ hts
-      exact applyPass_preserves_diverge hap (hS.1 p) σ₀ hts_pass hg hg0
+      exact applyPass_preserves_diverge hap σ₀ hts_pass hg hg0
     · exact ih hRest hts hinf hf0
 
 -- ============================================================

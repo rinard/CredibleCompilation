@@ -117,8 +117,7 @@ def checkNonterminationProp (cert : PCertificate) : Prop :=
 
 structure PCertificateValid (cert : PCertificate) : Prop where
   well_typed_orig  : WellTypedProg cert.tyCtx cert.orig
-  well_typed_trans : WellTypedProg cert.trans.tyCtx cert.trans
-  same_tyCtx       : cert.orig.tyCtx = cert.trans.tyCtx
+  well_typed_trans : WellTypedProg cert.tyCtx cert.trans
   same_observable  : cert.orig.observable = cert.trans.observable
   start_corr       : checkStartCorrespondenceProp cert
   start_inv        : checkInvariantsAtStartProp cert
@@ -902,7 +901,7 @@ theorem credible_compilation_soundness (cert : PCertificate) (hvalid : PCertific
   | typeErrors σ_e =>
     obtain ⟨am, am', h⟩ := htrans
     have hwt : WellTypedProg cert.tyCtx cert.trans := by
-      rw [PCertificate.tyCtx, hvalid.same_tyCtx]; exact hvalid.well_typed_trans
+      exact hvalid.well_typed_trans
     exact absurd h (type_safety hwt hts₀ hvalid.step_closed)
   | diverges => obtain ⟨f, hinf, hf0⟩ := htrans; exact soundness_diverge cert hvalid f σ₀ hts₀ hinf hf0
 
@@ -929,7 +928,7 @@ theorem credible_compilation_total (cert : PCertificate) (hvalid : PCertificateV
   | typeErrors σ_e =>
     obtain ⟨am, am', h⟩ := hb
     have hwt : WellTypedProg cert.tyCtx cert.trans := by
-      rw [PCertificate.tyCtx, hvalid.same_tyCtx]; exact hvalid.well_typed_trans
+      exact hvalid.well_typed_trans
     exact absurd h (type_safety hwt hts₀ hvalid.step_closed)
   | diverges =>
     obtain ⟨f, hinf, hf0⟩ := hb

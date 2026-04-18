@@ -3708,8 +3708,7 @@ theorem checkSuccessorsInBounds_sound (dc : ECertificate)
       have := hall pc hpc; simp [hi, successors] at this; exact this
 
 theorem soundness_bridge
-    (dc : ECertificate) (h : checkCertificateExec dc = true)
-    (htyctx : dc.orig.tyCtx = dc.trans.tyCtx) :
+    (dc : ECertificate) (h : checkCertificateExec dc = true) :
     PCertificateValid (toPCertificate dc) := by
   -- checkCertificateExec is: wt_orig && wt_trans && same_obs && c1..c16 && bool_no_arr_{orig,trans} && bool_vars_cov
   -- && is left-associative, so decompose from right to left (22 conjuncts, 21 steps)
@@ -3740,8 +3739,7 @@ theorem soundness_bridge
     unfold checkRelAtStartExec at h_relstart; exact h_relstart
   exact {
     well_typed_orig  := by simp [toPCertificate]; exact checkWellTypedProg_sound hwt_orig
-    well_typed_trans := by simp [toPCertificate]; exact checkWellTypedProg_sound hwt_trans
-    same_tyCtx       := by simp [toPCertificate]; exact htyctx
+    well_typed_trans := by simp [toPCertificate, PCertificate.tyCtx]; exact checkWellTypedProg_sound hwt_trans
     same_observable  := by
       simp [toPCertificate]
       exact beq_iff_eq.mp hobs_eq
@@ -3808,10 +3806,9 @@ redundant assignment removal).
     has a behavior for every well-typed initial store. -/
 theorem trans_has_behavior
     (dc : ECertificate) (h : checkCertificateExec dc = true)
-    (htyctx : dc.orig.tyCtx = dc.trans.tyCtx)
     (σ₀ : Store) :
     ∃ b, program_behavior dc.trans σ₀ b :=
-  has_behavior dc.trans σ₀ (soundness_bridge dc h htyctx).step_closed
+  has_behavior dc.trans σ₀ (soundness_bridge dc h).step_closed
 
 /-- **End-to-end correctness**: If the executable checker accepts,
     then every behavior of the transformed program has a corresponding
@@ -3822,7 +3819,6 @@ theorem trans_has_behavior
     `checkCertificateExec dc = true` to semantic preservation. -/
 theorem exec_checker_correct
     (dc : ECertificate) (h : checkCertificateExec dc = true)
-    (htyctx : dc.orig.tyCtx = dc.trans.tyCtx)
     (σ₀ : Store) (hts₀ : TypedStore dc.tyCtx σ₀) (b : Behavior)
     (htrans : program_behavior dc.trans σ₀ b) :
     ∃ b', program_behavior dc.orig σ₀ b' ∧
@@ -3835,7 +3831,7 @@ theorem exec_checker_correct
       | .typeErrors _, _ => True
       | .diverges, .diverges => True
       | _, _ => False := by
-  have hvalid := soundness_bridge dc h htyctx
+  have hvalid := soundness_bridge dc h
   cases b with
   | halts σ_t' =>
     obtain ⟨am₀, am', htrans'⟩ := htrans
@@ -3853,9 +3849,7 @@ theorem exec_checker_correct
     exact ⟨.errors σ_o, ⟨am₀, am_o', ho⟩, trivial⟩
   | typeErrors σ_e =>
     obtain ⟨am₀, am_e, hreach⟩ := htrans
-    have hwt : WellTypedProg dc.tyCtx dc.trans := by
-      rw [ECertificate.tyCtx, htyctx]; exact hvalid.well_typed_trans
-    exact absurd hreach (type_safety hwt hts₀ hvalid.step_closed)
+    exact absurd hreach (type_safety hvalid.well_typed_trans hts₀ hvalid.step_closed)
   | diverges =>
     obtain ⟨f, hinf, hf0⟩ := htrans
     obtain ⟨g, hg, hg0⟩ := soundness_diverge
@@ -3866,7 +3860,6 @@ theorem exec_checker_correct
     in the transformed program, and that behavior is matched by the original. -/
 theorem exec_checker_total
     (dc : ECertificate) (h : checkCertificateExec dc = true)
-    (htyctx : dc.orig.tyCtx = dc.trans.tyCtx)
     (σ₀ : Store) (hts₀ : TypedStore dc.tyCtx σ₀) :
     ∃ b, program_behavior dc.trans σ₀ b ∧
       ∃ b', program_behavior dc.orig σ₀ b' ∧
@@ -3879,8 +3872,8 @@ theorem exec_checker_total
         | .typeErrors _, _ => True
         | .diverges, .diverges => True
         | _, _ => False := by
-  obtain ⟨b, hb⟩ := trans_has_behavior dc h htyctx σ₀
-  have hvalid := soundness_bridge dc h htyctx
+  obtain ⟨b, hb⟩ := trans_has_behavior dc h σ₀
+  have hvalid := soundness_bridge dc h
   cases b with
   | halts σ_t =>
     obtain ⟨am₀, am', hb'⟩ := hb
@@ -3895,9 +3888,7 @@ theorem exec_checker_total
     exact ⟨.errors σ_e, ⟨am₀, am_e, hreach⟩, .errors σ_o, ⟨am₀, am_o', ho⟩, trivial⟩
   | typeErrors σ_e =>
     obtain ⟨am₀, am_e, hreach⟩ := hb
-    have hwt : WellTypedProg dc.tyCtx dc.trans := by
-      rw [ECertificate.tyCtx, htyctx]; exact hvalid.well_typed_trans
-    exact absurd hreach (type_safety hwt hts₀ hvalid.step_closed)
+    exact absurd hreach (type_safety hvalid.well_typed_trans hts₀ hvalid.step_closed)
   | diverges =>
     obtain ⟨f, hinf, hf0⟩ := hb
     obtain ⟨g, hg, hg0⟩ := soundness_diverge
@@ -3913,32 +3904,29 @@ theorem exec_checker_total
     observable values. -/
 theorem exec_halt_preservation
     (dc : ECertificate) (h : checkCertificateExec dc = true)
-    (htyctx : dc.orig.tyCtx = dc.trans.tyCtx)
     (σ₀ σ_t' : Store) (hts₀ : TypedStore dc.tyCtx σ₀)
     {am₀ : ArrayMem} (hexec : ∃ am', haltsWithResult dc.trans 0 σ₀ σ_t' am₀ am') :
     ∃ σ_o' am_f, haltsWithResult dc.orig 0 σ₀ σ_o' am₀ am_f ∧
       haltsWithResult dc.trans 0 σ₀ σ_t' am₀ am_f ∧
       ∀ v ∈ dc.observable, σ_t' v = σ_o' v :=
-  soundness_halt (toPCertificate dc) (soundness_bridge dc h htyctx) σ₀ σ_t' hts₀ hexec
+  soundness_halt (toPCertificate dc) (soundness_bridge dc h) σ₀ σ_t' hts₀ hexec
 
 /-- **Error preservation (executable)**: If the executable checker accepts and
     the transformed program reaches an error state, the original
     program also reaches an error state. -/
 theorem exec_error_preservation
     (dc : ECertificate) (h : checkCertificateExec dc = true)
-    (htyctx : dc.orig.tyCtx = dc.trans.tyCtx)
     (σ₀ : Store) (hts₀ : TypedStore dc.tyCtx σ₀) {σ_e : Store} {am₀ am_e : ArrayMem}
     (hreach : dc.trans ⊩ Cfg.run 0 σ₀ am₀ ⟶* Cfg.error σ_e am_e) :
     ∃ σ_o am_o', dc.orig ⊩ Cfg.run 0 σ₀ am₀ ⟶* Cfg.error σ_o am_o' :=
-  error_preservation (toPCertificate dc) (soundness_bridge dc h htyctx) σ₀ hts₀ hreach
+  error_preservation (toPCertificate dc) (soundness_bridge dc h) σ₀ hts₀ hreach
 
 /-- **Divergence preservation (executable)**: If the executable checker accepts
     and the transformed program diverges, the original program also diverges. -/
 theorem exec_diverge_preservation
     (dc : ECertificate) (h : checkCertificateExec dc = true)
-    (htyctx : dc.orig.tyCtx = dc.trans.tyCtx)
     (f : Nat → Cfg) (σ₀ : Store) (hts₀ : TypedStore dc.tyCtx σ₀)
     (hinf : IsInfiniteExec dc.trans f)
     (hf0 : f 0 = Cfg.run 0 σ₀ ArrayMem.init) :
     ∃ g : Nat → Cfg, IsInfiniteExec dc.orig g ∧ g 0 = Cfg.run 0 σ₀ ArrayMem.init :=
-  soundness_diverge (toPCertificate dc) (soundness_bridge dc h htyctx) f σ₀ hts₀ hinf hf0
+  soundness_diverge (toPCertificate dc) (soundness_bridge dc h) f σ₀ hts₀ hinf hf0
