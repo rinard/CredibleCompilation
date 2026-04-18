@@ -1131,6 +1131,15 @@ theorem checkBoolExprNoArrRead_sound (p : Prog)
   · intro x be heq; subst heq; simp at hall; exact hall
   · intro b l heq; subst heq; simp at hall; exact hall
 
+/-- Check that all BoolExpr operands in boolop/ifgoto instructions have simple
+    operands (variables and literals only, no `.bexpr`).
+    Ensures the verified code generator can handle all boolean conditions. -/
+def checkBoolExprSimpleOps (p : Prog) : Bool :=
+  p.code.all fun instr =>
+    match instr with
+    | .boolop _ be | .ifgoto be _ => be.hasSimpleOps
+    | _ => true
+
 /-- All arrLoad/arrStore instructions in a program use element type `.int`. -/
 def AllArrayOpsInt (p : Prog) : Prop :=
   ∀ i (h : i < p.size), match p[i] with
@@ -1204,6 +1213,8 @@ def checkCertificateExec (cert : ECertificate) : Bool :=
   checkSuccessorsInBounds cert &&
   checkBoolExprNoArrRead cert.orig &&
   checkBoolExprNoArrRead cert.trans &&
+  checkBoolExprSimpleOps cert.orig &&
+  checkBoolExprSimpleOps cert.trans &&
   checkBoolVarsCoveredExec cert
 
 /-- Verbose check: returns the result of each individual condition. -/
@@ -1229,6 +1240,8 @@ def checkCertificateVerboseExec (cert : ECertificate) : List (String × Bool) :=
     ("successors_in_bounds",  checkSuccessorsInBounds cert),
     ("bool_expr_no_arr_read_orig", checkBoolExprNoArrRead cert.orig),
     ("bool_expr_no_arr_read_trans", checkBoolExprNoArrRead cert.trans),
+    ("bool_expr_simple_ops_orig", checkBoolExprSimpleOps cert.orig),
+    ("bool_expr_simple_ops_trans", checkBoolExprSimpleOps cert.trans),
     ("bool_vars_covered",     checkBoolVarsCoveredExec cert) ]
 
 /-- Observable output of a configuration with respect to an executable certificate.

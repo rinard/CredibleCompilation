@@ -3710,12 +3710,15 @@ theorem checkSuccessorsInBounds_sound (dc : ECertificate)
 theorem soundness_bridge
     (dc : ECertificate) (h : checkCertificateExec dc = true) :
     PCertificateValid (toPCertificate dc) := by
-  -- checkCertificateExec is: wt_orig && wt_trans && same_obs && c1..c16 && bool_no_arr_{orig,trans} && bool_vars_cov
-  -- && is left-associative, so decompose from right to left (22 conjuncts, 21 steps)
+  -- checkCertificateExec is: wt_orig && wt_trans && same_obs && c1..c16
+  --   && bool_no_arr_{orig,trans} && bool_simple_{orig,trans} && bool_vars_cov
+  -- && is left-associative, so decompose from right to left (24 conjuncts, 23 steps)
   unfold checkCertificateExec at h
-  have ⟨h21, h_boolvarscov⟩  := and_true_of_and_eq_true h
-  have ⟨h20, h_boolnoarr_t⟩  := and_true_of_and_eq_true h21
-  have ⟨h19, h_boolnoarr_o⟩  := and_true_of_and_eq_true h20
+  have ⟨h23, h_boolvarscov⟩       := and_true_of_and_eq_true h
+  have ⟨h22, _h_boolsimple_t⟩     := and_true_of_and_eq_true h23
+  have ⟨h21, _h_boolsimple_o⟩     := and_true_of_and_eq_true h22
+  have ⟨h20, h_boolnoarr_t⟩       := and_true_of_and_eq_true h21
+  have ⟨h19, h_boolnoarr_o⟩       := and_true_of_and_eq_true h20
   have ⟨h18, h_step_bounds⟩  := and_true_of_and_eq_true h19
   have ⟨h17, h_pathbounds⟩   := and_true_of_and_eq_true h18
   have ⟨h16, h_arrsize⟩      := and_true_of_and_eq_true h17
