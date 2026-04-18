@@ -1539,11 +1539,17 @@ theorem verifiedGenerateAsm_spec {tyCtx : TyCtx} {p : Prog} {r : VerifiedAsmResu
 -- § 5b. Totality: verifiedGenerateAsm succeeds for pipeline output
 -- ──────────────────────────────────────────────────────────────
 
+/-- `lookupVar` succeeds for any variable that appears in the list used to build the map. -/
+private theorem lookupVar_of_mem {vars : List Var} {v : Var}
+    (hv : v ∈ vars) :
+    ∃ off, lookupVar (buildVarMap vars) v = some off := by
+  sorry
+
 /-- Every variable in `collectVars p` has a `lookupVar` entry in `buildVarMap`. -/
 private theorem lookupVar_of_mem_collectVars {p : Prog} {v : Var}
     (hv : v ∈ collectVars p) :
-    ∃ off, lookupVar (buildVarMap (collectVars p)) v = some off := by
-  sorry
+    ∃ off, lookupVar (buildVarMap (collectVars p)) v = some off :=
+  lookupVar_of_mem hv
 
 /-- `buildVarLayout` maps every variable in `collectVars p` to some location. -/
 private theorem buildVarLayout_complete {p : Prog} {v : Var}
@@ -1624,7 +1630,12 @@ private theorem verifiedGenInstr_total
     (hSimple : match instr with | .boolop _ be | .ifgoto be _ => be.hasSimpleOps = true | _ => True)
     (hNotPrint : ∀ fmt vs, instr ≠ .print fmt vs) :
     ∃ instrs, verifiedGenInstr layout pcMap instr haltS divS boundsS arrayDecls safe = some instrs := by
+  -- NOTE: copy case has a gap — verifiedGenInstr returns none when src is
+  -- stack/ireg and dst is freg. Fix: add FP load path for non-freg → freg copy.
   sorry
+  -- NOTE: copy case has a codegen gap — verifiedGenInstr returns none when
+  -- src is in stack/ireg and dst is in freg. Fix needed in verifiedGenInstr:
+  -- add vLoadVar + fmovToFP path for non-freg → freg copy.
 
 -- ──────────────────────────────────────────────────────────────
 -- buildPcMap prefix-sum lemmas
