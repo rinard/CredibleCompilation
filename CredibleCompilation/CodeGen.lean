@@ -1539,11 +1539,57 @@ theorem verifiedGenerateAsm_spec {tyCtx : TyCtx} {p : Prog} {r : VerifiedAsmResu
 -- § 5b. Totality: verifiedGenerateAsm succeeds for pipeline output
 -- ──────────────────────────────────────────────────────────────
 
+/-- If `(v, off) ∈ l`, then `lookupVar l v` returns some value. -/
+private theorem lookupVar_of_mem_pair {l : List (Var × Nat)} {v : Var} {off : Nat}
+    (h : (v, off) ∈ l) : ∃ n, lookupVar l v = some n := by
+  unfold lookupVar
+  induction l with
+  | nil => simp at h
+  | cons hd tl ih =>
+    simp only [List.find?]
+    split
+    · exact ⟨_, rfl⟩
+    · rename_i hp
+      cases h with
+      | head => simp [BEq.beq] at hp
+      | tail _ htl => exact ih htl
+
+/-- `List.map Prod.snd` on a zip with `List.range` recovers the original list
+    (when the range is at least as long). -/
+private theorem map_snd_zip_range (vars : List Var) :
+    ((List.range vars.length).zip vars).map Prod.snd = vars := by
+  induction vars with
+  | nil => simp
+  | cons hd tl ih =>
+    simp only [List.length_cons]
+    rw [List.range_succ_eq_map, List.zip_cons_cons, List.map_cons]
+    congr 1
+    rw [List.zip_map_left, List.map_map]
+    have : Prod.snd ∘ Prod.map Nat.succ id = @Prod.snd Nat Var := by ext ⟨_, _⟩; rfl
+    rw [this]; exact ih
+
+/-- The first components of `buildVarMap vars` are exactly `vars`. -/
+private theorem buildVarMap_map_fst (vars : List Var) :
+    (buildVarMap vars).map Prod.fst = vars := by
+  unfold buildVarMap
+  simp only [List.map_map]
+  have : (Prod.fst ∘ fun (x : Nat × Var) => (x.2, (x.1 + 1) * 8)) = Prod.snd := by ext ⟨_, _⟩; rfl
+  rw [this]
+  exact map_snd_zip_range vars
+
+private theorem fst_mem_of_mem_buildVarMap {vars : List Var} {v : Var}
+    (hv : v ∈ vars) : ∃ off, (v, off) ∈ buildVarMap vars := by
+  have hmem : v ∈ (buildVarMap vars).map Prod.fst := by
+    rw [buildVarMap_map_fst]; exact hv
+  obtain ⟨⟨x, off⟩, hmem', hfst⟩ := List.mem_map.mp hmem
+  exact ⟨off, by simp at hfst; rw [← hfst]; exact hmem'⟩
+
 /-- `lookupVar` succeeds for any variable that appears in the list used to build the map. -/
 private theorem lookupVar_of_mem {vars : List Var} {v : Var}
     (hv : v ∈ vars) :
     ∃ off, lookupVar (buildVarMap vars) v = some off := by
-  sorry
+  obtain ⟨off, hmem⟩ := fst_mem_of_mem_buildVarMap hv
+  exact lookupVar_of_mem_pair hmem
 
 /-- Every variable in `collectVars p` has a `lookupVar` entry in `buildVarMap`. -/
 private theorem lookupVar_of_mem_collectVars {p : Prog} {v : Var}
