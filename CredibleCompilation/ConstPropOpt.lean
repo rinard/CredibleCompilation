@@ -195,7 +195,7 @@ def buildInvariants (consts : Array (Option ConstMap)) : Array EInv :=
 
 /-- Run constant propagation on `prog` and produce a certified transformation.
     The result is an `ECertificate` that `checkCertificateExec` will accept. -/
-def optimize (prog : Prog) : ECertificate :=
+def optimize (tyCtx : TyCtx) (prog : Prog) : ECertificate :=
   let consts := analyze prog
   let trans := transformProg prog consts
   let inv := buildInvariants consts
@@ -209,7 +209,7 @@ def optimize (prog : Prog) : ECertificate :=
   let haltCerts := _root_.buildHaltCerts instrCerts trans
   { orig := orig
     trans := trans
-    tyCtx := orig.tyCtx
+    tyCtx := tyCtx
     inv_orig := inv
     inv_trans := inv
     instrCerts := instrCerts

@@ -52,7 +52,7 @@ def buildInvariants (consts : Array (Option ConstPropOpt.ConstMap)) : Array EInv
 -- § 4. Main entry point
 -- ============================================================
 
-def optimize (prog : Prog) : ECertificate :=
+def optimize (tyCtx : TyCtx) (prog : Prog) : ECertificate :=
   let consts := ConstPropOpt.analyze prog
   let trans := transformProg prog consts
   let inv := buildInvariants consts
@@ -60,7 +60,7 @@ def optimize (prog : Prog) : ECertificate :=
   let haltCerts := _root_.buildHaltCerts instrCerts trans
   { orig := prog
     trans := trans
-    tyCtx := prog.tyCtx
+    tyCtx := tyCtx
     inv_orig := inv
     inv_trans := inv
     instrCerts := instrCerts

@@ -333,7 +333,7 @@ def buildInstrCerts (trans : Prog) (rels : Array EExprRel) : Array EInstrCert :=
 
 /-- Run dead assignment elimination on `prog` and produce a certified
     transformation. -/
-def optimize (prog : Prog) : ECertificate :=
+def optimize (tyCtx : TyCtx) (prog : Prog) : ECertificate :=
   let liveOut := analyzeLiveness prog
   let consts := ConstPropOpt.analyze prog
   let deadPCs := findDeadPCs prog liveOut consts
@@ -349,7 +349,7 @@ def optimize (prog : Prog) : ECertificate :=
     { pc_orig := i, rel := rels.getD i ([] : EExprRel) : EHaltCert }
   { orig := prog
     trans := trans
-    tyCtx := prog.tyCtx
+    tyCtx := tyCtx
     inv_orig := inv_orig
     inv_trans := inv_trans
     instrCerts := instrCerts

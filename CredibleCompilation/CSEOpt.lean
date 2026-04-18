@@ -291,7 +291,7 @@ def buildInvariants (states : Array (Option CSEState)) : Array EInv :=
 
 /-- Run CSE on `prog` and produce a certified transformation.
     The result is an `ECertificate` that `checkCertificateExec` will accept. -/
-def optimize (prog : Prog) : ECertificate :=
+def optimize (tyCtx : TyCtx) (prog : Prog) : ECertificate :=
   let states := analyze prog
   let trans := transformProg prog states
   let inv := buildInvariants states
@@ -299,7 +299,7 @@ def optimize (prog : Prog) : ECertificate :=
   let haltCerts := _root_.buildHaltCerts instrCerts trans
   { orig := prog
     trans := trans
-    tyCtx := prog.tyCtx
+    tyCtx := tyCtx
     inv_orig := inv
     inv_trans := inv
     instrCerts := instrCerts

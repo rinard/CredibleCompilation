@@ -109,7 +109,7 @@ def buildInstrCerts (origMap : Array Nat) (trans : Prog) (allVars : List Var) : 
 /-- Run dead code elimination on `prog` and produce a certified transformation.
     Uses empty invariants — after ConstProp resolves branches to `goto`,
     basic reachability suffices. -/
-def optimize (prog : Prog) : ECertificate :=
+def optimize (tyCtx : TyCtx) (prog : Prog) : ECertificate :=
   let reached := reachable prog
   let origMap := _root_.buildOrigMap reached
   let revMap := _root_.buildRevMap origMap prog.size
@@ -118,7 +118,7 @@ def optimize (prog : Prog) : ECertificate :=
   let haltCerts := _root_.buildHaltCerts instrCerts trans
   { orig := prog
     trans := trans
-    tyCtx := prog.tyCtx
+    tyCtx := tyCtx
     inv_orig := Array.replicate prog.size ([] : EInv)
     inv_trans := Array.replicate trans.size ([] : EInv)
     instrCerts := instrCerts

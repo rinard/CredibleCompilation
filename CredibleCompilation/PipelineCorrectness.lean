@@ -350,7 +350,7 @@ theorem while_to_arm_correctness
     (passes : List (String × (Prog → ECertificate)))
     (hSound : ∀ np ∈ passes, TyCtxSound np.2)
     {r : VerifiedAsmResult}
-    (hGen : verifiedGenerateAsm (applyPassesPure passes prog.compileToTAC) = .ok r)
+    (hGen : verifiedGenerateAsm prog.tyCtx (applyPassesPure passes prog.compileToTAC) = .ok r)
     {σ_opt : Store} {am_opt : ArrayMem}
     (hHalt : haltsWithResult (applyPassesPure passes prog.compileToTAC) 0
       (Store.typedInit (applyPassesPure passes prog.compileToTAC).tyCtx) σ_opt ArrayMem.init am_opt) :
@@ -372,7 +372,9 @@ theorem while_to_arm_correctness
       (Store.typedInit prog.compileToTAC.tyCtx) σ_opt ArrayMem.init am_opt :=
     hTyOpt ▸ hHalt
   -- Part 2: ARM simulation
-  refine ⟨?_, tacToArm_correctness hGen (hTyOpt ▸ hHalt)⟩
+  have hOptTyCtx : (applyPassesPure passes prog.compileToTAC).tyCtx = prog.tyCtx :=
+    hTyOpt.trans (Program.compileToTAC_tyCtx_eq prog htc)
+  refine ⟨?_, tacToArm_correctness (hOptTyCtx ▸ hGen) (hOptTyCtx ▸ hHalt)⟩
   -- Part 1: Pipeline → original TAC halts with same final AM
   obtain ⟨σ_tac, hHalt_tac, hobs_tac⟩ :=
     applyPassesPure_preserves_halt_am passes hSound _ hts hHalt'
@@ -416,7 +418,7 @@ theorem while_to_arm_error_preservation
     (passes : List (String × (Prog → ECertificate)))
     (hSound : ∀ np ∈ passes, TyCtxSound np.2)
     {r : VerifiedAsmResult}
-    (hGen : verifiedGenerateAsm (applyPassesPure passes prog.compileToTAC) = .ok r)
+    (hGen : verifiedGenerateAsm prog.tyCtx (applyPassesPure passes prog.compileToTAC) = .ok r)
     {σ_err : Store} {am_err : ArrayMem}
     (hErr : (applyPassesPure passes prog.compileToTAC) ⊩
       Cfg.run 0 (Store.typedInit (applyPassesPure passes prog.compileToTAC).tyCtx)
@@ -432,8 +434,10 @@ theorem while_to_arm_error_preservation
   have hTyOpt := applyPassesPure_tyCtx_eq passes hSound prog.compileToTAC
   have hts : TypedStore prog.compileToTAC.tyCtx (Store.typedInit prog.compileToTAC.tyCtx) :=
     TypedStore.typedInit _
+  have hOptTyCtx : (applyPassesPure passes prog.compileToTAC).tyCtx = prog.tyCtx :=
+    hTyOpt.trans (Program.compileToTAC_tyCtx_eq prog htc)
   -- ARM simulation
-  refine ⟨?_, tacToArm_correctness hGen (hTyOpt ▸ hErr)⟩
+  refine ⟨?_, tacToArm_correctness (hOptTyCtx ▸ hGen) (hOptTyCtx ▸ hErr)⟩
   -- Pipeline → original TAC errors from ArrayMem.init
   obtain ⟨σ_o, am_o', hErr_tac⟩ :=
     applyPassesPure_preserves_error_am passes hSound _ hts (hTyOpt ▸ hErr)

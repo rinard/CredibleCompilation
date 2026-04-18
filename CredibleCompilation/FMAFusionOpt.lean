@@ -211,7 +211,7 @@ def buildInstrCerts (origProg : Prog) (origMap : Array Nat)
 
 /-- Run FMA fusion optimization: fuse fmul+fadd/fsub into fmadd/fmsub,
     compact the program, and produce a certified transformation. -/
-def optimize (prog : Prog) : ECertificate :=
+def optimize (tyCtx : TyCtx) (prog : Prog) : ECertificate :=
   let n := prog.size
   let liveOut := DAEOpt.analyzeLiveness prog
   let preds := DAEOpt.buildPredecessors prog
@@ -239,7 +239,7 @@ def optimize (prog : Prog) : ECertificate :=
     let haltCerts := buildHaltCerts instrCerts prog
     { orig := prog
       trans := prog
-      tyCtx := prog.tyCtx
+      tyCtx := tyCtx
       inv_orig := Array.replicate n ([] : EInv)
       inv_trans := Array.replicate n ([] : EInv)
       instrCerts := instrCerts
@@ -258,7 +258,7 @@ def optimize (prog : Prog) : ECertificate :=
     let haltCerts := buildHaltCerts instrCerts trans
     { orig := prog
       trans := trans
-      tyCtx := prog.tyCtx
+      tyCtx := tyCtx
       inv_orig := Array.replicate n ([] : EInv)
       inv_trans := Array.replicate trans.size ([] : EInv)
       instrCerts := instrCerts

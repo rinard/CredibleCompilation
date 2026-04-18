@@ -258,7 +258,7 @@ def numHoistable (prog : Prog) : Nat :=
   let inLoop := findLoopPCs prog
   (findHoistable prog inLoop).length
 
-def optimize (prog : Prog) : ECertificate :=
+def optimize (tyCtx : TyCtx) (prog : Prog) : ECertificate :=
   let inLoop := findLoopPCs prog
   let hoistable := findHoistable prog inLoop
   if hoistable.isEmpty then
@@ -266,7 +266,7 @@ def optimize (prog : Prog) : ECertificate :=
     let allVars := _root_.collectAllVars prog prog
     let instrCerts := _root_.buildInstrCerts1to1 prog allVars
     let haltCerts := _root_.buildHaltCerts instrCerts prog
-    { orig := prog, trans := prog, tyCtx := prog.tyCtx,
+    { orig := prog, trans := prog, tyCtx := tyCtx,
       inv_orig := Array.replicate prog.size ([] : EInv),
       inv_trans := Array.replicate prog.size ([] : EInv),
       instrCerts := instrCerts, haltCerts := haltCerts,
@@ -291,7 +291,7 @@ def optimize (prog : Prog) : ECertificate :=
         origPCMap.getD (tpc + 1 + offset) 0 == opc
       remaining.length + 1
     else 0
-  { orig := prog, trans := trans, tyCtx := prog.tyCtx,
+  { orig := prog, trans := trans, tyCtx := tyCtx,
     inv_orig := inv_orig, inv_trans := inv_trans,
     instrCerts := instrCerts, haltCerts := haltCerts,
     measure := measure.toArray }

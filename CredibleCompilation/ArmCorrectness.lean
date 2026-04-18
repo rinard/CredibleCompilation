@@ -1757,8 +1757,9 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
     (instrs : List ArmInstr)
     (hSome : verifiedGenInstr layout pcMap instr haltLabel divLabel boundsLabel arrayDecls boundsSafe = some instrs)
     (hPC_bound : pc < p.size)
-    (hWT : WellTypedProg p.tyCtx p) (hTS : TypedStore p.tyCtx σ)
-    (hWTL : WellTypedLayout p.tyCtx layout)
+    (tyCtx : TyCtx)
+    (hWT : WellTypedProg tyCtx p) (hTS : TypedStore tyCtx σ)
+    (hWTL : WellTypedLayout tyCtx layout)
     (hMapped : ∀ v, v ∈ instr.vars → layout v ≠ none)
     (cfg' : Cfg) (hStep : p ⊩ Cfg.run pc σ am ⟶ cfg')
     (hCodeInstr : CodeAt prog (pcMap pc) instrs)
@@ -2042,9 +2043,9 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
       have hWTi := hWT pc hPC_bound
       have heq_instr := Prog.getElem?_eq_getElem hPC_bound
       rw [hinstr] at heq_instr; rw [← Option.some.inj heq_instr] at hWTi
-      have hTyEq : p.tyCtx x = p.tyCtx y := match hWTi with | .copy h => h
-      have hTyY : p.tyCtx y = .float := by
-        cases h : p.tyCtx y with
+      have hTyEq : tyCtx x = tyCtx y := match hWTi with | .copy h => h
+      have hTyY : tyCtx y = .float := by
+        cases h : tyCtx y with
         | float => rfl
         | int => exact absurd hLY (hWTL.1 y r (by rw [h]; decide))
         | bool => exact absurd hLY (hWTL.1 y r (by rw [h]; decide))
@@ -2655,14 +2656,14 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
     have hCodeBE := hCodeInstr.append_left
     have hCodeStore := hCodeInstr.append_right
     -- Extract WellTypedBoolExpr
-    have hWTbe : WellTypedBoolExpr p.tyCtx be := by
+    have hWTbe : WellTypedBoolExpr tyCtx be := by
       have hwti := hWT pc hPC_bound
       have heq_i := Prog.getElem?_eq_getElem hPC_bound
       rw [hinstr] at heq_i; rw [← Option.some.inj heq_i] at hwti
       cases hwti with | boolop _ hbe => exact hbe
     obtain ⟨s1, hSteps1, hX0_1, hRel1, hPC1, hAM1⟩ :=
       verifiedGenBoolExpr_correct prog layout be σ s (pcMap pc) hStateRel hScratch hCodeBE
-        hPcRel p.tyCtx hTS hWTbe hWTL
+        hPcRel tyCtx hTS hWTbe hWTL
         (fun v hv => hMapped v (by simp [heq, TAC.vars]; exact Or.inr hv)) hSimpleBE am
     -- vStoreVar x from x0
     have hX0_val : s1.regs .x0 = (Value.bool (be.eval σ am)).encode := by
@@ -2683,7 +2684,7 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
       cases hb : be_var.hasSimpleOps with
       | true => rfl
       | false => simp [verifiedGenInstr, hSS, hII, hb] at hSome
-    have hWTbe : WellTypedBoolExpr p.tyCtx be_var := by
+    have hWTbe : WellTypedBoolExpr tyCtx be_var := by
       have hwti := hWT pc hPC_bound
       have heq_i := Prog.getElem?_eq_getElem hPC_bound
       rw [hinstr] at heq_i; rw [← Option.some.inj heq_i] at hwti
@@ -2696,9 +2697,9 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
         obtain rfl := Option.some.inj hSome
         have hSimpleCmp : (BoolExpr.cmp op a b).hasSimpleOps = true := hSimpleBV
         obtain ⟨hSimpleA, hSimpleB⟩ := BoolExpr.hasSimpleOps_cmp hSimpleCmp
-        have hWTcmp : WellTypedBoolExpr p.tyCtx (.cmp op a b) := by
+        have hWTcmp : WellTypedBoolExpr tyCtx (.cmp op a b) := by
           cases hWTbe with | not h => exact h
-        obtain ⟨ha_ty, hb_ty⟩ : ExprHasTy p.tyCtx a .int ∧ ExprHasTy p.tyCtx b .int := by
+        obtain ⟨ha_ty, hb_ty⟩ : ExprHasTy tyCtx a .int ∧ ExprHasTy tyCtx b .int := by
           cases hWTcmp with | cmp ha hb => exact ⟨ha, hb⟩
         have hcmp_false : BoolExpr.eval σ am (.cmp op a b) = false := by
           simp [BoolExpr.eval] at hcond; exact hcond
@@ -2853,9 +2854,9 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
         obtain rfl := Option.some.inj hSome
         have hSimpleFcmp : (BoolExpr.fcmp fop a b).hasSimpleOps = true := hSimpleBV
         obtain ⟨hSimpleA, hSimpleB⟩ := BoolExpr.hasSimpleOps_fcmp hSimpleFcmp
-        have hWTfcmp : WellTypedBoolExpr p.tyCtx (.fcmp fop a b) := by
+        have hWTfcmp : WellTypedBoolExpr tyCtx (.fcmp fop a b) := by
           cases hWTbe with | not h => exact h
-        obtain ⟨ha_ty, hb_ty⟩ : ExprHasTy p.tyCtx a .float ∧ ExprHasTy p.tyCtx b .float := by
+        obtain ⟨ha_ty, hb_ty⟩ : ExprHasTy tyCtx a .float ∧ ExprHasTy tyCtx b .float := by
           cases hWTfcmp with | fcmp ha hb => exact ⟨ha, hb⟩
         have hfcmp_false : BoolExpr.eval σ am (.fcmp fop a b) = false := by
           simp [BoolExpr.eval] at hcond; exact hcond
@@ -2921,7 +2922,7 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
                 (hMapped va (by simp [TAC.vars, BoolExpr.vars, Expr.freeVars])) hCodeA
             obtain ⟨s2, hSteps2, hD2val, hRel2, hPC2, hAM2, hFregs2⟩ :=
               loadFloatExpr_exec prog layout (.flit fb) .d2 σ am s1 _ hRel1 hScratch hPC1
-                (Or.inr ⟨fb, rfl⟩) p.tyCtx hTS hb_ty hWTL
+                (Or.inr ⟨fb, rfl⟩) tyCtx hTS hb_ty hWTL
                 (fun v hv => by simp [Expr.freeVars] at hv)
                 (Or.inr (Or.inr rfl)) hCodeFlit
             have hA_s2 : s2.fregs a_freg = fA := by
@@ -2967,7 +2968,7 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
                 (hMapped vb (by simp [TAC.vars, BoolExpr.vars, Expr.freeVars])) hCodeB
             obtain ⟨s2, hSteps2, hD1val, hRel2, hPC2, hAM2, hFregs2⟩ :=
               loadFloatExpr_exec prog layout (.flit fa) .d1 σ am s1 _ hRel1 hScratch hPC1
-                (Or.inr ⟨fa, rfl⟩) p.tyCtx hTS ha_ty hWTL
+                (Or.inr ⟨fa, rfl⟩) tyCtx hTS ha_ty hWTL
                 (fun v hv => by simp [Expr.freeVars] at hv)
                 (Or.inr (Or.inl rfl)) hCodeFlit
             have hB_s2 : s2.fregs b_freg = fB := by
@@ -3001,13 +3002,13 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
             -- Load flit fa into d1
             obtain ⟨s1, hSteps1, hD1val, hRel1, hPC1, hAM1, hFregs1⟩ :=
               loadFloatExpr_exec prog layout (.flit fa) .d1 σ am s (pcMap pc) hStateRel hScratch hPcRel
-                (Or.inr ⟨fa, rfl⟩) p.tyCtx hTS ha_ty hWTL
+                (Or.inr ⟨fa, rfl⟩) tyCtx hTS ha_ty hWTL
                 (fun v hv => by simp [Expr.freeVars] at hv)
                 (Or.inr (Or.inl rfl)) hCodeFlitA
             -- Load flit fb into d2
             obtain ⟨s2, hSteps2, hD2val, hRel2, hPC2, hAM2, hFregs2⟩ :=
               loadFloatExpr_exec prog layout (.flit fb) .d2 σ am s1 _ hRel1 hScratch hPC1
-                (Or.inr ⟨fb, rfl⟩) p.tyCtx hTS hb_ty hWTL
+                (Or.inr ⟨fb, rfl⟩) tyCtx hTS hb_ty hWTL
                 (fun v hv => by simp [Expr.freeVars] at hv)
                 (Or.inr (Or.inr rfl)) hCodeFlitB
             have hD1_s2 : s2.fregs .d1 = fa := by
@@ -3043,7 +3044,7 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
         have hSimpleBV' := hSimpleBV  -- preserve across cases
         obtain ⟨s1, hSteps1, hX0_1, hRel1, hPC1, hAM1⟩ :=
           verifiedGenBoolExpr_correct prog layout _ σ s (pcMap pc) hStateRel hScratch
-            hCodeBE hPcRel p.tyCtx hTS hWTbe hWTL
+            hCodeBE hPcRel tyCtx hTS hWTbe hWTL
             (fun v hv => hMapped v (by simp [TAC.vars]; exact hv)) hSimpleBV' am
         have hCbnz := hCodeCbnz.head; rw [← hPC1] at hCbnz
         have hx0_ne : s1.regs .x0 ≠ 0 := by rw [hX0_1, hcond]; simp
@@ -3057,7 +3058,7 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
       have hCodeCbnz := hCodeInstr.append_right
       obtain ⟨s1, hSteps1, hX0_1, hRel1, hPC1, hAM1⟩ :=
         verifiedGenBoolExpr_correct prog layout _ σ s (pcMap pc) hStateRel hScratch
-          hCodeBE hPcRel p.tyCtx hTS hWTbe hWTL
+          hCodeBE hPcRel tyCtx hTS hWTbe hWTL
           (fun v hv => hMapped v (by simp [TAC.vars]; exact hv)) hSimpleBV am
       have hCbnz := hCodeCbnz.head; rw [← hPC1] at hCbnz
       have hx0_ne : s1.regs .x0 ≠ 0 := by rw [hX0_1, hcond]; simp
@@ -3072,7 +3073,7 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
       cases hb : be_var.hasSimpleOps with
       | true => rfl
       | false => simp [verifiedGenInstr, hSS, hII, hb] at hSome
-    have hWTbe : WellTypedBoolExpr p.tyCtx be_var := by
+    have hWTbe : WellTypedBoolExpr tyCtx be_var := by
       have hwti := hWT pc hPC_bound
       have heq_i := Prog.getElem?_eq_getElem hPC_bound
       rw [hinstr] at heq_i; rw [← Option.some.inj heq_i] at hwti
@@ -3085,9 +3086,9 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
         obtain rfl := Option.some.inj hSome
         have hSimpleCmp : (BoolExpr.cmp op a b).hasSimpleOps = true := hSimpleBV
         obtain ⟨hSimpleA, hSimpleB⟩ := BoolExpr.hasSimpleOps_cmp hSimpleCmp
-        have hWTcmp : WellTypedBoolExpr p.tyCtx (.cmp op a b) := by
+        have hWTcmp : WellTypedBoolExpr tyCtx (.cmp op a b) := by
           cases hWTbe with | not h => exact h
-        obtain ⟨ha_ty, hb_ty⟩ : ExprHasTy p.tyCtx a .int ∧ ExprHasTy p.tyCtx b .int := by
+        obtain ⟨ha_ty, hb_ty⟩ : ExprHasTy tyCtx a .int ∧ ExprHasTy tyCtx b .int := by
           cases hWTcmp with | cmp ha hb => exact ⟨ha, hb⟩
         have hcmp_true : BoolExpr.eval σ am (.cmp op a b) = true := by
           simp [BoolExpr.eval] at hcond; exact hcond
@@ -3260,9 +3261,9 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
         obtain rfl := Option.some.inj hSome
         have hSimpleFcmp : (BoolExpr.fcmp fop a b).hasSimpleOps = true := hSimpleBV
         obtain ⟨hSimpleA, hSimpleB⟩ := BoolExpr.hasSimpleOps_fcmp hSimpleFcmp
-        have hWTfcmp : WellTypedBoolExpr p.tyCtx (.fcmp fop a b) := by
+        have hWTfcmp : WellTypedBoolExpr tyCtx (.fcmp fop a b) := by
           cases hWTbe with | not h => exact h
-        obtain ⟨ha_ty, hb_ty⟩ : ExprHasTy p.tyCtx a .float ∧ ExprHasTy p.tyCtx b .float := by
+        obtain ⟨ha_ty, hb_ty⟩ : ExprHasTy tyCtx a .float ∧ ExprHasTy tyCtx b .float := by
           cases hWTfcmp with | fcmp ha hb => exact ⟨ha, hb⟩
         have hfcmp_true : BoolExpr.eval σ am (.fcmp fop a b) = true := by
           simp [BoolExpr.eval] at hcond; exact hcond
@@ -3333,7 +3334,7 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
                 (hMapped va (by simp [TAC.vars, BoolExpr.vars, Expr.freeVars])) hCodeA
             obtain ⟨s2, hSteps2, hD2val, hRel2, hPC2, hAM2, hFregs2⟩ :=
               loadFloatExpr_exec prog layout (.flit fb) .d2 σ am s1 _ hRel1 hScratch hPC1
-                (Or.inr ⟨fb, rfl⟩) p.tyCtx hTS hb_ty hWTL
+                (Or.inr ⟨fb, rfl⟩) tyCtx hTS hb_ty hWTL
                 (fun v hv => by simp [Expr.freeVars] at hv)
                 (Or.inr (Or.inr rfl)) hCodeFlit
             have hA_s2 : s2.fregs a_freg = fA := by
@@ -3383,7 +3384,7 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
                 (hMapped vb (by simp [TAC.vars, BoolExpr.vars, Expr.freeVars])) hCodeB
             obtain ⟨s2, hSteps2, hD1val, hRel2, hPC2, hAM2, hFregs2⟩ :=
               loadFloatExpr_exec prog layout (.flit fa) .d1 σ am s1 _ hRel1 hScratch hPC1
-                (Or.inr ⟨fa, rfl⟩) p.tyCtx hTS ha_ty hWTL
+                (Or.inr ⟨fa, rfl⟩) tyCtx hTS ha_ty hWTL
                 (fun v hv => by simp [Expr.freeVars] at hv)
                 (Or.inr (Or.inl rfl)) hCodeFlit
             have hB_s2 : s2.fregs b_freg = fB := by
@@ -3421,12 +3422,12 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
             have hCodeFcmpBCond := hCodeInstr.append_right
             obtain ⟨s1, hSteps1, hD1val, hRel1, hPC1, hAM1, hFregs1⟩ :=
               loadFloatExpr_exec prog layout (.flit fa) .d1 σ am s (pcMap pc) hStateRel hScratch hPcRel
-                (Or.inr ⟨fa, rfl⟩) p.tyCtx hTS ha_ty hWTL
+                (Or.inr ⟨fa, rfl⟩) tyCtx hTS ha_ty hWTL
                 (fun v hv => by simp [Expr.freeVars] at hv)
                 (Or.inr (Or.inl rfl)) hCodeFlitA
             obtain ⟨s2, hSteps2, hD2val, hRel2, hPC2, hAM2, hFregs2⟩ :=
               loadFloatExpr_exec prog layout (.flit fb) .d2 σ am s1 _ hRel1 hScratch hPC1
-                (Or.inr ⟨fb, rfl⟩) p.tyCtx hTS hb_ty hWTL
+                (Or.inr ⟨fb, rfl⟩) tyCtx hTS hb_ty hWTL
                 (fun v hv => by simp [Expr.freeVars] at hv)
                 (Or.inr (Or.inr rfl)) hCodeFlitB
             have hD1_s2 : s2.fregs .d1 = fa := by
@@ -3464,7 +3465,7 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
         have hCodeCbnz := hCodeInstr.append_right
         obtain ⟨s1, hSteps1, hX0_1, hRel1, hPC1, hAM1⟩ :=
           verifiedGenBoolExpr_correct prog layout _ σ s (pcMap pc) hStateRel hScratch
-            hCodeBE hPcRel p.tyCtx hTS hWTbe hWTL
+            hCodeBE hPcRel tyCtx hTS hWTbe hWTL
             (fun v hv => hMapped v (by simp [TAC.vars]; exact hv)) hSimpleBV' am
         have hCbnz := hCodeCbnz.head; rw [← hPC1] at hCbnz
         have hx0_eq : s1.regs .x0 = 0 := by rw [hX0_1, hcond]; simp
@@ -3481,7 +3482,7 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
       have hCodeCbnz := hCodeInstr.append_right
       obtain ⟨s1, hSteps1, hX0_1, hRel1, hPC1, hAM1⟩ :=
         verifiedGenBoolExpr_correct prog layout _ σ s (pcMap pc) hStateRel hScratch
-          hCodeBE hPcRel p.tyCtx hTS hWTbe hWTL
+          hCodeBE hPcRel tyCtx hTS hWTbe hWTL
           (fun v hv => hMapped v (by simp [TAC.vars]; exact hv)) hSimpleBV' am
       have hCbnz := hCodeCbnz.head; rw [← hPC1] at hCbnz
       have hx0_eq : s1.regs .x0 = 0 := by rw [hX0_1, hcond]; simp
@@ -4183,7 +4184,7 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
       have hNotFloat : (ty == .float) = false := by
         cases ty <;> simp_all
       have hNotFregVal : ∀ r, layout val ≠ some (.freg r) := by
-        have hTyVal : p.tyCtx val = ty := by
+        have hTyVal : tyCtx val = ty := by
           have hwti := hWT pc hPC_bound
           rw [Prog.getElem?_eq_getElem hPC_bound |>.symm.trans hinstr |> Option.some.inj] at hwti
           exact match hwti with | .arrStore _ hv _ => hv
@@ -5054,8 +5055,9 @@ theorem ext_backward_simulation (p : Prog) (armProg : ArmProg)
     (hStep : p ⊩ Cfg.run pc σ am ⟶ cfg')
     (hRel : ExtSimRel layout pcMap (.run pc σ am) s)
     (hPC : pc < p.size)
-    (hWT : WellTypedProg p.tyCtx p) (hTS : TypedStore p.tyCtx σ)
-    (hWTL : WellTypedLayout p.tyCtx layout)
+    (tyCtx : TyCtx)
+    (hWT : WellTypedProg tyCtx p) (hTS : TypedStore tyCtx σ)
+    (hWTL : WellTypedLayout tyCtx layout)
     (instr : TAC) (hInstr : p[pc]? = some instr)
     (instrs : List ArmInstr)
     (hSome : verifiedGenInstr layout pcMap instr haltLabel divLabel boundsLabel arrayDecls boundsSafe = some instrs)
@@ -5068,4 +5070,4 @@ theorem ext_backward_simulation (p : Prog) (armProg : ArmProg)
     (hNCSLBin : ∀ x y z, instr = .fbinop x .fpow y z → NoCallerSavedLayout layout) :
     ∃ s', ArmSteps armProg s s' ∧ ExtSimRel layout pcMap cfg' s' :=
   verifiedGenInstr_correct armProg layout pcMap p pc σ am s haltLabel divLabel boundsLabel
-    arrayDecls boundsSafe instr hInstr hRel instrs hSome hPC hWT hTS hWTL hMapped cfg' hStep hCode hPcNext hAD hNCSL hNCSLBin
+    arrayDecls boundsSafe instr hInstr hRel instrs hSome hPC tyCtx hWT hTS hWTL hMapped cfg' hStep hCode hPcNext hAD hNCSL hNCSLBin

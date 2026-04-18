@@ -471,7 +471,7 @@ def buildRegAllocInstrCerts (trans : Prog) (rels : Array EExprRel)
 /-- Register allocation as an optimization pass. Renames TAC variables to
     register names (__ir{N}/__br{N}/__fr{N}) and produces a certificate with
     expression relations tracking the renaming. -/
-def optimize (prog : Prog) : ECertificate :=
+def optimize (tyCtx : TyCtx) (prog : Prog) : ECertificate :=
   let coloring := computeColoring prog
   let trans := renameProg prog coloring
   let copyBacks := copyBackInstrs coloring prog.observable
@@ -496,7 +496,7 @@ def optimize (prog : Prog) : ECertificate :=
     else 0
   { orig := prog
     trans := trans
-    tyCtx := prog.tyCtx
+    tyCtx := tyCtx
     inv_orig := inv_orig
     inv_trans := inv_trans
     instrCerts := instrCerts

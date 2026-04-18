@@ -838,15 +838,15 @@ private def bodyGenStep (code : Array TAC) (layout : VarLayout) (pcMap : Nat →
 
 /-- Verified core of code generation. Performs all validation and produces
     structured ArmInstr data. No string emission or platform-specific code. -/
-def verifiedGenerateAsm (p : Prog) : Except String VerifiedAsmResult := do
-  if !checkWellTypedProg p.tyCtx p then
+def verifiedGenerateAsm (tyCtx : TyCtx) (p : Prog) : Except String VerifiedAsmResult := do
+  if !checkWellTypedProg tyCtx p then
     .error "program failed type check"
   else
     let vars := collectVars p
     let varMap := buildVarMap vars
     let layout := buildVarLayout vars varMap
     -- Check WellTypedLayout (hWTL hypothesis)
-    match checkWellTypedLayout p.tyCtx layout p.code with
+    match checkWellTypedLayout tyCtx layout p.code with
     | some err => .error s!"well-typed layout check failed: {err}"
     | none =>
     -- Check caller-save spec (callerSave_composition hypotheses)
@@ -879,7 +879,7 @@ def verifiedGenerateAsm (p : Prog) : Except String VerifiedAsmResult := do
     -- Pass 2: generate instructions with real pcMap
     -- For library call sites, wrap with save/restore of live caller-saved registers.
     let bodyResult := (List.range p.code.size).foldl
-        (bodyGenStep p.code layout pcMap liveOut varMap intervals p.arrayDecls haltS divS boundsS p.tyCtx)
+        (bodyGenStep p.code layout pcMap liveOut varMap intervals p.arrayDecls haltS divS boundsS tyCtx)
         (some (Array.mkEmpty p.code.size))
     match bodyResult with
     | none => .error "verifiedGenInstr failed (layout or type mismatch)"
@@ -932,11 +932,11 @@ def VerifiedAsmResult.bodyFlat (r : VerifiedAsmResult) : ArmProg :=
 /-- Properties extracted from a successful `verifiedGenerateAsm` call.
     These are the invariants that the main code-generation function establishes
     via its runtime checks (type check, layout check, branch target check). -/
-structure GenAsmSpec (p : Prog) (r : VerifiedAsmResult) : Prop where
-  /-- The program is well-typed under its own TyCtx. -/
-  wellTypedProg : WellTypedProg p.tyCtx p
+structure GenAsmSpec (tyCtx : TyCtx) (p : Prog) (r : VerifiedAsmResult) : Prop where
+  /-- The program is well-typed under the given TyCtx. -/
+  wellTypedProg : WellTypedProg tyCtx p
   /-- The layout respects types: float vars in fregs, non-float in iregs/stack. -/
-  wellTypedLayout : WellTypedLayout p.tyCtx r.layout
+  wellTypedLayout : WellTypedLayout tyCtx r.layout
   /-- bodyPerPC has one entry per TAC instruction. -/
   bodySize : r.bodyPerPC.size = p.size
   /-- Each non-print, non-lib-call bodyPerPC entry was produced by verifiedGenInstr.
@@ -1364,8 +1364,8 @@ private theorem bodyGenStep_length {code : Array TAC} {layout : VarLayout}
           simp [hNotLib', hInstrs]
 
 /-- A successful `verifiedGenerateAsm` call satisfies `GenAsmSpec`. -/
-theorem verifiedGenerateAsm_spec {p : Prog} {r : VerifiedAsmResult}
-    (hGen : verifiedGenerateAsm p = .ok r) : GenAsmSpec p r := by
+theorem verifiedGenerateAsm_spec {tyCtx : TyCtx} {p : Prog} {r : VerifiedAsmResult}
+    (hGen : verifiedGenerateAsm tyCtx p = .ok r) : GenAsmSpec tyCtx p r := by
   -- Unfold and clear error guards
   simp only [verifiedGenerateAsm] at hGen
   split at hGen <;> simp_all                     -- checkWellTypedProg
@@ -1735,13 +1735,13 @@ private theorem codeAt_of_bodyFlat (bodyPerPC : Array (List ArmInstr))
 
     This wraps `ext_backward_simulation` by discharging `CodeAt` and
     `hPcNext` from the `GenAsmSpec` invariants. -/
-private theorem step_simulation {p : Prog} {r : VerifiedAsmResult}
-    (spec : GenAsmSpec p r)
+private theorem step_simulation {tyCtx : TyCtx} {p : Prog} {r : VerifiedAsmResult}
+    (spec : GenAsmSpec tyCtx p r)
     {pc : Nat} {σ : Store} {am : ArrayMem} {cfg' : Cfg} {s : ArmState}
     (hStep : p ⊩ Cfg.run pc σ am ⟶ cfg')
     (hRel : ExtSimRel r.layout r.pcMap (.run pc σ am) s)
     (hPC : pc < p.size)
-    (hTS : TypedStore p.tyCtx σ) :
+    (hTS : TypedStore tyCtx σ) :
     ∃ s', ArmSteps r.bodyFlat s s' ∧
           ExtSimRel r.layout r.pcMap cfg' s' := by
   -- Case split: lib-call, print, or normal instruction
@@ -2796,7 +2796,7 @@ private theorem step_simulation {p : Prog} {r : VerifiedAsmResult}
         simp [isLibCallTAC, heq] at hNotLib
       exact ext_backward_simulation p r.bodyFlat r.layout r.pcMap
         r.haltS r.divS r.boundsS p.arrayDecls safe
-        hStep hRel hPC spec.wellTypedProg hTS spec.wellTypedLayout
+        hStep hRel hPC tyCtx spec.wellTypedProg hTS spec.wellTypedLayout
         p[pc] (Prog.getElem?_eq_getElem hPC)
         (r.bodyPerPC[pc]'hpcB) hSome hCodeAt hPcNext
         (spec.layoutComplete pc hPC) rfl hNCSL hNCSLBin
@@ -2815,11 +2815,11 @@ private theorem Step.pc_lt_of_step {p : Prog} {pc : Nat} {σ : Store}
 
 /-- Classify a single step result: either the successor is `.run` with
     `TypedStore` preserved, or it is terminal (no further steps). -/
-private theorem step_run_or_terminal {p : Prog} {pc : Nat} {σ : Store}
+private theorem step_run_or_terminal {tyCtx : TyCtx} {p : Prog} {pc : Nat} {σ : Store}
     {am : ArrayMem} {c : Cfg}
-    (hwtp : WellTypedProg p.tyCtx p) (hts : TypedStore p.tyCtx σ)
+    (hwtp : WellTypedProg tyCtx p) (hts : TypedStore tyCtx σ)
     (hpc : pc < p.size) (hstep : p ⊩ Cfg.run pc σ am ⟶ c) :
-    (∃ pc' σ' am', c = .run pc' σ' am' ∧ TypedStore p.tyCtx σ') ∨
+    (∃ pc' σ' am', c = .run pc' σ' am' ∧ TypedStore tyCtx σ') ∨
     (∀ c', ¬ (p ⊩ c ⟶ c')) := by
   cases hstep with
   | const h =>
@@ -2885,12 +2885,12 @@ private theorem step_run_or_terminal {p : Prog} {pc : Nat} {σ : Store}
     intermediate config, and `type_preservation` for `TypedStore`.
 
     **Propagated sorrys:** 0 from `verifiedGenInstr_correct`. -/
-theorem tacToArm_refinement {p : Prog} {r : VerifiedAsmResult}
-    (hGen : verifiedGenerateAsm p = .ok r)
+theorem tacToArm_refinement {tyCtx : TyCtx} {p : Prog} {r : VerifiedAsmResult}
+    (hGen : verifiedGenerateAsm tyCtx p = .ok r)
     {pc : Nat} {σ : Store} {am : ArrayMem}
     (s : ArmState)
     (hRel : ExtSimRel r.layout r.pcMap (.run pc σ am) s)
-    (hTS : TypedStore p.tyCtx σ)
+    (hTS : TypedStore tyCtx σ)
     (cfg' : Cfg) (hSteps : p ⊩ Cfg.run pc σ am ⟶* cfg') :
     ∃ s', ArmSteps r.bodyFlat s s' ∧
           ExtSimRel r.layout r.pcMap cfg' s' := by
@@ -2900,7 +2900,7 @@ theorem tacToArm_refinement {p : Prog} {r : VerifiedAsmResult}
       ∀ pc σ am s,
         c = Cfg.run pc σ am →
         ExtSimRel r.layout r.pcMap (.run pc σ am) s →
-        TypedStore p.tyCtx σ →
+        TypedStore tyCtx σ →
         ∃ s', ArmSteps r.bodyFlat s s' ∧
               ExtSimRel r.layout r.pcMap c_end s' from
     this _ _ hSteps pc σ am s rfl hRel hTS
@@ -2966,20 +2966,20 @@ private theorem typedInit_encode (Γ : TyCtx) (v : Var) :
   simp [Store.typedInit, Value.ofBitVec, Value.encode]
   cases Γ v <;> simp
 
-theorem tacToArm_correctness {p : Prog} {r : VerifiedAsmResult}
-    (hGen : verifiedGenerateAsm p = .ok r)
+theorem tacToArm_correctness {tyCtx : TyCtx} {p : Prog} {r : VerifiedAsmResult}
+    (hGen : verifiedGenerateAsm tyCtx p = .ok r)
     {cfg' : Cfg}
-    (hSteps : p ⊩ Cfg.run 0 (Store.typedInit p.tyCtx) (fun _ _ => 0) ⟶* cfg') :
+    (hSteps : p ⊩ Cfg.run 0 (Store.typedInit tyCtx) (fun _ _ => 0) ⟶* cfg') :
     ∃ s', ArmSteps r.bodyFlat
       { regs := fun _ => 0, fregs := fun _ => 0, stack := fun _ => 0,
         pc := r.pcMap 0, flags := ⟨0, 0⟩ } s' ∧
       ExtSimRel r.layout r.pcMap cfg' s' :=
   tacToArm_refinement hGen _
-    (initial_extSimRel r.layout r.pcMap (Store.typedInit p.tyCtx) (fun _ _ => 0)
+    (initial_extSimRel r.layout r.pcMap (Store.typedInit tyCtx) (fun _ _ => 0)
       { regs := fun _ => 0, fregs := fun _ => 0, stack := fun _ => 0,
         pc := r.pcMap 0, flags := ⟨0, 0⟩ }
-      (typedInit_encode p.tyCtx) rfl (fun _ => rfl) (fun _ => rfl) (fun _ => rfl) rfl)
-    (TypedStore.typedInit p.tyCtx)
+      (typedInit_encode tyCtx) rfl (fun _ => rfl) (fun _ => rfl) (fun _ => rfl) rfl)
+    (TypedStore.typedInit tyCtx)
     cfg' hSteps
 
 /-- Reserved integer register numbers that must never appear in register allocation.
@@ -3020,8 +3020,8 @@ private def checkRegConvention (vars : List Var) : Except String Unit := do
 /-- Generate the complete assembly for a program.
     Calls `verifiedGenerateAsm` for the verified core, then wraps it with
     prologue/epilogue, printf code, error handlers, and data sections. -/
-def generateAsm (p : Prog) : Except String String := do
-  let r ← verifiedGenerateAsm p
+def generateAsm (tyCtx : TyCtx) (p : Prog) : Except String String := do
+  let r ← verifiedGenerateAsm tyCtx p
   let vars := collectVars p
   -- Check register convention before generating assembly
   checkRegConvention vars
@@ -3063,7 +3063,7 @@ def generateAsm (p : Prog) : Except String String := do
     [s!".L{pc}:"] ++ ppInstrs lbl ((r.bodyPerPC[pc]!))
   -- Print observable variables at halt (loads from stack, safe after saveRegs)
   let printCode := p.observable.flatMap fun v =>
-    let isFloat := p.tyCtx v == .float
+    let isFloat := tyCtx v == .float
     let fmtLabel := if isFloat then s!".Lfmt_float" else ".Lfmt"
     if isFloat then
       s!"  // print {v} (float)" ::
@@ -3184,18 +3184,18 @@ def applyPass (name : String) (pass : Prog → ECertificate) (p : Prog) : Except
     DCE after ConstProp: eliminates dead branches from constant folding.
     DCE before RegAlloc: cleans up after Peephole.
     Each pass is checked by the executable certificate checker. -/
-def optimizePipeline (p : Prog) : Except String Prog := do
-  let p ← applyPass "DCE" DCEOpt.optimize p
-  let p ← applyPass "LICM" LICMOpt.optimize p
-  let p ← applyPass "ConstProp" ConstPropOpt.optimize p
-  let p ← applyPass "DCE" DCEOpt.optimize p
-  let p ← applyPass "DAE" DAEOpt.optimize p
-  let p ← applyPass "FMAFusion" FMAFusionOpt.optimize p
-  let p ← applyPass "CSE" CSEOpt.optimize p
-  let p ← applyPass "ConstHoist" ConstHoistOpt.optimize p
-  let p ← applyPass "Peephole" PeepholeOpt.optimize p
-  let p ← applyPass "DCE" DCEOpt.optimize p
-  applyPass "RegAlloc" RegAllocOpt.optimize p
+def optimizePipeline (tyCtx : TyCtx) (p : Prog) : Except String Prog := do
+  let p ← applyPass "DCE" (DCEOpt.optimize tyCtx) p
+  let p ← applyPass "LICM" (LICMOpt.optimize tyCtx) p
+  let p ← applyPass "ConstProp" (ConstPropOpt.optimize tyCtx) p
+  let p ← applyPass "DCE" (DCEOpt.optimize tyCtx) p
+  let p ← applyPass "DAE" (DAEOpt.optimize tyCtx) p
+  let p ← applyPass "FMAFusion" (FMAFusionOpt.optimize tyCtx) p
+  let p ← applyPass "CSE" (CSEOpt.optimize tyCtx) p
+  let p ← applyPass "ConstHoist" (ConstHoistOpt.optimize tyCtx) p
+  let p ← applyPass "Peephole" (PeepholeOpt.optimize tyCtx) p
+  let p ← applyPass "DCE" (DCEOpt.optimize tyCtx) p
+  applyPass "RegAlloc" (RegAllocOpt.optimize tyCtx) p
 
 /-- A pass function is tyCtx-sound if its certificate carries the same tyCtx
     as the input program, and the transformed program's tyCtx matches. -/
@@ -3225,18 +3225,18 @@ def applyPassesPure : List (String × (Prog → ECertificate)) → Prog → Prog
     applyPassesPure rest p'
 
 /-- The standard optimization pass list. -/
-def standardPasses : List (String × (Prog → ECertificate)) :=
-  [ ("DCE", DCEOpt.optimize),
-    ("LICM", LICMOpt.optimize),
-    ("ConstProp", ConstPropOpt.optimize),
-    ("DCE", DCEOpt.optimize),
-    ("DAE", DAEOpt.optimize),
-    ("FMAFusion", FMAFusionOpt.optimize),
-    ("CSE", CSEOpt.optimize),
-    ("ConstHoist", ConstHoistOpt.optimize),
-    ("Peephole", PeepholeOpt.optimize),
-    ("DCE", DCEOpt.optimize),
-    ("RegAlloc", RegAllocOpt.optimize) ]
+def standardPasses (tyCtx : TyCtx) : List (String × (Prog → ECertificate)) :=
+  [ ("DCE", DCEOpt.optimize tyCtx),
+    ("LICM", LICMOpt.optimize tyCtx),
+    ("ConstProp", ConstPropOpt.optimize tyCtx),
+    ("DCE", DCEOpt.optimize tyCtx),
+    ("DAE", DAEOpt.optimize tyCtx),
+    ("FMAFusion", FMAFusionOpt.optimize tyCtx),
+    ("CSE", CSEOpt.optimize tyCtx),
+    ("ConstHoist", ConstHoistOpt.optimize tyCtx),
+    ("Peephole", PeepholeOpt.optimize tyCtx),
+    ("DCE", DCEOpt.optimize tyCtx),
+    ("RegAlloc", RegAllocOpt.optimize tyCtx) ]
 
 /-- IO version of applyPassesPure with warning messages on failures. -/
 def applyPassesIO (passes : List (String × (Prog → ECertificate))) (p : Prog) : IO Prog :=
@@ -3246,8 +3246,9 @@ def compileToAsm (input : String) : Except String String := do
   let prog ← parseProgram input
   if !prog.typeCheck then .error "program failed type check (frontend)"
   let tac := prog.compileToTAC
-  let opt := applyPassesPure standardPasses tac
-  generateAsm opt
+  let tyCtx := prog.tyCtx
+  let opt := applyPassesPure (standardPasses tyCtx) tac
+  generateAsm tyCtx opt
 
 -- ============================================================
 -- § 7. IO driver: write assembly, assemble, and run
