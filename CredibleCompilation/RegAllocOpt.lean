@@ -496,6 +496,7 @@ def optimize (prog : Prog) : ECertificate :=
     else 0
   { orig := prog
     trans := trans
+    tyCtx := prog.tyCtx
     inv_orig := inv_orig
     inv_trans := inv_trans
     instrCerts := instrCerts

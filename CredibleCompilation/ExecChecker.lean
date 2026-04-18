@@ -387,10 +387,11 @@ def BoolExpr.mapVarsRel (rel : EExprRel) : BoolExpr → Option BoolExpr
     some (.bexpr (e.substSym' ss))
 
 /-- An executable certificate: all data needed to verify the transformation.
-    The type context and observable variables are derived from the original program. -/
+    The type context is carried explicitly (not derived from orig/trans programs). -/
 structure ECertificate where
   orig       : Prog
   trans      : Prog
+  tyCtx      : TyCtx
   inv_orig   : Array EInv
   inv_trans  : Array EInv
   instrCerts : Array EInstrCert
@@ -400,10 +401,8 @@ structure ECertificate where
 
 instance : Inhabited ECertificate where
   default := { orig := ⟨#[], fun _ => .int, [], []⟩, trans := ⟨#[], fun _ => .int, [], []⟩,
+               tyCtx := fun _ => .int,
                inv_orig := #[], inv_trans := #[], instrCerts := #[], haltCerts := #[], measure := #[] }
-
-/-- The type context for the certificate, derived from the original program. -/
-abbrev ECertificate.tyCtx (cert : ECertificate) : TyCtx := cert.orig.tyCtx
 
 /-- The observable variables for the certificate, derived from the original program. -/
 abbrev ECertificate.observable (cert : ECertificate) : List Var := cert.orig.observable
@@ -1184,8 +1183,8 @@ theorem AllArrayOpsInt.arrStore_int {p : Prog} {pc : Nat} {arr : ArrayName}
 
 /-- Check all certificate conditions. Returns `true` iff the certificate is valid. -/
 def checkCertificateExec (cert : ECertificate) : Bool :=
-  checkWellTypedProg cert.orig.tyCtx cert.orig &&
-  checkWellTypedProg cert.orig.tyCtx cert.trans &&
+  checkWellTypedProg cert.tyCtx cert.orig &&
+  checkWellTypedProg cert.tyCtx cert.trans &&
   (cert.orig.observable == cert.trans.observable) &&
   checkStartCorrespondenceExec cert &&
   checkInvariantsAtStartExec cert &&
@@ -1209,8 +1208,8 @@ def checkCertificateExec (cert : ECertificate) : Bool :=
 
 /-- Verbose check: returns the result of each individual condition. -/
 def checkCertificateVerboseExec (cert : ECertificate) : List (String × Bool) :=
-  [ ("well_typed_orig",       checkWellTypedProg cert.orig.tyCtx cert.orig),
-    ("well_typed_trans",      checkWellTypedProg cert.orig.tyCtx cert.trans),
+  [ ("well_typed_orig",       checkWellTypedProg cert.tyCtx cert.orig),
+    ("well_typed_trans",      checkWellTypedProg cert.tyCtx cert.trans),
     ("same_observable",       cert.orig.observable == cert.trans.observable),
     ("start_correspondence",  checkStartCorrespondenceExec cert),
     ("invariants_at_start",   checkInvariantsAtStartExec cert),

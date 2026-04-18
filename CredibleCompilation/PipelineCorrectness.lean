@@ -127,7 +127,7 @@ private theorem same_obs_of_check (cert : ECertificate)
 private theorem applyPass_preserves_halt_am {name : String} {pass : Prog → ECertificate}
     {p p' : Prog}
     (h : applyPass name pass p = .ok p')
-    (σ₀ : Store) (hts : TypedStore (pass p).orig.tyCtx σ₀)
+    (σ₀ : Store) (hts : TypedStore (pass p).tyCtx σ₀)
     {σ' : Store} {am₀ am' : ArrayMem}
     (hh : haltsWithResult p' 0 σ₀ σ' am₀ am') :
     ∃ σ_orig, haltsWithResult p 0 σ₀ σ_orig am₀ am' ∧
@@ -136,7 +136,7 @@ private theorem applyPass_preserves_halt_am {name : String} {pass : Prog → ECe
   have hvalid := soundness_bridge (pass p) hcheck
   have hTransP : (toPCertificate (pass p)).trans = p' := by simp [toPCertificate]; exact hTrans
   have hts' : TypedStore (toPCertificate (pass p)).tyCtx σ₀ := by
-    simp [toPCertificate, PCertificate.tyCtx]; exact hts
+    simp [toPCertificate]; exact hts
   have hhalt_cert : ∃ am', haltsWithResult (toPCertificate (pass p)).trans 0 σ₀ σ' am₀ am' :=
     ⟨am', hTransP ▸ hh⟩
   obtain ⟨σ_o, am_f, hhalt_o, hhalt_t, hobs⟩ :=
@@ -156,7 +156,7 @@ private theorem applyPass_preserves_halt_am {name : String} {pass : Prog → ECe
 private theorem applyPass_preserves_error_am {name : String} {pass : Prog → ECertificate}
     {p p' : Prog}
     (h : applyPass name pass p = .ok p')
-    (σ₀ : Store) (hts : TypedStore (pass p).orig.tyCtx σ₀)
+    (σ₀ : Store) (hts : TypedStore (pass p).tyCtx σ₀)
     {σ' : Store} {am₀ am' : ArrayMem}
     (hbeh : p' ⊩ Cfg.run 0 σ₀ am₀ ⟶* Cfg.error σ' am') :
     ∃ σ_o am_o', p ⊩ Cfg.run 0 σ₀ am₀ ⟶* Cfg.error σ_o am_o' := by
@@ -164,7 +164,7 @@ private theorem applyPass_preserves_error_am {name : String} {pass : Prog → EC
   have hvalid := soundness_bridge (pass p) hcheck
   have hTransP : (toPCertificate (pass p)).trans = p' := by simp [toPCertificate]; exact hTrans
   have hts' : TypedStore (toPCertificate (pass p)).tyCtx σ₀ := by
-    simp [toPCertificate, PCertificate.tyCtx]; exact hts
+    simp [toPCertificate]; exact hts
   have herr_cert : (toPCertificate (pass p)).trans ⊩ Cfg.run 0 σ₀ am₀ ⟶* Cfg.error σ' am' :=
     hTransP ▸ hbeh
   obtain ⟨σ_o, ⟨am_f, herr_orig⟩⟩ := error_preservation _ hvalid σ₀ hts' herr_cert
@@ -176,7 +176,7 @@ private theorem applyPass_preserves_error_am {name : String} {pass : Prog → EC
 private theorem applyPass_preserves_diverge {name : String} {pass : Prog → ECertificate}
     {p p' : Prog}
     (h : applyPass name pass p = .ok p')
-    (σ₀ : Store) (hts : TypedStore (pass p).orig.tyCtx σ₀)
+    (σ₀ : Store) (hts : TypedStore (pass p).tyCtx σ₀)
     {f : Nat → Cfg}
     (hinf : IsInfiniteExec p' f) (hf0 : f 0 = Cfg.run 0 σ₀ ArrayMem.init) :
     ∃ g, IsInfiniteExec p g ∧ g 0 = Cfg.run 0 σ₀ ArrayMem.init := by
@@ -184,7 +184,7 @@ private theorem applyPass_preserves_diverge {name : String} {pass : Prog → ECe
   have hvalid := soundness_bridge (pass p) hcheck
   have hTransP : (toPCertificate (pass p)).trans = p' := by simp [toPCertificate]; exact hTrans
   have hts' : TypedStore (toPCertificate (pass p)).tyCtx σ₀ := by
-    simp [toPCertificate, PCertificate.tyCtx]; exact hts
+    simp [toPCertificate]; exact hts
   have hinf' : IsInfiniteExec (toPCertificate (pass p)).trans f := hTransP ▸ hinf
   have hf0' : f 0 = Cfg.run 0 σ₀ ArrayMem.init := hf0
   obtain ⟨g, hg, hg0⟩ := soundness_diverge _ hvalid f σ₀ hts' hinf' hf0'
@@ -265,7 +265,7 @@ theorem applyPassesPure_preserves_halt_am
       have hty' : p'.tyCtx = p.tyCtx := by rw [← hTrans, ← hS.1, hS.2]
       have hts' : TypedStore p'.tyCtx σ₀ := hty' ▸ hts
       obtain ⟨σ_mid, hHalt_mid, hobs_mid⟩ := ih hRest hts' hHalt
-      have hts_pass : TypedStore (pass p).orig.tyCtx σ₀ := hS.2 p ▸ hts
+      have hts_pass : TypedStore (pass p).tyCtx σ₀ := hS.2 p ▸ hts
       obtain ⟨σ_orig, hHalt_orig, hobs_orig⟩ :=
         applyPass_preserves_halt_am hap σ₀ hts_pass hHalt_mid
       have hobs_p' := obs_preserved_by_pass name pass p p' hap
@@ -299,7 +299,7 @@ theorem applyPassesPure_preserves_error_am
         rw [← hTrans, ← hS.1, hS.2]
       have hts' : TypedStore p'.tyCtx σ₀ := hty' ▸ hts
       obtain ⟨σ_mid, am_mid, hErr_mid⟩ := ih hRest hts' hErr
-      have hts_pass : TypedStore (pass p).orig.tyCtx σ₀ := hS.2 p ▸ hts
+      have hts_pass : TypedStore (pass p).tyCtx σ₀ := hS.2 p ▸ hts
       exact applyPass_preserves_error_am hap σ₀ hts_pass hErr_mid
     · exact ih hRest hts hErr
 
@@ -329,7 +329,7 @@ theorem applyPassesPure_preserves_diverge
         rw [← hTrans, ← hS.1, hS.2]
       have hts' : TypedStore p'.tyCtx σ₀ := hty' ▸ hts
       obtain ⟨g, hg, hg0⟩ := ih hRest hts' hinf hf0
-      have hts_pass : TypedStore (pass p).orig.tyCtx σ₀ := hS.2 p ▸ hts
+      have hts_pass : TypedStore (pass p).tyCtx σ₀ := hS.2 p ▸ hts
       exact applyPass_preserves_diverge hap σ₀ hts_pass hg hg0
     · exact ih hRest hts hinf hf0
 

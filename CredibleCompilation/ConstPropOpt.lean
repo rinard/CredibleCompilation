@@ -209,6 +209,7 @@ def optimize (prog : Prog) : ECertificate :=
   let haltCerts := _root_.buildHaltCerts instrCerts trans
   { orig := orig
     trans := trans
+    tyCtx := orig.tyCtx
     inv_orig := inv
     inv_trans := inv
     instrCerts := instrCerts

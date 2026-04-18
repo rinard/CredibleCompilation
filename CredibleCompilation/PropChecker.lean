@@ -48,13 +48,13 @@ def PTransMeasure := Label → Store → Nat
 structure PCertificate where
   orig        : Prog
   trans       : Prog
+  tyCtx       : TyCtx
   inv_orig    : PInvariantMap
   inv_trans   : PInvariantMap
   instrCerts  : Label → PInstrCert
   haltCerts   : Label → PHaltCert
   measure     : PTransMeasure
 
-abbrev PCertificate.tyCtx (cert : PCertificate) : TyCtx := cert.orig.tyCtx
 abbrev PCertificate.observable (cert : PCertificate) : List Var := cert.orig.observable
 
 -- ============================================================

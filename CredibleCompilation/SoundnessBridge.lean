@@ -153,6 +153,7 @@ def eRelToStoreRel (rel : EExprRel) : PStoreRel :=
 def toPCertificate (dc : ECertificate) : PCertificate :=
   { orig       := dc.orig
     trans      := dc.trans
+    tyCtx      := dc.tyCtx
     inv_orig   := fun l => (dc.inv_orig.getD l ([] : EInv)).toProp
     inv_trans  := fun l => (dc.inv_trans.getD l ([] : EInv)).toProp
     instrCerts := fun l =>
@@ -178,8 +179,7 @@ def toPCertificate (dc : ECertificate) : PCertificate :=
     (toPCertificate dc).trans = dc.trans := rfl
 
 @[simp] theorem toCertificate_tyCtx (dc : ECertificate) :
-    (toPCertificate dc).tyCtx = dc.tyCtx := by
-  simp [PCertificate.tyCtx, ECertificate.tyCtx, toPCertificate]
+    (toPCertificate dc).tyCtx = dc.tyCtx := rfl
 
 @[simp] theorem toCertificate_observable (dc : ECertificate) :
     (toPCertificate dc).observable = dc.observable := by
@@ -3739,7 +3739,7 @@ theorem soundness_bridge
     unfold checkRelAtStartExec at h_relstart; exact h_relstart
   exact {
     well_typed_orig  := by simp [toPCertificate]; exact checkWellTypedProg_sound hwt_orig
-    well_typed_trans := by simp [toPCertificate, PCertificate.tyCtx]; exact checkWellTypedProg_sound hwt_trans
+    well_typed_trans := by simp [toPCertificate]; exact checkWellTypedProg_sound hwt_trans
     same_observable  := by
       simp [toPCertificate]
       exact beq_iff_eq.mp hobs_eq

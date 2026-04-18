@@ -118,6 +118,7 @@ def optimize (prog : Prog) : ECertificate :=
   let haltCerts := _root_.buildHaltCerts instrCerts trans
   { orig := prog
     trans := trans
+    tyCtx := prog.tyCtx
     inv_orig := Array.replicate prog.size ([] : EInv)
     inv_trans := Array.replicate trans.size ([] : EInv)
     instrCerts := instrCerts

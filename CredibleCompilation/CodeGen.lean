@@ -3197,11 +3197,11 @@ def optimizePipeline (p : Prog) : Except String Prog := do
   let p ← applyPass "DCE" DCEOpt.optimize p
   applyPass "RegAlloc" RegAllocOpt.optimize p
 
-/-- A pass function is tyCtx-sound if it preserves tyCtx between orig and trans,
-    and sets orig.tyCtx = input.tyCtx. -/
+/-- A pass function is tyCtx-sound if its certificate carries the same tyCtx
+    as the input program, and the transformed program's tyCtx matches. -/
 def TyCtxSound (pass : Prog → ECertificate) : Prop :=
-  (∀ q, (pass q).orig.tyCtx = (pass q).trans.tyCtx) ∧
-  (∀ q, (pass q).orig.tyCtx = q.tyCtx)
+  (∀ q, (pass q).tyCtx = (pass q).trans.tyCtx) ∧
+  (∀ q, (pass q).tyCtx = q.tyCtx)
 
 /-- Try to apply a single optimization pass. If the certificate check fails,
     print a warning and return the input program unchanged. -/

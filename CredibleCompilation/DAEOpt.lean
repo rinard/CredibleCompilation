@@ -349,6 +349,7 @@ def optimize (prog : Prog) : ECertificate :=
     { pc_orig := i, rel := rels.getD i ([] : EExprRel) : EHaltCert }
   { orig := prog
     trans := trans
+    tyCtx := prog.tyCtx
     inv_orig := inv_orig
     inv_trans := inv_trans
     instrCerts := instrCerts
