@@ -944,6 +944,10 @@ structure GenAsmSpec (tyCtx : TyCtx) (p : Prog) (r : VerifiedAsmResult) : Prop w
   wellTypedProg : WellTypedProg tyCtx p
   /-- The layout respects types: float vars in fregs, non-float in iregs/stack. -/
   wellTypedLayout : WellTypedLayout tyCtx r.layout
+  /-- No variable is mapped to a restricted register (scratch or reserved). -/
+  regConventionSafe : RegConventionSafe r.layout
+  /-- No two variables share a register/stack location. -/
+  injective : VarLayoutInjective r.layout
   /-- bodyPerPC has one entry per TAC instruction. -/
   bodySize : r.bodyPerPC.size = p.size
   /-- Each non-print, non-lib-call bodyPerPC entry was produced by verifiedGenInstr.
@@ -1378,8 +1382,10 @@ theorem verifiedGenerateAsm_spec {tyCtx : TyCtx} {p : Prog} {r : VerifiedAsmResu
   split at hGen <;> simp_all                     -- checkWellTypedProg
   -- regConventionSafe
   split at hGen <;> simp_all
+  rename_i hRC
   -- isInjective
   split at hGen <;> simp_all
+  rename_i hII
   -- checkWellTypedLayout
   split at hGen
   · simp_all
@@ -1411,6 +1417,8 @@ theorem verifiedGenerateAsm_spec {tyCtx : TyCtx} {p : Prog} {r : VerifiedAsmResu
           refine ⟨
             checkWellTypedProg_sound ‹_›,
             checkWellTypedLayout_wellTyped ‹_›,
+            VarLayout.regConventionSafe_spec _ hRC,
+            VarLayout.isInjective_spec _ hII,
             by simp [Prog.size_eq]; exact hBSz,
             ?instrGen, ?pcMapLengths, ?layoutComplete, ?callSiteSaveRestore,
             ?printSaveRestore, ?callerSaveSpec⟩
@@ -1526,6 +1534,97 @@ theorem verifiedGenerateAsm_spec {tyCtx : TyCtx} {p : Prog} {r : VerifiedAsmResu
           case callerSaveSpec =>
             exact checkCallerSaveSpec_sound hCSS
 
+
+-- ──────────────────────────────────────────────────────────────
+-- § 5b. Totality: verifiedGenerateAsm succeeds for pipeline output
+-- ──────────────────────────────────────────────────────────────
+
+/-- Every variable in `collectVars p` has a `lookupVar` entry in `buildVarMap`. -/
+private theorem lookupVar_of_mem_collectVars {p : Prog} {v : Var}
+    (hv : v ∈ collectVars p) :
+    ∃ off, lookupVar (buildVarMap (collectVars p)) v = some off := by
+  sorry
+
+/-- `buildVarLayout` maps every variable in `collectVars p` to some location. -/
+private theorem buildVarLayout_complete {p : Prog} {v : Var}
+    (hv : v ∈ collectVars p) :
+    (buildVarLayout (collectVars p) (buildVarMap (collectVars p))) v ≠ none := by
+  -- buildVarLayout uses filterMap: tries varToArmReg, varToArmFReg, lookupVar
+  -- If the first two return none, lookupVar succeeds (since v ∈ collectVars)
+  unfold buildVarLayout
+  simp only [VarLayout.mk, List.lookup]
+  -- The layout entries are a filterMap over collectVars
+  -- Since v ∈ collectVars, and lookupVar always succeeds for members,
+  -- the filterMap includes v with some location
+  sorry
+
+/-- Every variable in `TAC.vars instr` for any instruction in `p.code` is in `collectVars p`. -/
+private theorem vars_subset_collectVars {p : Prog} {pc : Nat} (hpc : pc < p.code.size)
+    {v : Var} (hv : v ∈ (p.code[pc]).vars) :
+    v ∈ collectVars p := by
+  sorry
+
+/-- If no variable name violates the register convention, then `buildVarLayout` maps
+    no variable to a restricted register: `varToArmReg` on non-restricted names
+    produces non-restricted registers, `varToArmFReg` likewise. -/
+private theorem buildVarLayout_regConventionSafe (p : Prog)
+    (hNoViol : checkNoRegConventionViolations p = true) :
+    (buildVarLayout (collectVars p) (buildVarMap (collectVars p))).regConventionSafe = true := by
+  sorry
+
+/-- If no two variable names collide on register number (`checkNoRegisterCollisions`),
+    and no variable name violates the register convention, then `buildVarLayout` is injective. -/
+private theorem buildVarLayout_injective (p : Prog)
+    (hNoColl : checkNoRegisterCollisions p = true)
+    (hNoViol : checkNoRegConventionViolations p = true) :
+    (buildVarLayout (collectVars p) (buildVarMap (collectVars p))).isInjective = true := by
+  sorry
+
+/-- If the program is well-typed under `tyCtx` and variables follow the naming convention,
+    then `checkWellTypedLayout` returns `none` (success). -/
+private theorem checkWellTypedLayout_succeeds (tyCtx : TyCtx) (p : Prog)
+    (hWT : checkWellTypedProg tyCtx p = true) :
+    checkWellTypedLayout tyCtx
+      (buildVarLayout (collectVars p) (buildVarMap (collectVars p))) p.code = none := by
+  sorry
+
+/-- `checkCallerSaveSpec` passes for the constructed layout and varMap. -/
+private theorem checkCallerSaveSpec_succeeds (p : Prog) :
+    checkCallerSaveSpec
+      (buildVarLayout (collectVars p) (buildVarMap (collectVars p)))
+      (buildVarMap (collectVars p)) = true := by
+  sorry
+
+/-- Successor bounds check on a program (mirrors checkSuccessorsInBounds for trans). -/
+private def checkSuccessorsInBounds_prog (p : Prog) : Bool :=
+  p.size > 0 &&
+  (List.range p.size).all fun pc =>
+    match p[pc]? with
+    | some (.goto l) | some (.ifgoto _ l) => l < p.size
+    | _ => true
+
+/-- `checkBranchTargets` passes if all successors are in bounds. -/
+private theorem checkBranchTargets_of_successorsInBounds (p : Prog)
+    (hSIB : checkSuccessorsInBounds_prog p = true) :
+    checkBranchTargets p.code = none := by
+  sorry
+
+/-- `verifiedGenInstr` returns `some` for any instruction in a well-typed program
+    whose layout is complete, well-typed, regConventionSafe, and injective,
+    and whose BoolExprs have simple ops. -/
+private theorem verifiedGenInstr_total
+    {layout : VarLayout} {pcMap : Nat → Nat} {instr : TAC}
+    {haltS divS boundsS : Nat} {arrayDecls : List (ArrayName × Nat × VarTy)}
+    {safe : Bool}
+    (hRC : layout.regConventionSafe = true)
+    (hII : layout.isInjective = true)
+    (hComplete : ∀ v, v ∈ instr.vars → layout v ≠ none)
+    (hWTL : WellTypedLayout tyCtx layout)
+    (hWT : WellTypedInstr tyCtx arrayDecls instr)
+    (hSimple : match instr with | .boolop _ be | .ifgoto be _ => be.hasSimpleOps = true | _ => True)
+    (hNotPrint : ∀ fmt vs, instr ≠ .print fmt vs) :
+    ∃ instrs, verifiedGenInstr layout pcMap instr haltS divS boundsS arrayDecls safe = some instrs := by
+  sorry
 
 -- ──────────────────────────────────────────────────────────────
 -- buildPcMap prefix-sum lemmas
