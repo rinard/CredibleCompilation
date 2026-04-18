@@ -3711,10 +3711,13 @@ theorem soundness_bridge
     (dc : ECertificate) (h : checkCertificateExec dc = true) :
     PCertificateValid (toPCertificate dc) := by
   -- checkCertificateExec is: wt_orig && wt_trans && same_obs && c1..c16
-  --   && bool_no_arr_{orig,trans} && bool_simple_{orig,trans} && bool_vars_cov
-  -- && is left-associative, so decompose from right to left (24 conjuncts, 23 steps)
+  --   && bool_no_arr_{orig,trans} && bool_simple_{orig,trans}
+  --   && no_scratch_{orig,trans} && bool_vars_cov
+  -- && is left-associative, so decompose from right to left (26 conjuncts, 25 steps)
   unfold checkCertificateExec at h
-  have ⟨h23, h_boolvarscov⟩       := and_true_of_and_eq_true h
+  have ⟨h25, h_boolvarscov⟩       := and_true_of_and_eq_true h
+  have ⟨h24, _h_noscratch_t⟩      := and_true_of_and_eq_true h25
+  have ⟨h23, _h_noscratch_o⟩      := and_true_of_and_eq_true h24
   have ⟨h22, _h_boolsimple_t⟩     := and_true_of_and_eq_true h23
   have ⟨h21, _h_boolsimple_o⟩     := and_true_of_and_eq_true h22
   have ⟨h20, h_boolnoarr_t⟩       := and_true_of_and_eq_true h21

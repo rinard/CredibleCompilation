@@ -845,6 +845,12 @@ def verifiedGenerateAsm (tyCtx : TyCtx) (p : Prog) : Except String VerifiedAsmRe
     let vars := collectVars p
     let varMap := buildVarMap vars
     let layout := buildVarLayout vars varMap
+    -- Check layout safety: no scratch registers, injective mapping
+    if !layout.scratchSafe then
+      .error "layout uses scratch register"
+    else if !layout.isInjective then
+      .error "layout is not injective"
+    else
     -- Check WellTypedLayout (hWTL hypothesis)
     match checkWellTypedLayout tyCtx layout p.code with
     | some err => .error s!"well-typed layout check failed: {err}"
@@ -1369,6 +1375,10 @@ theorem verifiedGenerateAsm_spec {tyCtx : TyCtx} {p : Prog} {r : VerifiedAsmResu
   -- Unfold and clear error guards
   simp only [verifiedGenerateAsm] at hGen
   split at hGen <;> simp_all                     -- checkWellTypedProg
+  -- scratchSafe
+  split at hGen <;> simp_all
+  -- isInjective
+  split at hGen <;> simp_all
   -- checkWellTypedLayout
   split at hGen
   · simp_all
