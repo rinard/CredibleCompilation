@@ -158,29 +158,36 @@ import re, sys
 c_out = '''$out_c'''
 w_out = '''$out_w'''
 num_re = r'[-+]?[0-9]*\.?[0-9]+(?:[eE][-+]?[0-9]+)?'
-c_nums = []
+# Parse C output: 'name = value' pairs (skip elapsed line)
+c_vars = {}
 for line in c_out.strip().splitlines():
     if line.startswith('elapsed'): continue
-    for part in line.split('=')[1:]:
-        m = re.search(num_re, part)
-        if m: c_nums.append(m.group())
-w_nums = []
+    for m in re.finditer(r'(\w+)\s*=\s*(' + num_re + r')', line):
+        c_vars[m.group(1)] = m.group(2)
+# Parse WL output: 'name = value' lines from compiled program
+w_vars = {}
 for line in w_out.strip().splitlines():
-    if '=' in line: break
-    m = re.fullmatch(r'\s*(' + num_re + r')\s*', line)
-    if m: w_nums.append(m.group(1))
-if not c_nums or not w_nums:
-    print('ok?')
-    sys.exit()
-n = min(len(c_nums), len(w_nums))
-c_vals = [float(x) for x in c_nums[-n:]]
-w_vals = [float(x) for x in w_nums[-n:]]
+    m = re.match(r'(\w+)\s*=\s*(' + num_re + r')\s*$', line)
+    if m: w_vars[m.group(1)] = m.group(2)
+# Compare on shared variable names
+shared = set(c_vars) & set(w_vars)
+if not shared:
+    # Fallback: compare last N bare numbers (legacy behavior)
+    c_nums = list(c_vars.values()) if c_vars else []
+    w_nums = list(w_vars.values()) if w_vars else []
+    if not c_nums or not w_nums:
+        print('ok?'); sys.exit()
+    shared_nums = list(zip(c_nums[-min(len(c_nums),len(w_nums)):],
+                           w_nums[-min(len(c_nums),len(w_nums)):]))
+else:
+    shared_nums = [(c_vars[k], w_vars[k]) for k in sorted(shared)]
 ok = True
-for c, w in zip(c_vals, w_vals):
+for cs, ws in shared_nums:
+    c, w = float(cs), float(ws)
     if c == 0 and w == 0: continue
     if abs(c) < 1e-15 and abs(w) < 1e-15: continue
     if abs(c - w) / max(abs(c), abs(w), 1e-15) >= 1e-4:
-        print(f'MISMATCH c={c} w={w}')
+        print(f'MISMATCH {cs} vs {ws}')
         ok = False; break
 if ok: print('ok')
 ")
