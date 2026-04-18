@@ -204,27 +204,6 @@ private theorem obs_preserved_by_pass (n : String) (pass : Prog → ECertificate
 -- § 3. applyPassesPure: inductive soundness
 -- ============================================================
 
-/-- `applyPassesPure` preserves tyCtx across all passes. -/
-theorem applyPassesPure_tyCtx_eq
-    (passes : List (String × (Prog → ECertificate)))
-    (hSound : ∀ np ∈ passes, TyCtxSound np.2) (p : Prog) :
-    (applyPassesPure passes p).tyCtx = p.tyCtx := by
-  induction passes generalizing p with
-  | nil => rfl
-  | cons np rest ih =>
-    simp only [applyPassesPure]
-    obtain ⟨name, pass⟩ := np
-    have hS := hSound (name, pass) (List.mem_cons_self ..)
-    have hRest : ∀ np ∈ rest, TyCtxSound np.2 :=
-      fun np' h => hSound np' (List.mem_cons_of_mem _ h)
-    split
-    · -- applyPass succeeded: p' = cert.trans, tyCtx preserved
-      rename_i p' hap
-      have ⟨_, hTrans, _, _, _⟩ := applyPass_sound hap
-      rw [ih hRest _, ← hTrans, ← hS.1, hS.2]
-    · -- applyPass failed: identity
-      exact ih hRest _
-
 /-- `applyPassesPure` preserves observable variables across all passes. -/
 theorem applyPassesPure_obs_eq
     (passes : List (String × (Prog → ECertificate)))
@@ -239,11 +218,12 @@ theorem applyPassesPure_obs_eq
     · rename_i p' hap; rw [ih _, obs_preserved_by_pass name pass p p' hap]
     · exact ih _
 
-/-- `applyPassesPure` preserves halting behavior with fixed initial AM. -/
+/-- `applyPassesPure` preserves halting behavior with fixed initial AM.
+    Each pass's certificate carries the same tyCtx, so TypedStore is preserved. -/
 theorem applyPassesPure_preserves_halt_am
     (passes : List (String × (Prog → ECertificate)))
-    (hSound : ∀ np ∈ passes, TyCtxSound np.2)
-    (σ₀ : Store) (hts : TypedStore p.tyCtx σ₀)
+    {tyCtx : TyCtx} (hTyCtx : ∀ np ∈ passes, ∀ q, (np.2 q).tyCtx = tyCtx)
+    (σ₀ : Store) (hts : TypedStore tyCtx σ₀)
     {σ' : Store} {am₀ am' : ArrayMem}
     (hHalt : haltsWithResult (applyPassesPure passes p) 0 σ₀ σ' am₀ am') :
     ∃ σ_orig, haltsWithResult p 0 σ₀ σ_orig am₀ am' ∧
@@ -255,30 +235,27 @@ theorem applyPassesPure_preserves_halt_am
   | cons np rest ih =>
     simp only [applyPassesPure] at hHalt
     obtain ⟨name, pass⟩ := np
-    have hS := hSound (name, pass) (List.mem_cons_self ..)
-    have hRest : ∀ np ∈ rest, TyCtxSound np.2 :=
-      fun np' h => hSound np' (List.mem_cons_of_mem _ h)
+    have hRest : ∀ np ∈ rest, ∀ q, (np.2 q).tyCtx = tyCtx :=
+      fun np' h => hTyCtx np' (List.mem_cons_of_mem _ h)
     split at hHalt
     · -- Pass succeeded
       rename_i p' hap
-      have ⟨_, hTrans, _, _, _⟩ := applyPass_sound hap
-      have hty' : p'.tyCtx = p.tyCtx := by rw [← hTrans, ← hS.1, hS.2]
-      have hts' : TypedStore p'.tyCtx σ₀ := hty' ▸ hts
-      obtain ⟨σ_mid, hHalt_mid, hobs_mid⟩ := ih hRest hts' hHalt
-      have hts_pass : TypedStore (pass p).tyCtx σ₀ := hS.2 p ▸ hts
+      obtain ⟨σ_mid, hHalt_mid, hobs_mid⟩ := ih hRest hHalt
+      have hts_pass : TypedStore (pass p).tyCtx σ₀ :=
+        hTyCtx (name, pass) (List.mem_cons_self ..) p ▸ hts
       obtain ⟨σ_orig, hHalt_orig, hobs_orig⟩ :=
         applyPass_preserves_halt_am hap σ₀ hts_pass hHalt_mid
       have hobs_p' := obs_preserved_by_pass name pass p p' hap
       exact ⟨σ_orig, hHalt_orig, fun v hv => by
         rw [hobs_mid v (hobs_p' ▸ hv), hobs_orig v hv]⟩
     · -- Pass failed: identity
-      exact ih hRest hts hHalt
+      exact ih hRest hHalt
 
 /-- `applyPassesPure` preserves error behavior with fixed initial AM. -/
 theorem applyPassesPure_preserves_error_am
     (passes : List (String × (Prog → ECertificate)))
-    (hSound : ∀ np ∈ passes, TyCtxSound np.2)
-    (σ₀ : Store) (hts : TypedStore p.tyCtx σ₀)
+    {tyCtx : TyCtx} (hTyCtx : ∀ np ∈ passes, ∀ q, (np.2 q).tyCtx = tyCtx)
+    (σ₀ : Store) (hts : TypedStore tyCtx σ₀)
     {σ' : Store} {am₀ am' : ArrayMem}
     (hErr : (applyPassesPure passes p) ⊩ Cfg.run 0 σ₀ am₀ ⟶* Cfg.error σ' am') :
     ∃ σ_o am_o', p ⊩ Cfg.run 0 σ₀ am₀ ⟶* Cfg.error σ_o am_o' := by
@@ -289,25 +266,21 @@ theorem applyPassesPure_preserves_error_am
   | cons np rest ih =>
     simp only [applyPassesPure] at hErr
     obtain ⟨name, pass⟩ := np
-    have hS := hSound (name, pass) (List.mem_cons_self ..)
-    have hRest : ∀ np ∈ rest, TyCtxSound np.2 :=
-      fun np' h => hSound np' (List.mem_cons_of_mem _ h)
+    have hRest : ∀ np ∈ rest, ∀ q, (np.2 q).tyCtx = tyCtx :=
+      fun np' h => hTyCtx np' (List.mem_cons_of_mem _ h)
     split at hErr
     · rename_i p' hap
-      have hty' : p'.tyCtx = p.tyCtx := by
-        have ⟨_, hTrans, _, _, _⟩ := applyPass_sound hap
-        rw [← hTrans, ← hS.1, hS.2]
-      have hts' : TypedStore p'.tyCtx σ₀ := hty' ▸ hts
-      obtain ⟨σ_mid, am_mid, hErr_mid⟩ := ih hRest hts' hErr
-      have hts_pass : TypedStore (pass p).tyCtx σ₀ := hS.2 p ▸ hts
+      obtain ⟨σ_mid, am_mid, hErr_mid⟩ := ih hRest hErr
+      have hts_pass : TypedStore (pass p).tyCtx σ₀ :=
+        hTyCtx (name, pass) (List.mem_cons_self ..) p ▸ hts
       exact applyPass_preserves_error_am hap σ₀ hts_pass hErr_mid
-    · exact ih hRest hts hErr
+    · exact ih hRest hErr
 
 /-- `applyPassesPure` preserves divergence. -/
 theorem applyPassesPure_preserves_diverge
     (passes : List (String × (Prog → ECertificate)))
-    (hSound : ∀ np ∈ passes, TyCtxSound np.2)
-    (σ₀ : Store) (hts : TypedStore p.tyCtx σ₀)
+    {tyCtx : TyCtx} (hTyCtx : ∀ np ∈ passes, ∀ q, (np.2 q).tyCtx = tyCtx)
+    (σ₀ : Store) (hts : TypedStore tyCtx σ₀)
     {f : Nat → Cfg}
     (hinf : IsInfiniteExec (applyPassesPure passes p) f)
     (hf0 : f 0 = Cfg.run 0 σ₀ ArrayMem.init) :
@@ -319,19 +292,15 @@ theorem applyPassesPure_preserves_diverge
   | cons np rest ih =>
     simp only [applyPassesPure] at hinf
     obtain ⟨name, pass⟩ := np
-    have hS := hSound (name, pass) (List.mem_cons_self ..)
-    have hRest : ∀ np ∈ rest, TyCtxSound np.2 :=
-      fun np' h => hSound np' (List.mem_cons_of_mem _ h)
+    have hRest : ∀ np ∈ rest, ∀ q, (np.2 q).tyCtx = tyCtx :=
+      fun np' h => hTyCtx np' (List.mem_cons_of_mem _ h)
     split at hinf
     · rename_i p' hap
-      have hty' : p'.tyCtx = p.tyCtx := by
-        have ⟨_, hTrans, _, _, _⟩ := applyPass_sound hap
-        rw [← hTrans, ← hS.1, hS.2]
-      have hts' : TypedStore p'.tyCtx σ₀ := hty' ▸ hts
-      obtain ⟨g, hg, hg0⟩ := ih hRest hts' hinf hf0
-      have hts_pass : TypedStore (pass p).tyCtx σ₀ := hS.2 p ▸ hts
+      obtain ⟨g, hg, hg0⟩ := ih hRest hinf hf0
+      have hts_pass : TypedStore (pass p).tyCtx σ₀ :=
+        hTyCtx (name, pass) (List.mem_cons_self ..) p ▸ hts
       exact applyPass_preserves_diverge hap σ₀ hts_pass hg hg0
-    · exact ih hRest hts hinf hf0
+    · exact ih hRest hinf hf0
 
 -- ============================================================
 -- § 4. Full end-to-end: While source → ARM (halts)
@@ -348,12 +317,12 @@ theorem applyPassesPure_preserves_diverge
 theorem while_to_arm_correctness
     (prog : Program) (htcs : prog.typeCheckStrict = true)
     (passes : List (String × (Prog → ECertificate)))
-    (hSound : ∀ np ∈ passes, TyCtxSound np.2)
+    (hTyCtx : ∀ np ∈ passes, ∀ q, (np.2 q).tyCtx = prog.tyCtx)
     {r : VerifiedAsmResult}
     (hGen : verifiedGenerateAsm prog.tyCtx (applyPassesPure passes prog.compileToTAC) = .ok r)
     {σ_opt : Store} {am_opt : ArrayMem}
     (hHalt : haltsWithResult (applyPassesPure passes prog.compileToTAC) 0
-      (Store.typedInit (applyPassesPure passes prog.compileToTAC).tyCtx) σ_opt ArrayMem.init am_opt) :
+      (Store.typedInit prog.tyCtx) σ_opt ArrayMem.init am_opt) :
     (∃ fuel σ_src am_src,
       prog.interp fuel = some (σ_src, am_src) ∧
       am_src = am_opt ∧
@@ -363,21 +332,14 @@ theorem while_to_arm_correctness
         pc := r.pcMap 0, flags := ⟨0, 0⟩ } s' ∧
       ExtSimRel r.layout r.pcMap (.halt σ_opt am_opt) s') := by
   have htc := Program.typeCheckStrict_typeCheck prog htcs
-  have hInitEq : Store.typedInit prog.compileToTAC.tyCtx = prog.initStore := by
-    rw [Program.compileToTAC_tyCtx_eq prog htc]; exact Program.typedInit_eq_initStore prog htc
-  have hTyOpt := applyPassesPure_tyCtx_eq passes hSound prog.compileToTAC
-  have hts : TypedStore prog.compileToTAC.tyCtx (Store.typedInit prog.compileToTAC.tyCtx) :=
-    TypedStore.typedInit _
-  have hHalt' : haltsWithResult (applyPassesPure passes prog.compileToTAC) 0
-      (Store.typedInit prog.compileToTAC.tyCtx) σ_opt ArrayMem.init am_opt :=
-    hTyOpt ▸ hHalt
+  have hInitEq : Store.typedInit prog.tyCtx = prog.initStore :=
+    Program.typedInit_eq_initStore prog htc
+  have hts : TypedStore prog.tyCtx (Store.typedInit prog.tyCtx) := TypedStore.typedInit _
   -- Part 2: ARM simulation
-  have hOptTyCtx : (applyPassesPure passes prog.compileToTAC).tyCtx = prog.tyCtx :=
-    hTyOpt.trans (Program.compileToTAC_tyCtx_eq prog htc)
-  refine ⟨?_, tacToArm_correctness (hOptTyCtx ▸ hGen) (hOptTyCtx ▸ hHalt)⟩
+  refine ⟨?_, tacToArm_correctness hGen hHalt⟩
   -- Part 1: Pipeline → original TAC halts with same final AM
   obtain ⟨σ_tac, hHalt_tac, hobs_tac⟩ :=
-    applyPassesPure_preserves_halt_am passes hSound _ hts hHalt'
+    applyPassesPure_preserves_halt_am passes hTyCtx _ hts hHalt
   -- Original TAC halts → source terminates
   have hHalt_init : haltsWithResult prog.compileToTAC 0 prog.initStore σ_tac ArrayMem.init am_opt :=
     hInitEq ▸ hHalt_tac
@@ -416,12 +378,12 @@ theorem while_to_arm_correctness
 theorem while_to_arm_error_preservation
     (prog : Program) (htcs : prog.typeCheckStrict = true)
     (passes : List (String × (Prog → ECertificate)))
-    (hSound : ∀ np ∈ passes, TyCtxSound np.2)
+    (hTyCtx : ∀ np ∈ passes, ∀ q, (np.2 q).tyCtx = prog.tyCtx)
     {r : VerifiedAsmResult}
     (hGen : verifiedGenerateAsm prog.tyCtx (applyPassesPure passes prog.compileToTAC) = .ok r)
     {σ_err : Store} {am_err : ArrayMem}
     (hErr : (applyPassesPure passes prog.compileToTAC) ⊩
-      Cfg.run 0 (Store.typedInit (applyPassesPure passes prog.compileToTAC).tyCtx)
+      Cfg.run 0 (Store.typedInit prog.tyCtx)
         ArrayMem.init ⟶* Cfg.error σ_err am_err) :
     (∃ fuel, ¬ prog.body.safe fuel prog.initStore ArrayMem.init prog.arrayDecls) ∧
     (∃ s', ArmSteps r.bodyFlat
@@ -429,18 +391,14 @@ theorem while_to_arm_error_preservation
         pc := r.pcMap 0, flags := ⟨0, 0⟩ } s' ∧
       ExtSimRel r.layout r.pcMap (.error σ_err am_err) s') := by
   have htc := Program.typeCheckStrict_typeCheck prog htcs
-  have hInitEq : Store.typedInit prog.compileToTAC.tyCtx = prog.initStore := by
-    rw [Program.compileToTAC_tyCtx_eq prog htc]; exact Program.typedInit_eq_initStore prog htc
-  have hTyOpt := applyPassesPure_tyCtx_eq passes hSound prog.compileToTAC
-  have hts : TypedStore prog.compileToTAC.tyCtx (Store.typedInit prog.compileToTAC.tyCtx) :=
-    TypedStore.typedInit _
-  have hOptTyCtx : (applyPassesPure passes prog.compileToTAC).tyCtx = prog.tyCtx :=
-    hTyOpt.trans (Program.compileToTAC_tyCtx_eq prog htc)
+  have hInitEq : Store.typedInit prog.tyCtx = prog.initStore :=
+    Program.typedInit_eq_initStore prog htc
+  have hts : TypedStore prog.tyCtx (Store.typedInit prog.tyCtx) := TypedStore.typedInit _
   -- ARM simulation
-  refine ⟨?_, tacToArm_correctness (hOptTyCtx ▸ hGen) (hOptTyCtx ▸ hErr)⟩
+  refine ⟨?_, tacToArm_correctness hGen hErr⟩
   -- Pipeline → original TAC errors from ArrayMem.init
   obtain ⟨σ_o, am_o', hErr_tac⟩ :=
-    applyPassesPure_preserves_error_am passes hSound _ hts (hTyOpt ▸ hErr)
+    applyPassesPure_preserves_error_am passes hTyCtx _ hts hErr
   -- Original TAC errors → source is unsafe
   have hErr_init : program_behavior_init prog.compileToTAC prog.initStore (.errors σ_o) :=
     ⟨am_o', hInitEq ▸ hErr_tac⟩
@@ -457,21 +415,18 @@ theorem while_to_arm_error_preservation
 theorem while_to_arm_divergence_preservation
     (prog : Program) (htcs : prog.typeCheckStrict = true)
     (passes : List (String × (Prog → ECertificate)))
-    (hSound : ∀ np ∈ passes, TyCtxSound np.2)
+    (hTyCtx : ∀ np ∈ passes, ∀ q, (np.2 q).tyCtx = prog.tyCtx)
     {f : Nat → Cfg}
     (hDiv : IsInfiniteExec (applyPassesPure passes prog.compileToTAC) f)
-    (hf0 : f 0 = Cfg.run 0
-      (Store.typedInit (applyPassesPure passes prog.compileToTAC).tyCtx) ArrayMem.init) :
+    (hf0 : f 0 = Cfg.run 0 (Store.typedInit prog.tyCtx) ArrayMem.init) :
     ∀ fuel, prog.interp fuel = none := by
   have htc := Program.typeCheckStrict_typeCheck prog htcs
-  have hInitEq : Store.typedInit prog.compileToTAC.tyCtx = prog.initStore := by
-    rw [Program.compileToTAC_tyCtx_eq prog htc]; exact Program.typedInit_eq_initStore prog htc
-  have hTyOpt := applyPassesPure_tyCtx_eq passes hSound prog.compileToTAC
-  have hts : TypedStore prog.compileToTAC.tyCtx (Store.typedInit prog.compileToTAC.tyCtx) :=
-    TypedStore.typedInit _
+  have hInitEq : Store.typedInit prog.tyCtx = prog.initStore :=
+    Program.typedInit_eq_initStore prog htc
+  have hts : TypedStore prog.tyCtx (Store.typedInit prog.tyCtx) := TypedStore.typedInit _
   -- Pipeline → original TAC diverges
   obtain ⟨g, hg, hg0⟩ :=
-    applyPassesPure_preserves_diverge passes hSound _ hts hDiv (hTyOpt ▸ hf0)
+    applyPassesPure_preserves_diverge passes hTyCtx _ hts hDiv hf0
   -- Original TAC diverges → source diverges
   have hdiv_init : program_behavior_init prog.compileToTAC prog.initStore .diverges :=
     ⟨g, hg, hInitEq ▸ hg0⟩

@@ -777,80 +777,6 @@ private def instrDefType : TAC → Option (Var × VarTy)
   | .fternop x _ _ _ _ => some (x, .float)
   | _                  => none
 
-/-- Build a type context from declarations augmented with types inferred from
-    compiled instructions. Ensures temporaries get correct types. -/
-private def buildTyCtx (base : TyCtx) (code : Array TAC) : TyCtx :=
-  code.foldl (fun ctx instr =>
-    match instrDefType instr with
-    | some (x, ty) => fun v => if v == x then ty else ctx v
-    | none => ctx
-  ) base
-
-/-- For well-typed instructions, `instrDefType` agrees with the type context. -/
-private theorem instrDefType_matches_tyCtx {Γ : TyCtx}
-    {decls : List (ArrayName × Nat × VarTy)} {instr : TAC}
-    (hwt : WellTypedInstr Γ decls instr) {x : Var} {ty : VarTy}
-    (hdef : instrDefType instr = some (x, ty)) : ty = Γ x := by
-  cases hwt with
-  | const h =>
-    simp only [instrDefType, Option.some.injEq, Prod.mk.injEq] at hdef
-    obtain ⟨rfl, rfl⟩ := hdef; exact h
-  | copy _ => simp [instrDefType] at hdef
-  | binop hx _ _ =>
-    simp only [instrDefType, Option.some.injEq, Prod.mk.injEq] at hdef
-    obtain ⟨rfl, rfl⟩ := hdef; exact hx.symm
-  | boolop hx _ =>
-    simp only [instrDefType, Option.some.injEq, Prod.mk.injEq] at hdef
-    obtain ⟨rfl, rfl⟩ := hdef; exact hx.symm
-  | goto => simp [instrDefType] at hdef
-  | ifgoto _ => simp [instrDefType] at hdef
-  | halt => simp [instrDefType] at hdef
-  | arrLoad hx _ _ =>
-    simp only [instrDefType, Option.some.injEq, Prod.mk.injEq] at hdef
-    obtain ⟨rfl, rfl⟩ := hdef; exact hx.symm
-  | arrStore _ _ _ => simp [instrDefType] at hdef
-  | fbinop hx _ _ =>
-    simp only [instrDefType, Option.some.injEq, Prod.mk.injEq] at hdef
-    obtain ⟨rfl, rfl⟩ := hdef; exact hx.symm
-  | intToFloat hx _ =>
-    simp only [instrDefType, Option.some.injEq, Prod.mk.injEq] at hdef
-    obtain ⟨rfl, rfl⟩ := hdef; exact hx.symm
-  | floatToInt hx _ =>
-    simp only [instrDefType, Option.some.injEq, Prod.mk.injEq] at hdef
-    obtain ⟨rfl, rfl⟩ := hdef; exact hx.symm
-  | floatUnary hx _ =>
-    simp only [instrDefType, Option.some.injEq, Prod.mk.injEq] at hdef
-    obtain ⟨rfl, rfl⟩ := hdef; exact hx.symm
-  | fternop hx _ _ _ =>
-    simp only [instrDefType, Option.some.injEq, Prod.mk.injEq] at hdef
-    obtain ⟨rfl, rfl⟩ := hdef; exact hx.symm
-  | print => simp [instrDefType] at hdef
-
-/-- `buildTyCtx` is the identity when every instruction defines variables
-    at their existing type in the base context. -/
-private theorem buildTyCtx_eq_of_wt (base : TyCtx) (code : List TAC)
-    (h : ∀ instr, instr ∈ code → ∀ x ty, instrDefType instr = some (x, ty) → ty = base x) :
-    code.foldl (fun ctx instr =>
-      match instrDefType instr with
-      | some (x, ty) => fun v => if v == x then ty else ctx v
-      | none => ctx) base = base := by
-  induction code with
-  | nil => rfl
-  | cons hd rest ih =>
-    simp only [List.foldl]
-    have h_hd := h hd (.head _)
-    have h_rest : ∀ instr, instr ∈ rest → ∀ x ty,
-        instrDefType instr = some (x, ty) → ty = base x :=
-      fun i hi => h i (.tail _ hi)
-    match hq : instrDefType hd with
-    | none => exact ih h_rest
-    | some (x, ty) =>
-      have hty := h_hd x ty hq
-      suffices hsuff : (fun v => if v == x then ty else base v) = base by
-        simp only [hsuff]; exact ih h_rest
-      funext v; simp only [beq_iff_eq]; split
-      · next heq => rw [hty, heq]
-      · rfl
 
 /-- Compile a typed program: initialize declared variables, then compile body.
     Appends `halt` at the end. -/
@@ -860,7 +786,6 @@ def compileToTAC (prog : Program) : Prog :=
   let (body, _) := compileStmt prog.body inits.length 0 labels
   let code := (inits ++ body ++ [TAC.halt]).toArray
   { code := code
-    tyCtx := buildTyCtx prog.tyCtx code
     observable := prog.decls.map Prod.fst
     arrayDecls := prog.arrayDecls }
 
@@ -1770,29 +1695,6 @@ theorem compileToTAC_wellTyped (prog : Program) (h : prog.typeCheck = true) :
     (compileStmt_wt prog hnt prog.body hchk _ _
       (collectLabels prog.body (initCode prog.decls).length)) (allWTI_one .halt))
 
-/-- For well-typed programs, `compileToTAC.tyCtx = prog.tyCtx`.
-    Every instruction in the compiled code defines variables at their existing
-    type in `prog.tyCtx`, so `buildTyCtx` is the identity. -/
-theorem compileToTAC_tyCtx_eq (prog : Program) (htc : prog.typeCheck = true) :
-    prog.compileToTAC.tyCtx = prog.tyCtx := by
-  show buildTyCtx prog.tyCtx _ = prog.tyCtx
-  unfold buildTyCtx
-  rw [← Array.foldl_toList]
-  apply buildTyCtx_eq_of_wt
-  intro instr hmem x ty hdef
-  have hwtp := compileToTAC_wellTyped prog htc
-  have hmem' : instr ∈ prog.compileToTAC.code.toList := by
-    simp only [Program.compileToTAC]; exact hmem
-  obtain ⟨i, hi, heq⟩ := List.getElem_of_mem hmem'
-  have hi' : i < prog.compileToTAC.size := by
-    simp only [Prog.size]; rw [Array.length_toList] at hi; exact hi
-  have hwti := hwtp i hi'
-  have hconv : prog.compileToTAC.code[i] = instr := by
-    have : prog.compileToTAC.code.toList[i] = prog.compileToTAC.code[i] := by
-      simp [Array.getElem_toList]
-    rw [← this]; exact heq
-  rw [show (prog.compileToTAC[i] : TAC) = prog.compileToTAC.code[i] from rfl, hconv] at hwti
-  exact instrDefType_matches_tyCtx hwti hdef
 
 /-- `Value.ofBitVec ty 0 = ty.defaultVal` -/
 private theorem ofBitVec_zero_eq_defaultVal (ty : VarTy) :

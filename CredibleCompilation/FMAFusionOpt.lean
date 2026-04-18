@@ -106,7 +106,7 @@ def applyFusions (prog : Prog) (replaced : Array (Option TAC)) : Prog :=
     | _ => match prog[pc]? with
       | some instr => instr
       | none => .halt
-  { code := arr.toArray, tyCtx := prog.tyCtx,
+  { code := arr.toArray,
     observable := prog.observable, arrayDecls := prog.arrayDecls }
 
 -- ============================================================
@@ -131,7 +131,6 @@ def compactProg (fused : Prog) (origMap : Array Nat)
       | some instr => transformInstr instr skipArr revMap
       | none => .halt
     | none => .halt).toArray,
-    tyCtx := fused.tyCtx,
     observable := fused.observable,
     arrayDecls := fused.arrayDecls }
 

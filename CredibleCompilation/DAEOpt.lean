@@ -201,7 +201,7 @@ def transformProg (prog : Prog) (deadPCs : Array Bool) : Prog :=
     else match prog[pc]? with
     | some instr => instr
     | none => .halt
-  { code := arr.toArray, tyCtx := prog.tyCtx, observable := prog.observable,
+  { code := arr.toArray, observable := prog.observable,
     arrayDecls := prog.arrayDecls }
 
 /-- Simplify ifgotos whose condition is determined by ConstProp analysis. -/
@@ -219,7 +219,7 @@ def simplifyKnownBranches (prog : Prog)
       | _ => .ifgoto b l
     | some instr => instr
     | none => .halt
-  { code := arr.toArray, tyCtx := prog.tyCtx, observable := prog.observable,
+  { code := arr.toArray, observable := prog.observable,
     arrayDecls := prog.arrayDecls }
 
 -- ============================================================

@@ -72,10 +72,9 @@ def TAC.isScalar : TAC → Bool
   | .print .. => true
   | .arrLoad .. | .arrStore .. => false
 
-/-- A program: TAC code together with its type context and observable variables. -/
+/-- A program: TAC code together with observable variables and array declarations. -/
 structure Prog where
   code       : Array TAC
-  tyCtx      : TyCtx
   observable : List Var
   arrayDecls : List (ArrayName × Nat × VarTy) := []
 
@@ -145,7 +144,7 @@ theorem Prog.getElem?_eq_some_iff {p : Prog} {i : Nat} {v : TAC} :
 
 /-- Construct a Prog from just an array of instructions (default empty type context and observables). -/
 def Prog.ofCode (code : Array TAC) : Prog :=
-  ⟨code, fun _ => .int, [], []⟩
+  ⟨code, [], []⟩
 
 -- ============================================================
 -- § 4. Machine configurations

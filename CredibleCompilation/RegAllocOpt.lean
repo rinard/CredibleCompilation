@@ -151,7 +151,7 @@ def floatRegNums : Array Nat := #[3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
 /-- Compute register allocation for a program.
     Returns a list of (variable_name, register_name) pairs.
     Register names are like "ir3", "br10", "fr5", etc. -/
-def computeColoring (prog : Prog) : List (Var × String) :=
+def computeColoring (tyCtx : TyCtx) (prog : Prog) : List (Var × String) :=
   if prog.size == 0 then []
   else
     let liveOut := DAEOpt.analyzeLiveness prog
@@ -164,14 +164,14 @@ def computeColoring (prog : Prog) : List (Var × String) :=
       -- name prefixes (__ir vs __br) so the type context can derive types.
       -- We add type-conflict edges: int and bool variables always
       -- interfere, forcing each register color to have a single type.
-      let intBoolVars := allVars.filter fun v => prog.tyCtx v != .float
-      let floatVars := allVars.filter fun v => prog.tyCtx v == .float
+      let intBoolVars := allVars.filter fun v => tyCtx v != .float
+      let floatVars := allVars.filter fun v => tyCtx v == .float
       -- Build interference graph with type-conflict edges
       let baseGraph := buildInterference intBoolVars liveOut
       -- Add edges between every int-bool pair (different types must not share a color)
       let intBoolGraph := baseGraph.map fun (v, nbrs) =>
         let extraNbrs := intBoolVars.filter fun w =>
-          v != w && prog.tyCtx v != prog.tyCtx w && !nbrs.contains w
+          v != w && tyCtx v != tyCtx w && !nbrs.contains w
         (v, nbrs ++ extraNbrs)
       let floatGraph := buildInterference floatVars liveOut
       -- Color each graph. Caller-saved registers are listed first in
@@ -182,14 +182,14 @@ def computeColoring (prog : Prog) : List (Var × String) :=
       -- Determine the type of each color from the first variable that uses it
       let colorTypes := intBoolColoring.foldl (fun (acc : List (Nat × VarTy)) (v, c) =>
         if acc.any (fun (c', _) => c' == c) then acc
-        else (c, prog.tyCtx v) :: acc
+        else (c, tyCtx v) :: acc
       ) ([] : List (Nat × VarTy))
       -- Map color indices to register names, using type-based prefixes:
       --   __ir{N} for int, __br{N} for bool, __fr{N} for float.
       -- This naming convention lets the type context derive types from names.
       let intBoolMap := intBoolColoring.filterMap fun (v, c) =>
         if h : c < intRegNums.size then
-          let pfx := if prog.tyCtx v == .bool then "br" else "ir"
+          let pfx := if tyCtx v == .bool then "br" else "ir"
           some (v, s!"{pfx}{intRegNums[c]}")
         else none
       let floatMap := floatColoring.filterMap fun (v, c) =>
@@ -288,26 +288,7 @@ def renameProg (prog : Prog) (coloring : List (Var × String)) : Prog :=
       acc ++ copyBacks ++ [TAC.halt]
     | i => acc ++ [i]
   ) ([] : List TAC)
-  -- Build type context from the trans code: each defining instruction determines
-  -- the type of the defined variable. This correctly handles register reuse
-  -- (e.g., __ir3 is always int, __br3 is always bool).
-  -- For copy, the destination inherits the type of the source.
-  let newTyCtx : Var → VarTy := newCode.toArray.foldl (fun ctx instr =>
-    match instr with
-    | .const x v        => fun w => if w == x then v.typeOf else ctx w
-    | .copy x y         => fun w => if w == x then ctx y else ctx w
-    | .binop x _ _ _    => fun w => if w == x then .int else ctx w
-    | .boolop x _       => fun w => if w == x then .bool else ctx w
-    | .fbinop x _ _ _   => fun w => if w == x then .float else ctx w
-    | .intToFloat x _   => fun w => if w == x then .float else ctx w
-    | .floatToInt x _   => fun w => if w == x then .int else ctx w
-    | .floatUnary x _ _  => fun w => if w == x then .float else ctx w
-    | .fternop x _ _ _ _ => fun w => if w == x then .float else ctx w
-    | .arrLoad x _ _ ty => fun w => if w == x then ty else ctx w
-    | _                  => ctx
-  ) prog.tyCtx
   { code := newCode.toArray
-    tyCtx := newTyCtx
     observable := prog.observable
     arrayDecls := prog.arrayDecls }
 
@@ -472,7 +453,7 @@ def buildRegAllocInstrCerts (trans : Prog) (rels : Array EExprRel)
     register names (__ir{N}/__br{N}/__fr{N}) and produces a certificate with
     expression relations tracking the renaming. -/
 def optimize (tyCtx : TyCtx) (prog : Prog) : ECertificate :=
-  let coloring := computeColoring prog
+  let coloring := computeColoring tyCtx prog
   let trans := renameProg prog coloring
   let copyBacks := copyBackInstrs coloring prog.observable
   let pcMap := computePCMap prog copyBacks

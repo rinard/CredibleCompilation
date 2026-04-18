@@ -65,7 +65,7 @@ def transformProg (prog : Prog) (origMap : Array Nat) (revMap : Array Nat) : Pro
     match origMap[i]? with
     | some pc => transformInstr prog revMap pc
     | none => .halt
-  { code := arr.toArray, tyCtx := prog.tyCtx, observable := prog.observable,
+  { code := arr.toArray, observable := prog.observable,
     arrayDecls := prog.arrayDecls }
 
 -- ============================================================

@@ -35,7 +35,7 @@ def transformProg (prog : Prog) (consts : Array (Option ConstPropOpt.ConstMap)) 
       if isRedundantConst cm instr then .goto (i + 1) else instr
     | some instr, _ => instr
     | none, _ => .halt
-  { code := arr.toArray, tyCtx := prog.tyCtx, observable := prog.observable, arrayDecls := prog.arrayDecls }
+  { code := arr.toArray, observable := prog.observable, arrayDecls := prog.arrayDecls }
 
 -- ============================================================
 -- § 3. Certificate generation

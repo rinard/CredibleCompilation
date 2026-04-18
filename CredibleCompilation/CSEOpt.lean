@@ -258,7 +258,7 @@ def transformProg (prog : Prog) (states : Array (Option CSEState)) : Prog :=
     | some instr, some (some st) => transformInstr st instr
     | some instr, _              => instr
     | none, _                    => .halt
-  { code := arr.toArray, tyCtx := prog.tyCtx, observable := prog.observable, arrayDecls := prog.arrayDecls }
+  { code := arr.toArray, observable := prog.observable, arrayDecls := prog.arrayDecls }
 
 -- ============================================================
 -- § 5. Certificate generation

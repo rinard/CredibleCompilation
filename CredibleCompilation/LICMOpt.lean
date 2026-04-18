@@ -169,7 +169,7 @@ def buildTrans (prog : Prog) (hoistable : List (Nat × Nat × Var × Value)) : P
       | other => other
     acc ++ toInsert ++ [adjusted]
   ) ([] : List TAC)
-  { code := newCode.toArray, tyCtx := prog.tyCtx,
+  { code := newCode.toArray,
     observable := prog.observable, arrayDecls := prog.arrayDecls }
 
 -- ============================================================

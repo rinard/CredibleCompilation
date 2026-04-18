@@ -400,7 +400,7 @@ structure ECertificate where
   measure    : Array Nat
 
 instance : Inhabited ECertificate where
-  default := { orig := ⟨#[], fun _ => .int, [], []⟩, trans := ⟨#[], fun _ => .int, [], []⟩,
+  default := { orig := ⟨#[], [], []⟩, trans := ⟨#[], [], []⟩,
                tyCtx := fun _ => .int,
                inv_orig := #[], inv_trans := #[], instrCerts := #[], haltCerts := #[], measure := #[] }
 
@@ -746,7 +746,7 @@ def compactProg (prog : Prog) (reached : Array Bool) : Prog × Array Nat × Arra
       | some instr        => instr
       | none              => .halt
     | none => .halt
-  ({ code := arr.toArray, tyCtx := prog.tyCtx,
+  ({ code := arr.toArray,
      observable := prog.observable, arrayDecls := prog.arrayDecls },
    origMap, revMap)
 
