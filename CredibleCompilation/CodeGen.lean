@@ -358,23 +358,25 @@ where
 -- ============================================================
 
 private def varToArmReg (v : Var) : Option ArmReg :=
-  if v.startsWith "__x" then
-    match (v.drop 3).toNat? with
-    | some 0 => some .x0 | some 1 => some .x1 | some 2 => some .x2
-    | some 3 => some .x3 | some 4 => some .x4 | some 5 => some .x5
-    | some 6 => some .x6 | some 7 => some .x7 | some 8 => some .x8
-    | some 9 => some .x9 | some 10 => some .x10 | some 11 => some .x11
-    | some 12 => some .x12 | some 13 => some .x13 | some 14 => some .x14
-    | some 15 => some .x15 | some 16 => some .x16 | some 17 => some .x17
-    | some 18 => some .x18 | some 19 => some .x19 | some 20 => some .x20
-    | some 21 => some .x21 | some 22 => some .x22 | some 23 => some .x23
-    | some 24 => some .x24 | some 25 => some .x25 | some 26 => some .x26
-    | some 27 => some .x27 | some 28 => some .x28 | _ => none
-  else none
+  -- Int registers (__ir{N}) and bool registers (__br{N}) both use ARM x-registers
+  let n? := if v.startsWith "__ir" then (v.drop 4).toNat?
+            else if v.startsWith "__br" then (v.drop 4).toNat?
+            else none
+  match n? with
+  | some 0 => some .x0 | some 1 => some .x1 | some 2 => some .x2
+  | some 3 => some .x3 | some 4 => some .x4 | some 5 => some .x5
+  | some 6 => some .x6 | some 7 => some .x7 | some 8 => some .x8
+  | some 9 => some .x9 | some 10 => some .x10 | some 11 => some .x11
+  | some 12 => some .x12 | some 13 => some .x13 | some 14 => some .x14
+  | some 15 => some .x15 | some 16 => some .x16 | some 17 => some .x17
+  | some 18 => some .x18 | some 19 => some .x19 | some 20 => some .x20
+  | some 21 => some .x21 | some 22 => some .x22 | some 23 => some .x23
+  | some 24 => some .x24 | some 25 => some .x25 | some 26 => some .x26
+  | some 27 => some .x27 | some 28 => some .x28 | _ => none
 
 private def varToArmFReg (v : Var) : Option ArmFReg :=
-  if v.startsWith "__d" then
-    match (v.drop 3).toNat? with
+  if v.startsWith "__fr" then
+    match (v.drop 4).toNat? with
     | some 0 => some .d0 | some 1 => some .d1 | some 2 => some .d2
     | some 3 => some .d3 | some 4 => some .d4 | some 5 => some .d5
     | some 6 => some .d6 | some 7 => some .d7 | some 8 => some .d8
@@ -384,7 +386,7 @@ private def varToArmFReg (v : Var) : Option ArmFReg :=
   else none
 
 /-- Build a VarLayout from the variable list and stack offset map.
-    Register-allocated vars (named `__xN`/`__dN`) map to their register;
+    Register-allocated vars (named `__irN`/`__brN`/`__frN`) map to their register;
     all others map to their stack slot. -/
 private def buildVarLayout (vars : List Var) (varMap : List (Var × Nat)) : VarLayout :=
   { entries := vars.filterMap fun v =>
@@ -3001,12 +3003,14 @@ private def calleeSavedFloatRegs : List Nat := [8, 9, 10, 11, 12, 13, 14, 15]
     Returns an error if a reserved register is found. -/
 private def checkRegConvention (vars : List Var) : Except String Unit := do
   for v in vars do
-    if v.startsWith "__x" then
-      match (v.drop 3).toNat? with
-      | some n =>
-        if reservedIntRegs.contains n then
-          throw s!"register allocator bug: variable '{v}' uses reserved register x{n}"
-      | none => pure ()
+    let n? := if v.startsWith "__ir" then (v.drop 4).toNat?
+              else if v.startsWith "__br" then (v.drop 4).toNat?
+              else none
+    match n? with
+    | some n =>
+      if reservedIntRegs.contains n then
+        throw s!"register allocator bug: variable '{v}' uses reserved register x{n}"
+    | none => pure ()
 
 -- detectCalleeSaved, detectCallerSaved, pairUpSameClass, libcallSaveRestore,
 -- calleeSavePrologue, calleeSaveEpilogue: removed.

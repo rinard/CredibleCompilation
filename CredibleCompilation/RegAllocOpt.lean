@@ -150,7 +150,7 @@ def floatRegNums : Array Nat := #[3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
 
 /-- Compute register allocation for a program.
     Returns a list of (variable_name, register_name) pairs.
-    Register names are like "x3", "x10", "d5", etc. -/
+    Register names are like "ir3", "br10", "fr5", etc. -/
 def computeColoring (prog : Prog) : List (Var × String) :=
   if prog.size == 0 then []
   else
@@ -160,8 +160,9 @@ def computeColoring (prog : Prog) : List (Var × String) :=
     else
       let liveRanges := computeLiveRanges liveOut
       -- Separate int+bool (xN registers) from float (dN registers).
-      -- Int and bool share the same physical registers but need consistent
-      -- TAC types. We add type-conflict edges: int and bool variables always
+      -- Int and bool share the same physical registers but get different
+      -- name prefixes (__ir vs __br) so the type context can derive types.
+      -- We add type-conflict edges: int and bool variables always
       -- interfere, forcing each register color to have a single type.
       let intBoolVars := allVars.filter fun v => prog.tyCtx v != .float
       let floatVars := allVars.filter fun v => prog.tyCtx v == .float
@@ -183,12 +184,16 @@ def computeColoring (prog : Prog) : List (Var × String) :=
         if acc.any (fun (c', _) => c' == c) then acc
         else (c, prog.tyCtx v) :: acc
       ) ([] : List (Nat × VarTy))
-      -- Map color indices to register names — all use __xN, typed per color
+      -- Map color indices to register names, using type-based prefixes:
+      --   __ir{N} for int, __br{N} for bool, __fr{N} for float.
+      -- This naming convention lets the type context derive types from names.
       let intBoolMap := intBoolColoring.filterMap fun (v, c) =>
-        if h : c < intRegNums.size then some (v, s!"x{intRegNums[c]}")
+        if h : c < intRegNums.size then
+          let pfx := if prog.tyCtx v == .bool then "br" else "ir"
+          some (v, s!"{pfx}{intRegNums[c]}")
         else none
       let floatMap := floatColoring.filterMap fun (v, c) =>
-        if h : c < floatRegNums.size then some (v, s!"d{floatRegNums[c]}")
+        if h : c < floatRegNums.size then some (v, s!"fr{floatRegNums[c]}")
         else none
       intBoolMap ++ floatMap
 
@@ -197,7 +202,7 @@ def computeColoring (prog : Prog) : List (Var × String) :=
 -- ============================================================
 
 /-- Map a variable name through the coloring.
-    Colored variables get register-prefixed names (__x{N} or __d{N});
+    Colored variables get register-prefixed names (__ir{N}, __br{N}, or __fr{N});
     spilled variables keep their original names. -/
 def renameVar (coloring : List (Var × String)) (v : Var) : Var :=
   match coloring.find? (fun (x, _) => x == v) with
@@ -245,7 +250,7 @@ where
 def copyBackInstrs (coloring : List (Var × String)) (observables : List Var) : List TAC :=
   observables.filterMap fun v =>
     match coloring.find? (fun (x, _) => x == v) with
-    | some (_, reg) => some (.copy v (s!"__{reg}"))  -- copy r __x3
+    | some (_, reg) => some (.copy v (s!"__{reg}"))  -- copy r __ir3
     | none => none
 
 /-- Compute the PC offset array: for each original PC, how many extra instructions
@@ -285,7 +290,7 @@ def renameProg (prog : Prog) (coloring : List (Var × String)) : Prog :=
   ) ([] : List TAC)
   -- Build type context from the trans code: each defining instruction determines
   -- the type of the defined variable. This correctly handles register reuse
-  -- (e.g., __x3 is bool when defined by boolop, int when defined by binop).
+  -- (e.g., __ir3 is always int, __br3 is always bool).
   -- For copy, the destination inherits the type of the source.
   let newTyCtx : Var → VarTy := newCode.toArray.foldl (fun ctx instr =>
     match instr with
@@ -464,8 +469,8 @@ def buildRegAllocInstrCerts (trans : Prog) (rels : Array EExprRel)
 -- ============================================================
 
 /-- Register allocation as an optimization pass. Renames TAC variables to
-    register names (__x{N}/__d{N}) and produces a certificate with expression
-    relations tracking the renaming. -/
+    register names (__ir{N}/__br{N}/__fr{N}) and produces a certificate with
+    expression relations tracking the renaming. -/
 def optimize (prog : Prog) : ECertificate :=
   let coloring := computeColoring prog
   let trans := renameProg prog coloring
