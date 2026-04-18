@@ -3164,10 +3164,12 @@ def generateAsm (tyCtx : TyCtx) (p : Prog) : Except String String := do
 -- § 6. End-to-end: parse → compile → codegen
 -- ============================================================
 
-/-- Apply a single optimization pass: run it, check the certificate, return the
-    optimized program. Errors if the certificate check fails. -/
-def applyPass (name : String) (pass : Prog → ECertificate) (p : Prog) : Except String Prog :=
-  let cert := pass p
+/-- Apply a single optimization pass: run it, override the certificate's tyCtx
+    with the expected one, check the certificate, return the optimized program.
+    Overriding tyCtx ensures the certificate is validated under the correct
+    type context regardless of what the pass produced. -/
+def applyPass (name : String) (tyCtx : TyCtx) (pass : Prog → ECertificate) (p : Prog) : Except String Prog :=
+  let cert := { pass p with tyCtx := tyCtx }
   if cert.orig.code != p.code || cert.orig.observable != p.observable ||
      cert.orig.arrayDecls != p.arrayDecls then
     .error s!"optimization certificate orig mismatch for {name} (code={cert.orig.code == p.code} obs={cert.orig.observable == p.observable} arr={cert.orig.arrayDecls == p.arrayDecls})"
@@ -3185,23 +3187,23 @@ def applyPass (name : String) (pass : Prog → ECertificate) (p : Prog) : Except
     DCE before RegAlloc: cleans up after Peephole.
     Each pass is checked by the executable certificate checker. -/
 def optimizePipeline (tyCtx : TyCtx) (p : Prog) : Except String Prog := do
-  let p ← applyPass "DCE" (DCEOpt.optimize tyCtx) p
-  let p ← applyPass "LICM" (LICMOpt.optimize tyCtx) p
-  let p ← applyPass "ConstProp" (ConstPropOpt.optimize tyCtx) p
-  let p ← applyPass "DCE" (DCEOpt.optimize tyCtx) p
-  let p ← applyPass "DAE" (DAEOpt.optimize tyCtx) p
-  let p ← applyPass "FMAFusion" (FMAFusionOpt.optimize tyCtx) p
-  let p ← applyPass "CSE" (CSEOpt.optimize tyCtx) p
-  let p ← applyPass "ConstHoist" (ConstHoistOpt.optimize tyCtx) p
-  let p ← applyPass "Peephole" (PeepholeOpt.optimize tyCtx) p
-  let p ← applyPass "DCE" (DCEOpt.optimize tyCtx) p
-  applyPass "RegAlloc" (RegAllocOpt.optimize tyCtx) p
+  let p ← applyPass "DCE" tyCtx (DCEOpt.optimize tyCtx) p
+  let p ← applyPass "LICM" tyCtx (LICMOpt.optimize tyCtx) p
+  let p ← applyPass "ConstProp" tyCtx (ConstPropOpt.optimize tyCtx) p
+  let p ← applyPass "DCE" tyCtx (DCEOpt.optimize tyCtx) p
+  let p ← applyPass "DAE" tyCtx (DAEOpt.optimize tyCtx) p
+  let p ← applyPass "FMAFusion" tyCtx (FMAFusionOpt.optimize tyCtx) p
+  let p ← applyPass "CSE" tyCtx (CSEOpt.optimize tyCtx) p
+  let p ← applyPass "ConstHoist" tyCtx (ConstHoistOpt.optimize tyCtx) p
+  let p ← applyPass "Peephole" tyCtx (PeepholeOpt.optimize tyCtx) p
+  let p ← applyPass "DCE" tyCtx (DCEOpt.optimize tyCtx) p
+  applyPass "RegAlloc" tyCtx (RegAllocOpt.optimize tyCtx) p
 
 
 /-- Try to apply a single optimization pass. If the certificate check fails,
     print a warning and return the input program unchanged. -/
-def tryPass (name : String) (pass : Prog → ECertificate) (p : Prog) : IO Prog := do
-  match applyPass name pass p with
+def tryPass (name : String) (tyCtx : TyCtx) (pass : Prog → ECertificate) (p : Prog) : IO Prog := do
+  match applyPass name tyCtx pass p with
   | .ok p' => return p'
   | .error msg =>
     IO.eprintln s!"warning: skipping {name} optimization ({msg})"
@@ -3211,13 +3213,13 @@ def tryPass (name : String) (pass : Prog → ECertificate) (p : Prog) : IO Prog 
     Each pass is checked by the executable certificate checker; if a check
     fails, that pass is skipped and the pipeline continues with the
     unoptimized program. Always succeeds. -/
-def applyPassesPure : List (String × (Prog → ECertificate)) → Prog → Prog
+def applyPassesPure (tyCtx : TyCtx) : List (String × (Prog → ECertificate)) → Prog → Prog
   | [], p => p
   | (name, pass) :: rest, p =>
-    let p' := match applyPass name pass p with
+    let p' := match applyPass name tyCtx pass p with
       | .ok p' => p'
       | .error _ => p
-    applyPassesPure rest p'
+    applyPassesPure tyCtx rest p'
 
 /-- The standard optimization pass list. -/
 def standardPasses (tyCtx : TyCtx) : List (String × (Prog → ECertificate)) :=
@@ -3234,15 +3236,15 @@ def standardPasses (tyCtx : TyCtx) : List (String × (Prog → ECertificate)) :=
     ("RegAlloc", RegAllocOpt.optimize tyCtx) ]
 
 /-- IO version of applyPassesPure with warning messages on failures. -/
-def applyPassesIO (passes : List (String × (Prog → ECertificate))) (p : Prog) : IO Prog :=
-  passes.foldlM (fun p (name, pass) => tryPass name pass p) p
+def applyPassesIO (tyCtx : TyCtx) (passes : List (String × (Prog → ECertificate))) (p : Prog) : IO Prog :=
+  passes.foldlM (fun p (name, pass) => tryPass name tyCtx pass p) p
 
 def compileToAsm (input : String) : Except String String := do
   let prog ← parseProgram input
   if !prog.typeCheck then .error "program failed type check (frontend)"
   let tac := prog.compileToTAC
   let tyCtx := prog.tyCtx
-  let opt := applyPassesPure (standardPasses tyCtx) tac
+  let opt := applyPassesPure tyCtx (standardPasses tyCtx) tac
   generateAsm tyCtx opt
 
 -- ============================================================
