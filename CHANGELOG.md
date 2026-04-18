@@ -4,6 +4,26 @@ Chronological record of what was built and why, to reconstruct the sequence of d
 
 ---
 
+## Type-based register naming convention (2026-04-18)
+
+**Goal:** Prepare for removing `tyCtx` from `Prog` by making the typing context derivable from variable names alone.
+
+**Stage 1 — Rename registers (c19eb61):**
+- Register-allocated variables now encode TAC type in name prefix: `__ir{N}` (int), `__br{N}` (bool), `__fr{N}` (float) — was `__x{N}`/`__d{N}`
+- Bool variables get separate `__br` prefix (previously shared `__x` with int)
+- Updated `computeColoring` in RegAllocOpt, `varToArmReg`/`varToArmFReg`/`checkRegConvention` in CodeGen
+
+**Stage 2 — Update tyCtx defaults (f5b5444):**
+- Added `Program.defaultVarTy`: derives type from name prefix (`__f`→float, `__b`→bool, else int)
+- `Program.tyCtx` now uses `defaultVarTy` instead of `isFTmp`-based check
+- Updated `initStoreBase` to match the new convention
+- Added bridge lemmas `defaultVarTy_of_isTmp`, `defaultVarTy_of_isFTmp`
+- Fixed downstream `show` in CompilerCorrectness.lean
+
+**Result:** The typing context correctly types all compiler-generated names by convention. No pass needs to modify `tyCtx`. Stage 3 (remove `Prog.tyCtx` field, eliminate `TyCtxSound`) is ready.
+
+---
+
 ## Discharge print case sorrys, fix lib-call save/restore (2026-04-17)
 
 **Goal:** Close the 8 `callerSave_composition` hypothesis sorrys in the print case of `step_simulation`, and fix a soundness bug in lib-call save/restore codegen.
