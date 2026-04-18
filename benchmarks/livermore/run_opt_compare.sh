@@ -1,6 +1,6 @@
 #!/bin/bash
-# Compare WhileLang (optimized + unoptimized) vs clang -O0/-O1/-O2 on Livermore kernels.
-# 5 runs each, take fastest (minimum) time.
+# Compare WhileLang (optimized + unoptimized) vs clang -O0/-O1/-O2 and gfortran -O2
+# on Livermore kernels. 5 runs each, take fastest (minimum) time.
 set -euo pipefail
 
 DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -34,6 +34,7 @@ echo "Compiling kernels..."
 for name in "${KERNELS[@]}"; do
   wfile="$DIR/${name}.w"
   cfile="$DIR/${name}.c"
+  ffile="$DIR/${name}.f"
 
   # WhileLang optimized + unoptimized
   if [ -f "$wfile" ]; then
@@ -46,6 +47,11 @@ for name in "${KERNELS[@]}"; do
     cc -O0 -o "$BD/${name}_c0" "$cfile" 2>/dev/null || echo "  FAIL (C -O0): $name"
     cc -O1 -o "$BD/${name}_c1" "$cfile" 2>/dev/null || echo "  FAIL (C -O1): $name"
     cc -O2 -o "$BD/${name}_c2" "$cfile" 2>/dev/null || echo "  FAIL (C -O2): $name"
+  fi
+
+  # Fortran -O2
+  if [ -f "$ffile" ] && command -v gfortran &>/dev/null; then
+    gfortran -O2 -o "$BD/${name}_f2" "$ffile" 2>/dev/null || echo "  FAIL (F -O2): $name"
   fi
 done
 echo "Compilation done."
@@ -79,21 +85,25 @@ min_time() {
 }
 
 # ── run benchmarks ───────────────────────────────────────────────
-printf "\n%-22s  %8s  %8s  %8s  %8s  %8s  %8s  %8s  %8s  %s\n" \
-  "Kernel" "C -O0" "C -O1" "C -O2" "WL -O0" "WL opt" "WL/C-O0" "WL/C-O1" "WL/C-O2" "Correct?"
-printf "%-22s  %8s  %8s  %8s  %8s  %8s  %8s  %8s  %8s  %s\n" \
-  "──────────────────" "──────" "──────" "──────" "──────" "──────" "──────" "──────" "──────" "────────"
+printf "\n%-22s  %8s  %8s  %8s  %8s  %8s  %8s  %8s  %8s  %8s  %s\n" \
+  "Kernel" "F -O2" "C -O0" "C -O1" "C -O2" "WL -O0" "WL opt" "WL/C-O0" "WL/C-O2" "WL/F-O2" "OK?"
+printf "%-22s  %8s  %8s  %8s  %8s  %8s  %8s  %8s  %8s  %8s  %s\n" \
+  "──────────────────" "──────" "──────" "──────" "──────" "──────" "──────" "──────" "──────" "──────" "───"
 
-log_wl_opt=()     # WL-opt / WL-noopt
-log_wl_c0=()      # WL-opt / C-O0
-log_wl_c1=()      # WL-opt / C-O1
-log_wl_c2=()      # WL-opt / C-O2
+log_wl_c0=()
+log_wl_c2=()
+log_wl_f2=()
 
 for name in "${KERNELS[@]}"; do
-  t_c0="—"; t_c1="—"; t_c2="—"; t_noopt="—"; t_opt="—"
-  ratio_c0="—"; ratio_c1="—"; ratio_c2="—"
+  t_f2="—"; t_c0="—"; t_c1="—"; t_c2="—"; t_noopt="—"; t_opt="—"
+  ratio_c0="—"; ratio_c2="—"; ratio_f2="—"
   correct="—"
   out_opt=""; out_c2=""
+
+  # Run Fortran -O2
+  if [ -x "$BD/${name}_f2" ]; then
+    t_f2=$(min_time "$BD/${name}_f2")
+  fi
 
   # Run C variants
   for lvl in c0 c1 c2; do
@@ -141,8 +151,8 @@ if ok: print('ok')
 ")
   fi
 
-  # Ratios: WL-opt vs each C level
-  for pair in "c0:t_c0" "c1:t_c1" "c2:t_c2"; do
+  # Ratios: WL-opt vs C-O0, C-O2, F-O2
+  for pair in "c0:t_c0" "c2:t_c2" "f2:t_f2"; do
     tag="${pair%%:*}"; var="${pair##*:}"
     eval "tv=\$$var"
     if [ "$t_opt" != "—" ] && [ "$t_opt" != "ERR" ] && \
@@ -161,13 +171,13 @@ if t_c > 0:
     fi
   done
 
-  printf "%-22s  %8s  %8s  %8s  %8s  %8s  %8s  %8s  %8s  %s\n" \
-    "$name" "$t_c0" "$t_c1" "$t_c2" "$t_noopt" "$t_opt" "$ratio_c0" "$ratio_c1" "$ratio_c2" "$correct"
+  printf "%-22s  %8s  %8s  %8s  %8s  %8s  %8s  %8s  %8s  %8s  %s\n" \
+    "$name" "$t_f2" "$t_c0" "$t_c1" "$t_c2" "$t_noopt" "$t_opt" "$ratio_c0" "$ratio_c2" "$ratio_f2" "$correct"
 done
 
 # ── geometric means ──────────────────────────────────────────────
 printf "\n"
-for pair in "c0:WL-opt/C-O0" "c1:WL-opt/C-O1" "c2:WL-opt/C-O2"; do
+for pair in "c0:WL-opt/C-O0" "c2:WL-opt/C-O2" "f2:WL-opt/F-O2"; do
   tag="${pair%%:*}"; label="${pair##*:}"
   eval "logs=(\"\${log_wl_${tag}[@]}\")" 2>/dev/null || logs=()
   if [ ${#logs[@]} -gt 0 ]; then
