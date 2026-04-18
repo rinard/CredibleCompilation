@@ -344,11 +344,10 @@ def VarLayoutInjective (layout : VarLayout) : Prop :=
   ∀ v1 v2 loc, layout v1 = some loc → layout v2 = some loc → v1 = v2
 
 /-- No variable is mapped to a scratch register.
-    Scratch: x0, x1, x2 (integer), d0, d1 (float).
-    x8 is also reserved for array address computation. -/
+    Scratch: x0, x1, x2 (integer), d0, d1, d2 (float). -/
 def ExtScratchSafe (layout : VarLayout) : Prop :=
   ∀ v, layout v ≠ some (.ireg .x0) ∧ layout v ≠ some (.ireg .x1) ∧
-       layout v ≠ some (.ireg .x2) ∧ layout v ≠ some (.ireg .x8) ∧
+       layout v ≠ some (.ireg .x2) ∧
        layout v ≠ some (.freg .d0) ∧ layout v ≠ some (.freg .d1) ∧
        layout v ≠ some (.freg .d2)
 
@@ -356,10 +355,9 @@ def ExtScratchSafe (layout : VarLayout) : Prop :=
 theorem ExtScratchSafe.not_x0 (h : ExtScratchSafe layout) (v : Var) : layout v ≠ some (.ireg .x0) := (h v).1
 theorem ExtScratchSafe.not_x1 (h : ExtScratchSafe layout) (v : Var) : layout v ≠ some (.ireg .x1) := (h v).2.1
 theorem ExtScratchSafe.not_x2 (h : ExtScratchSafe layout) (v : Var) : layout v ≠ some (.ireg .x2) := (h v).2.2.1
-theorem ExtScratchSafe.not_x8 (h : ExtScratchSafe layout) (v : Var) : layout v ≠ some (.ireg .x8) := (h v).2.2.2.1
-theorem ExtScratchSafe.not_d0 (h : ExtScratchSafe layout) (v : Var) : layout v ≠ some (.freg .d0) := (h v).2.2.2.2.1
-theorem ExtScratchSafe.not_d1 (h : ExtScratchSafe layout) (v : Var) : layout v ≠ some (.freg .d1) := (h v).2.2.2.2.2.1
-theorem ExtScratchSafe.not_d2 (h : ExtScratchSafe layout) (v : Var) : layout v ≠ some (.freg .d2) := (h v).2.2.2.2.2.2
+theorem ExtScratchSafe.not_d0 (h : ExtScratchSafe layout) (v : Var) : layout v ≠ some (.freg .d0) := (h v).2.2.2.1
+theorem ExtScratchSafe.not_d1 (h : ExtScratchSafe layout) (v : Var) : layout v ≠ some (.freg .d1) := (h v).2.2.2.2.1
+theorem ExtScratchSafe.not_d2 (h : ExtScratchSafe layout) (v : Var) : layout v ≠ some (.freg .d2) := (h v).2.2.2.2.2
 
 /-- A layout respects types: non-float variables are not in float registers,
     and float variables are not in integer registers. -/
@@ -380,7 +378,7 @@ theorem WellTypedLayout.float_not_ireg (h : WellTypedLayout Γ layout) (hty : Γ
 def VarLayout.scratchSafe (layout : VarLayout) : Bool :=
   layout.entries.all fun (_, loc) =>
     loc != .ireg .x0 && loc != .ireg .x1 && loc != .ireg .x2 &&
-    loc != .ireg .x8 && loc != .freg .d0 && loc != .freg .d1 && loc != .freg .d2
+    loc != .freg .d0 && loc != .freg .d1 && loc != .freg .d2
 
 /-- Check no two variables share a location. -/
 def VarLayout.isInjective (layout : VarLayout) : Bool :=
@@ -410,7 +408,7 @@ theorem VarLayout.scratchSafe_spec (layout : VarLayout) (h : layout.scratchSafe 
   intro v
   unfold VarLayout.scratchSafe at h
   rw [List.all_eq_true] at h
-  refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_⟩ <;> intro heq <;> simp at heq
+  refine ⟨?_, ?_, ?_, ?_, ?_, ?_⟩ <;> intro heq <;> simp at heq
   all_goals (
     obtain ⟨k, hk_mem, _⟩ := List.lookup_mem_of_some heq
     have := h ⟨k, _⟩ hk_mem

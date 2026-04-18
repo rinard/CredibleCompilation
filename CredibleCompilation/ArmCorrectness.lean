@@ -450,20 +450,19 @@ theorem ExtStateRel.preserved_by_ireg_only
     {layout : VarLayout} {σ : Store} {s s' : ArmState}
     (hRel : ExtStateRel layout σ s) (hScratch : ExtScratchSafe layout)
     (hStack : s'.stack = s.stack) (hFregs : s'.fregs = s.fregs)
-    (hRegsOther : ∀ r, r ≠ .x0 → r ≠ .x1 → r ≠ .x2 → r ≠ .x8 → s'.regs r = s.regs r) :
+    (hRegsOther : ∀ r, r ≠ .x0 → r ≠ .x1 → r ≠ .x2 → s'.regs r = s.regs r) :
     ExtStateRel layout σ s' := by
   intro v loc hv
   match loc with
   | .stack off => rw [hStack]; exact hRel v (.stack off) hv
   | .ireg r =>
     have h0 := hScratch.not_x0 v; have h1 := hScratch.not_x1 v
-    have h2 := hScratch.not_x2 v; have h8 := hScratch.not_x8 v
+    have h2 := hScratch.not_x2 v
     have hr0 : r ≠ .x0 := fun h => h0 (h ▸ hv)
     have hr1 : r ≠ .x1 := fun h => h1 (h ▸ hv)
     have hr2 : r ≠ .x2 := fun h => h2 (h ▸ hv)
-    have hr8 : r ≠ .x8 := fun h => h8 (h ▸ hv)
     show s'.regs r = (σ v).encode
-    rw [hRegsOther r hr0 hr1 hr2 hr8]; exact hRel v (.ireg r) hv
+    rw [hRegsOther r hr0 hr1 hr2]; exact hRel v (.ireg r) hv
   | .freg r =>
     show s'.fregs r = (σ v).encode
     rw [hFregs]; exact hRel v (.freg r) hv
@@ -478,7 +477,7 @@ theorem loadImm64_preserves_ExtStateRel (_prog : ArmProg) (layout : VarLayout)
     (hRdScratch : rd = .x0 ∨ rd = .x1 ∨ rd = .x2) :
     ExtStateRel layout σ s' := by
   apply ExtStateRel.preserved_by_ireg_only hRel hScratch hStack hFregs
-  intro r h0 h1 h2 h8
+  intro r h0 h1 h2
   apply hRegs
   rcases hRdScratch with rfl | rfl | rfl
   · exact h0
@@ -1840,7 +1839,7 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
           loadImm64_fregs_preserved prog .x0 n s (pcMap pc) hCodeL hPcRel
         have hRel1 : ExtStateRel layout σ s1 :=
           ExtStateRel.preserved_by_ireg_only hStateRel hScratch hStack1 hFregs1
-            (fun r h0 h1 h2 h8 => hRegs1 r h0)
+            (fun r h0 h1 h2 => hRegs1 r h0)
         have hStore := vStoreVar_stack layout x .x0 off hLocX
         rw [hStore] at hCodeR
         have hStr := hCodeR.head; rw [← hPC1] at hStr
@@ -1861,7 +1860,7 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
           loadImm64_fregs_preserved prog .x0 n s (pcMap pc) hCodeL hPcRel
         have hRel1 : ExtStateRel layout σ s1 :=
           ExtStateRel.preserved_by_ireg_only hStateRel hScratch hStack1 hFregs1
-            (fun r h0 h1 h2 h8 => hRegs1 r h0)
+            (fun r h0 h1 h2 => hRegs1 r h0)
         have hne : (r == ArmReg.x0) = false := by
           cases hr : r == ArmReg.x0
           · rfl
@@ -1900,7 +1899,7 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
           intro r hr; simp [s1, ArmState.setReg, ArmState.nextPC, hr]
         have hRel1 : ExtStateRel layout σ s1 :=
           ExtStateRel.preserved_by_ireg_only hStateRel hScratch hStack1 hFregs1
-            (fun r h0 _ _ _ => hRegs1 r h0)
+            (fun r h0 _ _ => hRegs1 r h0)
         have hSteps1 : ArmSteps prog s s1 :=
           ArmSteps.single (.mov .x0 (if b then 1 else 0) hMov)
         have hStore := vStoreVar_stack layout x .x0 off hLocX
@@ -1933,7 +1932,7 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
           intro r hr; simp [s1, ArmState.setReg, ArmState.nextPC, hr]
         have hRel1 : ExtStateRel layout σ s1 :=
           ExtStateRel.preserved_by_ireg_only hStateRel hScratch hStack1 hFregs1
-            (fun r h0 _ _ _ => hRegs1 r h0)
+            (fun r h0 _ _ => hRegs1 r h0)
         have hSteps1 : ArmSteps prog s s1 :=
           ArmSteps.single (.mov .x0 (if b then 1 else 0) hMov)
         have hne : (r == ArmReg.x0) = false := by
@@ -1966,7 +1965,7 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
           loadImm64_fregs_preserved prog .x0 f s (pcMap pc) hCodeL hPcRel
         have hRel1 : ExtStateRel layout σ s1 :=
           ExtStateRel.preserved_by_ireg_only hStateRel hScratch hStack1 hFregs1
-            (fun r h0 _ _ _ => hRegs1 r h0)
+            (fun r h0 _ _ => hRegs1 r h0)
         have hFmov := hCodeM.head; rw [← hPC1] at hFmov
         let s2 := s1.setFReg .d0 (s1.regs .x0) |>.nextPC
         have hSteps2 : ArmSteps prog s1 s2 := ArmSteps.single (.fmovToFP .d0 .x0 hFmov)
@@ -2004,7 +2003,7 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
           loadImm64_fregs_preserved prog .x0 f s (pcMap pc) hCodeL hPcRel
         have hRel1 : ExtStateRel layout σ s1 :=
           ExtStateRel.preserved_by_ireg_only hStateRel hScratch hStack1 hFregs1
-            (fun r h0 _ _ _ => hRegs1 r h0)
+            (fun r h0 _ _ => hRegs1 r h0)
         have hFmov := hCodeR.head; rw [← hPC1] at hFmov
         -- s1.regs .x0 = f = (Value.float f).encode
         have hx0enc : s1.regs .x0 = (Value.float f).encode := by
@@ -4716,7 +4715,7 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
         simp [s1, ArmState.nextPC]; exact hPcRel
       have hRel1 : ExtStateRel layout σ s1 :=
         ExtStateRel.preserved_by_ireg_only hStateRel hScratch
-          (by simp [s1]) (by simp [s1]) (fun rr h0 _ _ _ => by simp [s1, ArmState.setReg, ArmState.nextPC, h0])
+          (by simp [s1]) (by simp [s1]) (fun rr h0 _ _ => by simp [s1, ArmState.setReg, ArmState.nextPC, h0])
       have hAM1 : s1.arrayMem = s.arrayMem := by simp [s1]
       -- Step 2: vStoreVar stores x0 into x
       obtain ⟨s2, hSteps2, hRel2, hPC2, hAM2⟩ :=
@@ -4755,7 +4754,7 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
         simp [s2, ArmState.nextPC, hPC1]
       have hRel2 : ExtStateRel layout σ s2 :=
         ExtStateRel.preserved_by_ireg_only hRel1 hScratch
-          (by simp [s2]) (by simp [s2]) (fun r h0 _ _ _ => by simp [s2, ArmState.setReg, ArmState.nextPC, h0])
+          (by simp [s2]) (by simp [s2]) (fun r h0 _ _ => by simp [s2, ArmState.setReg, ArmState.nextPC, h0])
       have hAM2 : s2.arrayMem = s1.arrayMem := by simp [s2]
       -- Step 3: vStoreVar stores x0 into x
       obtain ⟨s3, hSteps3, hRel3, hPC3, hAM3⟩ :=

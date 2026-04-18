@@ -267,13 +267,13 @@ private def ppInstr (lbl : Nat → String) (afterFcmp : Bool)
   | .bCond c target =>
     [s!"  b.{if afterFcmp then ppCondFloat c else ppCond c} {lbl target}"]
   | .arrLd dst arr idxReg =>
-    [s!"  adrp x8, _arr_{arr}@PAGE",
-     s!"  add x8, x8, _arr_{arr}@PAGEOFF",
-     s!"  ldr {ppReg dst}, [x8, {ppReg idxReg}, lsl #3]"]
+    [s!"  adrp x0, _arr_{arr}@PAGE",
+     s!"  add x0, x0, _arr_{arr}@PAGEOFF",
+     s!"  ldr {ppReg dst}, [x0, {ppReg idxReg}, lsl #3]"]
   | .arrSt arr idxReg valReg =>
-    [s!"  adrp x8, _arr_{arr}@PAGE",
-     s!"  add x8, x8, _arr_{arr}@PAGEOFF",
-     s!"  str {ppReg valReg}, [x8, {ppReg idxReg}, lsl #3]"]
+    [s!"  adrp x0, _arr_{arr}@PAGE",
+     s!"  add x0, x0, _arr_{arr}@PAGEOFF",
+     s!"  str {ppReg valReg}, [x0, {ppReg idxReg}, lsl #3]"]
   | .fmovToFP fd rn =>
     [s!"  fmov {ppFReg fd}, {ppReg rn}"]
   | .fmovRR fd fn =>
@@ -313,13 +313,13 @@ private def ppInstr (lbl : Nat → String) (afterFcmp : Bool)
   | .fcvtzs rd fn =>
     [s!"  fcvtzs {ppReg rd}, {ppFReg fn}"]
   | .farrLd fd arr idxReg =>
-    [s!"  adrp x8, _arr_{arr}@PAGE",
-     s!"  add x8, x8, _arr_{arr}@PAGEOFF",
-     s!"  ldr {ppFReg fd}, [x8, {ppReg idxReg}, lsl #3]"]
+    [s!"  adrp x0, _arr_{arr}@PAGE",
+     s!"  add x0, x0, _arr_{arr}@PAGEOFF",
+     s!"  ldr {ppFReg fd}, [x0, {ppReg idxReg}, lsl #3]"]
   | .farrSt arr idxReg fs =>
-    [s!"  adrp x8, _arr_{arr}@PAGE",
-     s!"  add x8, x8, _arr_{arr}@PAGEOFF",
-     s!"  str {ppFReg fs}, [x8, {ppReg idxReg}, lsl #3]"]
+    [s!"  adrp x0, _arr_{arr}@PAGE",
+     s!"  add x0, x0, _arr_{arr}@PAGEOFF",
+     s!"  str {ppFReg fs}, [x0, {ppReg idxReg}, lsl #3]"]
   | .floatUnaryInstr op fd fn =>
     match op with
     | .sqrt => [s!"  fsqrt {ppFReg fd}, {ppFReg fn}"]
@@ -2986,8 +2986,8 @@ theorem tacToArm_correctness {tyCtx : TyCtx} {p : Prog} {r : VerifiedAsmResult}
     x16-x17: linker scratch (IP0/IP1), x18: platform-reserved. -/
 private def reservedIntRegs : List Nat := [16, 17, 18]
 
-/-- Caller-saved integer register numbers (x3-x7, x9-x15). -/
-private def callerSavedIntRegs : List Nat := [3, 4, 5, 6, 7, 9, 10, 11, 12, 13, 14, 15]
+/-- Caller-saved integer register numbers (x3-x8, x9-x15). -/
+private def callerSavedIntRegs : List Nat := [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
 
 /-- Caller-saved float register numbers (d0-d7). d0 is the call arg/return. -/
 private def callerSavedFloatRegs : List Nat := [0, 1, 2, 3, 4, 5, 6, 7]
@@ -3069,9 +3069,9 @@ def generateAsm (tyCtx : TyCtx) (p : Prog) : Except String String := do
       s!"  // print {v} (float)" ::
       (loadVarFP r.varMap v "d0") ::
       "  sub sp, sp, #32" ::
-      s!"  adrp x8, .Lname_{v}@PAGE" ::
-      s!"  add x8, x8, .Lname_{v}@PAGEOFF" ::
-      "  str x8, [sp]" ::
+      s!"  adrp x1, .Lname_{v}@PAGE" ::
+      s!"  add x1, x1, .Lname_{v}@PAGEOFF" ::
+      "  str x1, [sp]" ::
       "  str d0, [sp, #8]" ::
       s!"  adrp x0, {fmtLabel}@PAGE" ::
       s!"  add x0, x0, {fmtLabel}@PAGEOFF" ::
@@ -3081,9 +3081,9 @@ def generateAsm (tyCtx : TyCtx) (p : Prog) : Except String String := do
       s!"  // print {v}" ::
       (loadVar r.varMap v "x9") ::
       "  sub sp, sp, #16" ::
-      s!"  adrp x8, .Lname_{v}@PAGE" ::
-      s!"  add x8, x8, .Lname_{v}@PAGEOFF" ::
-      "  str x8, [sp]" ::
+      s!"  adrp x1, .Lname_{v}@PAGE" ::
+      s!"  add x1, x1, .Lname_{v}@PAGEOFF" ::
+      "  str x1, [sp]" ::
       "  str x9, [sp, #8]" ::
       s!"  adrp x0, {fmtLabel}@PAGE" ::
       s!"  add x0, x0, {fmtLabel}@PAGEOFF" ::

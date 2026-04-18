@@ -136,13 +136,13 @@ partial def graphColor (graph : List (Var × List Var)) (K : Nat)
 -- § 4. Register mapping
 -- ============================================================
 
-/-- Integer allocatable registers: x3-x7, x9-x15 (caller-saved), x19-x28 (callee-saved).
+/-- Integer allocatable registers: x3-x8, x9-x15 (caller-saved), x19-x28 (callee-saved).
     Caller-saved listed first so graph coloring prefers them under low pressure.
-    x0-x2 reserved as scratch, x8 reserved for array address,
+    x0-x2 reserved as scratch,
     x16-x17 reserved (linker scratch IP0/IP1), x18 reserved (platform register). -/
 def intRegNums : Array Nat :=
-  #[3, 4, 5, 6, 7, 9, 10, 11, 12, 13, 14, 15,   -- caller-saved (12)
-    19, 20, 21, 22, 23, 24, 25, 26, 27, 28]       -- callee-saved (10)
+  #[3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,   -- caller-saved (13)
+    19, 20, 21, 22, 23, 24, 25, 26, 27, 28]          -- callee-saved (10)
 
 /-- Float allocatable registers: d3-d15 (13 total).
     d0-d2 reserved as scratch (d2 used by fcmp/fbinop fallback). -/
