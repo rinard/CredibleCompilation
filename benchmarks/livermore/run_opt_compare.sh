@@ -1,7 +1,6 @@
 #!/bin/bash
-# Compare optimized vs unoptimized WhileLang compilation on Livermore kernels.
-# Compiles each kernel with full optimization pipeline and with -O0 (RegAlloc only),
-# runs each NRUNS times, takes the minimum, and reports the speedup from optimizations.
+# Compare WhileLang (optimized + unoptimized) vs clang -O0/-O1/-O2 on Livermore kernels.
+# 5 runs each, take fastest (minimum) time.
 set -euo pipefail
 
 DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -31,25 +30,25 @@ fi
 NRUNS=5
 
 # ── compile all kernels ──────────────────────────────────────────
-echo "Compiling kernels (optimized + unoptimized)..."
-fail_opt=0; fail_noopt=0
+echo "Compiling kernels..."
 for name in "${KERNELS[@]}"; do
   wfile="$DIR/${name}.w"
-  [ -f "$wfile" ] || continue
+  cfile="$DIR/${name}.c"
 
-  if "$COMPILER" "$wfile" -o "$BD/${name}_opt" 2>/dev/null; then
-    :
-  else
-    echo "  FAIL (opt): $name"; ((fail_opt++)) || true
+  # WhileLang optimized + unoptimized
+  if [ -f "$wfile" ]; then
+    "$COMPILER" "$wfile" -o "$BD/${name}_opt" 2>/dev/null || echo "  FAIL (WL opt): $name"
+    "$COMPILER" "$wfile" -O0 -o "$BD/${name}_noopt" 2>/dev/null || echo "  FAIL (WL -O0): $name"
   fi
 
-  if "$COMPILER" "$wfile" -O0 -o "$BD/${name}_noopt" 2>/dev/null; then
-    :
-  else
-    echo "  FAIL (noopt): $name"; ((fail_noopt++)) || true
+  # C at three optimization levels
+  if [ -f "$cfile" ]; then
+    cc -O0 -o "$BD/${name}_c0" "$cfile" 2>/dev/null || echo "  FAIL (C -O0): $name"
+    cc -O1 -o "$BD/${name}_c1" "$cfile" 2>/dev/null || echo "  FAIL (C -O1): $name"
+    cc -O2 -o "$BD/${name}_c2" "$cfile" 2>/dev/null || echo "  FAIL (C -O2): $name"
   fi
 done
-echo "Compilation done (opt failures: $fail_opt, noopt failures: $fail_noopt)"
+echo "Compilation done."
 echo ""
 
 # ── timing helpers ───────────────────────────────────────────────
@@ -80,42 +79,54 @@ min_time() {
 }
 
 # ── run benchmarks ───────────────────────────────────────────────
-printf "\n%-22s  %10s  %10s  %10s  %s\n" \
-  "Kernel" "Opt (s)" "NoOpt (s)" "Speedup" "Correct?"
-printf "%-22s  %10s  %10s  %10s  %s\n" \
-  "──────────────────" "────────" "────────" "────────" "────────"
+printf "\n%-22s  %8s  %8s  %8s  %8s  %8s  %8s  %8s  %8s  %s\n" \
+  "Kernel" "C -O0" "C -O1" "C -O2" "WL -O0" "WL opt" "WL/C-O0" "WL/C-O1" "WL/C-O2" "Correct?"
+printf "%-22s  %8s  %8s  %8s  %8s  %8s  %8s  %8s  %8s  %s\n" \
+  "──────────────────" "──────" "──────" "──────" "──────" "──────" "──────" "──────" "──────" "────────"
 
-log_ratios=()
+log_wl_opt=()     # WL-opt / WL-noopt
+log_wl_c0=()      # WL-opt / C-O0
+log_wl_c1=()      # WL-opt / C-O1
+log_wl_c2=()      # WL-opt / C-O2
 
 for name in "${KERNELS[@]}"; do
-  opt_bin="$BD/${name}_opt"
-  noopt_bin="$BD/${name}_noopt"
-  t_opt="—"; t_noopt="—"; speedup="—"; correct="—"
-  out_opt=""; out_noopt=""
+  t_c0="—"; t_c1="—"; t_c2="—"; t_noopt="—"; t_opt="—"
+  ratio_c0="—"; ratio_c1="—"; ratio_c2="—"
+  correct="—"
+  out_opt=""; out_c2=""
 
-  if [ -x "$opt_bin" ]; then
-    t_opt=$(min_time "$opt_bin")
+  # Run C variants
+  for lvl in c0 c1 c2; do
+    bin="$BD/${name}_${lvl}"
+    if [ -x "$bin" ]; then
+      eval "t_${lvl}=$(min_time "$bin")"
+      [ "$lvl" = "c2" ] && out_c2=$(cat "$BD/tmp_last_out.txt" 2>/dev/null || true)
+    fi
+  done
+
+  # Run WL variants
+  if [ -x "$BD/${name}_noopt" ]; then
+    t_noopt=$(min_time "$BD/${name}_noopt")
+  fi
+  if [ -x "$BD/${name}_opt" ]; then
+    t_opt=$(min_time "$BD/${name}_opt")
     out_opt=$(cat "$BD/tmp_last_out.txt" 2>/dev/null || true)
   fi
 
-  if [ -x "$noopt_bin" ]; then
-    t_noopt=$(min_time "$noopt_bin")
-    out_noopt=$(cat "$BD/tmp_last_out.txt" 2>/dev/null || true)
-  fi
-
-  # Correctness: compare opt vs noopt output
+  # Correctness: compare WL opt output to C -O2 output
   if [ "$t_opt" != "—" ] && [ "$t_opt" != "ERR" ] && \
-     [ "$t_noopt" != "—" ] && [ "$t_noopt" != "ERR" ]; then
+     [ "$t_c2" != "—" ] && [ "$t_c2" != "ERR" ]; then
     correct=$(python3 -c "
 import re, sys
 num_re = r'[-+]?[0-9]*\.?[0-9]+(?:[eE][-+]?[0-9]+)?'
 def parse(text):
     d = {}
     for line in text.strip().splitlines():
-        m = re.match(r'(\w+)\s*=\s*(' + num_re + r')\s*$', line)
-        if m: d[m.group(1)] = m.group(2)
+        if line.startswith('elapsed'): continue
+        for m in re.finditer(r'(\w+)\s*=\s*(' + num_re + r')', line):
+            d[m.group(1)] = m.group(2)
     return d
-a, b = parse('''$out_opt'''), parse('''$out_noopt''')
+a, b = parse('''$out_opt'''), parse('''$out_c2''')
 shared = set(a) & set(b)
 if not shared: print('—'); sys.exit()
 ok = True
@@ -130,36 +141,43 @@ if ok: print('ok')
 ")
   fi
 
-  # Speedup = noopt / opt (how much faster opt is)
-  if [ "$t_opt" != "—" ] && [ "$t_opt" != "ERR" ] && \
-     [ "$t_noopt" != "—" ] && [ "$t_noopt" != "ERR" ]; then
-    speedup=$(python3 -c "
+  # Ratios: WL-opt vs each C level
+  for pair in "c0:t_c0" "c1:t_c1" "c2:t_c2"; do
+    tag="${pair%%:*}"; var="${pair##*:}"
+    eval "tv=\$$var"
+    if [ "$t_opt" != "—" ] && [ "$t_opt" != "ERR" ] && \
+       [ "$tv" != "—" ] && [ "$tv" != "ERR" ]; then
+      eval "ratio_${tag}=$(python3 -c "
 import math
-t_o, t_n = float('$t_opt'), float('$t_noopt')
-if t_o > 0:
-    r = t_n / t_o
-    print(f'{r:.2f}x')
-    print(f'{math.log(r)}', file=open('$BD/tmp_logratio.txt','w'))
-else:
-    print('inf')
-")
-    if [ -f "$BD/tmp_logratio.txt" ]; then
-      log_ratios+=("$(cat "$BD/tmp_logratio.txt")")
+t_w, t_c = float('$t_opt'), float('$tv')
+if t_c > 0:
+    r = t_w / t_c
+    print(f'{r:.1f}x')
+    print(f'{math.log(r)}', file=open('$BD/tmp_lr_${tag}.txt','w'))
+")"
+      if [ -f "$BD/tmp_lr_${tag}.txt" ]; then
+        eval "log_wl_${tag}+=(\"\$(cat '$BD/tmp_lr_${tag}.txt')\")"
+      fi
     fi
-  fi
+  done
 
-  printf "%-22s  %10s  %10s  %10s  %s\n" \
-    "$name" "$t_opt" "$t_noopt" "$speedup" "$correct"
+  printf "%-22s  %8s  %8s  %8s  %8s  %8s  %8s  %8s  %8s  %s\n" \
+    "$name" "$t_c0" "$t_c1" "$t_c2" "$t_noopt" "$t_opt" "$ratio_c0" "$ratio_c1" "$ratio_c2" "$correct"
 done
 
-# ── geometric mean ───────────────────────────────────────────────
-if [ ${#log_ratios[@]} -gt 0 ]; then
-  geomean=$(python3 -c "
+# ── geometric means ──────────────────────────────────────────────
+printf "\n"
+for pair in "c0:WL-opt/C-O0" "c1:WL-opt/C-O1" "c2:WL-opt/C-O2"; do
+  tag="${pair%%:*}"; label="${pair##*:}"
+  eval "logs=(\"\${log_wl_${tag}[@]}\")" 2>/dev/null || logs=()
+  if [ ${#logs[@]} -gt 0 ]; then
+    gm=$(python3 -c "
 import math
-logs = [$(IFS=,; echo "${log_ratios[*]}")]
+logs = [$(IFS=,; echo "${logs[*]}")]
 print(f'{math.exp(sum(logs)/len(logs)):.2f}x')
 ")
-  printf "\n%-22s  %10s  %10s  %10s\n" "Geometric mean" "" "" "$geomean"
-fi
+    printf "  Geometric mean %-16s  %s\n" "$label" "$gm"
+  fi
+done
 
-rm -f "$BD/tmp_out.txt" "$BD/tmp_last_out.txt" "$BD/tmp_logratio.txt"
+rm -f "$BD"/tmp_out.txt "$BD"/tmp_last_out.txt "$BD"/tmp_lr_*.txt
