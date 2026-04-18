@@ -343,21 +343,27 @@ def ExtStateRel (layout : VarLayout) (σ : Store) (arm : ArmState) : Prop :=
 def VarLayoutInjective (layout : VarLayout) : Prop :=
   ∀ v1 v2 loc, layout v1 = some loc → layout v2 = some loc → v1 = v2
 
-/-- No variable is mapped to a scratch register.
-    Scratch: x0, x1, x2 (integer), d0, d1, d2 (float). -/
-def ExtScratchSafe (layout : VarLayout) : Prop :=
+/-- No variable is mapped to a restricted register.
+    Scratch: x0, x1, x2 (integer), d0, d1, d2 (float).
+    Reserved/platform: x16 (IP0), x17 (IP1), x18 (platform). -/
+def RegConventionSafe (layout : VarLayout) : Prop :=
   ∀ v, layout v ≠ some (.ireg .x0) ∧ layout v ≠ some (.ireg .x1) ∧
        layout v ≠ some (.ireg .x2) ∧
        layout v ≠ some (.freg .d0) ∧ layout v ≠ some (.freg .d1) ∧
-       layout v ≠ some (.freg .d2)
+       layout v ≠ some (.freg .d2) ∧
+       layout v ≠ some (.ireg .x16) ∧ layout v ≠ some (.ireg .x17) ∧
+       layout v ≠ some (.ireg .x18)
 
-/-- Convenience: ExtScratchSafe implies no variable in a specific scratch ireg. -/
-theorem ExtScratchSafe.not_x0 (h : ExtScratchSafe layout) (v : Var) : layout v ≠ some (.ireg .x0) := (h v).1
-theorem ExtScratchSafe.not_x1 (h : ExtScratchSafe layout) (v : Var) : layout v ≠ some (.ireg .x1) := (h v).2.1
-theorem ExtScratchSafe.not_x2 (h : ExtScratchSafe layout) (v : Var) : layout v ≠ some (.ireg .x2) := (h v).2.2.1
-theorem ExtScratchSafe.not_d0 (h : ExtScratchSafe layout) (v : Var) : layout v ≠ some (.freg .d0) := (h v).2.2.2.1
-theorem ExtScratchSafe.not_d1 (h : ExtScratchSafe layout) (v : Var) : layout v ≠ some (.freg .d1) := (h v).2.2.2.2.1
-theorem ExtScratchSafe.not_d2 (h : ExtScratchSafe layout) (v : Var) : layout v ≠ some (.freg .d2) := (h v).2.2.2.2.2
+/-- Convenience: RegConventionSafe implies no variable in a specific restricted register. -/
+theorem RegConventionSafe.not_x0 (h : RegConventionSafe layout) (v : Var) : layout v ≠ some (.ireg .x0) := (h v).1
+theorem RegConventionSafe.not_x1 (h : RegConventionSafe layout) (v : Var) : layout v ≠ some (.ireg .x1) := (h v).2.1
+theorem RegConventionSafe.not_x2 (h : RegConventionSafe layout) (v : Var) : layout v ≠ some (.ireg .x2) := (h v).2.2.1
+theorem RegConventionSafe.not_d0 (h : RegConventionSafe layout) (v : Var) : layout v ≠ some (.freg .d0) := (h v).2.2.2.1
+theorem RegConventionSafe.not_d1 (h : RegConventionSafe layout) (v : Var) : layout v ≠ some (.freg .d1) := (h v).2.2.2.2.1
+theorem RegConventionSafe.not_d2 (h : RegConventionSafe layout) (v : Var) : layout v ≠ some (.freg .d2) := (h v).2.2.2.2.2.1
+theorem RegConventionSafe.not_x16 (h : RegConventionSafe layout) (v : Var) : layout v ≠ some (.ireg .x16) := (h v).2.2.2.2.2.2.1
+theorem RegConventionSafe.not_x17 (h : RegConventionSafe layout) (v : Var) : layout v ≠ some (.ireg .x17) := (h v).2.2.2.2.2.2.2.1
+theorem RegConventionSafe.not_x18 (h : RegConventionSafe layout) (v : Var) : layout v ≠ some (.ireg .x18) := (h v).2.2.2.2.2.2.2.2
 
 /-- A layout respects types: non-float variables are not in float registers,
     and float variables are not in integer registers. -/
@@ -374,11 +380,13 @@ theorem WellTypedLayout.bool_not_freg (h : WellTypedLayout Γ layout) (hty : Γ 
 theorem WellTypedLayout.float_not_ireg (h : WellTypedLayout Γ layout) (hty : Γ v = .float) :
     ∀ r, layout v ≠ some (.ireg r) := fun r => h.2 v r hty
 
-/-- Check no variable maps to a scratch register. -/
-def VarLayout.scratchSafe (layout : VarLayout) : Bool :=
+/-- Check no variable maps to a restricted register
+    (scratch x0-x2, d0-d2; reserved x16-x18). -/
+def VarLayout.regConventionSafe (layout : VarLayout) : Bool :=
   layout.entries.all fun (_, loc) =>
     loc != .ireg .x0 && loc != .ireg .x1 && loc != .ireg .x2 &&
-    loc != .freg .d0 && loc != .freg .d1 && loc != .freg .d2
+    loc != .freg .d0 && loc != .freg .d1 && loc != .freg .d2 &&
+    loc != .ireg .x16 && loc != .ireg .x17 && loc != .ireg .x18
 
 /-- Check no two variables share a location. -/
 def VarLayout.isInjective (layout : VarLayout) : Bool :=
@@ -403,12 +411,12 @@ private theorem List.lookup_mem_of_some {entries : List (String × VarLoc)} {v :
       obtain ⟨k, hk_mem, hk_eq⟩ := ih h
       exact ⟨k, .tail _ hk_mem, hk_eq⟩
 
-theorem VarLayout.scratchSafe_spec (layout : VarLayout) (h : layout.scratchSafe = true) :
-    ExtScratchSafe layout := by
+theorem VarLayout.regConventionSafe_spec (layout : VarLayout) (h : layout.regConventionSafe = true) :
+    RegConventionSafe layout := by
   intro v
-  unfold VarLayout.scratchSafe at h
+  unfold VarLayout.regConventionSafe at h
   rw [List.all_eq_true] at h
-  refine ⟨?_, ?_, ?_, ?_, ?_, ?_⟩ <;> intro heq <;> simp at heq
+  refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩ <;> intro heq <;> simp at heq
   all_goals (
     obtain ⟨k, hk_mem, _⟩ := List.lookup_mem_of_some heq
     have := h ⟨k, _⟩ hk_mem
@@ -1392,7 +1400,7 @@ def verifiedGenInstr (layout : VarLayout) (pcMap : Nat → Nat) (instr : TAC)
     (haltLabel : Nat) (divLabel : Nat) (boundsLabel : Nat)
     (arrayDecls : List (ArrayName × Nat × VarTy))
     (boundsSafe : Bool := false) : Option (List ArmInstr) :=
-  if !layout.scratchSafe || !layout.isInjective then none
+  if !layout.regConventionSafe || !layout.isInjective then none
   else match instr with
   | .const v (.int n) =>
     match layout v with

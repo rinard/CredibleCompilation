@@ -1140,18 +1140,19 @@ def checkBoolExprSimpleOps (p : Prog) : Bool :=
     | .boolop _ be | .ifgoto be _ => be.hasSimpleOps
     | _ => true
 
-/-- Check that no variable in the program would map to a scratch register.
-    Scratch int registers: x0 (__ir0/__br0), x1 (__ir1/__br1), x2 (__ir2/__br2).
-    Scratch float registers: d0 (__fr0), d1 (__fr1), d2 (__fr2).
-    Variables without __ir/__br/__fr prefixes go to stack (always safe). -/
-def isScratchVarName (v : Var) : Bool :=
+/-- Check that no variable in the program would map to a restricted register.
+    Scratch registers: x0-x2 (__ir0-2/__br0-2), d0-d2 (__fr0-2).
+    Reserved/platform registers: x16-x18 (__ir16-18/__br16-18). -/
+def violatesRegConvention (v : Var) : Bool :=
   (v == "__ir0" || v == "__ir1" || v == "__ir2" ||
    v == "__br0" || v == "__br1" || v == "__br2" ||
-   v == "__fr0" || v == "__fr1" || v == "__fr2")
+   v == "__fr0" || v == "__fr1" || v == "__fr2" ||
+   v == "__ir16" || v == "__ir17" || v == "__ir18" ||
+   v == "__br16" || v == "__br17" || v == "__br18")
 
-def checkNoScratchVarNames (p : Prog) : Bool :=
+def checkNoRegConventionViolations (p : Prog) : Bool :=
   p.code.all fun instr =>
-    instr.vars.all fun v => !isScratchVarName v
+    instr.vars.all fun v => !violatesRegConvention v
 
 /-- All arrLoad/arrStore instructions in a program use element type `.int`. -/
 def AllArrayOpsInt (p : Prog) : Prop :=
@@ -1228,8 +1229,8 @@ def checkCertificateExec (cert : ECertificate) : Bool :=
   checkBoolExprNoArrRead cert.trans &&
   checkBoolExprSimpleOps cert.orig &&
   checkBoolExprSimpleOps cert.trans &&
-  checkNoScratchVarNames cert.orig &&
-  checkNoScratchVarNames cert.trans &&
+  checkNoRegConventionViolations cert.orig &&
+  checkNoRegConventionViolations cert.trans &&
   checkBoolVarsCoveredExec cert
 
 /-- Verbose check: returns the result of each individual condition. -/
@@ -1257,8 +1258,8 @@ def checkCertificateVerboseExec (cert : ECertificate) : List (String × Bool) :=
     ("bool_expr_no_arr_read_trans", checkBoolExprNoArrRead cert.trans),
     ("bool_expr_simple_ops_orig", checkBoolExprSimpleOps cert.orig),
     ("bool_expr_simple_ops_trans", checkBoolExprSimpleOps cert.trans),
-    ("no_scratch_var_names_orig", checkNoScratchVarNames cert.orig),
-    ("no_scratch_var_names_trans", checkNoScratchVarNames cert.trans),
+    ("reg_convention_orig", checkNoRegConventionViolations cert.orig),
+    ("reg_convention_trans", checkNoRegConventionViolations cert.trans),
     ("bool_vars_covered",     checkBoolVarsCoveredExec cert) ]
 
 /-- Observable output of a configuration with respect to an executable certificate.

@@ -846,7 +846,7 @@ def verifiedGenerateAsm (tyCtx : TyCtx) (p : Prog) : Except String VerifiedAsmRe
     let varMap := buildVarMap vars
     let layout := buildVarLayout vars varMap
     -- Check layout safety: no scratch registers, injective mapping
-    if !layout.scratchSafe then
+    if !layout.regConventionSafe then
       .error "layout uses scratch register"
     else if !layout.isInjective then
       .error "layout is not injective"
@@ -1375,7 +1375,7 @@ theorem verifiedGenerateAsm_spec {tyCtx : TyCtx} {p : Prog} {r : VerifiedAsmResu
   -- Unfold and clear error guards
   simp only [verifiedGenerateAsm] at hGen
   split at hGen <;> simp_all                     -- checkWellTypedProg
-  -- scratchSafe
+  -- regConventionSafe
   split at hGen <;> simp_all
   -- isInjective
   split at hGen <;> simp_all
@@ -1900,28 +1900,28 @@ private theorem step_simulation {tyCtx : TyCtx} {p : Prog} {r : VerifiedAsmResul
       | floatUnary x op y =>
         -- Step 2: unfold verifiedGenInstr for floatUnary
         rw [show p[pc] = p.code[pc] from rfl, hInstr] at hGenInstr
-        have hSS : r.layout.scratchSafe = true := by
-          cases h : r.layout.scratchSafe
+        have hRC : r.layout.regConventionSafe = true := by
+          cases h : r.layout.regConventionSafe
           · simp [verifiedGenInstr, h] at hGenInstr
           · rfl
         have hII : r.layout.isInjective = true := by
           cases h : r.layout.isInjective
-          · simp [verifiedGenInstr, hSS, h] at hGenInstr
+          · simp [verifiedGenInstr, hRC, h] at hGenInstr
           · rfl
-        have hScratch : ExtScratchSafe r.layout := VarLayout.scratchSafe_spec r.layout hSS
+        have hRegConv : RegConventionSafe r.layout := VarLayout.regConventionSafe_spec r.layout hRC
         have hInjective : VarLayoutInjective r.layout := VarLayout.isInjective_spec r.layout hII
         have hNotIregY : ∀ ir, r.layout y ≠ some (.ireg ir) := by
-          intro ir h; have := hGenInstr; simp [verifiedGenInstr, hSS, hII, h] at this
+          intro ir h; have := hGenInstr; simp [verifiedGenInstr, hRC, hII, h] at this
         have hNotIregX : ∀ ir, r.layout x ≠ some (.ireg ir) := by
           intro ir h; have := hGenInstr
-          simp only [verifiedGenInstr, hSS, hII, Bool.not_true, Bool.false_or, h] at this
+          simp only [verifiedGenInstr, hRC, hII, Bool.not_true, Bool.false_or, h] at this
           split at this <;> simp_all
         let src_reg := match r.layout y with | some (.freg r) => r | _ => ArmFReg.d0
         let dst_reg := match r.layout x with | some (.freg r) => r | _ => ArmFReg.d0
         have hInstrs : baseInstrs =
             vLoadVarFP r.layout y src_reg ++ [.floatUnaryInstr op dst_reg src_reg] ++
             vStoreVarFP r.layout x dst_reg := by
-          simp only [verifiedGenInstr, hSS, hII, Bool.not_true, Bool.false_or] at hGenInstr
+          simp only [verifiedGenInstr, hRC, hII, Bool.not_true, Bool.false_or] at hGenInstr
           split at hGenInstr
           · simp_all
           · exact (Option.some.inj hGenInstr).symm
@@ -1936,7 +1936,7 @@ private theorem step_simulation {tyCtx : TyCtx} {p : Prog} {r : VerifiedAsmResul
         obtain ⟨s1, hSteps1, hSR1, hRel1, hRegs1, hPC1, hAM1, hFregs1, hStack1⟩ :=
           vLoadVarFP_eff_exec r.bodyFlat r.layout y σ s_saved
             (r.pcMap pc + (entriesToSaves entries).length) .d0
-            hRelSaved hScratch hSavedPC hNotIregY (Or.inl rfl) hMappedY hCodeLoad
+            hRelSaved hRegConv hSavedPC hNotIregY (Or.inl rfl) hMappedY hCodeLoad
         -- Phase B: havoc (floatUnaryLibCall)
         have hCodeMid := hCodeBase.append_left.append_right
           (l1 := vLoadVarFP r.layout y src_reg)
@@ -2016,16 +2016,16 @@ private theorem step_simulation {tyCtx : TyCtx} {p : Prog} {r : VerifiedAsmResul
           rw [hSR1', hfy, hσx]; simp [Value.encode]
         rcases hlx : r.layout x with _ | ⟨off | ir | fr⟩
         · -- none: vStoreVarFP = [], s_mid = s2
-          have hSS2 : ∀ e ∈ entries, s2.stack e.off = (applyCallerSaves entries s).stack e.off :=
+          have hRC2 : ∀ e ∈ entries, s2.stack e.off = (applyCallerSaves entries s).stack e.off :=
             fun e _ => by rw [hStack2]
-          refine ⟨s2, hSteps1.trans hSteps2, ?_, hAMChain, hSS2, hNEI_shared, ?_, ?_⟩
+          refine ⟨s2, hSteps1.trans hSteps2, ?_, hAMChain, hRC2, hNEI_shared, ?_, ?_⟩
           · -- PC
             rw [hPC2, hPC1', hSavedPC, hInstrs]; simp [vStoreVarFP, hlx, List.length_append]; omega
           · -- non-entry freg
             intro v fr hLoc hNE
-            -- dst_reg = .d0 (layout x = none), so fr ≠ .d0 by scratchSafe
+            -- dst_reg = .d0 (layout x = none), so fr ≠ .d0 by regConventionSafe
             have hDR : dst_reg = .d0 := by simp [dst_reg, hlx]
-            have hfrne : fr ≠ ArmFReg.d0 := fun h => absurd (h ▸ hLoc) (hScratch.not_d0 v)
+            have hfrne : fr ≠ ArmFReg.d0 := fun h => absurd (h ▸ hLoc) (hRegConv.not_d0 v)
             -- s2.fregs fr = (havocCallerSaved ...).fregs fr (setFReg only changed .d0)
             have : s2.fregs fr = (s1.havocCallerSaved newRegs newFregs).fregs fr := by
               simp [s2, ArmState.nextPC, ArmState.setFReg, hDR, hfrne]
@@ -2072,7 +2072,7 @@ private theorem step_simulation {tyCtx : TyCtx} {p : Prog} {r : VerifiedAsmResul
           have hNEI3 : ∀ v ir, r.layout v = some (.ireg ir) →
               (∀ off, CallerSaveEntry.ireg ir off ∉ entries) → s3.regs ir = (σ' v).encode :=
             fun v ir hLoc hNE => hRegs3 ▸ hNEI_shared v ir hLoc hNE
-          have hSS3 : ∀ e ∈ entries, s3.stack e.off = (applyCallerSaves entries s).stack e.off := by
+          have hRC3 : ∀ e ∈ entries, s3.stack e.off = (applyCallerSaves entries s).stack e.off := by
             intro e he
             simp [s3, ArmState.nextPC, ArmState.setStack]
             -- e.off ≠ off because off is a layout offset for x, and save slots are fresh
@@ -2080,7 +2080,7 @@ private theorem step_simulation {tyCtx : TyCtx} {p : Prog} {r : VerifiedAsmResul
               intro heq
               exact spec.callerSaveSpec.1 e (hEntriesSub'.subset he) x (heq ▸ hlx)
             simp [hne, hStack2]
-          refine ⟨s3, hSteps1.trans (hSteps2.trans hSteps3), ?_, ?_, hSS3, hNEI3, ?_, ?_⟩
+          refine ⟨s3, hSteps1.trans (hSteps2.trans hSteps3), ?_, ?_, hRC3, hNEI3, ?_, ?_⟩
           · -- PC
             simp [s3, ArmState.nextPC, ArmState.setStack]
             rw [hPC2, hPC1', hSavedPC, hInstrs]; simp [vStoreVarFP, hlx, List.length_append]; omega
@@ -2092,7 +2092,7 @@ private theorem step_simulation {tyCtx : TyCtx} {p : Prog} {r : VerifiedAsmResul
             rw [hFregs3]
             -- dst_reg = .d0 (layout x = stack, not freg)
             have hDR : dst_reg = .d0 := by simp [dst_reg, hlx]
-            have hfrne : fr ≠ ArmFReg.d0 := fun h => absurd (h ▸ hLoc) (hScratch.not_d0 v)
+            have hfrne : fr ≠ ArmFReg.d0 := fun h => absurd (h ▸ hLoc) (hRegConv.not_d0 v)
             have : s2.fregs fr = (s1.havocCallerSaved newRegs newFregs).fregs fr := by
               simp [s2, ArmState.nextPC, ArmState.setFReg, hDR, hfrne]
             rw [this]
@@ -2138,9 +2138,9 @@ private theorem step_simulation {tyCtx : TyCtx} {p : Prog} {r : VerifiedAsmResul
           by_cases hEq : fr == dst_reg
           · -- fr = dst_reg: vStoreVarFP = [], s_mid = s2
             simp [vStoreVarFP, hlx, hEq] at hCodeStore
-            have hSS2 : ∀ e ∈ entries, s2.stack e.off = (applyCallerSaves entries s).stack e.off :=
+            have hRC2 : ∀ e ∈ entries, s2.stack e.off = (applyCallerSaves entries s).stack e.off :=
               fun e _ => by rw [hStack2]
-            refine ⟨s2, hSteps1.trans hSteps2, ?_, hAMChain, hSS2, hNEI_shared, ?_, ?_⟩
+            refine ⟨s2, hSteps1.trans hSteps2, ?_, hAMChain, hRC2, hNEI_shared, ?_, ?_⟩
             · -- PC
               rw [hPC2, hPC1', hSavedPC, hInstrs]
               simp [vStoreVarFP, hlx, hEq, List.length_append]; omega
@@ -2193,9 +2193,9 @@ private theorem step_simulation {tyCtx : TyCtx} {p : Prog} {r : VerifiedAsmResul
                 (∀ off, CallerSaveEntry.ireg ir off ∉ entries) → s3.regs ir = (σ' v).encode :=
               fun v ir hLoc hNE => hRegs3 ▸ hNEI_shared v ir hLoc hNE
             have hStack3 : s3.stack = s2.stack := by simp [s3, ArmState.nextPC, ArmState.setFReg]
-            have hSS3 : ∀ e ∈ entries, s3.stack e.off = (applyCallerSaves entries s).stack e.off :=
+            have hRC3 : ∀ e ∈ entries, s3.stack e.off = (applyCallerSaves entries s).stack e.off :=
               fun e _ => by rw [hStack3, hStack2]
-            refine ⟨s3, hSteps1.trans (hSteps2.trans hSteps3), ?_, ?_, hSS3, hNEI3, ?_, ?_⟩
+            refine ⟨s3, hSteps1.trans (hSteps2.trans hSteps3), ?_, ?_, hRC3, hNEI3, ?_, ?_⟩
             · -- PC
               simp [s3, ArmState.nextPC, ArmState.setFReg]
               rw [hPC2, hPC1', hSavedPC, hInstrs]
@@ -2249,22 +2249,22 @@ private theorem step_simulation {tyCtx : TyCtx} {p : Prog} {r : VerifiedAsmResul
         | fpow =>
           -- Step 2: unfold verifiedGenInstr for fbinop fpow
           rw [show p[pc] = p.code[pc] from rfl, hInstr] at hGenInstr
-          have hSS : r.layout.scratchSafe = true := by
-            cases h : r.layout.scratchSafe
+          have hRC : r.layout.regConventionSafe = true := by
+            cases h : r.layout.regConventionSafe
             · simp [verifiedGenInstr, h] at hGenInstr
             · rfl
           have hII : r.layout.isInjective = true := by
             cases h : r.layout.isInjective
-            · simp [verifiedGenInstr, hSS, h] at hGenInstr
+            · simp [verifiedGenInstr, hRC, h] at hGenInstr
             · rfl
-          have hScratch : ExtScratchSafe r.layout := VarLayout.scratchSafe_spec r.layout hSS
+          have hRegConv : RegConventionSafe r.layout := VarLayout.regConventionSafe_spec r.layout hRC
           have hInjective : VarLayoutInjective r.layout := VarLayout.isInjective_spec r.layout hII
           have hNotIregY : ∀ ir, r.layout y ≠ some (.ireg ir) := by
-            intro ir h; have := hGenInstr; simp [verifiedGenInstr, hSS, hII, h] at this
+            intro ir h; have := hGenInstr; simp [verifiedGenInstr, hRC, hII, h] at this
           have hNotIregZ : ∀ ir, r.layout z ≠ some (.ireg ir) := by
-            intro ir h; have := hGenInstr; simp [verifiedGenInstr, hSS, hII, h] at this
+            intro ir h; have := hGenInstr; simp [verifiedGenInstr, hRC, hII, h] at this
           have hNotIregX : ∀ ir, r.layout x ≠ some (.ireg ir) := by
-            intro ir h; have := hGenInstr; simp [verifiedGenInstr, hSS, hII, h] at this
+            intro ir h; have := hGenInstr; simp [verifiedGenInstr, hRC, hII, h] at this
           let lv_reg := match r.layout y with | some (.freg r) => r | _ => ArmFReg.d1
           let rv_reg := match r.layout z with | some (.freg r) => r | _ => ArmFReg.d2
           let dst_reg := match r.layout x with | some (.freg r) => r | _ => ArmFReg.d0
@@ -2273,7 +2273,7 @@ private theorem step_simulation {tyCtx : TyCtx} {p : Prog} {r : VerifiedAsmResul
               [.callBinF .fpow dst_reg lv_reg rv_reg] ++
               vStoreVarFP r.layout x dst_reg := by
             have h := hGenInstr
-            simp only [verifiedGenInstr, hSS, hII, Bool.not_true, Bool.false_or] at h
+            simp only [verifiedGenInstr, hRC, hII, Bool.not_true, Bool.false_or] at h
             -- Eliminate ireg branches by case-splitting each layout
             rcases hly : r.layout y with _ | ⟨ir | fr | off⟩
             all_goals rcases hlz : r.layout z with _ | ⟨ir | fr | off⟩
@@ -2293,7 +2293,7 @@ private theorem step_simulation {tyCtx : TyCtx} {p : Prog} {r : VerifiedAsmResul
           obtain ⟨s1, hSteps1, hSR1, hRel1, hRegs1, hPC1, hAM1, hFregs1, hStack1⟩ :=
             vLoadVarFP_eff_exec r.bodyFlat r.layout y σ s_saved
               (r.pcMap pc + (entriesToSaves entries).length) .d1
-              hRelSaved hScratch hSavedPC hNotIregY (Or.inr (Or.inl rfl)) hMappedY hCodeLoad1
+              hRelSaved hRegConv hSavedPC hNotIregY (Or.inr (Or.inl rfl)) hMappedY hCodeLoad1
           -- Second load: z into rv_reg
           have hCodeLoad2 : CodeAt r.bodyFlat s1.pc (vLoadVarFP r.layout z rv_reg) := by
             rw [hPC1]
@@ -2306,7 +2306,7 @@ private theorem step_simulation {tyCtx : TyCtx} {p : Prog} {r : VerifiedAsmResul
           obtain ⟨s1b, hSteps1b, hSR1b, hRel1b, hRegs1b, hPC1b, hAM1b, hFregs1b, hStack1b⟩ :=
             vLoadVarFP_eff_exec r.bodyFlat r.layout z σ s1
               s1.pc .d2
-              hRel1 hScratch rfl hNotIregZ (Or.inr (Or.inr rfl)) hMappedZ hCodeLoad2
+              hRel1 hRegConv rfl hNotIregZ (Or.inr (Or.inr rfl)) hMappedZ hCodeLoad2
           -- Phase B: havoc (callBinF)
           have hCodeMid := hCodeBase.append_left.append_right
             (l1 := vLoadVarFP r.layout y lv_reg ++ vLoadVarFP r.layout z rv_reg)
@@ -2350,7 +2350,7 @@ private theorem step_simulation {tyCtx : TyCtx} {p : Prog} {r : VerifiedAsmResul
               have : (ArmFReg.d1 : ArmFReg) ≠ rv_reg := by
                 rcases hlz : r.layout z with _ | ⟨_ | _ | frz⟩ <;>
                   simp [rv_reg, hlz]
-                exact fun h => absurd (h ▸ hlz) (hScratch.not_d1 z)
+                exact fun h => absurd (h ▸ hlz) (hRegConv.not_d1 z)
               rw [hFregs1b _ this]
               have := hSR1'; simp [lv_reg, hly] at this; exact this
             · exact absurd hly (hNotIregY iry)
@@ -2407,15 +2407,15 @@ private theorem step_simulation {tyCtx : TyCtx} {p : Prog} {r : VerifiedAsmResul
           -- rcases on layout x
           rcases hlx : r.layout x with _ | ⟨off | ir | fr⟩
           · -- none
-            have hSS2 : ∀ e ∈ entries, s2.stack e.off = (applyCallerSaves entries s).stack e.off :=
+            have hRC2 : ∀ e ∈ entries, s2.stack e.off = (applyCallerSaves entries s).stack e.off :=
               fun e _ => by rw [hStack2]
-            refine ⟨s2, (hSteps1.trans hSteps1b).trans hSteps2, ?_, hAMChain, hSS2, hNEI_shared, ?_, ?_⟩
+            refine ⟨s2, (hSteps1.trans hSteps1b).trans hSteps2, ?_, hAMChain, hRC2, hNEI_shared, ?_, ?_⟩
             · rw [hPC2, hPC1b', hPC1', hSavedPC, hInstrs]
               simp [vStoreVarFP, hlx, List.length_append]; omega
             · -- non-entry freg
               intro v fr hLoc hNE
               have hDR : dst_reg = .d0 := by simp [dst_reg, hlx]
-              have hfrne : fr ≠ ArmFReg.d0 := fun h => absurd (h ▸ hLoc) (hScratch.not_d0 v)
+              have hfrne : fr ≠ ArmFReg.d0 := fun h => absurd (h ▸ hLoc) (hRegConv.not_d0 v)
               have : s2.fregs fr = (s1b.havocCallerSaved newRegs newFregs).fregs fr := by
                 simp [s2, ArmState.nextPC, ArmState.setFReg, hDR, hfrne]
               rw [this]
@@ -2454,12 +2454,12 @@ private theorem step_simulation {tyCtx : TyCtx} {p : Prog} {r : VerifiedAsmResul
             have hSteps3 : ArmSteps r.bodyFlat s2 s3 := .single (.fstr dst_reg off hFstr)
             have hRegs3 : s3.regs = s2.regs := by simp [s3, ArmState.nextPC, ArmState.setStack]
             have hNEI3 := fun v ir hLoc hNE => hRegs3 ▸ hNEI_shared v ir hLoc hNE
-            have hSS3 : ∀ e ∈ entries, s3.stack e.off = (applyCallerSaves entries s).stack e.off := by
+            have hRC3 : ∀ e ∈ entries, s3.stack e.off = (applyCallerSaves entries s).stack e.off := by
               intro e he; simp [s3, ArmState.nextPC, ArmState.setStack]
               have hne : e.off ≠ off := by
                 intro heq; exact spec.callerSaveSpec.1 e (hEntriesSub'.subset he) x (heq ▸ hlx)
               simp [hne, hStack2]
-            refine ⟨s3, (hSteps1.trans hSteps1b).trans (hSteps2.trans hSteps3), ?_, ?_, hSS3, hNEI3, ?_, ?_⟩
+            refine ⟨s3, (hSteps1.trans hSteps1b).trans (hSteps2.trans hSteps3), ?_, ?_, hRC3, hNEI3, ?_, ?_⟩
             · simp [s3, ArmState.nextPC, ArmState.setStack]
               rw [hPC2, hPC1b', hPC1', hSavedPC, hInstrs]
               simp [vStoreVarFP, hlx, List.length_append]; omega
@@ -2469,7 +2469,7 @@ private theorem step_simulation {tyCtx : TyCtx} {p : Prog} {r : VerifiedAsmResul
               have hFregs3 : s3.fregs = s2.fregs := by simp [s3, ArmState.nextPC, ArmState.setStack]
               rw [hFregs3]
               have hDR : dst_reg = .d0 := by simp [dst_reg, hlx]
-              have hfrne : fr ≠ ArmFReg.d0 := fun h => absurd (h ▸ hLoc) (hScratch.not_d0 v)
+              have hfrne : fr ≠ ArmFReg.d0 := fun h => absurd (h ▸ hLoc) (hRegConv.not_d0 v)
               have : s2.fregs fr = (s1b.havocCallerSaved newRegs newFregs).fregs fr := by
                 simp [s2, ArmState.nextPC, ArmState.setFReg, hDR, hfrne]
               rw [this]
@@ -2510,9 +2510,9 @@ private theorem step_simulation {tyCtx : TyCtx} {p : Prog} {r : VerifiedAsmResul
             by_cases hEq : fr == dst_reg
             · -- fr = dst_reg
               simp [vStoreVarFP, hlx, hEq] at hCodeStore
-              have hSS2 : ∀ e ∈ entries, s2.stack e.off = (applyCallerSaves entries s).stack e.off :=
+              have hRC2 : ∀ e ∈ entries, s2.stack e.off = (applyCallerSaves entries s).stack e.off :=
                 fun e _ => by rw [hStack2]
-              refine ⟨s2, (hSteps1.trans hSteps1b).trans hSteps2, ?_, hAMChain, hSS2, hNEI_shared, ?_, ?_⟩
+              refine ⟨s2, (hSteps1.trans hSteps1b).trans hSteps2, ?_, hAMChain, hRC2, hNEI_shared, ?_, ?_⟩
               · rw [hPC2, hPC1b', hPC1', hSavedPC, hInstrs]
                 simp [vStoreVarFP, hlx, hEq, List.length_append]; omega
               · -- non-entry freg
@@ -2558,9 +2558,9 @@ private theorem step_simulation {tyCtx : TyCtx} {p : Prog} {r : VerifiedAsmResul
               have hRegs3 : s3.regs = s2.regs := by simp [s3, ArmState.nextPC, ArmState.setFReg]
               have hNEI3 := fun v ir hLoc hNE => hRegs3 ▸ hNEI_shared v ir hLoc hNE
               have hStack3 : s3.stack = s2.stack := by simp [s3, ArmState.nextPC, ArmState.setFReg]
-              have hSS3 : ∀ e ∈ entries, s3.stack e.off = (applyCallerSaves entries s).stack e.off :=
+              have hRC3 : ∀ e ∈ entries, s3.stack e.off = (applyCallerSaves entries s).stack e.off :=
                 fun e _ => by rw [hStack3, hStack2]
-              refine ⟨s3, (hSteps1.trans hSteps1b).trans (hSteps2.trans hSteps3), ?_, ?_, hSS3, hNEI3, ?_, ?_⟩
+              refine ⟨s3, (hSteps1.trans hSteps1b).trans (hSteps2.trans hSteps3), ?_, ?_, hRC3, hNEI3, ?_, ?_⟩
               · simp [s3, ArmState.nextPC, ArmState.setFReg]
                 rw [hPC2, hPC1b', hPC1', hSavedPC, hInstrs]
                 simp [vStoreVarFP, hlx, hEq, List.length_append]; omega
@@ -2992,10 +2992,6 @@ theorem tacToArm_correctness {tyCtx : TyCtx} {p : Prog} {r : VerifiedAsmResult}
     (TypedStore.typedInit tyCtx)
     cfg' hSteps
 
-/-- Reserved integer register numbers that must never appear in register allocation.
-    x16-x17: linker scratch (IP0/IP1), x18: platform-reserved. -/
-private def reservedIntRegs : List Nat := [16, 17, 18]
-
 /-- Caller-saved integer register numbers (x3-x8, x9-x15). -/
 private def callerSavedIntRegs : List Nat := [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
 
@@ -3009,23 +3005,19 @@ private def calleeSavedIntRegs : List Nat := [19, 20, 21, 22, 23, 24, 25, 26, 27
 /-- Callee-saved float register numbers (d8-d15). -/
 private def calleeSavedFloatRegs : List Nat := [8, 9, 10, 11, 12, 13, 14, 15]
 
-/-- Check that no variable in the TAC program maps to a reserved register.
-    Returns an error if a reserved register is found. -/
-private def checkRegConvention (vars : List Var) : Except String Unit := do
-  for v in vars do
-    let n? := if v.startsWith "__ir" then (v.drop 4).toNat?
-              else if v.startsWith "__br" then (v.drop 4).toNat?
-              else none
-    match n? with
-    | some n =>
-      if reservedIntRegs.contains n then
-        throw s!"register allocator bug: variable '{v}' uses reserved register x{n}"
-    | none => pure ()
-
 -- detectCalleeSaved, detectCallerSaved, pairUpSameClass, libcallSaveRestore,
 -- calleeSavePrologue, calleeSaveEpilogue: removed.
 -- Callee-save prologue/epilogue and caller-save save/restore are now
 -- generated as verified ArmInstr in verifiedGenerateAsm.
+
+/-- Defense-in-depth: check that no variable maps to a restricted register.
+    This is redundant with `checkNoRegConventionViolations` in the certificate checker
+    and `VarLayout.regConventionSafe` in `verifiedGenerateAsm`, but guards against
+    bugs in either check. -/
+private def checkRegConvention (vars : List Var) : Except String Unit := do
+  for v in vars do
+    if violatesRegConvention v then
+      throw s!"register convention violation: variable '{v}' maps to a restricted register"
 
 /-- Generate the complete assembly for a program.
     Calls `verifiedGenerateAsm` for the verified core, then wraps it with
@@ -3033,9 +3025,8 @@ private def checkRegConvention (vars : List Var) : Except String Unit := do
 def generateAsm (tyCtx : TyCtx) (p : Prog) : Except String String := do
   let r ← verifiedGenerateAsm tyCtx p
   let vars := collectVars p
-  -- Check register convention before generating assembly
+  -- Defense-in-depth: register convention and callee-save checks
   checkRegConvention vars
-  -- Defense-in-depth: verify every callee-saved register in the layout is in calleeSaveRegs
   let layoutCallee := detectCalleeSavedLayout r.layout
   let (csIntRegs, csFloatRegs) := r.calleeSaveRegs
   if !layoutCallee.1.all csIntRegs.contains then
