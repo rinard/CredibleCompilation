@@ -303,17 +303,29 @@ theorem applyPassesPure_preserves_diverge
     · exact ih hRest hinf hf0
 
 -- ============================================================
--- § 4. Full end-to-end: While source → ARM (halts)
+-- § 4. ARM-to-While relation and full end-to-end (halts)
 -- ============================================================
+
+/-- The ARM program's observable output matches the While source output.
+    For each observable variable with a layout entry, the ARM register or
+    stack slot holds the encoded value from the source program's final store.
+    Array memory also matches. -/
+def ArmMatchesWhile (layout : VarLayout) (observables : List Var)
+    (σ_src : Store) (am : ArrayMem) (s : ArmState) : Prop :=
+  (∀ v ∈ observables, ∀ loc, layout v = some loc →
+    match loc with
+    | .stack off => s.stack off = (σ_src v).encode
+    | .ireg r    => s.regs r = (σ_src v).encode
+    | .freg r    => s.fregs r = (σ_src v).encode) ∧
+  s.arrayMem = am
 
 /-- **Full end-to-end correctness (halts): While source → ARM.**
 
-    If a well-typed While program is compiled to TAC, optimized through
-    any list of certificate-checked passes, and code-generated to ARM,
-    and the optimized TAC halts, then:
-    1. The source program terminates with matching observable variables
-       and identical final array memory
-    2. The ARM program simulates the TAC halt -/
+    If a well-typed While program is compiled, optimized, and code-generated
+    to ARM, and the optimized TAC halts, then:
+    1. The source While program terminates safely
+    2. The ARM program reaches a final state whose observable registers/stack
+       slots hold the source program's output values -/
 theorem while_to_arm_correctness
     (prog : Program) (htcs : prog.typeCheckStrict = true)
     (passes : List (String × (Prog → ECertificate)))
@@ -323,21 +335,22 @@ theorem while_to_arm_correctness
     {σ_opt : Store} {am_opt : ArrayMem}
     (hHalt : haltsWithResult (applyPassesPure passes prog.compileToTAC) 0
       (Store.typedInit prog.tyCtx) σ_opt ArrayMem.init am_opt) :
-    (∃ fuel σ_src am_src,
+    ∃ fuel σ_src am_src s',
       prog.interp fuel = some (σ_src, am_src) ∧
-      am_src = am_opt ∧
-      ∀ v ∈ prog.compileToTAC.observable, σ_opt v = σ_src v) ∧
-    (∃ s', ArmSteps r.bodyFlat
-      { regs := fun _ => 0, fregs := fun _ => 0, stack := fun _ => 0,
-        pc := r.pcMap 0, flags := ⟨0, 0⟩ } s' ∧
-      ExtSimRel r.layout r.pcMap (.halt σ_opt am_opt) s') := by
+      ArmSteps r.bodyFlat
+        { regs := fun _ => 0, fregs := fun _ => 0, stack := fun _ => 0,
+          pc := r.pcMap 0, flags := ⟨0, 0⟩ } s' ∧
+      ArmMatchesWhile r.layout prog.compileToTAC.observable σ_src am_src s' := by
   have htc := Program.typeCheckStrict_typeCheck prog htcs
   have hInitEq : Store.typedInit prog.tyCtx = prog.initStore :=
     Program.typedInit_eq_initStore prog htc
   have hts : TypedStore prog.tyCtx (Store.typedInit prog.tyCtx) := TypedStore.typedInit _
-  -- Part 2: ARM simulation
-  refine ⟨?_, tacToArm_correctness hGen hHalt⟩
-  -- Part 1: Pipeline → original TAC halts with same final AM
+  -- ARM simulation from TAC
+  obtain ⟨s', hArm, hSimRel⟩ := tacToArm_correctness hGen hHalt
+  -- Extract ExtStateRel from ExtSimRel at halt
+  have hStateRel : ExtStateRel r.layout σ_opt s' := hSimRel.1
+  have hAmRel : s'.arrayMem = am_opt := hSimRel.2
+  -- Pipeline → original TAC halts with same final AM
   obtain ⟨σ_tac, hHalt_tac, hobs_tac⟩ :=
     applyPassesPure_preserves_halt_am passes hTyCtx _ hts hHalt
   -- Original TAC halts → source terminates
@@ -348,12 +361,13 @@ theorem while_to_arm_correctness
   have hsrc := whileToTAC_refinement prog htcs (.halts σ_tac) hbeh_tac
   simp only at hsrc
   obtain ⟨fuel, σ_src, am_h, am_src, hinterp, hHalt_tac2, ham_eq, hobs_src⟩ := hsrc
-  -- am_h = am_opt by determinism, am_h = am_src from whileToTAC_refinement
   have ham_opt : am_h = am_opt := (haltsWithResult_unique hHalt_tac2 hHalt_init).2
   have hnt : Program.noTmpDecls prog.decls = true := by
     unfold Program.typeCheck at htc; simp only [Bool.and_eq_true] at htc; exact htc.1.2
   have hobs_eq := applyPassesPure_obs_eq passes prog.compileToTAC
-  exact ⟨fuel, σ_src, am_src, hinterp, ham_opt ▸ ham_eq.symm, fun v hv => by
+  -- Build observable equality: σ_opt v = σ_src v for observables
+  have hobs_match : ∀ v ∈ prog.compileToTAC.observable, σ_opt v = σ_src v := by
+    intro v hv
     rw [hobs_tac v (hobs_eq ▸ hv)]
     have hv' : v ∈ prog.decls.map Prod.fst := by
       have : prog.compileToTAC.observable = prog.decls.map Prod.fst := by
@@ -364,7 +378,14 @@ theorem while_to_arm_correctness
     simp only [Program.noTmpDecls, List.all_eq_true] at hnt
     have hntw := hnt ⟨w, ty⟩ hp
     simp only [Bool.and_eq_true, Bool.not_eq_true'] at hntw
-    exact hobs_src w hntw.1 hntw.2⟩
+    exact hobs_src w hntw.1 hntw.2
+  -- Compose: ARM state matches While output on observables
+  exact ⟨fuel, σ_src, am_src, s', hinterp, hArm,
+    ⟨fun v hv loc hloc => by
+      have := hStateRel v loc hloc
+      rw [hobs_match v hv] at this
+      exact this,
+    by rw [hAmRel, ← ham_opt, ham_eq]⟩⟩
 
 -- ============================================================
 -- § 5. Full end-to-end: While source → ARM (errors)
@@ -373,8 +394,8 @@ theorem while_to_arm_correctness
 /-- **Full end-to-end error preservation: While source → ARM.**
 
     If the optimized TAC reaches an error (division by zero or array
-    out-of-bounds), then the source program is unsafe at some fuel,
-    and the ARM program simulates the error execution. -/
+    out-of-bounds), then the source While program is unsafe at some fuel.
+    The ARM program also reaches the error (its execution does not get stuck). -/
 theorem while_to_arm_error_preservation
     (prog : Program) (htcs : prog.typeCheckStrict = true)
     (passes : List (String × (Prog → ECertificate)))
@@ -410,8 +431,8 @@ theorem while_to_arm_error_preservation
 
 /-- **Full end-to-end divergence preservation: While source → ARM.**
 
-    If the optimized TAC diverges, then the source program diverges
-    at all fuels. -/
+    If the optimized TAC diverges, then the source While program diverges
+    (does not terminate at any fuel). -/
 theorem while_to_arm_divergence_preservation
     (prog : Program) (htcs : prog.typeCheckStrict = true)
     (passes : List (String × (Prog → ECertificate)))
