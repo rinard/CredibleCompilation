@@ -626,7 +626,7 @@ private theorem checkNoCallerSavedLayout_ireg {entries : List (String × VarLoc)
   rw [List.all_eq_true] at h
   obtain ⟨k, hk_mem, hk_eq⟩ := List.lookup_mem_of_some hlookup
   have := h ⟨k, .ireg r⟩ hk_mem
-  simp [Bool.not_eq_false'] at this; exact this
+  simp at this; exact this
 
 private theorem checkNoCallerSavedLayout_freg {entries : List (String × VarLoc)}
     (h : entries.all (fun (_, loc) => match loc with
@@ -636,7 +636,7 @@ private theorem checkNoCallerSavedLayout_freg {entries : List (String × VarLoc)
   rw [List.all_eq_true] at h
   obtain ⟨k, hk_mem, hk_eq⟩ := List.lookup_mem_of_some hlookup
   have := h ⟨k, .freg r⟩ hk_mem
-  simp [Bool.not_eq_false'] at this; exact this
+  simp at this; exact this
 
 theorem checkNoCallerSavedLayout_spec (layout : VarLayout)
     (h : checkNoCallerSavedLayout layout = true) :
@@ -672,7 +672,7 @@ theorem callerSave_str_havoc_ldr_ireg
     {newRegs : ArmReg → BitVec 64} {newFregs : ArmFReg → BitVec 64}
     (hRel : ExtStateRel layout σ s)
     (hLoc : layout v = some (.ireg r))
-    (hCS : r.isCallerSaved = true) :
+    (_hCS : r.isCallerSaved = true) :
     let s₁ := s.setStack off (s.regs r)
     let s₂ := s₁.havocCallerSaved newRegs newFregs
     let s₃ := s₂.setReg r (s₂.stack off)
@@ -689,7 +689,7 @@ theorem callerSave_fstr_havoc_fldr_freg
     {newRegs : ArmReg → BitVec 64} {newFregs : ArmFReg → BitVec 64}
     (hRel : ExtStateRel layout σ s)
     (hLoc : layout v = some (.freg fr))
-    (hCS : fr.isCallerSaved = true) :
+    (_hCS : fr.isCallerSaved = true) :
     let s₁ := s.setStack off (s.fregs fr)
     let s₂ := s₁.havocCallerSaved newRegs newFregs
     let s₃ := s₂.setFReg fr (s₂.stack off)
@@ -1186,7 +1186,7 @@ theorem ExtStateRel.callerSave_composition
       have hNotIn : ∀ off, CallerSaveEntry.ireg r off ∉ entries := by
         intro off hm; exact absurd (hAllCSIreg r off hm) (by simp [hcs])
       simp only [applyCallerRestores_regs_other entries _ r hNotIn,
-        ArmState.havocCallerSaved, hcs, ite_false,
+        ArmState.havocCallerSaved, hcs,
         applyCallerSaves_regs]
       exact hRel v (.ireg r) hLoc
   | .freg r =>
@@ -1200,7 +1200,7 @@ theorem ExtStateRel.callerSave_composition
     · have hNotIn : ∀ off, CallerSaveEntry.freg r off ∉ entries := by
         intro off hm; exact absurd (hAllCSFreg r off hm) (by simp [hcs])
       simp only [applyCallerRestores_fregs_other entries _ r hNotIn,
-        ArmState.havocCallerSaved, hcs, ite_false,
+        ArmState.havocCallerSaved, hcs,
         applyCallerSaves_fregs]
       exact hRel v (.freg r) hLoc
 
@@ -1218,14 +1218,14 @@ theorem ExtStateRel.callerSave_composition_excluding
     (hRel : ExtStateRel layout σ s)
     (entries : List CallerSaveEntry)
     (s_mid : ArmState)
-    (hFresh : ∀ e ∈ entries, ∀ v, layout v ≠ some (.stack e.off))
+    (_hFresh : ∀ e ∈ entries, ∀ v, layout v ≠ some (.stack e.off))
     (hNodup : (entries.map CallerSaveEntry.off).Nodup)
     (hUniqIreg : ∀ r off1 off2, CallerSaveEntry.ireg r off1 ∈ entries →
       CallerSaveEntry.ireg r off2 ∈ entries → off1 = off2)
     (hUniqFreg : ∀ r off1 off2, CallerSaveEntry.freg r off1 ∈ entries →
       CallerSaveEntry.freg r off2 ∈ entries → off1 = off2)
-    (hAllCSIreg : ∀ r off, CallerSaveEntry.ireg r off ∈ entries → r.isCallerSaved = true)
-    (hAllCSFreg : ∀ r off, CallerSaveEntry.freg r off ∈ entries → r.isCallerSaved = true)
+    (_hAllCSIreg : ∀ r off, CallerSaveEntry.ireg r off ∈ entries → r.isCallerSaved = true)
+    (_hAllCSFreg : ∀ r off, CallerSaveEntry.freg r off ∈ entries → r.isCallerSaved = true)
     -- Save slots in s_mid still hold the values written by applyCallerSaves
     (hSaveSlots : ∀ e ∈ entries, s_mid.stack e.off = (applyCallerSaves entries s).stack e.off)
     -- Variables whose registers are NOT in entries already have σ' values in s_mid

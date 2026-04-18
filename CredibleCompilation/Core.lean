@@ -111,9 +111,9 @@ def toBits : Value → BitVec 64
 theorem ofBitVec_toBits {v : Value} {ty : VarTy} (h : v.typeOf = ty) :
     Value.ofBitVec ty v.toBits = v := by
   cases v with
-  | int n => cases ty <;> simp [typeOf] at h <;> simp [ofBitVec, toBits, h]
-  | bool b => cases ty <;> simp [typeOf] at h <;> simp [ofBitVec, toBits, h]; cases b <;> rfl
-  | float f => cases ty <;> simp [typeOf] at h <;> simp [ofBitVec, toBits, h]
+  | int n => cases ty <;> simp [typeOf] at h <;> simp [ofBitVec, toBits]
+  | bool b => cases ty <;> simp [typeOf] at h <;> simp [ofBitVec, toBits]; cases b <;> rfl
+  | float f => cases ty <;> simp [typeOf] at h <;> simp [ofBitVec, toBits]
 
 end Value
 

@@ -739,7 +739,7 @@ private def initCode (decls : List (Var × VarTy)) : List TAC :=
 /-- Infer the type a TAC instruction assigns to its destination variable. -/
 private def instrDefType : TAC → Option (Var × VarTy)
   | .const x v        => some (x, v.typeOf)
-  | .copy x _         => none  -- inherits type from source, handled by declared vars
+  | .copy _x _        => none  -- inherits type from source, handled by declared vars
   | .binop x _ _ _    => some (x, .int)
   | .boolop x _       => some (x, .bool)
   | .arrLoad x _ _ ty => some (x, ty)
@@ -1167,7 +1167,7 @@ theorem lookup_none_of_isTmp_wt {decls : List (Var × VarTy)}
       intro heq; subst heq
       simp only [Bool.not_eq_true'] at hny
       rw [hx] at hny; exact Bool.noConfusion hny
-    simp only [hne, ite_false]
+    simp only [hne]
     exact ih hnt_rest
 
 -- If noTmpDecls and x.isFTmp, then lookup returns none
@@ -1186,7 +1186,7 @@ theorem lookup_none_of_isFTmp_wt {decls : List (Var × VarTy)}
       intro heq; subst heq
       simp only [Bool.not_eq_true'] at hny
       rw [hx] at hny; exact Bool.noConfusion hny
-    simp only [hne, ite_false]
+    simp only [hne]
     exact ih hnt_rest
 
 -- tmpName k is a temporary variable
@@ -1956,7 +1956,7 @@ theorem compileBool_allJumpsLe (b : SBool) (offset nextTmp bound : Nat)
   | barrRead arr idx =>
     simp only [compileBool, List.length_append, List.length_cons, List.length_nil] at hbound ⊢
     exact AllJumpsLe_of_allSeq (fun instr hmem => by
-      simp [compileBool, List.mem_append] at hmem
+      simp [List.mem_append] at hmem
       rcases hmem with hi | rfl
       · exact compileExpr_allSeq idx _ _ instr hi
       · trivial)
@@ -2108,7 +2108,7 @@ theorem collectLabels_allLabelsLe (s : Stmt) (offset : Nat) :
   induction s generalizing offset with
   | label name =>
     intro k v hmem
-    simp [collectLabels, stmtCodeLen] at hmem
+    simp [collectLabels] at hmem
     obtain ⟨rfl, rfl⟩ := hmem
     omega
   | seq s1 s2 ih1 ih2 =>
@@ -2186,7 +2186,7 @@ theorem compileStmt_allJumpsLe (s : Stmt) (offset nextTmp : Nat)
     | (codeIdx, vIdx, tmp1) =>
     match hcb : compileBool bval (offset + codeIdx.length) tmp1 with
     | (codeBool, be, tmp2) =>
-    simp only [compileStmt, hci, hcb, List.length_append, List.length_cons, List.length_nil]
+    simp only [compileStmt, hci, hcb]
     have hi : AllJumpsLe (offset + codeIdx.length) codeIdx :=
       AllJumpsLe_of_allSeq (fun instr hmem => by
         have := compileExpr_allSeq idx offset nextTmp instr; simp [hci] at this; exact this hmem)

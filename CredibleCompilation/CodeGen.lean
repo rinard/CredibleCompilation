@@ -803,7 +803,7 @@ private def genPrintCallLines (tyCtx : TyCtx) (layout : VarLayout)
     generates (and possibly wraps) ARM instructions, pushing onto the accumulator.
     Returns `none` if verifiedGenInstr fails; propagates `none` from previous steps. -/
 private def bodyGenStep (code : Array TAC) (layout : VarLayout) (pcMap : Nat → Nat)
-    (liveOut : Array (List Var)) (varMap : List (Var × Nat))
+    (_liveOut : Array (List Var)) (varMap : List (Var × Nat))
     (intervals : Array (Option BoundsOpt.IMap))
     (arrayDecls : List (ArrayName × Nat × VarTy))
     (haltS divS boundsS : Nat) (tyCtx : TyCtx)
@@ -1036,7 +1036,7 @@ private theorem foldl_collects (instrs : List TAC) (v : Var) (instr : TAC)
       · exact List.mem_append_left _ hmem
       · apply List.mem_append_right
         rw [List.mem_filter]
-        exact ⟨hv, by simp [List.contains_iff_mem, hmem]⟩
+        exact ⟨hv, by simp [hmem]⟩
     · exact ih htl _
 
 /-- checkWellTypedLayout returning none implies all TAC.vars are in the layout. -/
@@ -1379,7 +1379,7 @@ theorem verifiedGenerateAsm_spec {p : Prog} {r : VerifiedAsmResult}
       replace hCSS : checkCallerSaveSpec
           (buildVarLayout (collectVars p) (buildVarMap (collectVars p)))
           (buildVarMap (collectVars p)) = true := by
-        revert hCSS; simp [Bool.not_eq_true]
+        revert hCSS; simp
       -- checkBranchTargets
       split at hGen
       · simp_all
@@ -1785,7 +1785,7 @@ private theorem step_simulation {p : Prog} {r : VerifiedAsmResult}
         have hWTI := spec.wellTypedProg pc hPC
         rw [show p[pc] = p.code[pc] from rfl, hI] at hWTI
         cases hWTI <;> simp_all [TypedStore]
-      | _ => exfalso; simp_all [Prog.getElem?_code]
+      | _ => exfalso; simp_all
     have hLibStepBin : ∀ x y z, p.code[pc] = .fbinop x .fpow y z →
         ∃ fy fz, σ y = .float fy ∧ σ z = .float fz ∧
           σ' x = .float (FloatBinOp.eval .fpow fy fz) := by
@@ -1804,7 +1804,7 @@ private theorem step_simulation {p : Prog} {r : VerifiedAsmResult}
         have hWTI := spec.wellTypedProg pc hPC
         rw [show p[pc] = p.code[pc] from rfl, hI] at hWTI
         cases hWTI <;> simp_all [TypedStore]
-      | _ => exfalso; simp_all [Prog.getElem?_code]
+      | _ => exfalso; simp_all
     subst hCfg
     -- Get bodyPerPC = saves ++ baseInstrs ++ restores
     obtain ⟨baseInstrs, hGenInstr, hBody⟩ :=
@@ -2337,7 +2337,7 @@ private theorem step_simulation {p : Prog} {r : VerifiedAsmResult}
               simp [lv_reg, hly]
               have : (ArmFReg.d1 : ArmFReg) ≠ rv_reg := by
                 rcases hlz : r.layout z with _ | ⟨_ | _ | frz⟩ <;>
-                  simp [rv_reg, hlz, ArmFReg.d1]
+                  simp [rv_reg, hlz]
                 exact fun h => absurd (h ▸ hlz) (hScratch.not_d1 z)
               rw [hFregs1b _ this]
               have := hSR1'; simp [lv_reg, hly] at this; exact this
@@ -2962,7 +2962,7 @@ theorem initial_extSimRel (layout : VarLayout) (pcMap : Nat → Nat)
 private theorem typedInit_encode (Γ : TyCtx) (v : Var) :
     (Store.typedInit Γ v).encode = 0 := by
   simp [Store.typedInit, Value.ofBitVec, Value.encode]
-  cases Γ v <;> simp [Value.ofBitVec, Value.encode]
+  cases Γ v <;> simp
 
 theorem tacToArm_correctness {p : Prog} {r : VerifiedAsmResult}
     (hGen : verifiedGenerateAsm p = .ok r)

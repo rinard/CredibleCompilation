@@ -210,13 +210,13 @@ private def buildInstrCerts (trans : Prog) (origPCMap : Array Nat)
   -- The replaced goto is a back-edge target. On re-entry, all hoisted vars
   -- are set. Its rel should be hoistRel (= cumulative after all hoisted consts).
   -- Override relAt for back-edge targets that are replaced gotos.
-  let replacedGotoRel (tpc : Nat) : EExprRel :=
+  let _replacedGotoRel (tpc : Nat) : EExprRel :=
     match trans[tpc]? with
     | some (.goto _) =>
       -- Check if this is a replaced goto (goto to next PC, orig was a const)
-      let opc := origPCMap.getD tpc tpc
+      let _opc := origPCMap.getD tpc tpc
       if relAt tpc != hoistRel &&
-         (hoistedVars.any fun (x, _) =>
+         (hoistedVars.any fun (_x, _) =>
            match trans[tpc]? with | some (.goto _) => true | _ => false) then
         hoistRel
       else relAt tpc

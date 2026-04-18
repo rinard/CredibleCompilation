@@ -889,7 +889,7 @@ theorem checkInvAtom_sound (inv_pre : EInv) (instr : TAC) (atom : Var × Expr)
         have hσ' : σ' = σ := (Cfg.run.inj this).2.1.symm
         rw [hσ']; exact ssGet_nil σ am
       | arrLoad dest arr idx ty =>
-        simp only [execSymbolic, Prod.fst]
+        simp only [execSymbolic]
         have step_det : ∀ c, Step prog (Cfg.run pc σ am) c → c = Cfg.run pc' σ' am' :=
           fun c hc => Step.deterministic hc hstep
         obtain ⟨idxVal, hidx⟩ : ∃ idxVal : BitVec 64, σ idx = .int idxVal := by
@@ -1005,7 +1005,7 @@ private theorem noArrRead_of_inv (inv : Array EInv)
       (Array.all_eq_true.mp hnoarr) l hlt
     rw [List.all_eq_true] at hall
     have := hall atom hmem
-    simp [Bool.not_eq_true] at this
+    simp at this
     exact this
   · -- l ≥ inv.size → inv.getD l [] = []
     have hgetD : inv.getD l ([] : EInv) = [] := by simp [Array.getD, Nat.not_lt.mp hlt]
@@ -1407,7 +1407,7 @@ private theorem execPath_sound_gen (orig : Prog) (ss : SymStore) (sam : SymArray
     (hinv : EInv.toProp inv σ₀ am₀)
     (hsamCoh : SamCoherent sam σ₀ am₀ am)
     (hsamTyped : ∀ a i v, (a, i, v) ∈ sam → (v.eval σ₀ am₀).typeOf = arrayElemTy orig.arrayDecls a)
-    (hInvNoArrRead : inv.all (fun (_, e) => !e.hasArrRead) = true)
+    (_hInvNoArrRead : inv.all (fun (_, e) => !e.hasArrRead) = true)
     (hpath : checkOrigPath orig ss sam inv pc labels pc' branchInfo = true)
     (hbranch : ∀ cond taken, branchInfo = some (cond, taken) →
         cond.eval σ am = taken)
@@ -2176,7 +2176,7 @@ private theorem checkBoolVarsCoveredExec_sound (cert : ECertificate)
   | none => rw [hic] at hall; simp at hall
   | some ic =>
     rw [hic] at hall
-    simp only [Bool.and_eq_true] at hall
+    simp (config := { decide := false }) only [] at hall
     rw [List.all_eq_true] at hall
     have hfv := hall v hv
     rw [List.any_eq_true] at hfv
@@ -2429,7 +2429,7 @@ private theorem ssGet_buildSubstMap_of_all_rel (rel : EExprRel) (v : Var)
     obtain ⟨e_o, e_t⟩ := p
     by_cases het : e_t = Expr.var v
     · subst het
-      right; exact ⟨e_o, List.Mem.head _, by simp [buildSubstMap, List.filterMap, ssGet, List.find?]⟩
+      right; exact ⟨e_o, List.Mem.head _, by simp [buildSubstMap, List.filterMap, ssGet]⟩
     · -- e_t ≠ .var v: buildSubstMap either skips this pair or maps a different key
       have hskip : ssGet (buildSubstMap ((e_o, e_t) :: rest)) v = ssGet (buildSubstMap rest) v := by
         simp only [buildSubstMap, List.filterMap]
@@ -2678,7 +2678,7 @@ private theorem idx_transfer_via_inv
        | _ => false) = true)
     (hcons : ∀ e_o v, (e_o, .var v) ∈ dic.rel → σ_t v = e_o.eval σ_o am_o)
     (hinv_o : EInv.toProp (dc.inv_orig.getD dic.pc_orig ([] : EInv)) σ_o am_o)
-    (hic_def : dic = dc.instrCerts.getD pc_t default) :
+    (_hic_def : dic = dc.instrCerts.getD pc_t default) :
     σ_t idx_t = σ_o idx_o := by
   generalize hfi : (dc.inv_orig.getD dic.pc_orig ([] : EInv)).find? (fun (v, _) => v == idx_o) = fi at hinv_case
   cases fi with
@@ -2879,7 +2879,7 @@ private theorem transRel_sound (dc : ECertificate)
         -- b is arrRead-free (from hBoolNoArrTrans + hinstr)
         have hb_noarr := (hBoolNoArrTrans pc_t _ hinstr).2 b l rfl
         exact mapVarsRel_noArrRead b dtc.rel origCond hmap hb_noarr hnoarr_rel
-    | _ => simp [branchInfoWithRel] at hbi
+    | _ => simp at hbi
   -- Array bounds for the first instruction
   have hOrigBounds : dtc.origLabels ≠ [] → ∀ arr idx (idxVal : BitVec 64) ty,
       ((∃ x, dc.orig[dic.pc_orig]? = some (.arrLoad x arr idx ty)) ∨
@@ -2984,7 +2984,7 @@ private theorem transRel_sound (dc : ECertificate)
         | arrLoad dest arr idx ty =>
           change ∀ v, (ssGet (execSymbolic ([] : SymStore) ([] : SymArrayMem)
             (TAC.arrLoad dest arr idx ty)).1 v).eval σ_t am_t = σ_t' v
-          simp only [execSymbolic, Prod.fst]
+          simp only [execSymbolic]
           have step_det : ∀ c, Step dc.trans (Cfg.run pc_t σ_t am_t) c →
               c = Cfg.run pc_t' σ_t' am_t' :=
             fun c hc => Step.deterministic hc hstep
@@ -3082,8 +3082,7 @@ private theorem transRel_sound (dc : ECertificate)
       obtain ⟨bv, hval_eval, ham_o'_eq⟩ := samCoherent_singleton hsamCoh_final
       rw [ham_t'_eq, ham_o'_eq]
       -- Extract matching conditions from ham_pairs
-      simp only [List.zip, List.zipWith, List.all, Bool.and_eq_true, Bool.true_and,
-        Bool.and_self] at ham_pairs
+      simp only [List.zip, List.zipWith, List.all, Bool.and_eq_true] at ham_pairs
       obtain ⟨⟨⟨harr_eq, hidx_match⟩, hval_match⟩, _⟩ := ham_pairs
       -- arr_o = arr_t
       have harr := beq_iff_eq.mp harr_eq
@@ -3566,7 +3565,7 @@ theorem checkDivPreservationExec_sound (dc : ECertificate)
                     have hpred := List.find?_some hfind_inv
                     simp at hpred; symm at hpred; subst hpred
                     have hmem := List.mem_of_find?_eq_some hfind_inv
-                    simp only [toPCertificate, hic_def] at hinv_o
+                    simp only [toPCertificate] at hinv_o
                     have hinv_entry := hinv_o (idx', .lit c) hmem
                     simp [Expr.eval] at hinv_entry
                     -- From relation: σ_t idx = .int c'
@@ -3623,7 +3622,7 @@ theorem checkDivPreservationExec_sound (dc : ECertificate)
                     have hpred := List.find?_some hfind_inv
                     simp at hpred; symm at hpred; subst hpred
                     have hmem := List.mem_of_find?_eq_some hfind_inv
-                    simp only [toPCertificate, hic_def] at hinv_o
+                    simp only [toPCertificate] at hinv_o
                     have hinv_entry := hinv_o (idx', .lit c) hmem
                     simp [Expr.eval] at hinv_entry
                     have hmem_rel := relFindOrigExpr_mem hfind_rel
