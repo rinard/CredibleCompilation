@@ -31,7 +31,7 @@ def checkExprTy (Γ : TyCtx) : Expr → VarTy → Bool
 
 theorem checkExprTy_sound {Γ : TyCtx} {e : Expr} {ty : VarTy}
     (h : checkExprTy Γ e ty = true) : ExprHasTy Γ e ty := by
-  cases e <;> cases ty <;> simp_all [checkExprTy, ExprHasTy, decide_eq_true_eq]
+  cases e <;> cases ty <;> simp_all [checkExprTy, ExprHasTy]
 
 /-- Well-typedness for boolean expressions. -/
 inductive WellTypedBoolExpr (Γ : TyCtx) : BoolExpr → Prop where
@@ -394,13 +394,13 @@ theorem checkWellTypedInstr_sound {Γ : TyCtx} {decls : List (ArrayName × Nat �
 
 theorem checkExprTy_complete {Γ : TyCtx} {e : Expr} {ty : VarTy}
     (h : ExprHasTy Γ e ty) : checkExprTy Γ e ty = true := by
-  cases e <;> cases ty <;> simp_all [checkExprTy, ExprHasTy, decide_eq_true_eq]
+  cases e <;> cases ty <;> simp_all [checkExprTy, ExprHasTy]
 
 theorem checkWellTypedBoolExpr_complete {Γ : TyCtx} {b : BoolExpr}
     (h : WellTypedBoolExpr Γ b) : checkWellTypedBoolExpr Γ b = true := by
   induction h with
   | lit => rfl
-  | bvar h => simp [checkWellTypedBoolExpr, decide_eq_true_eq, h]
+  | bvar h => simp [checkWellTypedBoolExpr, h]
   | cmp ha hb => simp [checkWellTypedBoolExpr, checkExprTy_complete ha, checkExprTy_complete hb]
   | not _ ih => simp [checkWellTypedBoolExpr, ih]
   | fcmp ha hb => simp [checkWellTypedBoolExpr, checkExprTy_complete ha, checkExprTy_complete hb]
@@ -409,20 +409,20 @@ theorem checkWellTypedBoolExpr_complete {Γ : TyCtx} {b : BoolExpr}
 theorem checkWellTypedInstr_complete {Γ : TyCtx} {decls : List (ArrayName × Nat × VarTy)} {instr : TAC}
     (h : WellTypedInstr Γ decls instr) : checkWellTypedInstr Γ decls instr = true := by
   cases h with
-  | const h => simp [checkWellTypedInstr, decide_eq_true_eq, h]
-  | copy h => simp [checkWellTypedInstr, decide_eq_true_eq, h]
-  | binop hx hy hz => simp [checkWellTypedInstr, decide_eq_true_eq, hx, hy, hz]
-  | boolop hx hbe => simp [checkWellTypedInstr, decide_eq_true_eq, hx, checkWellTypedBoolExpr_complete hbe]
+  | const h => simp [checkWellTypedInstr, h]
+  | copy h => simp [checkWellTypedInstr, h]
+  | binop hx hy hz => simp [checkWellTypedInstr, hx, hy, hz]
+  | boolop hx hbe => simp [checkWellTypedInstr, hx, checkWellTypedBoolExpr_complete hbe]
   | goto => rfl
   | ifgoto hb => simp [checkWellTypedInstr, checkWellTypedBoolExpr_complete hb]
   | halt => rfl
-  | arrLoad hx hi hty => simp [checkWellTypedInstr, decide_eq_true_eq, hx, hi, hty]
-  | arrStore hi hv hty => simp [checkWellTypedInstr, decide_eq_true_eq, hi, hv, hty]
-  | fbinop hx hy hz => simp [checkWellTypedInstr, decide_eq_true_eq, hx, hy, hz]
-  | intToFloat hx hy => simp [checkWellTypedInstr, decide_eq_true_eq, hx, hy]
-  | floatToInt hx hy => simp [checkWellTypedInstr, decide_eq_true_eq, hx, hy]
-  | floatUnary hx hy => simp [checkWellTypedInstr, decide_eq_true_eq, hx, hy]
-  | fternop hx ha hb hc => simp [checkWellTypedInstr, decide_eq_true_eq, hx, ha, hb, hc]
+  | arrLoad hx hi hty => simp [checkWellTypedInstr, hx, hi, hty]
+  | arrStore hi hv hty => simp [checkWellTypedInstr, hi, hv, hty]
+  | fbinop hx hy hz => simp [checkWellTypedInstr, hx, hy, hz]
+  | intToFloat hx hy => simp [checkWellTypedInstr, hx, hy]
+  | floatToInt hx hy => simp [checkWellTypedInstr, hx, hy]
+  | floatUnary hx hy => simp [checkWellTypedInstr, hx, hy]
+  | fternop hx ha hb hc => simp [checkWellTypedInstr, hx, ha, hb, hc]
   | print => rfl
 
 /-- Check that every instruction in a program is well-typed. -/
