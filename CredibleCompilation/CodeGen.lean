@@ -1,3 +1,4 @@
+import Mathlib.Data.List.Nodup
 import CredibleCompilation.WhileLang
 import CredibleCompilation.Parser
 import CredibleCompilation.ConstPropOpt
@@ -1018,14 +1019,13 @@ theorem bodyGenStep_push (code : Array TAC) (layout : VarLayout)
     ∃ instrs, bodyGenStep code layout pcMap liveOut varMap intervals arrayDecls
       haltS divS boundsS tyCtx (some arr) pc = some (arr.push instrs) := by
   simp only [bodyGenStep]
-  split <;> split <;> simp_all
-  -- print case: push (simp_all removed the Or, leaving ∃)
-  · exact ⟨_, rfl⟩
-  -- non-print case: split on verifiedGenInstr
-  · generalize verifiedGenInstr layout pcMap _ haltS divS boundsS arrayDecls _ = r
-    cases r with
-    | none => exact Or.inl rfl
-    | some instrs => exact Or.inr ⟨_, rfl⟩
+  split <;> split <;> simp_all <;>
+    first
+    | exact ⟨_, rfl⟩
+    | (generalize verifiedGenInstr layout pcMap _ haltS divS boundsS arrayDecls _ = r
+       cases r with
+       | none => exact Or.inl rfl
+       | some instrs => exact Or.inr ⟨_, rfl⟩)
 
 /-- `verifiedGenInstr` output length is independent of pcMap.
     For goto/ifgoto, pcMap changes values but not list length.
