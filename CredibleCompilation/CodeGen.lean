@@ -1739,7 +1739,46 @@ private def checkSuccessorsInBounds_prog (p : Prog) : Bool :=
 private theorem checkBranchTargets_of_successorsInBounds (p : Prog)
     (hSIB : checkSuccessorsInBounds_prog p = true) :
     checkBranchTargets p.code = none := by
-  sorry
+  -- Both functions check the same property; bridge via contradiction
+  unfold checkBranchTargets
+  unfold checkSuccessorsInBounds_prog at hSIB
+  simp only [Prog.size, Bool.and_eq_true, decide_eq_true_eq, List.all_eq_true] at hSIB
+  obtain ⟨_, hAll⟩ := hSIB
+  -- Show find? returns none by showing the predicate is false for all PCs
+  have hfind : ∀ pc ∈ List.range p.code.size,
+      (match p.code[pc]?.getD .halt with
+       | .goto l | .ifgoto _ l => decide (p.code.size ≤ l)
+       | _ => false) = false := by
+    intro pc hpc
+    have hlt : pc < p.code.size := List.mem_range.mp hpc
+    have hAll_pc := hAll pc (List.mem_range.mpr hlt)
+    -- Resolve p[pc]? and getD for this in-bounds pc
+    simp only [show (p[pc]? : Option TAC) = some p.code[pc] from
+      Array.getElem?_eq_getElem hlt] at hAll_pc
+    simp only [show p.code[pc]?.getD .halt = p.code[pc] from by
+      simp [Array.getElem?_eq_getElem hlt]]
+    -- Generalize + cases so substitution applies to both hAll_pc and goal
+    generalize p.code[pc] = instr at hAll_pc ⊢
+    cases instr with
+    | goto l =>
+      simp only at hAll_pc ⊢
+      rw [decide_eq_true_eq] at hAll_pc
+      rw [decide_eq_false_iff_not]
+      exact Nat.not_le.mpr hAll_pc
+    | ifgoto _ l =>
+      simp only at hAll_pc ⊢
+      rw [decide_eq_true_eq] at hAll_pc
+      rw [decide_eq_false_iff_not]
+      exact Nat.not_le.mpr hAll_pc
+    | _ => rfl
+  -- Now close: find? with all-false predicate returns none
+  have : (List.range p.code.size).find? (fun pc =>
+      match p.code[pc]?.getD .halt with
+      | .goto l | .ifgoto _ l => decide (p.code.size ≤ l)
+      | _ => false) = none := by
+    rw [List.find?_eq_none]; intro pc hpc
+    exact Bool.eq_false_iff.mp (hfind pc hpc)
+  simp [this]
 
 /-- `verifiedGenInstr` returns `some` for any instruction in a well-typed program
     whose layout is complete, well-typed, regConventionSafe, and injective,
