@@ -2388,6 +2388,8 @@ private theorem verifiedGenInstr_total
     (hSimple : match instr with | .boolop _ be | .ifgoto be _ => be.hasSimpleOps = true | _ => True)
     (hNotPrint : ∀ fmt vs, instr ≠ .print fmt vs) :
     ∃ instrs, verifiedGenInstr layout pcMap instr haltS divS boundsS arrayDecls safe = some instrs := by
+  -- Normalize layout coercion for simp_all compatibility
+  have hlay : ∀ v, layout v = List.lookup v layout.entries := fun _ => rfl
   cases hWT
   case print => exact absurd rfl (hNotPrint _ _)
   case goto => unfold verifiedGenInstr; simp [hRC, hII]
@@ -2429,7 +2431,71 @@ private theorem verifiedGenInstr_total
         | ireg r => exact absurd hlx (hWTL.float_not_ireg hty.symm r)
         | freg _ => simp_all
         | stack _ => simp_all
-  all_goals sorry
+  case binop hx hy hz =>
+    unfold verifiedGenInstr; simp only [hRC, hII, Bool.not_true, Bool.false_or]; dsimp
+    -- Prove each notFreg check is false (int vars can't be freg)
+    -- Generalize the three lookup expressions so we can case-split them
+    generalize hly : List.lookup _ layout.entries = ly
+    generalize hlz : List.lookup _ layout.entries = lz
+    generalize hld : List.lookup _ layout.entries = ld
+    cases ly <;> cases lz <;> cases ld <;> (try dsimp)
+    all_goals first
+      | exact ⟨_, rfl⟩
+      | (split <;> exact ⟨_, rfl⟩)
+      | (split <;> split <;> exact ⟨_, rfl⟩)
+      | (split <;> split <;> split <;> exact ⟨_, rfl⟩)
+      | (exfalso; have := hWTL.int_not_freg hy; have := hWTL.int_not_freg hz
+         have := hWTL.int_not_freg hx; simp_all [hlay])
+  case boolop hx _ =>
+    unfold verifiedGenInstr; simp only [hRC, hII, Bool.not_true, Bool.false_or]; dsimp
+    dsimp at hSimple; simp only [hSimple, Bool.not_true, ↓reduceIte]
+    split
+    · rename_i h; exact absurd h (by decide) -- false = true
+    · -- notFreg guard on dst
+      split
+      · rename_i _ _ r h; exact absurd h (hWTL.bool_not_freg hx r)
+      · exact ⟨_, rfl⟩
+  case ifgoto _ =>
+    unfold verifiedGenInstr; simp only [hRC, hII, Bool.not_true, Bool.false_or]; dsimp
+    dsimp at hSimple; simp only [hSimple, Bool.not_true, ↓reduceIte]
+    split
+    · rename_i h; exact absurd h (by decide) -- false = true
+    · split <;> exact ⟨_, rfl⟩
+  case arrLoad => unfold verifiedGenInstr; simp [hRC, hII]; split <;> exact ⟨_, rfl⟩
+  case arrStore => unfold verifiedGenInstr; simp [hRC, hII]; split <;> exact ⟨_, rfl⟩
+  case fbinop hx hy hz =>
+    unfold verifiedGenInstr; simp only [hRC, hII, Bool.not_true, Bool.false_or]; dsimp
+    split
+    · next _ _ _ _ r h => exact absurd h (hWTL.float_not_ireg hy r)
+    · next _ _ _ r h _ => exact absurd h (hWTL.float_not_ireg hz r)
+    · next _ _ r h _ _ => exact absurd h (hWTL.float_not_ireg hx r)
+    · exact ⟨_, rfl⟩
+  case intToFloat hx hy =>
+    unfold verifiedGenInstr; simp only [hRC, hII, Bool.not_true, Bool.false_or]; dsimp
+    split
+    · next _ _ r h => exact absurd h (hWTL.int_not_freg hy r)
+    · next _ r h _ => exact absurd h (hWTL.float_not_ireg hx r)
+    · exact ⟨_, rfl⟩
+  case floatToInt hx hy =>
+    unfold verifiedGenInstr; simp only [hRC, hII, Bool.not_true, Bool.false_or]; dsimp
+    split
+    · next _ _ r h => exact absurd h (hWTL.float_not_ireg hy r)
+    · next _ r h _ => exact absurd h (hWTL.int_not_freg hx r)
+    · exact ⟨_, rfl⟩
+  case floatUnary hx hy =>
+    unfold verifiedGenInstr; simp only [hRC, hII, Bool.not_true, Bool.false_or]; dsimp
+    split
+    · next _ _ r h => exact absurd h (hWTL.float_not_ireg hy r)
+    · next _ r h _ => exact absurd h (hWTL.float_not_ireg hx r)
+    · exact ⟨_, rfl⟩
+  case fternop hx ha hb hc =>
+    unfold verifiedGenInstr; simp only [hRC, hII, Bool.not_true, Bool.false_or]; dsimp
+    split
+    · next _ _ _ _ r h => exact absurd h (hWTL.float_not_ireg ha r)
+    · next _ _ _ r h _ => exact absurd h (hWTL.float_not_ireg hb r)
+    · next _ _ r h _ _ => exact absurd h (hWTL.float_not_ireg hc r)
+    · next _ r h _ _ _ => exact absurd h (hWTL.float_not_ireg hx r)
+    · exact ⟨_, rfl⟩
   -- NOTE: copy case has a codegen gap — verifiedGenInstr returns none when
   -- src is in stack/ireg and dst is in freg. Fix needed in verifiedGenInstr:
   -- add vLoadVar + fmovToFP path for non-freg → freg copy.
