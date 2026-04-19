@@ -2433,19 +2433,11 @@ private theorem verifiedGenInstr_total
         | stack _ => simp_all
   case binop hx hy hz =>
     unfold verifiedGenInstr; simp only [hRC, hII, Bool.not_true, Bool.false_or]; dsimp
-    -- Prove each notFreg check is false (int vars can't be freg)
-    -- Generalize the three lookup expressions so we can case-split them
-    generalize hly : List.lookup _ layout.entries = ly
-    generalize hlz : List.lookup _ layout.entries = lz
-    generalize hld : List.lookup _ layout.entries = ld
-    cases ly <;> cases lz <;> cases ld <;> (try dsimp)
-    all_goals first
-      | exact ⟨_, rfl⟩
-      | (split <;> exact ⟨_, rfl⟩)
-      | (split <;> split <;> exact ⟨_, rfl⟩)
-      | (split <;> split <;> split <;> exact ⟨_, rfl⟩)
-      | (exfalso; have := hWTL.int_not_freg hy; have := hWTL.int_not_freg hz
-         have := hWTL.int_not_freg hx; simp_all [hlay])
+    split
+    · next _ _ _ _ r h => exact absurd h (hWTL.int_not_freg hy r)
+    · next _ _ _ r h _ => exact absurd h (hWTL.int_not_freg hz r)
+    · next _ _ r h _ _ => exact absurd h (hWTL.int_not_freg hx r)
+    · split <;> exact ⟨_, rfl⟩
   case boolop hx _ =>
     unfold verifiedGenInstr; simp only [hRC, hII, Bool.not_true, Bool.false_or]; dsimp
     dsimp at hSimple; simp only [hSimple, Bool.not_true, ↓reduceIte]

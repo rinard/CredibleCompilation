@@ -1427,8 +1427,11 @@ def verifiedGenInstr (layout : VarLayout) (pcMap : Nat → Nat) (instr : TAC)
       | some (.freg r) => some (vLoadVar layout src .x0 ++ [.fmovToFP r .x0])
       | _ => some (vLoadVar layout src .x0 ++ vStoreVar layout dst .x0)
   | .binop dst op lv rv =>
-    let notFreg := fun v => match layout v with | some (.freg _) => true | _ => false
-    if notFreg lv || notFreg rv || notFreg dst then none else
+    match layout lv, layout rv, layout dst with
+    | some (.freg _), _, _ => none
+    | _, some (.freg _), _ => none
+    | _, _, some (.freg _) => none
+    | _, _, _ =>
     let lv_reg := match layout lv with | some (.ireg r) => r | _ => .x1
     let rv_reg := match layout rv with | some (.ireg r) => r | _ => .x2
     let dst_reg := match layout dst with | some (.ireg r) => r | _ => .x0
