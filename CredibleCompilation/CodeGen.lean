@@ -2363,6 +2363,33 @@ private theorem verifiedGenInstr_total
   -- add vLoadVar + fmovToFP path for non-freg → freg copy.
 
 -- ──────────────────────────────────────────────────────────────
+-- § 5b-final. Totality of verifiedGenerateAsm
+-- ──────────────────────────────────────────────────────────────
+
+/-- `verifiedGenerateAsm` succeeds for any well-typed program whose layout
+    passes the codegen prerequisite checks. -/
+theorem verifiedGenerateAsm_total (tyCtx : TyCtx) (p : Prog)
+    (hWT : checkWellTypedProg tyCtx p = true)
+    (hRC : (buildVarLayout (collectVars p) (buildVarMap (collectVars p))).regConventionSafe = true)
+    (hPrereqs : checkCodegenPrereqs p = true)
+    (hWTL : checkWellTypedLayout tyCtx
+      (buildVarLayout (collectVars p) (buildVarMap (collectVars p))) p.code = none)
+    (hBranch : checkBranchTargets p.code = none) :
+    ∃ r, verifiedGenerateAsm tyCtx p = .ok r := by
+  unfold verifiedGenerateAsm
+  simp only [hWT, Bool.not_true, Bool.true_and, ↓reduceIte]
+  -- Discharge layout checks
+  have hII := (buildVarLayout_injective p hPrereqs)
+  have hCS := (checkCallerSaveSpec_succeeds p hPrereqs)
+  simp only [hRC, hII, Bool.not_true, ↓reduceIte, hWTL, hCS, hBranch]
+  -- One remaining `if false = true` guard, then match on fold result
+  split
+  · exact absurd ‹false = true› (by decide)
+  · split
+    · sorry -- fold returned none — need to show it returns some
+    · exact ⟨_, rfl⟩
+
+-- ──────────────────────────────────────────────────────────────
 -- buildPcMap prefix-sum lemmas
 -- ──────────────────────────────────────────────────────────────
 

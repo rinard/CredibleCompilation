@@ -123,6 +123,28 @@ d0–d2 are scratch (blocked from allocation). d3–d7 are caller-saved and hand
 No violations found. The compiler has a solid layered defense: register allocator exclusion, naming convention checks, formal RegConventionSafe property, caller/callee-save protocols with formal proofs, and defense-in-depth runtime checks.
 
 +++
+Last sorry - can't fix binop. Great example of how a simple change elsewhere makes a tough proof go through immediately. With suggested fix everything proved. 
+
+> any ideas on how to close binop case. what worked in other similar cases
+
+The pattern that worked for fbinop/intToFloat/etc.: split on a multi-way match produces individual goals with h : List.lookup v ... = some (.ireg r), and absurd h (hWTL.float_not_ireg ...) closes them directly.
+
+Binop is different: it uses an if-guard with || over notFreg calls. The split on if gives h : (big_or) = true which needs decomposition — that's where everything breaks.
+
+Simplest fix: Refactor verifiedGenInstr's binop case in ArmSemantics.lean to use the same multi-way match pattern as fbinop:
+
+
+| .binop dst op lv rv =>
+    match layout lv, layout rv, layout dst with
+    | some (.freg _), _, _ => none
+    | _, some (.freg _), _ => none
+    | _, _, some (.freg _) => none
+    | _, _, _ => ...  -- existing codegen
+Then the proof becomes identical to fbinop: split + next r h => absurd h (hWTL.int_not_freg ...).
+
+This is a 5-line codegen change, not a proof technique change. Want me to do it?
+
++++
 
 Partial def issue for proving compiler termination. This is a Lean issue:
 
