@@ -2408,6 +2408,148 @@ theorem verifiedGenerateAsm_total (tyCtx : TyCtx) (p : Prog)
               exact hSimpleOps pc hpc))
     rw [hbp]; exact ⟨_, rfl⟩
 
+-- ──────────────────────────────────────────────────────────────
+-- § 5b-pre4. compileExpr/compileBool/compileStmt produce no register vars
+-- ──────────────────────────────────────────────────────────────
+
+/-- tmpName doesn't map to an integer register. -/
+private theorem tmpName_noArmReg (k : Nat) : varToArmReg (tmpName k) = none := by
+  unfold varToArmReg startsWithList tmpName
+  simp [String.toList_append, ts_t, List.isPrefixOf]
+
+/-- tmpName doesn't map to a float register. -/
+private theorem tmpName_noArmFReg (k : Nat) : varToArmFReg (tmpName k) = none := by
+  unfold varToArmFReg startsWithList tmpName
+  simp [String.toList_append, ts_t, List.isPrefixOf]
+
+/-- ftmpName doesn't map to an integer register. -/
+private theorem ftmpName_noArmReg (k : Nat) : varToArmReg (ftmpName k) = none := by
+  unfold varToArmReg startsWithList ftmpName
+  simp [String.toList_append, ts_ft, List.isPrefixOf]
+
+/-- ftmpName doesn't map to a float register. -/
+private theorem ftmpName_noArmFReg (k : Nat) : varToArmFReg (ftmpName k) = none := by
+  unfold varToArmFReg startsWithList ftmpName
+  simp [String.toList_append, ts_ft, List.isPrefixOf]
+
+/-- Every var in compileExpr output has varToArmReg = none, and so does the result var. -/
+private theorem compileExpr_noArmReg (e : SExpr) (offset nextTmp : Nat)
+    (hSrc : Program.SExpr.noReservedVars e = true) :
+    (∀ instr ∈ (compileExpr e offset nextTmp).1, ∀ v ∈ instr.vars, varToArmReg v = none) ∧
+    varToArmReg (compileExpr e offset nextTmp).2.1 = none := by
+  induction e generalizing offset nextTmp with
+  | lit n =>
+    simp only [compileExpr]
+    exact ⟨fun instr hmem => by simp at hmem; subst hmem; intro v hv; simp [TAC.vars] at hv; subst hv; exact tmpName_noArmReg _,
+           tmpName_noArmReg _⟩
+  | var x =>
+    simp only [Program.SExpr.noReservedVars, Bool.not_eq_true'] at hSrc
+    simp only [compileExpr]
+    exact ⟨fun _ hmem => by simp at hmem, varToArmReg_none_of_not_dunder x hSrc⟩
+  | bin _ a b iha ihb =>
+    simp only [Program.SExpr.noReservedVars, Bool.and_eq_true] at hSrc
+    simp only [compileExpr]
+    have ⟨ha_instrs, ha_res⟩ := iha offset nextTmp hSrc.1
+    have ⟨hb_instrs, hb_res⟩ := ihb (offset + (compileExpr a offset nextTmp).1.length)
+      (compileExpr a offset nextTmp).2.2 hSrc.2
+    constructor
+    · intro instr hmem v hv
+      simp [List.mem_append] at hmem
+      rcases hmem with h | h | rfl
+      · exact ha_instrs instr h v hv
+      · exact hb_instrs instr h v hv
+      · simp [TAC.vars] at hv; rcases hv with rfl | rfl | rfl
+        · exact tmpName_noArmReg _
+        · exact ha_res
+        · exact hb_res
+    · exact tmpName_noArmReg _
+  | arrRead _ idx ih =>
+    simp only [Program.SExpr.noReservedVars] at hSrc
+    simp only [compileExpr]
+    have ⟨hi_instrs, hi_res⟩ := ih offset nextTmp hSrc
+    constructor
+    · intro instr hmem v hv
+      simp [List.mem_append] at hmem
+      rcases hmem with h | rfl
+      · exact hi_instrs instr h v hv
+      · simp [TAC.vars] at hv; rcases hv with rfl | rfl
+        · exact tmpName_noArmReg _
+        · exact hi_res
+    · exact tmpName_noArmReg _
+  | flit _ =>
+    simp only [compileExpr]
+    exact ⟨fun instr hmem => by simp at hmem; subst hmem; intro v hv; simp [TAC.vars] at hv; subst hv; exact ftmpName_noArmReg _,
+           ftmpName_noArmReg _⟩
+  | fbin _ a b iha ihb =>
+    simp only [Program.SExpr.noReservedVars, Bool.and_eq_true] at hSrc
+    simp only [compileExpr]
+    have ⟨ha_instrs, ha_res⟩ := iha offset nextTmp hSrc.1
+    have ⟨hb_instrs, hb_res⟩ := ihb (offset + (compileExpr a offset nextTmp).1.length)
+      (compileExpr a offset nextTmp).2.2 hSrc.2
+    constructor
+    · intro instr hmem v hv
+      simp [List.mem_append] at hmem
+      rcases hmem with h | h | rfl
+      · exact ha_instrs instr h v hv
+      · exact hb_instrs instr h v hv
+      · simp [TAC.vars] at hv; rcases hv with rfl | rfl | rfl
+        · exact ftmpName_noArmReg _
+        · exact ha_res
+        · exact hb_res
+    · exact ftmpName_noArmReg _
+  | intToFloat e ih =>
+    simp only [Program.SExpr.noReservedVars] at hSrc
+    simp only [compileExpr]
+    have ⟨hi_instrs, hi_res⟩ := ih offset nextTmp hSrc
+    constructor
+    · intro instr hmem v hv
+      simp [List.mem_append] at hmem
+      rcases hmem with h | rfl
+      · exact hi_instrs instr h v hv
+      · simp [TAC.vars] at hv; rcases hv with rfl | rfl
+        · exact ftmpName_noArmReg _
+        · exact hi_res
+    · exact ftmpName_noArmReg _
+  | floatToInt e ih =>
+    simp only [Program.SExpr.noReservedVars] at hSrc
+    simp only [compileExpr]
+    have ⟨hi_instrs, hi_res⟩ := ih offset nextTmp hSrc
+    constructor
+    · intro instr hmem v hv
+      simp [List.mem_append] at hmem
+      rcases hmem with h | rfl
+      · exact hi_instrs instr h v hv
+      · simp [TAC.vars] at hv; rcases hv with rfl | rfl
+        · exact tmpName_noArmReg _
+        · exact hi_res
+    · exact tmpName_noArmReg _
+  | floatUnary _ e ih =>
+    simp only [Program.SExpr.noReservedVars] at hSrc
+    simp only [compileExpr]
+    have ⟨hi_instrs, hi_res⟩ := ih offset nextTmp hSrc
+    constructor
+    · intro instr hmem v hv
+      simp [List.mem_append] at hmem
+      rcases hmem with h | rfl
+      · exact hi_instrs instr h v hv
+      · simp [TAC.vars] at hv; rcases hv with rfl | rfl
+        · exact ftmpName_noArmReg _
+        · exact hi_res
+    · exact ftmpName_noArmReg _
+  | farrRead _ idx ih =>
+    simp only [Program.SExpr.noReservedVars] at hSrc
+    simp only [compileExpr]
+    have ⟨hi_instrs, hi_res⟩ := ih offset nextTmp hSrc
+    constructor
+    · intro instr hmem v hv
+      simp [List.mem_append] at hmem
+      rcases hmem with h | rfl
+      · exact hi_instrs instr h v hv
+      · simp [TAC.vars] at hv; rcases hv with rfl | rfl
+        · exact ftmpName_noArmReg _
+        · exact hi_res
+    · exact ftmpName_noArmReg _
+
 /-- End-to-end totality: `generateAsm` succeeds for any well-typed program
     (no-optimization path, directly from `compileToTAC`). -/
 theorem generateAsm_total (prog : Program) (htcs : prog.typeCheckStrict = true) :
