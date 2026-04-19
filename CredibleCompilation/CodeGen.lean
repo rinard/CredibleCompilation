@@ -2840,6 +2840,16 @@ private theorem list_foldl_allVars_mem_imp (l : List TAC) (init : List Var) (v :
         exact (List.mem_filter.mp hf).1
     · right; exact ⟨instr, List.mem_cons_of_mem hd hmem, hv⟩
 
+/-- `filterMap` equals `map` when the function produces `Some` on every input. -/
+private theorem filterMap_eq_map_of_all_some {α β : Type}
+    {l : List α} {f : α → Option β} {g : α → β}
+    (h : ∀ v ∈ l, f v = some (g v)) : l.filterMap f = l.map g := by
+  induction l with
+  | nil => rfl
+  | cons hd tl ih =>
+    simp only [List.filterMap_cons, h hd List.mem_cons_self, List.map_cons]
+    exact congrArg _ (ih (fun v hv => h v (List.mem_cons_of_mem hd hv)))
+
 /-- Under the `noRegVar` assumption on `vars`, every layout entry is a `.stack` entry. -/
 private theorem buildVarLayout_entries_stack_of_noRegVar
     {vars : List Var} {varMap : List (Var × Nat)}
