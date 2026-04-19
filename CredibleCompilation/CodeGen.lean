@@ -2383,12 +2383,32 @@ theorem verifiedGenerateAsm_total (tyCtx : TyCtx) (p : Prog)
   have hII := (buildVarLayout_injective p hPrereqs)
   have hCS := (checkCallerSaveSpec_succeeds p hPrereqs)
   simp only [hRC, hII, Bool.not_true, ↓reduceIte, hWTL, hCS, hBranch]
-  -- One remaining `if false = true` guard, then match on fold result
+  -- One remaining `if false = true` guard
   split
   · exact absurd ‹false = true› (by decide)
-  · split
-    · sorry -- fold returned none — need to show it returns some
-    · exact ⟨_, rfl⟩
+  · -- Generalize the fold, prove it's some, then match gives .ok
+    generalize hfoldEq : List.foldl _ (some _) (List.range _) = foldResult
+    -- General: foldl preserves some if each step does
+    have foldl_pres : ∀ (f : Option (Array (List ArmInstr)) → Nat → Option (Array (List ArmInstr)))
+        (pcs : List Nat) (arr : Array (List ArmInstr)),
+        (∀ pc ∈ pcs, ∀ a, ∃ a', f (some a) pc = some a') →
+        ∃ r, pcs.foldl f (some arr) = some r := by
+      intro f pcs; induction pcs with
+      | nil => intro arr _; exact ⟨arr, rfl⟩
+      | cons pc rest ih =>
+        intro arr hstep
+        obtain ⟨a', ha'⟩ := hstep pc (.head _) arr
+        simp only [List.foldl_cons, ha']
+        exact ih _ (fun q hq a => hstep q (.tail _ hq) a)
+    -- Prove foldResult = some bp
+    obtain ⟨bp, hbp⟩ : ∃ bp, foldResult = some bp := by
+      rw [← hfoldEq]
+      -- Per-step: bodyGenStep (some arr) pc returns some for pc < p.code.size
+      -- Print path: unconditional some. Non-print: verifiedGenInstr_total gives some.
+      -- Mechanically correct but blocked by dependent match / coercion plumbing.
+      exact foldl_pres _ _ _ (fun pc hpc arr => by
+        rw [List.mem_range] at hpc; sorry)
+    rw [hbp]; exact ⟨_, rfl⟩
 
 -- ──────────────────────────────────────────────────────────────
 -- buildPcMap prefix-sum lemmas
