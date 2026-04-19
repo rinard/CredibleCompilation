@@ -2550,6 +2550,118 @@ private theorem compileExpr_noArmReg (e : SExpr) (offset nextTmp : Nat)
         · exact hi_res
     · exact ftmpName_noArmReg _
 
+/-- Every var in compileBool output has varToArmReg = none, and so do vars in the result BoolExpr. -/
+private theorem compileBool_noArmReg (b : SBool) (offset nextTmp : Nat)
+    (hSrc : Program.SBool.noReservedVars b = true) :
+    (∀ instr ∈ (compileBool b offset nextTmp).1, ∀ v ∈ instr.vars, varToArmReg v = none) ∧
+    (∀ v ∈ (compileBool b offset nextTmp).2.1.vars, varToArmReg v = none) := by
+  induction b generalizing offset nextTmp with
+  | lit _ => simp [compileBool, BoolExpr.vars]
+  | bvar x =>
+    simp only [Program.SBool.noReservedVars, Bool.not_eq_true'] at hSrc
+    simp only [compileBool, BoolExpr.vars]
+    constructor
+    · intro _ h; simp at h
+    · intro v hv; simp at hv; rw [hv]; exact varToArmReg_none_of_not_dunder x hSrc
+  | cmp _ a b =>
+    simp only [Program.SBool.noReservedVars, Bool.and_eq_true] at hSrc
+    simp only [compileBool]
+    have ⟨ha_i, ha_r⟩ := compileExpr_noArmReg a offset nextTmp hSrc.1
+    have ⟨hb_i, hb_r⟩ := compileExpr_noArmReg b
+      (offset + (compileExpr a offset nextTmp).1.length)
+      (compileExpr a offset nextTmp).2.2 hSrc.2
+    constructor
+    · intro instr hmem v hv
+      simp [List.mem_append] at hmem
+      rcases hmem with h | h
+      · exact ha_i instr h v hv
+      · exact hb_i instr h v hv
+    · intro v hv
+      simp [BoolExpr.vars, Expr.freeVars] at hv
+      rcases hv with rfl | rfl
+      · exact ha_r
+      · exact hb_r
+  | not e ih =>
+    simp only [Program.SBool.noReservedVars] at hSrc
+    simp only [compileBool]
+    exact ih offset nextTmp hSrc
+  | and a b iha ihb =>
+    simp only [Program.SBool.noReservedVars, Bool.and_eq_true] at hSrc
+    simp only [compileBool]
+    have ⟨ha_i, ha_be⟩ := iha offset nextTmp hSrc.1
+    have ⟨hb_i, hb_be⟩ := ihb (offset + (compileBool a offset nextTmp).1.length + 1)
+      ((compileBool a offset nextTmp).2.2 + 1) hSrc.2
+    constructor
+    · intro instr hmem v hv
+      simp only [List.mem_append, List.mem_cons, List.mem_nil_iff, or_false] at hmem
+      -- code = codeA ++ [ifgoto] ++ codeB ++ [ifgoto, const, goto, const]
+      rcases hmem with ((ha | rfl) | hb) | rfl | rfl | rfl | rfl
+      · exact ha_i instr ha v hv
+      · -- ifgoto (.not ba) — vars from BoolExpr
+        simp [TAC.vars] at hv; exact ha_be v hv
+      · exact hb_i instr hb v hv
+      · simp [TAC.vars] at hv; exact hb_be v hv
+      · simp [TAC.vars] at hv; subst hv; exact tmpName_noArmReg _
+      · simp [TAC.vars] at hv  -- goto has no vars
+      · simp [TAC.vars] at hv; subst hv; exact tmpName_noArmReg _
+    · -- result BoolExpr: .cmp .ne (.var tR) (.lit 0)
+      intro v hv
+      simp [BoolExpr.vars, Expr.freeVars] at hv; subst hv
+      exact tmpName_noArmReg _
+  | or a b iha ihb =>
+    simp only [Program.SBool.noReservedVars, Bool.and_eq_true] at hSrc
+    simp only [compileBool]
+    have ⟨ha_i, ha_be⟩ := iha offset nextTmp hSrc.1
+    have ⟨hb_i, hb_be⟩ := ihb (offset + (compileBool a offset nextTmp).1.length + 1)
+      ((compileBool a offset nextTmp).2.2 + 1) hSrc.2
+    constructor
+    · intro instr hmem v hv
+      simp only [List.mem_append, List.mem_cons, List.mem_nil_iff, or_false] at hmem
+      rcases hmem with ((ha | rfl) | hb) | rfl | rfl | rfl | rfl
+      · exact ha_i instr ha v hv
+      · simp [TAC.vars] at hv; exact ha_be v hv
+      · exact hb_i instr hb v hv
+      · simp [TAC.vars] at hv; exact hb_be v hv
+      · simp [TAC.vars] at hv; subst hv; exact tmpName_noArmReg _
+      · simp [TAC.vars] at hv
+      · simp [TAC.vars] at hv; subst hv; exact tmpName_noArmReg _
+    · intro v hv
+      simp [BoolExpr.vars, Expr.freeVars] at hv; subst hv
+      exact tmpName_noArmReg _
+  | barrRead _ idx =>
+    simp only [Program.SBool.noReservedVars] at hSrc
+    simp only [compileBool]
+    have ⟨hi_i, hi_r⟩ := compileExpr_noArmReg idx offset nextTmp hSrc
+    constructor
+    · intro instr hmem v hv
+      simp [List.mem_append] at hmem
+      rcases hmem with h | rfl
+      · exact hi_i instr h v hv
+      · simp [TAC.vars] at hv; rcases hv with rfl | rfl
+        · exact tmpName_noArmReg _
+        · exact hi_r
+    · intro v hv
+      simp [BoolExpr.vars, Expr.freeVars] at hv; subst hv
+      exact tmpName_noArmReg _
+  | fcmp _ a b =>
+    simp only [Program.SBool.noReservedVars, Bool.and_eq_true] at hSrc
+    simp only [compileBool]
+    have ⟨ha_i, ha_r⟩ := compileExpr_noArmReg a offset nextTmp hSrc.1
+    have ⟨hb_i, hb_r⟩ := compileExpr_noArmReg b
+      (offset + (compileExpr a offset nextTmp).1.length)
+      (compileExpr a offset nextTmp).2.2 hSrc.2
+    constructor
+    · intro instr hmem v hv
+      simp [List.mem_append] at hmem
+      rcases hmem with h | h
+      · exact ha_i instr h v hv
+      · exact hb_i instr h v hv
+    · intro v hv
+      simp [BoolExpr.vars, Expr.freeVars] at hv
+      rcases hv with rfl | rfl
+      · exact ha_r
+      · exact hb_r
+
 /-- End-to-end totality: `generateAsm` succeeds for any well-typed program
     (no-optimization path, directly from `compileToTAC`). -/
 theorem generateAsm_total (prog : Program) (htcs : prog.typeCheckStrict = true) :
