@@ -1725,10 +1725,175 @@ private theorem buildVarLayout_complete {p : Prog} {v : Var}
       | tail _ htl => exact ih htl
 
 /-- Every variable in `TAC.vars instr` for any instruction in `p.code` is in `collectVars p`. -/
+-- Helper: the collectVars step function adds all vars of the instruction
+private theorem collectVars_step_adds_vars {acc : List Var} {instr : TAC} {v : Var}
+    (hv : v ∈ instr.vars) :
+    v ∈ (match instr with
+    | .const x _       => if acc.contains x then acc else acc ++ [x]
+    | .copy x y        => let a := if acc.contains x then acc else acc ++ [x]
+                          if a.contains y then a else a ++ [y]
+    | .binop x _ y z   => let a := if acc.contains x then acc else acc ++ [x]
+                          let b := if a.contains y then a else a ++ [y]
+                          if b.contains z then b else b ++ [z]
+    | .boolop x be     => let a := if acc.contains x then acc else acc ++ [x]
+                          be.vars.foldl (fun a v => if a.contains v then a else a ++ [v]) a
+    | .arrLoad x _ idx _ => let a := if acc.contains x then acc else acc ++ [x]
+                            if a.contains idx then a else a ++ [idx]
+    | .arrStore _ idx val _ => let a := if acc.contains idx then acc else acc ++ [idx]
+                               if a.contains val then a else a ++ [val]
+    | .fbinop x _ y z  => let a := if acc.contains x then acc else acc ++ [x]
+                          let b := if a.contains y then a else a ++ [y]
+                          if b.contains z then b else b ++ [z]
+    | .intToFloat x y  => let a := if acc.contains x then acc else acc ++ [x]
+                          if a.contains y then a else a ++ [y]
+    | .floatToInt x y  => let a := if acc.contains x then acc else acc ++ [x]
+                          if a.contains y then a else a ++ [y]
+    | .floatUnary x _ y => let a := if acc.contains x then acc else acc ++ [x]
+                          if a.contains y then a else a ++ [y]
+    | .fternop x _ a b c => let acc := if acc.contains x then acc else acc ++ [x]
+                            let acc := if acc.contains a then acc else acc ++ [a]
+                            let acc := if acc.contains b then acc else acc ++ [b]
+                            if acc.contains c then acc else acc ++ [c]
+    | .print _ vs      => vs.foldl (fun a v => if a.contains v then a else a ++ [v]) acc
+    | .goto _          => acc
+    | .ifgoto be _     => be.vars.foldl (fun a v => if a.contains v then a else a ++ [v]) acc
+    | .halt            => acc) := by
+  cases instr with
+  | const x _ => simp [TAC.vars] at hv; subst hv; exact self_mem_addIfNew
+  | copy x y =>
+    simp [TAC.vars] at hv; rcases hv with rfl | rfl
+    · exact mem_of_mem_addIfNew self_mem_addIfNew
+    · exact self_mem_addIfNew
+  | binop x _ y z =>
+    simp [TAC.vars] at hv; rcases hv with rfl | rfl | rfl
+    · exact mem_of_mem_addIfNew (mem_of_mem_addIfNew self_mem_addIfNew)
+    · exact mem_of_mem_addIfNew self_mem_addIfNew
+    · exact self_mem_addIfNew
+  | boolop x be =>
+    simp [TAC.vars] at hv; rcases hv with rfl | hv
+    · exact mem_foldl_addIfNew_of_mem self_mem_addIfNew
+    · exact mem_foldl_addIfNew_of_mem_list hv
+  | arrLoad x _ idx _ =>
+    simp [TAC.vars] at hv; rcases hv with rfl | rfl
+    · exact mem_of_mem_addIfNew self_mem_addIfNew
+    · exact self_mem_addIfNew
+  | arrStore _ idx val _ =>
+    simp [TAC.vars] at hv; rcases hv with rfl | rfl
+    · exact mem_of_mem_addIfNew self_mem_addIfNew
+    · exact self_mem_addIfNew
+  | fbinop x _ y z =>
+    simp [TAC.vars] at hv; rcases hv with rfl | rfl | rfl
+    · exact mem_of_mem_addIfNew (mem_of_mem_addIfNew self_mem_addIfNew)
+    · exact mem_of_mem_addIfNew self_mem_addIfNew
+    · exact self_mem_addIfNew
+  | intToFloat x y =>
+    simp [TAC.vars] at hv; rcases hv with rfl | rfl
+    · exact mem_of_mem_addIfNew self_mem_addIfNew
+    · exact self_mem_addIfNew
+  | floatToInt x y =>
+    simp [TAC.vars] at hv; rcases hv with rfl | rfl
+    · exact mem_of_mem_addIfNew self_mem_addIfNew
+    · exact self_mem_addIfNew
+  | floatUnary x _ y =>
+    simp [TAC.vars] at hv; rcases hv with rfl | rfl
+    · exact mem_of_mem_addIfNew self_mem_addIfNew
+    · exact self_mem_addIfNew
+  | fternop x _ a b c =>
+    simp [TAC.vars] at hv; rcases hv with rfl | rfl | rfl | rfl
+    · exact mem_of_mem_addIfNew (mem_of_mem_addIfNew (mem_of_mem_addIfNew self_mem_addIfNew))
+    · exact mem_of_mem_addIfNew (mem_of_mem_addIfNew self_mem_addIfNew)
+    · exact mem_of_mem_addIfNew self_mem_addIfNew
+    · exact self_mem_addIfNew
+  | print _ vs =>
+    simp [TAC.vars] at hv; exact mem_foldl_addIfNew_of_mem_list hv
+  | goto _ => simp [TAC.vars] at hv
+  | ifgoto be _ =>
+    simp [TAC.vars] at hv; exact mem_foldl_addIfNew_of_mem_list hv
+  | halt => simp [TAC.vars] at hv
+
+-- Helper: the collectVars step function preserves existing membership
+private theorem collectVars_step_mono {acc : List Var} {instr : TAC} {w : Var}
+    (hw : w ∈ acc) :
+    w ∈ (match instr with
+    | .const x _       => if acc.contains x then acc else acc ++ [x]
+    | .copy x y        => let a := if acc.contains x then acc else acc ++ [x]
+                          if a.contains y then a else a ++ [y]
+    | .binop x _ y z   => let a := if acc.contains x then acc else acc ++ [x]
+                          let b := if a.contains y then a else a ++ [y]
+                          if b.contains z then b else b ++ [z]
+    | .boolop x be     => let a := if acc.contains x then acc else acc ++ [x]
+                          be.vars.foldl (fun a v => if a.contains v then a else a ++ [v]) a
+    | .arrLoad x _ idx _ => let a := if acc.contains x then acc else acc ++ [x]
+                            if a.contains idx then a else a ++ [idx]
+    | .arrStore _ idx val _ => let a := if acc.contains idx then acc else acc ++ [idx]
+                               if a.contains val then a else a ++ [val]
+    | .fbinop x _ y z  => let a := if acc.contains x then acc else acc ++ [x]
+                          let b := if a.contains y then a else a ++ [y]
+                          if b.contains z then b else b ++ [z]
+    | .intToFloat x y  => let a := if acc.contains x then acc else acc ++ [x]
+                          if a.contains y then a else a ++ [y]
+    | .floatToInt x y  => let a := if acc.contains x then acc else acc ++ [x]
+                          if a.contains y then a else a ++ [y]
+    | .floatUnary x _ y => let a := if acc.contains x then acc else acc ++ [x]
+                          if a.contains y then a else a ++ [y]
+    | .fternop x _ a b c => let acc := if acc.contains x then acc else acc ++ [x]
+                            let acc := if acc.contains a then acc else acc ++ [a]
+                            let acc := if acc.contains b then acc else acc ++ [b]
+                            if acc.contains c then acc else acc ++ [c]
+    | .print _ vs      => vs.foldl (fun a v => if a.contains v then a else a ++ [v]) acc
+    | .goto _          => acc
+    | .ifgoto be _     => be.vars.foldl (fun a v => if a.contains v then a else a ++ [v]) acc
+    | .halt            => acc) := by
+  cases instr <;> simp_all only <;>
+    first
+    | exact hw
+    | exact mem_foldl_addIfNew_of_mem (mem_of_mem_addIfNew hw)
+    | exact mem_foldl_addIfNew_of_mem hw
+    | exact mem_of_mem_addIfNew (mem_of_mem_addIfNew (mem_of_mem_addIfNew (mem_of_mem_addIfNew hw)))
+    | exact mem_of_mem_addIfNew (mem_of_mem_addIfNew (mem_of_mem_addIfNew hw))
+    | exact mem_of_mem_addIfNew (mem_of_mem_addIfNew hw)
+    | exact mem_of_mem_addIfNew hw
+
+-- Monotone foldl: if v ∈ acc and each step preserves membership, v stays in the result
+private theorem mem_foldl_mono
+    {f : List Var → TAC → List Var}
+    {l : List TAC} {acc : List Var} {v : Var}
+    (hv : v ∈ acc)
+    (hmono : ∀ acc (b : TAC), v ∈ acc → v ∈ f acc b) :
+    v ∈ l.foldl f acc := by
+  induction l generalizing acc with
+  | nil => exact hv
+  | cons hd tl ih => exact ih (hmono _ hd hv)
+
+-- General foldl lemma: if step adds v when processing e, and step is monotone,
+-- then v ∈ foldl step init list whenever e ∈ list.
+private theorem mem_foldl_of_mem_step
+    {f : List Var → TAC → List Var}
+    {l : List TAC} {init : List Var} {e : TAC} {v : Var}
+    (he : e ∈ l)
+    (hadd : ∀ acc, v ∈ f acc e)
+    (hmono : ∀ acc (b : TAC), v ∈ acc → v ∈ f acc b) :
+    v ∈ l.foldl f init := by
+  induction l generalizing init with
+  | nil => simp at he
+  | cons hd tl ih =>
+    simp only [List.foldl_cons]
+    cases List.mem_cons.mp he with
+    | inl heq => subst heq; exact mem_foldl_mono (hadd init) hmono
+    | inr htl => exact ih htl
+
 private theorem vars_subset_collectVars {p : Prog} {pc : Nat} (hpc : pc < p.code.size)
     {v : Var} (hv : v ∈ (p.code[pc]).vars) :
     v ∈ collectVars p := by
-  sorry
+  unfold collectVars
+  -- The observable fold preserves membership
+  apply mem_foldl_addIfNew_of_mem
+  -- Now show v ∈ p.code.foldl step [] — convert Array.foldl to List.foldl
+  rw [← Array.foldl_toList]
+  apply mem_foldl_of_mem_step (e := p.code[pc])
+  · exact Array.getElem_mem_toList hpc
+  · intro acc; exact collectVars_step_adds_vars hv
+  · intro acc instr hw; exact collectVars_step_mono hw
 
 /-- If no variable name violates the register convention, then `buildVarLayout` maps
     no variable to a restricted register: `varToArmReg` on non-restricted names
