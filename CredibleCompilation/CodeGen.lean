@@ -2850,6 +2850,89 @@ private theorem filterMap_eq_map_of_all_some {α β : Type}
     simp only [List.filterMap_cons, h hd List.mem_cons_self, List.map_cons]
     exact congrArg _ (ih (fun v hv => h v (List.mem_cons_of_mem hd hv)))
 
+/-- `buildVarMap (hd :: tl) = (hd, 8) :: (shift by 8) (buildVarMap tl)`. -/
+private theorem buildVarMap_cons_shift (hd : Var) (tl : List Var) :
+    buildVarMap (hd :: tl) =
+    (hd, 8) :: (buildVarMap tl).map (fun p => (p.1, p.2 + 8)) := by
+  unfold buildVarMap
+  simp only [List.length_cons, List.range_succ_eq_map, List.zip_cons_cons,
+             List.map_cons, List.zip_map_left, List.map_map]
+  refine congrArg₂ List.cons (by rfl) ?_
+  apply List.map_congr_left
+  rintro ⟨i, v⟩ _
+  simp only [Function.comp_apply, Prod.map_apply, id_eq]
+  refine Prod.mk.injEq _ _ _ _ |>.mpr ⟨rfl, ?_⟩
+  omega
+
+/-- `lookupVar` pushes a uniform offset-shift on the varMap through the result. -/
+private theorem lookupVar_map_shift (varMap : List (Var × Nat)) (k : Nat) (v : Var) :
+    lookupVar (varMap.map (fun p => (p.1, p.2 + k))) v =
+    (lookupVar varMap v).map (· + k) := by
+  unfold lookupVar
+  rw [List.find?_map]
+  have hpred :
+      ((fun (x : Var × Nat) => x.1 == v) ∘ (fun (p : Var × Nat) => (p.1, p.2 + k))) =
+      (fun (x : Var × Nat) => x.1 == v) := by
+    funext p; rfl
+  rw [hpred]
+  cases varMap.find? (fun p => p.1 == v) with
+  | none => rfl
+  | some p => rfl
+
+/-- When the head's key doesn't match, `lookupVar` skips it. -/
+private theorem lookupVar_cons_ne (hd : Var) (off : Nat)
+    (varMap : List (Var × Nat)) (v : Var) (hne : v ≠ hd) :
+    lookupVar ((hd, off) :: varMap) v = lookupVar varMap v := by
+  unfold lookupVar
+  have hfind :
+      List.find? (fun (p : Var × Nat) => p.1 == v) ((hd, off) :: varMap) =
+      List.find? (fun (p : Var × Nat) => p.1 == v) varMap := by
+    apply List.find?_cons_of_neg
+    simp only [beq_iff_eq]
+    exact fun h => hne h.symm
+  rw [hfind]
+
+/-- For `Nodup vars`, `lookupVar (buildVarMap vars) vars[i] = some ((i+1)*8)`. -/
+private theorem lookupVar_buildVarMap_getElem {vars : List Var} (hNodup : vars.Nodup)
+    {i : Nat} (hi : i < vars.length) :
+    lookupVar (buildVarMap vars) vars[i] = some ((i + 1) * 8) := by
+  induction vars generalizing i with
+  | nil => exact absurd hi (by simp)
+  | cons hd tl ih =>
+    simp only [List.nodup_cons] at hNodup
+    obtain ⟨hNotMem, hNodupTl⟩ := hNodup
+    rw [buildVarMap_cons_shift]
+    match i, hi with
+    | 0, _ =>
+      show lookupVar ((hd, 8) :: _) hd = some ((0 + 1) * 8)
+      unfold lookupVar
+      simp [List.find?_cons]
+    | i + 1, hi =>
+      have hit : i < tl.length := by simp at hi; omega
+      have hne : tl[i] ≠ hd := fun h => hNotMem (h ▸ List.getElem_mem hit)
+      show lookupVar ((hd, 8) :: _) tl[i] = some ((i + 1 + 1) * 8)
+      rw [lookupVar_cons_ne _ _ _ _ hne, lookupVar_map_shift,
+          ih hNodupTl hit]
+      show some ((i + 1) * 8 + 8) = some ((i + 1 + 1) * 8)
+      congr 1
+      omega
+
+/-- `lookupVar (buildVarMap vars) · ` is injective on `vars` (when `vars.Nodup`). -/
+private theorem lookupVar_buildVarMap_injOn
+    {vars : List Var} (hNodup : vars.Nodup)
+    {v₁ v₂ : Var} (hv₁ : v₁ ∈ vars) (hv₂ : v₂ ∈ vars)
+    (h : lookupVar (buildVarMap vars) v₁ = lookupVar (buildVarMap vars) v₂) :
+    v₁ = v₂ := by
+  obtain ⟨i, hi, rfl⟩ := List.mem_iff_getElem.mp hv₁
+  obtain ⟨j, hj, rfl⟩ := List.mem_iff_getElem.mp hv₂
+  rw [lookupVar_buildVarMap_getElem hNodup hi,
+      lookupVar_buildVarMap_getElem hNodup hj] at h
+  have heq : i = j := by
+    have := Option.some.inj h
+    omega
+  subst heq
+  rfl
+
 /-- Under the `noRegVar` assumption on `vars`, every layout entry is a `.stack` entry. -/
 private theorem buildVarLayout_entries_stack_of_noRegVar
     {vars : List Var} {varMap : List (Var × Nat)}
@@ -2901,7 +2984,37 @@ theorem generateAsm_total (prog : Program) (htcs : prog.typeCheckStrict = true) 
       intro ⟨v, loc⟩ hmem
       obtain ⟨off, rfl⟩ := hAllStack v loc hmem
       simp
-    · sorry -- isInjective
+    · -- isInjective: offsets from buildVarMap are Nodup; .stack is injective.
+      show VarLayout.isInjective _ = true
+      unfold VarLayout.isInjective
+      apply isInjective_go_of_nodup_snd
+      have hNodupVars : (collectVars prog.compileToTAC).Nodup := collectVars_nodup _
+      have hEntriesEq :
+          (buildVarLayout (collectVars prog.compileToTAC)
+              (buildVarMap (collectVars prog.compileToTAC))).entries =
+          (collectVars prog.compileToTAC).map (fun v =>
+            (v, VarLoc.stack
+              ((lookupVar (buildVarMap (collectVars prog.compileToTAC)) v).getD 0))) := by
+        show (collectVars prog.compileToTAC).filterMap _ = _
+        apply filterMap_eq_map_of_all_some
+        intro v hv
+        have hnr := hNoRegVar v hv
+        rw [hnr.1, hnr.2.1]
+        simp only
+        obtain ⟨off, hoff⟩ := lookupVar_of_mem hv
+        rw [hoff]
+        simp
+      rw [hEntriesEq, List.map_map]
+      apply List.Nodup.map_on _ hNodupVars
+      intro v₁ hv₁ v₂ hv₂ heq
+      simp only [Function.comp_apply] at heq
+      obtain ⟨off₁, hoff₁⟩ := lookupVar_of_mem hv₁
+      obtain ⟨off₂, hoff₂⟩ := lookupVar_of_mem hv₂
+      rw [hoff₁, hoff₂] at heq
+      simp only [Option.getD_some] at heq
+      have hOff : off₁ = off₂ := by cases heq; rfl
+      exact lookupVar_buildVarMap_injOn hNodupVars hv₁ hv₂
+        (by rw [hoff₁, hoff₂, hOff])
     · -- checkCallerSaveSpec: with all-stack layout, genCallerSaveAll produces []
       -- so all six conjuncts are vacuous or trivial.
       have hEmpty : genCallerSaveAll
