@@ -853,11 +853,44 @@ def typeCheck (prog : Program) : Bool :=
 def checkNoReservedNames (prog : Program) : Bool :=
   prog.decls.all fun (v, _) => !(startsWithList v "__")
 
-/-- Strict type check: typeCheck + no goto/ifgoto + no reserved names.
+/-- Check that no variable in an expression starts with `__`. -/
+def SExpr.noReservedVars : SExpr → Bool
+  | .lit _ | .flit _ => true
+  | .var x => !(startsWithList x "__")
+  | .bin _ a b | .fbin _ a b => SExpr.noReservedVars a && SExpr.noReservedVars b
+  | .arrRead _ idx | .farrRead _ idx => SExpr.noReservedVars idx
+  | .intToFloat e | .floatToInt e | .floatUnary _ e => SExpr.noReservedVars e
+
+/-- Check that no variable in a boolean expression starts with `__`. -/
+def SBool.noReservedVars : SBool → Bool
+  | .lit _ => true
+  | .bvar x => !(startsWithList x "__")
+  | .cmp _ a b | .fcmp _ a b => SExpr.noReservedVars a && SExpr.noReservedVars b
+  | .not e => SBool.noReservedVars e
+  | .and a b | .or a b => SBool.noReservedVars a && SBool.noReservedVars b
+  | .barrRead _ idx => SExpr.noReservedVars idx
+
+/-- Check that no variable in a statement starts with `__`. -/
+def Stmt.noReservedVars : Stmt → Bool
+  | .skip | .label _ | .goto _ => true
+  | .assign x e | .fassign x e => !(startsWithList x "__") && SExpr.noReservedVars e
+  | .bassign x b => !(startsWithList x "__") && SBool.noReservedVars b
+  | .arrWrite _ idx val | .farrWrite _ idx val =>
+      SExpr.noReservedVars idx && SExpr.noReservedVars val
+  | .barrWrite _ idx bval => SExpr.noReservedVars idx && SBool.noReservedVars bval
+  | .seq s1 s2 => Stmt.noReservedVars s1 && Stmt.noReservedVars s2
+  | .ite b s1 s2 =>
+      SBool.noReservedVars b && Stmt.noReservedVars s1 && Stmt.noReservedVars s2
+  | .loop b body => SBool.noReservedVars b && Stmt.noReservedVars body
+  | .ifgoto b _ => SBool.noReservedVars b
+  | .print _ args => args.all SExpr.noReservedVars
+
+/-- Strict type check: typeCheck + no goto/ifgoto + no reserved names (in decls and body).
     Used by compiler correctness proofs which require structured control flow
     and guarantee that `__ir`/`__br`/`__fr` register names are compiler-generated. -/
 def typeCheckStrict (prog : Program) : Bool :=
-  prog.typeCheck && prog.body.checkNoGoto && prog.checkNoReservedNames
+  prog.typeCheck && prog.body.checkNoGoto && prog.checkNoReservedNames &&
+  Stmt.noReservedVars prog.body
 
 -- ============================================================
 -- § 5b. Compilation
@@ -1000,7 +1033,7 @@ theorem initStore_typedStore (prog : Program)
 /-- typeCheckStrict implies typeCheck. -/
 theorem typeCheckStrict_typeCheck (prog : Program) (h : prog.typeCheckStrict = true) :
     prog.typeCheck = true := by
-  unfold typeCheckStrict at h; simp only [Bool.and_eq_true] at h; exact h.1.1
+  unfold typeCheckStrict at h; simp only [Bool.and_eq_true] at h; exact h.1.1.1
 
 /-- Extract noDups from typeCheck (public, so other files can use it). -/
 theorem typeCheck_noDups (prog : Program) (h : prog.typeCheck = true) :
