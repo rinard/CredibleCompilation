@@ -2202,10 +2202,72 @@ private theorem buildVarLayout_injective (p : Prog)
 /-- If the program is well-typed under `tyCtx` and variables follow the naming convention,
     then `checkWellTypedLayout` returns `none` (success). -/
 private theorem checkWellTypedLayout_succeeds (tyCtx : TyCtx) (p : Prog)
-    (hWT : checkWellTypedProg tyCtx p = true) :
+    (hWT : checkWellTypedProg tyCtx p = true)
+    (hIRegTy : ∀ v r, varToArmReg v = some r → tyCtx v ≠ .float)
+    (hFRegTy : ∀ v r, varToArmFReg v = some r → tyCtx v = .float) :
     checkWellTypedLayout tyCtx
       (buildVarLayout (collectVars p) (buildVarMap (collectVars p))) p.code = none := by
-  sorry
+  unfold checkWellTypedLayout
+  -- Step 1: show typeErr = none (no type mismatches in layout entries)
+  have hTypeOk : (buildVarLayout (collectVars p) (buildVarMap (collectVars p))).entries.find?
+      (fun x => match x with | (v, loc) => match loc with
+        | .freg _ => tyCtx v != .float | .ireg _ => tyCtx v == .float | .stack _ => false) = none := by
+    rw [List.find?_eq_none]
+    intro ⟨v, loc⟩ hmem
+    -- (v, loc) ∈ buildVarLayout entries → came from filterMap
+    unfold buildVarLayout at hmem; simp only at hmem
+    rw [List.mem_filterMap] at hmem
+    obtain ⟨w, _, hwf⟩ := hmem
+    cases h1 : varToArmReg w with
+    | some r =>
+      simp [h1] at hwf; obtain ⟨rfl, rfl⟩ := hwf
+      simp [bne_iff_ne, beq_iff_eq, hIRegTy _ _ h1]
+    | none =>
+      cases h2 : varToArmFReg w with
+      | some r =>
+        simp [h1, h2] at hwf; obtain ⟨rfl, rfl⟩ := hwf
+        simp [bne_iff_ne, hFRegTy _ _ h2]
+      | none =>
+        simp [h1, h2] at hwf
+        cases h3 : lookupVar (buildVarMap (collectVars p)) w with
+        | some off => simp [h3] at hwf; obtain ⟨_, rfl⟩ := hwf; simp
+        | none => simp [h3] at hwf
+  -- Step 2: show completeness — every referenced var has a layout entry
+  -- The goal after simp [hTypeOk] is: match find? ... allVars with | some => ... | none => none = none
+  -- Show the find? returns none, then the match reduces
+  suffices hComplete : List.find?
+      (fun v => (List.lookup v (buildVarLayout (collectVars p)
+        (buildVarMap (collectVars p))).entries).isNone)
+      (Array.foldl (fun acc instr => acc ++ (instr.vars).filter
+        fun v => !decide (v ∈ acc)) ([] : List Var) p.code) = none by
+    simp [hTypeOk, hComplete]
+  rw [List.find?_eq_none]
+  intro v hv
+  -- Goal: ¬(Option.isNone (layout v) = true), i.e., layout v ≠ none
+  simp only [Option.isNone_iff_eq_none, Bool.not_eq_true']
+  -- v ∈ allVars → v ∈ collectVars p → layout v ≠ none
+  -- First, a general foldl containment lemma for the allVars computation
+  have allVars_sub : ∀ (l : List TAC) (acc : List Var) (w : Var),
+      w ∈ l.foldl (fun acc instr => acc ++ (instr.vars).filter fun v => !decide (v ∈ acc)) acc →
+      w ∈ acc ∨ ∃ instr ∈ l, w ∈ instr.vars := by
+    intro l; induction l with
+    | nil => intro acc w hv; exact Or.inl hv
+    | cons hd tl ih =>
+      intro acc w hw; simp only [List.foldl_cons] at hw
+      rcases ih _ _ hw with h | ⟨instr, hmem, hvi⟩
+      · rcases List.mem_append.mp h with h | h
+        · exact Or.inl h
+        · exact Or.inr ⟨hd, List.mem_cons.mpr (Or.inl rfl), (List.mem_filter.mp h).1⟩
+      · exact Or.inr ⟨instr, List.mem_cons.mpr (Or.inr hmem), hvi⟩
+  -- Apply to show v ∈ collectVars p
+  have hcv : v ∈ collectVars p := by
+    rw [← Array.foldl_toList] at hv
+    rcases allVars_sub _ ([] : List Var) _ hv with h | ⟨instr, hmem, hvi⟩
+    · contradiction
+    · obtain ⟨i, hlt, heq⟩ := Array.mem_iff_getElem.mp (Array.mem_toList_iff.mp hmem)
+      rw [← heq] at hvi; exact vars_subset_collectVars hlt hvi
+  -- layout v ≠ none from buildVarLayout_complete
+  exact buildVarLayout_complete hcv
 
 /-- `checkCallerSaveSpec` passes for the constructed layout and varMap. -/
 private theorem checkCallerSaveSpec_succeeds (p : Prog)
