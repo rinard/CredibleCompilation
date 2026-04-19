@@ -1498,6 +1498,47 @@ private theorem mem_foldl_addIfNew_of_mem_list {acc vs : List Var} {w : Var}
     | inl heq => subst heq; exact mem_foldl_addIfNew_of_mem self_mem_addIfNew
     | inr hmem => exact ih hmem
 
+/-- `addIfNew` preserves `Nodup`. -/
+private theorem addIfNew_nodup {acc : List Var} {v : Var} (h : acc.Nodup) :
+    (if acc.contains v then acc else acc ++ [v]).Nodup := by
+  split
+  · exact h
+  · rename_i hne
+    have hv_notin : v ∉ acc := fun hm =>
+      hne (List.contains_iff_mem.mpr hm)
+    rw [List.nodup_append]
+    refine ⟨h, List.Pairwise.cons (fun a hn => by simp at hn) List.Pairwise.nil, ?_⟩
+    intro w hw x hxm hxw
+    rcases List.mem_singleton.mp hxm with rfl
+    exact hv_notin (hxw ▸ hw)
+
+/-- `foldl addIfNew` preserves `Nodup`. -/
+private theorem foldl_addIfNew_nodup (vs : List Var) {acc : List Var} (h : acc.Nodup) :
+    (vs.foldl (fun a v => if a.contains v then a else a ++ [v]) acc).Nodup := by
+  induction vs generalizing acc with
+  | nil => exact h
+  | cons v rest ih =>
+    simp only [List.foldl_cons]
+    exact ih (addIfNew_nodup h)
+
+/-- Inner code-fold in `collectVars` preserves Nodup starting from any Nodup acc. -/
+private theorem list_foldl_collect_code_nodup (l : List TAC) {acc : List Var}
+    (h : acc.Nodup) :
+    (l.foldl (fun acc instr =>
+      (TAC.vars instr).foldl (fun a v => if a.contains v then a else a ++ [v]) acc) acc).Nodup := by
+  induction l generalizing acc with
+  | nil => exact h
+  | cons hd tl ih =>
+    simp only [List.foldl_cons]
+    exact ih (foldl_addIfNew_nodup _ h)
+
+/-- `collectVars p` has no duplicates. -/
+private theorem collectVars_nodup (p : Prog) : (collectVars p).Nodup := by
+  unfold collectVars
+  apply foldl_addIfNew_nodup
+  rw [← Array.foldl_toList]
+  exact list_foldl_collect_code_nodup _ List.nodup_nil
+
 -- ──────────────────────────────────────────────────────────────
 -- § 5b. Totality: verifiedGenerateAsm succeeds for pipeline output
 -- ──────────────────────────────────────────────────────────────
