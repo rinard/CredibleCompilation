@@ -448,7 +448,7 @@ private def isBoundsSafe (arrayDecls : List (ArrayName × Nat × VarTy))
 
 /-- Check that all branch targets are in bounds.
     Corresponds to the `hPC_bound` hypothesis on successor PCs. -/
-private def checkBranchTargets (code : Array TAC) : Option String :=
+def checkBranchTargets (code : Array TAC) : Option String :=
   let n := code.size
   match (List.range n).find? fun pc =>
     match code.getD pc .halt with
@@ -1863,7 +1863,7 @@ private theorem checkCallerSaveSpec_succeeds (tyCtx : TyCtx) (p : Prog)
   exact hPrereqs.1.2
 
 /-- Successor bounds check on a program (mirrors checkSuccessorsInBounds for trans). -/
-private def checkSuccessorsInBounds_prog (p : Prog) : Bool :=
+def checkSuccessorsInBounds_prog (p : Prog) : Bool :=
   p.size > 0 &&
   (List.range p.size).all fun pc =>
     match p[pc]? with
@@ -1871,7 +1871,7 @@ private def checkSuccessorsInBounds_prog (p : Prog) : Bool :=
     | _ => true
 
 /-- `checkBranchTargets` passes if all successors are in bounds. -/
-private theorem checkBranchTargets_of_successorsInBounds (p : Prog)
+theorem checkBranchTargets_of_successorsInBounds (p : Prog)
     (hSIB : checkSuccessorsInBounds_prog p = true) :
     checkBranchTargets p.code = none := by
   -- Both functions check the same property; bridge via contradiction
@@ -2954,125 +2954,125 @@ private theorem buildVarLayout_entries_stack_of_noRegVar
     simp at hfeq
     exact ⟨off, by rw [hfeq.2]⟩
 
-/-- End-to-end totality: `generateAsm` succeeds for any well-typed program
-    (no-optimization path, directly from `compileToTAC`). -/
-theorem generateAsm_total (prog : Program) (htcs : prog.typeCheckStrict = true) :
-    ∃ asm, verifiedGenerateAsm prog.tyCtx prog.compileToTAC = .ok asm := by
-  have htc := prog.typeCheckStrict_typeCheck htcs
-  -- Item 1: checkWellTypedProg
-  have hWT : checkWellTypedProg prog.tyCtx prog.compileToTAC = true :=
-    checkWellTypedProg_complete (prog.compileToTAC_wellTyped htc)
-  -- Item 4: hBranch (proved)
-  have hBranch := compileToTAC_checkBranchTargets prog
-  -- Item 5: hSimpleOps (proved)
-  have hSimpleOps := compileToTAC_checkBoolExprSimpleOps prog
-  -- Item 2+3: codegenPrereqs (includes regConventionSafe, isInjective, callerSaveSpec, wellTypedLayout)
-  have hPrereqs : checkCodegenPrereqs prog.tyCtx prog.compileToTAC = true := by
-    have hNoRegVar : ∀ v ∈ collectVars prog.compileToTAC, noRegVar v :=
-      collectVars_compileToTAC_noRegVar prog htcs
-    have hAllStack : ∀ v loc,
-        (v, loc) ∈ (buildVarLayout (collectVars prog.compileToTAC)
-          (buildVarMap (collectVars prog.compileToTAC))).entries →
-        ∃ off, loc = .stack off :=
-      fun v loc hmem => buildVarLayout_entries_stack_of_noRegVar hNoRegVar hmem
-    unfold checkCodegenPrereqs
-    simp only [Bool.and_eq_true, beq_iff_eq]
-    refine ⟨⟨⟨?_, ?_⟩, ?_⟩, ?_⟩
-    · -- regConventionSafe: all entries are .stack, so none are restricted .ireg / .freg
-      unfold VarLayout.regConventionSafe
-      rw [List.all_eq_true]
+/-- `compileToTAC` output satisfies `checkCodegenPrereqs`: its variable layout
+    is regConventionSafe, injective, has empty caller-save spec, and is well-typed.
+    Follows from the all-stack layout produced by `compileToTAC`'s output. -/
+theorem compileToTAC_codegenPrereqs (prog : Program) (htcs : prog.typeCheckStrict = true) :
+    checkCodegenPrereqs prog.tyCtx prog.compileToTAC = true := by
+  have hNoRegVar : ∀ v ∈ collectVars prog.compileToTAC, noRegVar v :=
+    collectVars_compileToTAC_noRegVar prog htcs
+  have hAllStack : ∀ v loc,
+      (v, loc) ∈ (buildVarLayout (collectVars prog.compileToTAC)
+        (buildVarMap (collectVars prog.compileToTAC))).entries →
+      ∃ off, loc = .stack off :=
+    fun v loc hmem => buildVarLayout_entries_stack_of_noRegVar hNoRegVar hmem
+  unfold checkCodegenPrereqs
+  simp only [Bool.and_eq_true, beq_iff_eq]
+  refine ⟨⟨⟨?_, ?_⟩, ?_⟩, ?_⟩
+  · -- regConventionSafe: all entries are .stack, so none are restricted .ireg / .freg
+    unfold VarLayout.regConventionSafe
+    rw [List.all_eq_true]
+    intro ⟨v, loc⟩ hmem
+    obtain ⟨off, rfl⟩ := hAllStack v loc hmem
+    simp
+  · -- isInjective: offsets from buildVarMap are Nodup; .stack is injective.
+    show VarLayout.isInjective _ = true
+    unfold VarLayout.isInjective
+    apply isInjective_go_of_nodup_snd
+    have hNodupVars : (collectVars prog.compileToTAC).Nodup := collectVars_nodup _
+    have hEntriesEq :
+        (buildVarLayout (collectVars prog.compileToTAC)
+            (buildVarMap (collectVars prog.compileToTAC))).entries =
+        (collectVars prog.compileToTAC).map (fun v =>
+          (v, VarLoc.stack
+            ((lookupVar (buildVarMap (collectVars prog.compileToTAC)) v).getD 0))) := by
+      show (collectVars prog.compileToTAC).filterMap _ = _
+      apply filterMap_eq_map_of_all_some
+      intro v hv
+      have hnr := hNoRegVar v hv
+      rw [hnr.1, hnr.2.1]
+      simp only
+      obtain ⟨off, hoff⟩ := lookupVar_of_mem hv
+      rw [hoff]
+      simp
+    rw [hEntriesEq, List.map_map]
+    apply List.Nodup.map_on _ hNodupVars
+    intro v₁ hv₁ v₂ hv₂ heq
+    simp only [Function.comp_apply] at heq
+    obtain ⟨off₁, hoff₁⟩ := lookupVar_of_mem hv₁
+    obtain ⟨off₂, hoff₂⟩ := lookupVar_of_mem hv₂
+    rw [hoff₁, hoff₂] at heq
+    simp only [Option.getD_some] at heq
+    have hOff : off₁ = off₂ := by cases heq; rfl
+    exact lookupVar_buildVarMap_injOn hNodupVars hv₁ hv₂
+      (by rw [hoff₁, hoff₂, hOff])
+  · -- checkCallerSaveSpec: with all-stack layout, genCallerSaveAll produces []
+    -- so all six conjuncts are vacuous or trivial.
+    have hEmpty : genCallerSaveAll
+        (buildVarLayout (collectVars prog.compileToTAC)
+          (buildVarMap (collectVars prog.compileToTAC)))
+        (buildVarMap (collectVars prog.compileToTAC)) = [] := by
+      unfold genCallerSaveAll
+      apply filterMap_eq_nil_of_forall_none
+      intro ⟨v, loc⟩ hmem
+      obtain ⟨off, rfl⟩ := hAllStack v loc hmem
+      rfl
+    unfold checkCallerSaveSpec
+    rw [hEmpty]
+    simp [listNodupBool]
+    -- Remaining: hCoversIreg and hCoversFreg over layout.entries
+    refine ⟨?_, ?_⟩ <;>
+      (intro v loc hmem;
+       obtain ⟨off, rfl⟩ := hAllStack v loc hmem; rfl)
+  · -- checkWellTypedLayout = none
+    -- Prove typeErr = none and allVars.find? = none, then the nested match is none.
+    have htypeErr :
+        (buildVarLayout (collectVars prog.compileToTAC)
+            (buildVarMap (collectVars prog.compileToTAC))).entries.find?
+          (fun x => match x.snd with
+            | .freg _ => prog.tyCtx x.fst != .float
+            | .ireg _ => prog.tyCtx x.fst == .float
+            | .stack _ => false) = none := by
+      rw [List.find?_eq_none]
       intro ⟨v, loc⟩ hmem
       obtain ⟨off, rfl⟩ := hAllStack v loc hmem
       simp
-    · -- isInjective: offsets from buildVarMap are Nodup; .stack is injective.
-      show VarLayout.isInjective _ = true
-      unfold VarLayout.isInjective
-      apply isInjective_go_of_nodup_snd
-      have hNodupVars : (collectVars prog.compileToTAC).Nodup := collectVars_nodup _
-      have hEntriesEq :
-          (buildVarLayout (collectVars prog.compileToTAC)
-              (buildVarMap (collectVars prog.compileToTAC))).entries =
-          (collectVars prog.compileToTAC).map (fun v =>
-            (v, VarLoc.stack
-              ((lookupVar (buildVarMap (collectVars prog.compileToTAC)) v).getD 0))) := by
-        show (collectVars prog.compileToTAC).filterMap _ = _
-        apply filterMap_eq_map_of_all_some
-        intro v hv
-        have hnr := hNoRegVar v hv
-        rw [hnr.1, hnr.2.1]
-        simp only
-        obtain ⟨off, hoff⟩ := lookupVar_of_mem hv
-        rw [hoff]
-        simp
-      rw [hEntriesEq, List.map_map]
-      apply List.Nodup.map_on _ hNodupVars
-      intro v₁ hv₁ v₂ hv₂ heq
-      simp only [Function.comp_apply] at heq
-      obtain ⟨off₁, hoff₁⟩ := lookupVar_of_mem hv₁
-      obtain ⟨off₂, hoff₂⟩ := lookupVar_of_mem hv₂
-      rw [hoff₁, hoff₂] at heq
-      simp only [Option.getD_some] at heq
-      have hOff : off₁ = off₂ := by cases heq; rfl
-      exact lookupVar_buildVarMap_injOn hNodupVars hv₁ hv₂
-        (by rw [hoff₁, hoff₂, hOff])
-    · -- checkCallerSaveSpec: with all-stack layout, genCallerSaveAll produces []
-      -- so all six conjuncts are vacuous or trivial.
-      have hEmpty : genCallerSaveAll
-          (buildVarLayout (collectVars prog.compileToTAC)
-            (buildVarMap (collectVars prog.compileToTAC)))
-          (buildVarMap (collectVars prog.compileToTAC)) = [] := by
-        unfold genCallerSaveAll
-        apply filterMap_eq_nil_of_forall_none
-        intro ⟨v, loc⟩ hmem
-        obtain ⟨off, rfl⟩ := hAllStack v loc hmem
-        rfl
-      unfold checkCallerSaveSpec
-      rw [hEmpty]
-      simp [listNodupBool]
-      -- Remaining: hCoversIreg and hCoversFreg over layout.entries
-      refine ⟨?_, ?_⟩ <;>
-        (intro v loc hmem;
-         obtain ⟨off, rfl⟩ := hAllStack v loc hmem; rfl)
-    · -- checkWellTypedLayout = none
-      -- Prove typeErr = none and allVars.find? = none, then the nested match is none.
-      have htypeErr :
-          (buildVarLayout (collectVars prog.compileToTAC)
-              (buildVarMap (collectVars prog.compileToTAC))).entries.find?
-            (fun x => match x.snd with
-              | .freg _ => prog.tyCtx x.fst != .float
-              | .ireg _ => prog.tyCtx x.fst == .float
-              | .stack _ => false) = none := by
-        rw [List.find?_eq_none]
-        intro ⟨v, loc⟩ hmem
-        obtain ⟨off, rfl⟩ := hAllStack v loc hmem
-        simp
-      have hAllMapped :
-          (prog.compileToTAC.code.foldl (init := ([] : List Var)) fun acc instr =>
-            acc ++ (TAC.vars instr).filter fun w => !acc.contains w).find?
-            (fun v => ((buildVarLayout (collectVars prog.compileToTAC)
-                (buildVarMap (collectVars prog.compileToTAC))) v).isNone) = none := by
-        rw [List.find?_eq_none]
-        intro v hv
-        rw [← Array.foldl_toList] at hv
-        rcases list_foldl_allVars_mem_imp _ _ _ hv with hinit | ⟨instr, hmem, hvars⟩
-        · simp at hinit
-        · have ⟨pc, hpc, heq⟩ := Array.mem_iff_getElem.mp (Array.mem_toList_iff.mp hmem)
-          rw [← heq] at hvars
-          have hvc : v ∈ collectVars prog.compileToTAC := vars_subset_collectVars hpc hvars
-          have hne := buildVarLayout_complete hvc
-          dsimp only at hne ⊢
-          simp [Option.isNone_iff_eq_none, hne]
-      -- Close by showing both find?s are none via the stored hypotheses.
-      unfold checkWellTypedLayout
-      simp only []
-      split
-      · rename_i _ _ _ heq
-        exact absurd (heq.symm.trans htypeErr) (by simp)
-      · split
-        · rename_i _ _ heq
-          exact absurd (heq.symm.trans hAllMapped) (by simp)
-        · rfl
-  exact verifiedGenerateAsm_total prog.tyCtx prog.compileToTAC hWT hPrereqs hBranch hSimpleOps
+    have hAllMapped :
+        (prog.compileToTAC.code.foldl (init := ([] : List Var)) fun acc instr =>
+          acc ++ (TAC.vars instr).filter fun w => !acc.contains w).find?
+          (fun v => ((buildVarLayout (collectVars prog.compileToTAC)
+              (buildVarMap (collectVars prog.compileToTAC))) v).isNone) = none := by
+      rw [List.find?_eq_none]
+      intro v hv
+      rw [← Array.foldl_toList] at hv
+      rcases list_foldl_allVars_mem_imp _ _ _ hv with hinit | ⟨instr, hmem, hvars⟩
+      · simp at hinit
+      · have ⟨pc, hpc, heq⟩ := Array.mem_iff_getElem.mp (Array.mem_toList_iff.mp hmem)
+        rw [← heq] at hvars
+        have hvc : v ∈ collectVars prog.compileToTAC := vars_subset_collectVars hpc hvars
+        have hne := buildVarLayout_complete hvc
+        dsimp only at hne ⊢
+        simp [Option.isNone_iff_eq_none, hne]
+    -- Close by showing both find?s are none via the stored hypotheses.
+    unfold checkWellTypedLayout
+    simp only []
+    split
+    · rename_i _ _ _ heq
+      exact absurd (heq.symm.trans htypeErr) (by simp)
+    · split
+      · rename_i _ _ heq
+        exact absurd (heq.symm.trans hAllMapped) (by simp)
+      · rfl
+
+/-- End-to-end totality: `generateAsm` succeeds for any well-typed program
+    (no-optimization path, directly from `compileToTAC`). -/
+theorem generateAsm_total (prog : Program) (htcs : prog.typeCheckStrict = true) :
+    ∃ asm, verifiedGenerateAsm prog.tyCtx prog.compileToTAC = .ok asm :=
+  verifiedGenerateAsm_total prog.tyCtx prog.compileToTAC
+    (checkWellTypedProg_complete (prog.compileToTAC_wellTyped (prog.typeCheckStrict_typeCheck htcs)))
+    (compileToTAC_codegenPrereqs prog htcs)
+    (compileToTAC_checkBranchTargets prog)
+    (compileToTAC_checkBoolExprSimpleOps prog)
 
 -- ──────────────────────────────────────────────────────────────
 -- buildPcMap prefix-sum lemmas

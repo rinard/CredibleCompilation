@@ -430,3 +430,141 @@ theorem while_to_arm_divergence_preservation
   have hdiv_init : program_behavior_init prog.compileToTAC prog.initStore .diverges :=
     ⟨g, hg, hInitEq ▸ hg0⟩
   exact whileToTAC_refinement prog htcs .diverges hdiv_init
+
+-- ============================================================
+-- § 7. Totality of generateAsm on the optimized pipeline
+-- ============================================================
+
+/-- Bridge: the exec-side `checkSuccessorsInBounds` (which checks every successor
+    of every instruction) is strictly stronger than the codegen-facing
+    `checkSuccessorsInBounds_prog` (which only looks at goto/ifgoto targets). -/
+theorem checkSuccessorsInBounds_prog_of_exec {cert : ECertificate}
+    (h : checkSuccessorsInBounds cert = true) :
+    checkSuccessorsInBounds_prog cert.trans = true := by
+  unfold checkSuccessorsInBounds at h
+  unfold checkSuccessorsInBounds_prog
+  simp only [Bool.and_eq_true, decide_eq_true_eq, List.all_eq_true] at h ⊢
+  obtain ⟨hpos, hAll⟩ := h
+  refine ⟨hpos, ?_⟩
+  intro pc hpc
+  have hext := hAll pc hpc
+  cases hp : cert.trans[pc]? with
+  | none => simp
+  | some instr =>
+    rw [hp] at hext
+    simp only at hext
+    cases instr with
+    | goto l => simp [successors, decide_eq_true_eq] at hext ⊢; exact hext
+    | ifgoto _ l =>
+      simp [successors, decide_eq_true_eq] at hext ⊢
+      exact hext.1
+    | _ => simp
+
+/-- Helper: decompose `(a && b) = true` into the two conjuncts. -/
+private theorem and_true_split {a b : Bool} (h : (a && b) = true) :
+    a = true ∧ b = true := by simp [Bool.and_eq_true] at h; exact h
+
+/-- Extract the four codegen prerequisites from `checkCertificateExec`: well-typed,
+    codegen prereqs, branch targets, and simple bool ops — all on `cert.trans`.
+    `checkCertificateExec` is a left-associative conjunction of 30 checks; we peel
+    from the right, naming only the conjuncts we need. -/
+private theorem invariants_of_checkCertificateExec {cert : ECertificate}
+    (h : checkCertificateExec cert = true) :
+    checkWellTypedProg cert.tyCtx cert.trans = true ∧
+    checkCodegenPrereqs cert.tyCtx cert.trans = true ∧
+    checkBranchTargets cert.trans.code = none ∧
+    checkBoolExprSimpleOps cert.trans = true := by
+  unfold checkCertificateExec at h
+  have ⟨h29, hPrereqs_t⟩  := and_true_split h
+  have ⟨h28, _⟩           := and_true_split h29
+  have ⟨h27, _⟩           := and_true_split h28
+  have ⟨h26, _⟩           := and_true_split h27
+  have ⟨h25, _⟩           := and_true_split h26
+  have ⟨h24, _⟩           := and_true_split h25
+  have ⟨h23, _⟩           := and_true_split h24
+  have ⟨h22, hSimple_t⟩   := and_true_split h23
+  have ⟨h21, _⟩           := and_true_split h22
+  have ⟨h20, _⟩           := and_true_split h21
+  have ⟨h19, _⟩           := and_true_split h20
+  have ⟨h18, hSIB⟩        := and_true_split h19
+  have ⟨h17, _⟩           := and_true_split h18
+  have ⟨h16, _⟩           := and_true_split h17
+  have ⟨h15, _⟩           := and_true_split h16
+  have ⟨h14, _⟩           := and_true_split h15
+  have ⟨h13, _⟩           := and_true_split h14
+  have ⟨h12, _⟩           := and_true_split h13
+  have ⟨h11, _⟩           := and_true_split h12
+  have ⟨h10, _⟩           := and_true_split h11
+  have ⟨h9,  _⟩           := and_true_split h10
+  have ⟨h8,  _⟩           := and_true_split h9
+  have ⟨h7,  _⟩           := and_true_split h8
+  have ⟨h6,  _⟩           := and_true_split h7
+  have ⟨h5,  _⟩           := and_true_split h6
+  have ⟨h4,  _⟩           := and_true_split h5
+  have ⟨h3,  _⟩           := and_true_split h4
+  have ⟨h2,  _⟩           := and_true_split h3
+  have ⟨_,   hWT_t⟩       := and_true_split h2
+  exact ⟨hWT_t, hPrereqs_t,
+    checkBranchTargets_of_successorsInBounds _ (checkSuccessorsInBounds_prog_of_exec hSIB),
+    hSimple_t⟩
+
+/-- A single pass preserves the four codegen invariants: if the invariants hold
+    at the input `p` and `applyPass` succeeds, they hold at the output `p'`. -/
+theorem applyPass_preserves_invariants {name : String} {tyCtx : TyCtx}
+    {pass : Prog → ECertificate} {p p' : Prog}
+    (h : applyPass name tyCtx pass p = .ok p') :
+    checkWellTypedProg tyCtx p' = true ∧
+    checkCodegenPrereqs tyCtx p' = true ∧
+    checkBranchTargets p'.code = none ∧
+    checkBoolExprSimpleOps p' = true := by
+  obtain ⟨hcheck, hTrans, _, _, _⟩ := applyPass_sound h
+  have ⟨hWT, hPrereqs, hBranch, hSimple⟩ :=
+    invariants_of_checkCertificateExec (cert := { pass p with tyCtx := tyCtx }) hcheck
+  -- Record field projections reduce definitionally; rewrite .trans to p' via hTrans
+  simp only [hTrans] at hWT hPrereqs hBranch hSimple
+  exact ⟨hWT, hPrereqs, hBranch, hSimple⟩
+
+/-- `applyPassesPure` preserves the four codegen invariants. Either a pass
+    succeeds (and `applyPass_preserves_invariants` transfers them to the new
+    program) or fails (and the program is unchanged). -/
+theorem applyPassesPure_preserves_invariants (tyCtx : TyCtx)
+    (passes : List (String × (Prog → ECertificate)))
+    (p : Prog)
+    (hWT : checkWellTypedProg tyCtx p = true)
+    (hPrereqs : checkCodegenPrereqs tyCtx p = true)
+    (hBranch : checkBranchTargets p.code = none)
+    (hSimple : checkBoolExprSimpleOps p = true) :
+    checkWellTypedProg tyCtx (applyPassesPure tyCtx passes p) = true ∧
+    checkCodegenPrereqs tyCtx (applyPassesPure tyCtx passes p) = true ∧
+    checkBranchTargets (applyPassesPure tyCtx passes p).code = none ∧
+    checkBoolExprSimpleOps (applyPassesPure tyCtx passes p) = true := by
+  induction passes generalizing p with
+  | nil => simp [applyPassesPure]; exact ⟨hWT, hPrereqs, hBranch, hSimple⟩
+  | cons np rest ih =>
+    simp only [applyPassesPure]
+    obtain ⟨name, pass⟩ := np
+    split
+    · rename_i p' hap
+      obtain ⟨hWT', hPrereqs', hBranch', hSimple'⟩ :=
+        applyPass_preserves_invariants hap
+      exact ih p' hWT' hPrereqs' hBranch' hSimple'
+    · exact ih p hWT hPrereqs hBranch hSimple
+
+/-- End-to-end totality on the optimized pipeline: `verifiedGenerateAsm` succeeds
+    for any well-typed source program after an arbitrary list of certificate-checked
+    optimization passes. Each pass either validates (refining the program) or is
+    skipped; the codegen invariants are preserved either way. -/
+theorem generateAsm_total_with_passes (prog : Program) (htcs : prog.typeCheckStrict = true)
+    (passes : List (String × (Prog → ECertificate))) :
+    ∃ asm, verifiedGenerateAsm prog.tyCtx
+      (applyPassesPure prog.tyCtx passes prog.compileToTAC) = .ok asm := by
+  have htc := prog.typeCheckStrict_typeCheck htcs
+  have hWT0 : checkWellTypedProg prog.tyCtx prog.compileToTAC = true :=
+    checkWellTypedProg_complete (prog.compileToTAC_wellTyped htc)
+  have hPrereqs0 := compileToTAC_codegenPrereqs prog htcs
+  have hBranch0 := compileToTAC_checkBranchTargets prog
+  have hSimple0 := compileToTAC_checkBoolExprSimpleOps prog
+  obtain ⟨hWT, hPrereqs, hBranch, hSimple⟩ :=
+    applyPassesPure_preserves_invariants prog.tyCtx passes prog.compileToTAC
+      hWT0 hPrereqs0 hBranch0 hSimple0
+  exact verifiedGenerateAsm_total prog.tyCtx _ hWT hPrereqs hBranch hSimple

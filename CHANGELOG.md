@@ -4,6 +4,25 @@ Chronological record of what was built and why, to reconstruct the sequence of d
 
 ---
 
+## Totality over the optimization pipeline (2026-04-19)
+
+**Goal:** Extend `generateAsm_total` to cover `applyPassesPure`, so we have a logical totality theorem for the full optimized codegen pipeline, not just the direct `compileToTAC` path.
+
+**Key insight:** `checkCertificateExec` already verifies every codegen prerequisite on `cert.trans` — `checkWellTypedProg`, `checkCodegenPrereqs`, `checkSuccessorsInBounds`, `checkBoolExprSimpleOps`. And `applyPass_sound` gives `checkCertificateExec = true` whenever `applyPass` returns `.ok`. So invariants transfer across every successful pass; failed passes fall back to the input program, preserving the previous invariants.
+
+**Changes:**
+- **CodeGen.lean:** Extracted `compileToTAC_codegenPrereqs` as a standalone public theorem (the ~60-line block previously inlined in `generateAsm_total`). Simplified `generateAsm_total` to a one-liner. Removed `private` from `checkBranchTargets`, `checkSuccessorsInBounds_prog`, and `checkBranchTargets_of_successorsInBounds` so the pipeline module can reach them.
+- **PipelineCorrectness.lean § 7:**
+  - `checkSuccessorsInBounds_prog_of_exec`: bridge from the stricter exec-side check (verifies every successor of every instruction) to the codegen-facing prog-side check (goto/ifgoto targets only).
+  - `invariants_of_checkCertificateExec`: right-to-left peel through 30 `Bool.and` conjuncts to extract the four needed invariants on `cert.trans`.
+  - `applyPass_preserves_invariants`: invariants on `p'` after a successful pass, via `applyPass_sound`.
+  - `applyPassesPure_preserves_invariants`: list induction; `.error` branch is identity.
+  - `generateAsm_total_with_passes`: main theorem, reuses `compileToTAC_*` lemmas as the induction base, then invokes `verifiedGenerateAsm_total`.
+
+**Result:** Logical totality over the full pipeline. 0 sorrys. ~110 lines in PipelineCorrectness, ~8-line refactor in CodeGen. Operational termination (partial defs in pass internals → fuel-bounded versions) remains a separate task.
+
+---
+
 ## Type-based register naming convention (2026-04-18)
 
 **Goal:** Prepare for removing `tyCtx` from `Prog` by making the typing context derivable from variable names alone.
