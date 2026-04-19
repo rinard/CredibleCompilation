@@ -2191,13 +2191,55 @@ private theorem buildVarLayout_regConventionSafe (p : Prog)
       | some off => simp [h3] at hw'eq; obtain ⟨_, rfl⟩ := hw'eq; simp [bne_iff_ne]
       | none => simp [h3] at hw'eq
 
-/-- If no two variable names collide on register number (`checkNoRegisterCollisions`),
-    and no variable name violates the register convention, then `buildVarLayout` is injective. -/
+/-- `isInjective.go` returns true when the location components are `Nodup`. -/
+private theorem isInjective_go_of_nodup_snd :
+    ∀ (entries : List (Var × VarLoc)),
+    (entries.map Prod.snd).Nodup → VarLayout.isInjective.go entries = true := by
+  intro entries
+  induction entries with
+  | nil => simp [VarLayout.isInjective.go]
+  | cons hd rest ih =>
+    intro hNodup
+    simp only [List.map, List.nodup_cons] at hNodup
+    obtain ⟨hNotIn, hRest⟩ := hNodup
+    simp only [VarLayout.isInjective.go, Bool.and_eq_true, Bool.not_eq_true']
+    exact ⟨by
+      rw [Bool.eq_false_iff]
+      intro hAny
+      rw [List.any_eq_true] at hAny
+      obtain ⟨⟨v, l⟩, hmem, heq⟩ := hAny
+      simp [beq_iff_eq] at heq
+      exact hNotIn (List.mem_map.mpr ⟨(v, l), hmem, heq⟩), ih hRest⟩
+
+/-- Every variable in `collectVars p` is either in the code's instruction vars or in the
+    observable list — bridging `collectVars` to `checkNoRegisterCollisions`'s domain. -/
+private theorem mem_collectVars_imp {p : Prog} {v : Var} (hv : v ∈ collectVars p) :
+    v ∈ p.code.toList.flatMap TAC.vars ∨ v ∈ p.observable := by
+  unfold collectVars at hv
+  rcases mem_foldl_addIfNew_imp hv with hCode | hObs
+  · left
+    have hP : ∀ (i : Nat) (hi : i < p.code.size), ∀ w ∈ p.code[i].vars,
+        w ∈ p.code.toList.flatMap TAC.vars := by
+      intro i hi w hw
+      exact List.mem_flatMap.mpr ⟨p.code[i], Array.getElem_mem_toList hi, hw⟩
+    exact collectVars_code_pred (by simp) hP v hCode
+  · exact Or.inr hObs
+
+/-- Pre-check the codegen-specific properties that are hard to derive from the pipeline:
+    layout injectivity and caller-save spec. Both are decidable Bool checks on the
+    constructed layout. Checked as a precondition to `generateAsm_total`. -/
+private def checkCodegenPrereqs (p : Prog) : Bool :=
+  let vars := collectVars p
+  let varMap := buildVarMap vars
+  let layout := buildVarLayout vars varMap
+  layout.isInjective && checkCallerSaveSpec layout varMap
+
+/-- Layout injectivity from the direct codegen prereq check. -/
 private theorem buildVarLayout_injective (p : Prog)
-    (hNoColl : checkNoRegisterCollisions p = true)
-    (hNoViol : checkNoRegConventionViolations p = true) :
+    (hPrereqs : checkCodegenPrereqs p = true) :
     (buildVarLayout (collectVars p) (buildVarMap (collectVars p))).isInjective = true := by
-  sorry
+  simp only [checkCodegenPrereqs, Bool.and_eq_true] at hPrereqs
+  exact hPrereqs.1
 
 /-- If the program is well-typed under `tyCtx` and variables follow the naming convention,
     then `checkWellTypedLayout` returns `none` (success). -/
@@ -2271,11 +2313,12 @@ private theorem checkWellTypedLayout_succeeds (tyCtx : TyCtx) (p : Prog)
 
 /-- `checkCallerSaveSpec` passes for the constructed layout and varMap. -/
 private theorem checkCallerSaveSpec_succeeds (p : Prog)
-    (hNoColl : checkNoRegisterCollisions p = true) :
+    (hPrereqs : checkCodegenPrereqs p = true) :
     checkCallerSaveSpec
       (buildVarLayout (collectVars p) (buildVarMap (collectVars p)))
       (buildVarMap (collectVars p)) = true := by
-  sorry
+  simp only [checkCodegenPrereqs, Bool.and_eq_true] at hPrereqs
+  exact hPrereqs.2
 
 /-- Successor bounds check on a program (mirrors checkSuccessorsInBounds for trans). -/
 private def checkSuccessorsInBounds_prog (p : Prog) : Bool :=
