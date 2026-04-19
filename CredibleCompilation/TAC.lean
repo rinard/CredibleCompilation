@@ -65,6 +65,11 @@ def TAC.vars : TAC → List Var
   | .halt               => []
   | .print _ vs         => vs
 
+/-- Whether a TAC instruction's boolean sub-expressions (if any) use only simple ops. -/
+def TAC.hasSimpleOps : TAC → Bool
+  | .boolop _ be | .ifgoto be _ => be.hasSimpleOps
+  | _ => true
+
 /-- A scalar instruction is one that does not touch ArrayMem. -/
 def TAC.isScalar : TAC → Bool
   | .const .. | .copy .. | .binop .. | .boolop .. | .goto .. | .ifgoto .. | .halt => true

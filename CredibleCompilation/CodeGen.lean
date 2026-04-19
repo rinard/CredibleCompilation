@@ -2255,7 +2255,7 @@ private theorem verifiedGenInstr_total
     (hComplete : ∀ v, v ∈ instr.vars → layout v ≠ none)
     (hWTL : WellTypedLayout tyCtx layout)
     (hWT : WellTypedInstr tyCtx arrayDecls instr)
-    (hSimple : match instr with | .boolop _ be | .ifgoto be _ => be.hasSimpleOps = true | _ => True)
+    (hSimple : TAC.hasSimpleOps instr = true)
     (hNotPrint : ∀ fmt vs, instr ≠ .print fmt vs) :
     ∃ instrs, verifiedGenInstr layout pcMap instr haltS divS boundsS arrayDecls safe = some instrs := by
   -- Normalize layout coercion for simp_all compatibility
@@ -2310,7 +2310,7 @@ private theorem verifiedGenInstr_total
     · split <;> exact ⟨_, rfl⟩
   case boolop hx _ =>
     unfold verifiedGenInstr; simp only [hRC, hII, Bool.not_true, Bool.false_or]; dsimp
-    dsimp at hSimple; simp only [hSimple, Bool.not_true, ↓reduceIte]
+    simp only [TAC.hasSimpleOps] at hSimple; simp only [hSimple, Bool.not_true, ↓reduceIte]
     split
     · rename_i h; exact absurd h (by decide) -- false = true
     · -- notFreg guard on dst
@@ -2319,9 +2319,9 @@ private theorem verifiedGenInstr_total
       · exact ⟨_, rfl⟩
   case ifgoto _ =>
     unfold verifiedGenInstr; simp only [hRC, hII, Bool.not_true, Bool.false_or]; dsimp
-    dsimp at hSimple; simp only [hSimple, Bool.not_true, ↓reduceIte]
+    simp only [TAC.hasSimpleOps] at hSimple; simp only [hSimple, Bool.not_true, ↓reduceIte]
     split
-    · rename_i h; exact absurd h (by decide) -- false = true
+    · rename_i h; exact absurd h (by decide)
     · split <;> exact ⟨_, rfl⟩
   case arrLoad => unfold verifiedGenInstr; simp [hRC, hII]; split <;> exact ⟨_, rfl⟩
   case arrStore => unfold verifiedGenInstr; simp [hRC, hII]; split <;> exact ⟨_, rfl⟩
@@ -2366,6 +2366,38 @@ private theorem verifiedGenInstr_total
 -- § 5b-final. Totality of verifiedGenerateAsm
 -- ──────────────────────────────────────────────────────────────
 
+/-- `bodyGenStep` with `some` input returns `some` for any valid pc. -/
+private theorem bodyGenStep_preserves_some
+    {code : Array TAC} {layout : VarLayout} {pcMap : Nat → Nat}
+    {liveOut : Array (List Var)} {varMap : List (Var × Nat)}
+    {intervals : Array (Option BoundsOpt.IMap)}
+    {arrayDecls : List (ArrayName × Nat × VarTy)}
+    {haltS divS boundsS : Nat} {tyCtx : TyCtx}
+    {arr : Array (List ArmInstr)} {pc : Nat}
+    (hpc : pc < code.size)
+    (hRC : layout.regConventionSafe = true)
+    (hII : layout.isInjective = true)
+    (hComplete : ∀ v, v ∈ code[pc].vars → layout v ≠ none)
+    (hWTL : WellTypedLayout tyCtx layout)
+    (hWTI : WellTypedInstr tyCtx arrayDecls code[pc])
+    (hSimple : code[pc].hasSimpleOps = true) :
+    ∃ arr', bodyGenStep code layout pcMap liveOut varMap intervals arrayDecls
+      haltS divS boundsS tyCtx (some arr) pc = some arr' := by
+  unfold bodyGenStep
+  -- Normalize getD to getElem using hpc
+  have hGetD : code.getD pc .halt = code[pc] := by simp [Array.getD, hpc]
+  simp only [hGetD]
+  -- Case split: print vs non-print
+  split
+  · -- print: unconditional some
+    exact ⟨_, rfl⟩
+  · -- non-print: verifiedGenInstr returns some
+    rename_i hNotPrint
+    have hNP : ∀ fmt vs, code[pc] ≠ .print fmt vs := by
+      intro fmt vs h; exact hNotPrint fmt vs h
+    obtain ⟨instrs, hinstrs⟩ := verifiedGenInstr_total hRC hII hComplete hWTL hWTI hSimple hNP
+    rw [hinstrs]; split <;> exact ⟨_, rfl⟩
+
 /-- `verifiedGenerateAsm` succeeds for any well-typed program whose layout
     passes the codegen prerequisite checks. -/
 theorem verifiedGenerateAsm_total (tyCtx : TyCtx) (p : Prog)
@@ -2407,7 +2439,13 @@ theorem verifiedGenerateAsm_total (tyCtx : TyCtx) (p : Prog)
       -- Print path: unconditional some. Non-print: verifiedGenInstr_total gives some.
       -- Mechanically correct but blocked by dependent match / coercion plumbing.
       exact foldl_pres _ _ _ (fun pc hpc arr => by
-        rw [List.mem_range] at hpc; sorry)
+        rw [List.mem_range] at hpc
+        exact bodyGenStep_preserves_some hpc hRC hII
+          (fun v hv => buildVarLayout_complete (vars_subset_collectVars hpc hv))
+          (checkWellTypedLayout_wellTyped hWTL)
+          (checkWellTypedProg_sound hWT _ hpc)
+          (by simp only [checkBoolExprSimpleOps, TAC.hasSimpleOps, Array.all_eq_true] at hSimpleOps
+              exact hSimpleOps pc hpc))
     rw [hbp]; exact ⟨_, rfl⟩
 
 -- ──────────────────────────────────────────────────────────────
