@@ -266,7 +266,8 @@
       "Bash(.lake/build/bin/compiler benchmarks/livermore/k18_hydro_2d.w -O0 -o /tmp/k18_noopt2)",
       "Bash(/tmp/k18_noopt2)",
       "Bash(.lake/build/bin/compiler benchmarks/livermore/k18_hydro_2d.w -O0 -o /tmp/k18_noopt_new)",
-      "Bash(.lake/build/bin/compiler benchmarks/livermore/k18_hydro_2d.w -O0 -o /tmp/k18_check)"
+      "Bash(.lake/build/bin/compiler benchmarks/livermore/k18_hydro_2d.w -O0 -o /tmp/k18_check)",
+      "Bash(grep -v '-- ')"
     ],
     "additionalDirectories": [
       "/Users/mr/CredibleCompilation/tests/programs",

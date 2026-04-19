@@ -14,6 +14,29 @@ Split from `Semantics.lean`.
 abbrev Var   := String
 abbrev Label := Nat        -- program counter / jump target
 
+/-- Proof-friendly `startsWith`: checks whether `pre.toList` is a prefix of `v.toList`.
+    Unlike `String.startsWith` (which uses opaque byte comparison via memcmpSlice),
+    this reduces under `simp [startsWithList, List.isPrefixOf]` for concrete prefixes
+    with symbolic tails — enabling proofs about compiler-generated variable names. -/
+def startsWithList (v : Var) (pre : String) : Bool :=
+  pre.toList.isPrefixOf v.toList
+
+/-- If a prefix of the pattern doesn't match, the full pattern doesn't match either. -/
+theorem List.isPrefixOf_of_isPrefixOf_append [BEq α] [LawfulBEq α]
+    (pre ext l : List α)
+    (h : pre.isPrefixOf l = false) :
+    (pre ++ ext).isPrefixOf l = false := by
+  induction pre generalizing l with
+  | nil => simp at h
+  | cons x xs ih =>
+    cases l with
+    | nil => simp [List.isPrefixOf]
+    | cons y ys =>
+      simp only [List.isPrefixOf, List.cons_append, Bool.and_eq_false_iff] at h ⊢
+      cases h with
+      | inl h => exact Or.inl h
+      | inr h => exact Or.inr (ih ys h)
+
 /-- Runtime values: a 64-bit integer, a boolean, or a 64-bit float.
     Integers and floats both use `BitVec 64` to match ARM64 register semantics.
     Float operations are opaque/uninterpreted in proofs. -/

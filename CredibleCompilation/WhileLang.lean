@@ -851,7 +851,7 @@ def typeCheck (prog : Program) : Bool :=
 
 /-- No variable name starts with `__` (reserved for compiler-generated names). -/
 def checkNoReservedNames (prog : Program) : Bool :=
-  prog.decls.all fun (v, _) => !(v.startsWith "__")
+  prog.decls.all fun (v, _) => !(startsWithList v "__")
 
 /-- Strict type check: typeCheck + no goto/ifgoto + no reserved names.
     Used by compiler correctness proofs which require structured control flow

@@ -1381,6 +1381,25 @@ private theorem ftmpName_not_violates (k : Nat) : violatesRegConvention (ftmpNam
   unfold violatesRegConvention startsWithList ftmpName
   simp [String.toList_append, ts_ft, List.isPrefixOf]
 
+/-- Variables without `__` prefix don't map to integer registers. -/
+private theorem varToArmReg_none_of_not_dunder (v : Var) (h : startsWithList v "__" = false) :
+    varToArmReg v = none := by
+  have hir : startsWithList v "__ir" = false := by
+    unfold startsWithList at *
+    exact List.isPrefixOf_of_isPrefixOf_append "__".toList "ir".toList v.toList h
+  have hbr : startsWithList v "__br" = false := by
+    unfold startsWithList at *
+    exact List.isPrefixOf_of_isPrefixOf_append "__".toList "br".toList v.toList h
+  simp [varToArmReg, hir, hbr]
+
+/-- Variables without `__` prefix don't map to float registers. -/
+private theorem varToArmFReg_none_of_not_dunder (v : Var) (h : startsWithList v "__" = false) :
+    varToArmFReg v = none := by
+  have hfr : startsWithList v "__fr" = false := by
+    unfold startsWithList at *
+    exact List.isPrefixOf_of_isPrefixOf_append "__".toList "fr".toList v.toList h
+  simp [varToArmFReg, hfr]
+
 /-- If `varToArmReg v = some r` and `r` is a restricted register,
     then `violatesRegConvention v = true`. Contrapositive gives:
     pipeline passing → no restricted registers in layout. -/

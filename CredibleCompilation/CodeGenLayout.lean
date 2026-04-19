@@ -60,12 +60,6 @@ def lookupVar (varMap : List (Var × Nat)) (v : Var) : Option Nat :=
 -- § 2. Register mapping
 -- ============================================================
 
-/-- Proof-friendly `startsWith`: checks whether `pre.toList` is a prefix of `v.toList`.
-    Unlike `String.startsWith` (which uses opaque byte comparison), this reduces
-    under `simp [startsWithList, List.isPrefixOf]` for concrete prefixes. -/
-def startsWithList (v : Var) (pre : String) : Bool :=
-  pre.toList.isPrefixOf v.toList
-
 /-- Map a variable name to an ARM integer register.
     `__irN` and `__brN` both map to xN (they share the integer register file). -/
 def varToArmReg (v : Var) : Option ArmReg :=
