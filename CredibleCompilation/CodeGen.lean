@@ -2146,20 +2146,58 @@ private theorem ftmpName_noArmFReg (k : Nat) : varToArmFReg (ftmpName k) = none 
   unfold varToArmFReg startsWithList ftmpName
   simp [String.toList_append, ts_ft, List.isPrefixOf]
 
+/-- Unified predicate: `v` does not correspond to any restricted register name.
+    This combines three facts needed for `checkCodegenPrereqs`:
+    1. `v` is not an integer register (`varToArmReg v = none`),
+    2. `v` is not a float register (`varToArmFReg v = none`),
+    3. `v` does not violate the register convention (`violatesRegConvention v = false`). -/
+private def noRegVar (v : Var) : Prop :=
+  varToArmReg v = none ∧ varToArmFReg v = none ∧ violatesRegConvention v = false
+
+/-- Variables without `__` prefix don't violate the register convention. -/
+private theorem violatesRegConvention_false_of_not_dunder (v : Var)
+    (h : startsWithList v "__" = false) :
+    violatesRegConvention v = false := by
+  have hir : startsWithList v "__ir" = false := by
+    unfold startsWithList at *
+    exact List.isPrefixOf_of_isPrefixOf_append "__".toList "ir".toList v.toList h
+  have hbr : startsWithList v "__br" = false := by
+    unfold startsWithList at *
+    exact List.isPrefixOf_of_isPrefixOf_append "__".toList "br".toList v.toList h
+  have hfr : startsWithList v "__fr" = false := by
+    unfold startsWithList at *
+    exact List.isPrefixOf_of_isPrefixOf_append "__".toList "fr".toList v.toList h
+  simp [violatesRegConvention, hir, hbr, hfr]
+
+/-- Source variables (no `__` prefix) satisfy `noRegVar`. -/
+private theorem noRegVar_of_not_dunder (v : Var) (h : startsWithList v "__" = false) :
+    noRegVar v :=
+  ⟨varToArmReg_none_of_not_dunder v h,
+   varToArmFReg_none_of_not_dunder v h,
+   violatesRegConvention_false_of_not_dunder v h⟩
+
+/-- Integer temporaries `__tK` satisfy `noRegVar`. -/
+private theorem tmpName_noRegVar (k : Nat) : noRegVar (tmpName k) :=
+  ⟨tmpName_noArmReg k, tmpName_noArmFReg k, tmpName_not_violates k⟩
+
+/-- Float temporaries `__ftK` satisfy `noRegVar`. -/
+private theorem ftmpName_noRegVar (k : Nat) : noRegVar (ftmpName k) :=
+  ⟨ftmpName_noArmReg k, ftmpName_noArmFReg k, ftmpName_not_violates k⟩
+
 /-- Every var in compileExpr output has varToArmReg = none, and so does the result var. -/
-private theorem compileExpr_noArmReg (e : SExpr) (offset nextTmp : Nat)
+private theorem compileExpr_noRegVar (e : SExpr) (offset nextTmp : Nat)
     (hSrc : Program.SExpr.noReservedVars e = true) :
-    (∀ instr ∈ (compileExpr e offset nextTmp).1, ∀ v ∈ instr.vars, varToArmReg v = none) ∧
-    varToArmReg (compileExpr e offset nextTmp).2.1 = none := by
+    (∀ instr ∈ (compileExpr e offset nextTmp).1, ∀ v ∈ instr.vars, noRegVar v) ∧
+    noRegVar (compileExpr e offset nextTmp).2.1 := by
   induction e generalizing offset nextTmp with
   | lit n =>
     simp only [compileExpr]
-    exact ⟨fun instr hmem => by simp at hmem; subst hmem; intro v hv; simp [TAC.vars] at hv; subst hv; exact tmpName_noArmReg _,
-           tmpName_noArmReg _⟩
+    exact ⟨fun instr hmem => by simp at hmem; subst hmem; intro v hv; simp [TAC.vars] at hv; subst hv; exact tmpName_noRegVar _,
+           tmpName_noRegVar _⟩
   | var x =>
     simp only [Program.SExpr.noReservedVars, Bool.not_eq_true'] at hSrc
     simp only [compileExpr]
-    exact ⟨fun _ hmem => by simp at hmem, varToArmReg_none_of_not_dunder x hSrc⟩
+    exact ⟨fun _ hmem => by simp at hmem, noRegVar_of_not_dunder x hSrc⟩
   | bin _ a b iha ihb =>
     simp only [Program.SExpr.noReservedVars, Bool.and_eq_true] at hSrc
     simp only [compileExpr]
@@ -2173,10 +2211,10 @@ private theorem compileExpr_noArmReg (e : SExpr) (offset nextTmp : Nat)
       · exact ha_instrs instr h v hv
       · exact hb_instrs instr h v hv
       · simp [TAC.vars] at hv; rcases hv with rfl | rfl | rfl
-        · exact tmpName_noArmReg _
+        · exact tmpName_noRegVar _
         · exact ha_res
         · exact hb_res
-    · exact tmpName_noArmReg _
+    · exact tmpName_noRegVar _
   | arrRead _ idx ih =>
     simp only [Program.SExpr.noReservedVars] at hSrc
     simp only [compileExpr]
@@ -2187,13 +2225,13 @@ private theorem compileExpr_noArmReg (e : SExpr) (offset nextTmp : Nat)
       rcases hmem with h | rfl
       · exact hi_instrs instr h v hv
       · simp [TAC.vars] at hv; rcases hv with rfl | rfl
-        · exact tmpName_noArmReg _
+        · exact tmpName_noRegVar _
         · exact hi_res
-    · exact tmpName_noArmReg _
+    · exact tmpName_noRegVar _
   | flit _ =>
     simp only [compileExpr]
-    exact ⟨fun instr hmem => by simp at hmem; subst hmem; intro v hv; simp [TAC.vars] at hv; subst hv; exact ftmpName_noArmReg _,
-           ftmpName_noArmReg _⟩
+    exact ⟨fun instr hmem => by simp at hmem; subst hmem; intro v hv; simp [TAC.vars] at hv; subst hv; exact ftmpName_noRegVar _,
+           ftmpName_noRegVar _⟩
   | fbin _ a b iha ihb =>
     simp only [Program.SExpr.noReservedVars, Bool.and_eq_true] at hSrc
     simp only [compileExpr]
@@ -2207,10 +2245,10 @@ private theorem compileExpr_noArmReg (e : SExpr) (offset nextTmp : Nat)
       · exact ha_instrs instr h v hv
       · exact hb_instrs instr h v hv
       · simp [TAC.vars] at hv; rcases hv with rfl | rfl | rfl
-        · exact ftmpName_noArmReg _
+        · exact ftmpName_noRegVar _
         · exact ha_res
         · exact hb_res
-    · exact ftmpName_noArmReg _
+    · exact ftmpName_noRegVar _
   | intToFloat e ih =>
     simp only [Program.SExpr.noReservedVars] at hSrc
     simp only [compileExpr]
@@ -2221,9 +2259,9 @@ private theorem compileExpr_noArmReg (e : SExpr) (offset nextTmp : Nat)
       rcases hmem with h | rfl
       · exact hi_instrs instr h v hv
       · simp [TAC.vars] at hv; rcases hv with rfl | rfl
-        · exact ftmpName_noArmReg _
+        · exact ftmpName_noRegVar _
         · exact hi_res
-    · exact ftmpName_noArmReg _
+    · exact ftmpName_noRegVar _
   | floatToInt e ih =>
     simp only [Program.SExpr.noReservedVars] at hSrc
     simp only [compileExpr]
@@ -2234,9 +2272,9 @@ private theorem compileExpr_noArmReg (e : SExpr) (offset nextTmp : Nat)
       rcases hmem with h | rfl
       · exact hi_instrs instr h v hv
       · simp [TAC.vars] at hv; rcases hv with rfl | rfl
-        · exact tmpName_noArmReg _
+        · exact tmpName_noRegVar _
         · exact hi_res
-    · exact tmpName_noArmReg _
+    · exact tmpName_noRegVar _
   | floatUnary _ e ih =>
     simp only [Program.SExpr.noReservedVars] at hSrc
     simp only [compileExpr]
@@ -2247,9 +2285,9 @@ private theorem compileExpr_noArmReg (e : SExpr) (offset nextTmp : Nat)
       rcases hmem with h | rfl
       · exact hi_instrs instr h v hv
       · simp [TAC.vars] at hv; rcases hv with rfl | rfl
-        · exact ftmpName_noArmReg _
+        · exact ftmpName_noRegVar _
         · exact hi_res
-    · exact ftmpName_noArmReg _
+    · exact ftmpName_noRegVar _
   | farrRead _ idx ih =>
     simp only [Program.SExpr.noReservedVars] at hSrc
     simp only [compileExpr]
@@ -2260,15 +2298,15 @@ private theorem compileExpr_noArmReg (e : SExpr) (offset nextTmp : Nat)
       rcases hmem with h | rfl
       · exact hi_instrs instr h v hv
       · simp [TAC.vars] at hv; rcases hv with rfl | rfl
-        · exact ftmpName_noArmReg _
+        · exact ftmpName_noRegVar _
         · exact hi_res
-    · exact ftmpName_noArmReg _
+    · exact ftmpName_noRegVar _
 
 /-- Every var in compileBool output has varToArmReg = none, and so do vars in the result BoolExpr. -/
-private theorem compileBool_noArmReg (b : SBool) (offset nextTmp : Nat)
+private theorem compileBool_noRegVar (b : SBool) (offset nextTmp : Nat)
     (hSrc : Program.SBool.noReservedVars b = true) :
-    (∀ instr ∈ (compileBool b offset nextTmp).1, ∀ v ∈ instr.vars, varToArmReg v = none) ∧
-    (∀ v ∈ (compileBool b offset nextTmp).2.1.vars, varToArmReg v = none) := by
+    (∀ instr ∈ (compileBool b offset nextTmp).1, ∀ v ∈ instr.vars, noRegVar v) ∧
+    (∀ v ∈ (compileBool b offset nextTmp).2.1.vars, noRegVar v) := by
   induction b generalizing offset nextTmp with
   | lit _ => simp [compileBool, BoolExpr.vars]
   | bvar x =>
@@ -2276,12 +2314,12 @@ private theorem compileBool_noArmReg (b : SBool) (offset nextTmp : Nat)
     simp only [compileBool, BoolExpr.vars]
     constructor
     · intro _ h; simp at h
-    · intro v hv; simp at hv; rw [hv]; exact varToArmReg_none_of_not_dunder x hSrc
+    · intro v hv; simp at hv; rw [hv]; exact noRegVar_of_not_dunder x hSrc
   | cmp _ a b =>
     simp only [Program.SBool.noReservedVars, Bool.and_eq_true] at hSrc
     simp only [compileBool]
-    have ⟨ha_i, ha_r⟩ := compileExpr_noArmReg a offset nextTmp hSrc.1
-    have ⟨hb_i, hb_r⟩ := compileExpr_noArmReg b
+    have ⟨ha_i, ha_r⟩ := compileExpr_noRegVar a offset nextTmp hSrc.1
+    have ⟨hb_i, hb_r⟩ := compileExpr_noRegVar b
       (offset + (compileExpr a offset nextTmp).1.length)
       (compileExpr a offset nextTmp).2.2 hSrc.2
     constructor
@@ -2315,13 +2353,13 @@ private theorem compileBool_noArmReg (b : SBool) (offset nextTmp : Nat)
         simp [TAC.vars] at hv; exact ha_be v hv
       · exact hb_i instr hb v hv
       · simp [TAC.vars] at hv; exact hb_be v hv
-      · simp [TAC.vars] at hv; subst hv; exact tmpName_noArmReg _
+      · simp [TAC.vars] at hv; subst hv; exact tmpName_noRegVar _
       · simp [TAC.vars] at hv  -- goto has no vars
-      · simp [TAC.vars] at hv; subst hv; exact tmpName_noArmReg _
+      · simp [TAC.vars] at hv; subst hv; exact tmpName_noRegVar _
     · -- result BoolExpr: .cmp .ne (.var tR) (.lit 0)
       intro v hv
       simp [BoolExpr.vars, Expr.freeVars] at hv; subst hv
-      exact tmpName_noArmReg _
+      exact tmpName_noRegVar _
   | or a b iha ihb =>
     simp only [Program.SBool.noReservedVars, Bool.and_eq_true] at hSrc
     simp only [compileBool]
@@ -2336,32 +2374,32 @@ private theorem compileBool_noArmReg (b : SBool) (offset nextTmp : Nat)
       · simp [TAC.vars] at hv; exact ha_be v hv
       · exact hb_i instr hb v hv
       · simp [TAC.vars] at hv; exact hb_be v hv
-      · simp [TAC.vars] at hv; subst hv; exact tmpName_noArmReg _
+      · simp [TAC.vars] at hv; subst hv; exact tmpName_noRegVar _
       · simp [TAC.vars] at hv
-      · simp [TAC.vars] at hv; subst hv; exact tmpName_noArmReg _
+      · simp [TAC.vars] at hv; subst hv; exact tmpName_noRegVar _
     · intro v hv
       simp [BoolExpr.vars, Expr.freeVars] at hv; subst hv
-      exact tmpName_noArmReg _
+      exact tmpName_noRegVar _
   | barrRead _ idx =>
     simp only [Program.SBool.noReservedVars] at hSrc
     simp only [compileBool]
-    have ⟨hi_i, hi_r⟩ := compileExpr_noArmReg idx offset nextTmp hSrc
+    have ⟨hi_i, hi_r⟩ := compileExpr_noRegVar idx offset nextTmp hSrc
     constructor
     · intro instr hmem v hv
       simp [List.mem_append] at hmem
       rcases hmem with h | rfl
       · exact hi_i instr h v hv
       · simp [TAC.vars] at hv; rcases hv with rfl | rfl
-        · exact tmpName_noArmReg _
+        · exact tmpName_noRegVar _
         · exact hi_r
     · intro v hv
       simp [BoolExpr.vars, Expr.freeVars] at hv; subst hv
-      exact tmpName_noArmReg _
+      exact tmpName_noRegVar _
   | fcmp _ a b =>
     simp only [Program.SBool.noReservedVars, Bool.and_eq_true] at hSrc
     simp only [compileBool]
-    have ⟨ha_i, ha_r⟩ := compileExpr_noArmReg a offset nextTmp hSrc.1
-    have ⟨hb_i, hb_r⟩ := compileExpr_noArmReg b
+    have ⟨ha_i, ha_r⟩ := compileExpr_noRegVar a offset nextTmp hSrc.1
+    have ⟨hb_i, hb_r⟩ := compileExpr_noRegVar b
       (offset + (compileExpr a offset nextTmp).1.length)
       (compileExpr a offset nextTmp).2.2 hSrc.2
     constructor
@@ -2377,9 +2415,9 @@ private theorem compileBool_noArmReg (b : SBool) (offset nextTmp : Nat)
       · exact hb_r
 
 /-- Every var in compileExprs output has varToArmReg = none. -/
-private theorem compileExprs_noArmReg (args : List SExpr) (offset nextTmp : Nat)
+private theorem compileExprs_noRegVar (args : List SExpr) (offset nextTmp : Nat)
     (hSrc : args.all Program.SExpr.noReservedVars = true) :
-    ∀ instr ∈ (compileExprs args offset nextTmp).1, ∀ v ∈ instr.vars, varToArmReg v = none := by
+    ∀ instr ∈ (compileExprs args offset nextTmp).1, ∀ v ∈ instr.vars, noRegVar v := by
   induction args generalizing offset nextTmp with
   | nil => intro _ hmem; simp [compileExprs] at hmem
   | cons e rest ih =>
@@ -2387,13 +2425,13 @@ private theorem compileExprs_noArmReg (args : List SExpr) (offset nextTmp : Nat)
     intro instr hmem v hv
     simp only [compileExprs, List.mem_append] at hmem
     rcases hmem with he | hrest
-    · exact (compileExpr_noArmReg e offset nextTmp hSrc.1).1 instr he v hv
+    · exact (compileExpr_noRegVar e offset nextTmp hSrc.1).1 instr he v hv
     · exact ih _ _ hSrc.2 instr hrest v hv
 
 /-- Every result var produced by compileExprs has varToArmReg = none. -/
-private theorem compileExprs_result_noArmReg (args : List SExpr) (offset nextTmp : Nat)
+private theorem compileExprs_result_noRegVar (args : List SExpr) (offset nextTmp : Nat)
     (hSrc : args.all Program.SExpr.noReservedVars = true) :
-    ∀ v ∈ (compileExprs args offset nextTmp).2.1, varToArmReg v = none := by
+    ∀ v ∈ (compileExprs args offset nextTmp).2.1, noRegVar v := by
   induction args generalizing offset nextTmp with
   | nil => intro _ hmem; simp [compileExprs] at hmem
   | cons e rest ih =>
@@ -2401,16 +2439,16 @@ private theorem compileExprs_result_noArmReg (args : List SExpr) (offset nextTmp
     intro v hv
     simp only [compileExprs, List.mem_cons] at hv
     rcases hv with rfl | hrest
-    · exact (compileExpr_noArmReg e offset nextTmp hSrc.1).2
+    · exact (compileExpr_noRegVar e offset nextTmp hSrc.1).2
     · exact ih _ _ hSrc.2 v hrest
 
 set_option maxHeartbeats 400000 in
 /-- Every var in compileStmt output has varToArmReg = none. -/
-private theorem compileStmt_noArmReg (s : Stmt) (offset nextTmp : Nat)
+private theorem compileStmt_noRegVar (s : Stmt) (offset nextTmp : Nat)
     (labels : List (String × Nat))
     (hSrc : Program.Stmt.noReservedVars s = true) :
     ∀ instr ∈ (compileStmt s offset nextTmp labels).1, ∀ v ∈ instr.vars,
-      varToArmReg v = none := by
+      noRegVar v := by
   induction s generalizing offset nextTmp labels with
   | skip => intro _ hmem; simp [compileStmt] at hmem
   | seq s1 s2 ih1 ih2 =>
@@ -2426,8 +2464,8 @@ private theorem compileStmt_noArmReg (s : Stmt) (offset nextTmp : Nat)
     intro v hv; simp [TAC.vars] at hv
   | arrWrite _ idx val =>
     simp only [Program.Stmt.noReservedVars, Bool.and_eq_true] at hSrc
-    have ⟨hi_i, hi_r⟩ := compileExpr_noArmReg idx offset nextTmp hSrc.1
-    have ⟨hv_i, hv_r⟩ := compileExpr_noArmReg val
+    have ⟨hi_i, hi_r⟩ := compileExpr_noRegVar idx offset nextTmp hSrc.1
+    have ⟨hv_i, hv_r⟩ := compileExpr_noRegVar val
       (offset + (compileExpr idx offset nextTmp).1.length)
       (compileExpr idx offset nextTmp).2.2 hSrc.2
     intro instr hmem v hv; simp [compileStmt, List.mem_append] at hmem
@@ -2437,8 +2475,8 @@ private theorem compileStmt_noArmReg (s : Stmt) (offset nextTmp : Nat)
     · simp [TAC.vars] at hv; rcases hv with rfl | rfl; exact hi_r; exact hv_r
   | farrWrite _ idx val =>
     simp only [Program.Stmt.noReservedVars, Bool.and_eq_true] at hSrc
-    have ⟨hi_i, hi_r⟩ := compileExpr_noArmReg idx offset nextTmp hSrc.1
-    have ⟨hv_i, hv_r⟩ := compileExpr_noArmReg val
+    have ⟨hi_i, hi_r⟩ := compileExpr_noRegVar idx offset nextTmp hSrc.1
+    have ⟨hv_i, hv_r⟩ := compileExpr_noRegVar val
       (offset + (compileExpr idx offset nextTmp).1.length)
       (compileExpr idx offset nextTmp).2.2 hSrc.2
     intro instr hmem v hv; simp [compileStmt, List.mem_append] at hmem
@@ -2448,13 +2486,13 @@ private theorem compileStmt_noArmReg (s : Stmt) (offset nextTmp : Nat)
     · simp [TAC.vars] at hv; rcases hv with rfl | rfl; exact hi_r; exact hv_r
   | bassign x b =>
     simp only [Program.Stmt.noReservedVars, Bool.and_eq_true, Bool.not_eq_true'] at hSrc
-    have ⟨hb_i, hb_be⟩ := compileBool_noArmReg b offset nextTmp hSrc.2
+    have ⟨hb_i, hb_be⟩ := compileBool_noRegVar b offset nextTmp hSrc.2
     intro instr hmem v hv
     simp only [compileStmt, List.mem_append, List.mem_cons, List.mem_nil_iff, or_false] at hmem
     rcases hmem with hcode | rfl
     · exact hb_i instr hcode v hv
     · simp [TAC.vars] at hv; rcases hv with rfl | hbe
-      · exact varToArmReg_none_of_not_dunder _ hSrc.1
+      · exact noRegVar_of_not_dunder _ hSrc.1
       · exact hb_be v hbe
   | ite b s1 s2 ih1 ih2 =>
     simp only [Program.Stmt.noReservedVars, Bool.and_eq_true] at hSrc
@@ -2464,14 +2502,14 @@ private theorem compileStmt_noArmReg (s : Stmt) (offset nextTmp : Nat)
     | (codeElse, tmpE) =>
     match hs1 : compileStmt s1 (offset + codeB.length + 1 + codeElse.length + 1) tmpE labels with
     | (codeThen, _) =>
-    have ⟨hb_i, hb_be⟩ := compileBool_noArmReg b offset nextTmp hSrc.1.1
+    have ⟨hb_i, hb_be⟩ := compileBool_noRegVar b offset nextTmp hSrc.1.1
     simp only [compileStmt, hcb, hs2, hs1]
     intro instr hmem v hv
     simp only [List.mem_append, List.mem_cons, List.mem_nil_iff, or_false] at hmem
     rcases hmem with (((h | rfl) | h) | rfl) | h
-    · have := compileBool_noArmReg b offset nextTmp hSrc.1.1
+    · have := compileBool_noRegVar b offset nextTmp hSrc.1.1
       simp [hcb] at this; exact this.1 instr h v hv
-    · have := compileBool_noArmReg b offset nextTmp hSrc.1.1
+    · have := compileBool_noRegVar b offset nextTmp hSrc.1.1
       simp [hcb] at this; simp [TAC.vars] at hv; exact this.2 v hv
     · have h2 := ih2 (offset + codeB.length + 1) tmpB labels hSrc.2 instr
       simp only [hs2] at h2; exact h2 h v hv
@@ -2484,14 +2522,14 @@ private theorem compileStmt_noArmReg (s : Stmt) (offset nextTmp : Nat)
     | (codeB, be, tmpB) =>
     match hsbody : compileStmt body (offset + codeB.length + 1) tmpB labels with
     | (codeBody, _) =>
-    have ⟨hb_i, hb_be⟩ := compileBool_noArmReg b offset nextTmp hSrc.1
+    have ⟨hb_i, hb_be⟩ := compileBool_noRegVar b offset nextTmp hSrc.1
     simp only [compileStmt, hcb, hsbody]
     intro instr hmem v hv
     simp only [List.mem_append, List.mem_cons, List.mem_nil_iff, or_false] at hmem
     rcases hmem with ((h | rfl) | h) | rfl
-    · have := compileBool_noArmReg b offset nextTmp hSrc.1
+    · have := compileBool_noRegVar b offset nextTmp hSrc.1
       simp [hcb] at this; exact this.1 instr h v hv
-    · have := compileBool_noArmReg b offset nextTmp hSrc.1
+    · have := compileBool_noRegVar b offset nextTmp hSrc.1
       simp [hcb] at this; simp [TAC.vars] at hv; exact this.2 v hv
     · have hih := ih (offset + codeB.length + 1) tmpB labels hSrc.2 instr
       simp only [hsbody] at hih; exact hih h v hv
@@ -2504,34 +2542,34 @@ private theorem compileStmt_noArmReg (s : Stmt) (offset nextTmp : Nat)
     intro instr hmem v hv
     simp only [List.mem_append, List.mem_cons, List.mem_nil_iff, or_false] at hmem
     rcases hmem with h | rfl
-    · have := compileBool_noArmReg b offset nextTmp hSrc
+    · have := compileBool_noRegVar b offset nextTmp hSrc
       simp [hcb] at this; exact this.1 instr h v hv
-    · have := compileBool_noArmReg b offset nextTmp hSrc
+    · have := compileBool_noRegVar b offset nextTmp hSrc
       simp [hcb] at this; simp [TAC.vars] at hv; exact this.2 v hv
   | print _ args =>
     simp only [Program.Stmt.noReservedVars] at hSrc
     intro instr hmem v hv; simp [compileStmt, List.mem_append] at hmem
     rcases hmem with h | rfl
-    · exact compileExprs_noArmReg args offset nextTmp hSrc instr h v hv
+    · exact compileExprs_noRegVar args offset nextTmp hSrc instr h v hv
     · simp [TAC.vars] at hv
-      exact compileExprs_result_noArmReg args offset nextTmp hSrc v hv
+      exact compileExprs_result_noRegVar args offset nextTmp hSrc v hv
   | assign x e =>
     simp only [Program.Stmt.noReservedVars, Bool.and_eq_true, Bool.not_eq_true'] at hSrc
     intro instr hmem v hv
     cases e with
     | lit _ =>
       simp [compileStmt] at hmem; rw [hmem] at hv; simp [TAC.vars] at hv
-      rw [hv]; exact varToArmReg_none_of_not_dunder _ hSrc.1
+      rw [hv]; exact noRegVar_of_not_dunder _ hSrc.1
     | var y =>
       simp only [Program.SExpr.noReservedVars, Bool.not_eq_true'] at hSrc
       simp [compileStmt] at hmem; rw [hmem] at hv; simp [TAC.vars] at hv
       rcases hv with rfl | rfl
-      · exact varToArmReg_none_of_not_dunder _ hSrc.1
-      · exact varToArmReg_none_of_not_dunder _ hSrc.2
+      · exact noRegVar_of_not_dunder _ hSrc.1
+      · exact noRegVar_of_not_dunder _ hSrc.2
     | bin _ a b =>
       simp only [Program.SExpr.noReservedVars, Bool.and_eq_true] at hSrc
-      have ⟨ha_i, ha_r⟩ := compileExpr_noArmReg a offset nextTmp hSrc.2.1
-      have ⟨hb_i, hb_r⟩ := compileExpr_noArmReg b
+      have ⟨ha_i, ha_r⟩ := compileExpr_noRegVar a offset nextTmp hSrc.2.1
+      have ⟨hb_i, hb_r⟩ := compileExpr_noRegVar b
         (offset + (compileExpr a offset nextTmp).1.length)
         (compileExpr a offset nextTmp).2.2 hSrc.2.2
       simp [compileStmt, List.mem_append] at hmem
@@ -2540,28 +2578,28 @@ private theorem compileStmt_noArmReg (s : Stmt) (offset nextTmp : Nat)
       · exact hb_i instr hb v hv
       · simp only [TAC.vars, List.mem_cons, List.mem_nil_iff, or_false] at hv
         rcases hv with h | h | h
-        · rw [h]; exact varToArmReg_none_of_not_dunder _ hSrc.1
+        · rw [h]; exact noRegVar_of_not_dunder _ hSrc.1
         · rw [h]; exact ha_r
         · rw [h]; exact hb_r
     | arrRead _ idx =>
       simp only [Program.SExpr.noReservedVars] at hSrc
-      have ⟨hi_i, hi_r⟩ := compileExpr_noArmReg idx offset nextTmp hSrc.2
+      have ⟨hi_i, hi_r⟩ := compileExpr_noRegVar idx offset nextTmp hSrc.2
       simp [compileStmt, List.mem_append] at hmem
       rcases hmem with h | rfl | rfl
       · exact hi_i instr h v hv
       · simp [TAC.vars] at hv; rcases hv with rfl | rfl
-        · exact tmpName_noArmReg _
+        · exact tmpName_noRegVar _
         · exact hi_r
       · simp [TAC.vars] at hv; rcases hv with rfl | rfl
-        · exact varToArmReg_none_of_not_dunder _ hSrc.1
-        · exact tmpName_noArmReg _
+        · exact noRegVar_of_not_dunder _ hSrc.1
+        · exact tmpName_noRegVar _
     | flit _ | fbin _ _ _ | intToFloat _ | floatToInt _ | floatUnary _ _ | farrRead _ _ =>
-      have ⟨he_i, he_r⟩ := compileExpr_noArmReg _ offset nextTmp hSrc.2
+      have ⟨he_i, he_r⟩ := compileExpr_noRegVar _ offset nextTmp hSrc.2
       simp [compileStmt, List.mem_append] at hmem
       rcases hmem with h | rfl
       · exact he_i instr h v hv
       · simp [TAC.vars] at hv; rcases hv with rfl | rfl
-        · exact varToArmReg_none_of_not_dunder _ hSrc.1
+        · exact noRegVar_of_not_dunder _ hSrc.1
         · exact he_r
   | fassign x e =>
     simp only [Program.Stmt.noReservedVars, Bool.and_eq_true, Bool.not_eq_true'] at hSrc
@@ -2569,17 +2607,17 @@ private theorem compileStmt_noArmReg (s : Stmt) (offset nextTmp : Nat)
     cases e with
     | flit _ =>
       simp [compileStmt] at hmem; rw [hmem] at hv; simp [TAC.vars] at hv
-      rw [hv]; exact varToArmReg_none_of_not_dunder _ hSrc.1
+      rw [hv]; exact noRegVar_of_not_dunder _ hSrc.1
     | var y =>
       simp only [Program.SExpr.noReservedVars, Bool.not_eq_true'] at hSrc
       simp [compileStmt] at hmem; rw [hmem] at hv; simp [TAC.vars] at hv
       rcases hv with rfl | rfl
-      · exact varToArmReg_none_of_not_dunder _ hSrc.1
-      · exact varToArmReg_none_of_not_dunder _ hSrc.2
+      · exact noRegVar_of_not_dunder _ hSrc.1
+      · exact noRegVar_of_not_dunder _ hSrc.2
     | fbin _ a b =>
       simp only [Program.SExpr.noReservedVars, Bool.and_eq_true] at hSrc
-      have ⟨ha_i, ha_r⟩ := compileExpr_noArmReg a offset nextTmp hSrc.2.1
-      have ⟨hb_i, hb_r⟩ := compileExpr_noArmReg b
+      have ⟨ha_i, ha_r⟩ := compileExpr_noRegVar a offset nextTmp hSrc.2.1
+      have ⟨hb_i, hb_r⟩ := compileExpr_noRegVar b
         (offset + (compileExpr a offset nextTmp).1.length)
         (compileExpr a offset nextTmp).2.2 hSrc.2.2
       simp [compileStmt, List.mem_append] at hmem
@@ -2588,51 +2626,51 @@ private theorem compileStmt_noArmReg (s : Stmt) (offset nextTmp : Nat)
       · exact hb_i instr hb v hv
       · simp only [TAC.vars, List.mem_cons, List.mem_nil_iff, or_false] at hv
         rcases hv with h | h | h
-        · rw [h]; exact varToArmReg_none_of_not_dunder _ hSrc.1
+        · rw [h]; exact noRegVar_of_not_dunder _ hSrc.1
         · rw [h]; exact ha_r
         · rw [h]; exact hb_r
     | intToFloat e =>
       simp only [Program.SExpr.noReservedVars] at hSrc
-      have ⟨he_i, he_r⟩ := compileExpr_noArmReg e offset nextTmp hSrc.2
+      have ⟨he_i, he_r⟩ := compileExpr_noRegVar e offset nextTmp hSrc.2
       simp [compileStmt, List.mem_append] at hmem
       rcases hmem with h | rfl
       · exact he_i instr h v hv
       · simp [TAC.vars] at hv; rcases hv with rfl | rfl
-        · exact varToArmReg_none_of_not_dunder _ hSrc.1
+        · exact noRegVar_of_not_dunder _ hSrc.1
         · exact he_r
     | floatUnary _ e =>
       simp only [Program.SExpr.noReservedVars] at hSrc
-      have ⟨he_i, he_r⟩ := compileExpr_noArmReg e offset nextTmp hSrc.2
+      have ⟨he_i, he_r⟩ := compileExpr_noRegVar e offset nextTmp hSrc.2
       simp [compileStmt, List.mem_append] at hmem
       rcases hmem with h | rfl
       · exact he_i instr h v hv
       · simp [TAC.vars] at hv; rcases hv with rfl | rfl
-        · exact varToArmReg_none_of_not_dunder _ hSrc.1
+        · exact noRegVar_of_not_dunder _ hSrc.1
         · exact he_r
     | farrRead _ idx =>
       simp only [Program.SExpr.noReservedVars] at hSrc
-      have ⟨hi_i, hi_r⟩ := compileExpr_noArmReg idx offset nextTmp hSrc.2
+      have ⟨hi_i, hi_r⟩ := compileExpr_noRegVar idx offset nextTmp hSrc.2
       simp [compileStmt, List.mem_append] at hmem
       rcases hmem with h | rfl | rfl
       · exact hi_i instr h v hv
       · simp [TAC.vars] at hv; rcases hv with rfl | rfl
-        · exact ftmpName_noArmReg _
+        · exact ftmpName_noRegVar _
         · exact hi_r
       · simp [TAC.vars] at hv; rcases hv with rfl | rfl
-        · exact varToArmReg_none_of_not_dunder _ hSrc.1
-        · exact ftmpName_noArmReg _
+        · exact noRegVar_of_not_dunder _ hSrc.1
+        · exact ftmpName_noRegVar _
     | lit _ | bin _ _ _ | arrRead _ _ | floatToInt _ =>
-      have ⟨he_i, he_r⟩ := compileExpr_noArmReg _ offset nextTmp hSrc.2
+      have ⟨he_i, he_r⟩ := compileExpr_noRegVar _ offset nextTmp hSrc.2
       simp [compileStmt, List.mem_append] at hmem
       rcases hmem with h | rfl
       · exact he_i instr h v hv
       · simp [TAC.vars] at hv; rcases hv with rfl | rfl
-        · exact varToArmReg_none_of_not_dunder _ hSrc.1
+        · exact noRegVar_of_not_dunder _ hSrc.1
         · exact he_r
   | barrWrite arr idx bval =>
     simp only [Program.Stmt.noReservedVars, Bool.and_eq_true] at hSrc
-    have ⟨hi_i, hi_r⟩ := compileExpr_noArmReg idx offset nextTmp hSrc.1
-    have ⟨hb_i, hb_be⟩ := compileBool_noArmReg bval
+    have ⟨hi_i, hi_r⟩ := compileExpr_noRegVar idx offset nextTmp hSrc.1
+    have ⟨hb_i, hb_be⟩ := compileBool_noRegVar bval
       (offset + (compileExpr idx offset nextTmp).1.length)
       (compileExpr idx offset nextTmp).2.2 hSrc.2
     intro instr hmem v hv
@@ -2641,12 +2679,12 @@ private theorem compileStmt_noArmReg (s : Stmt) (offset nextTmp : Nat)
     · exact hi_i instr hi v hv
     · exact hb_i instr hb v hv
     · simp [TAC.vars] at hv; exact hb_be v hv
-    · simp [TAC.vars] at hv; subst hv; exact tmpName_noArmReg _
+    · simp [TAC.vars] at hv; subst hv; exact tmpName_noRegVar _
     · simp [TAC.vars] at hv
-    · simp [TAC.vars] at hv; subst hv; exact tmpName_noArmReg _
+    · simp [TAC.vars] at hv; subst hv; exact tmpName_noRegVar _
     · simp [TAC.vars] at hv; rcases hv with rfl | rfl
       · exact hi_r
-      · exact tmpName_noArmReg _
+      · exact tmpName_noRegVar _
 
 /-- End-to-end totality: `generateAsm` succeeds for any well-typed program
     (no-optimization path, directly from `compileToTAC`). -/
