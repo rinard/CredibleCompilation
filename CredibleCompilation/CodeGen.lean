@@ -1682,12 +1682,47 @@ private theorem buildVarLayout_complete {p : Prog} {v : Var}
     (buildVarLayout (collectVars p) (buildVarMap (collectVars p))) v ≠ none := by
   -- buildVarLayout uses filterMap: tries varToArmReg, varToArmFReg, lookupVar
   -- If the first two return none, lookupVar succeeds (since v ∈ collectVars)
-  unfold buildVarLayout
-  simp only [VarLayout.mk, List.lookup]
-  -- The layout entries are a filterMap over collectVars
-  -- Since v ∈ collectVars, and lookupVar always succeeds for members,
-  -- the filterMap includes v with some location
-  sorry
+  -- The filterMap function always returns some for v ∈ collectVars
+  -- (lookupVar succeeds as fallback), so (v, loc) ∈ entries, so lookup ≠ none
+  have hfv : ∃ loc, (match varToArmReg v with
+      | some r => some (v, VarLoc.ireg r)
+      | none => match varToArmFReg v with
+        | some r => some (v, VarLoc.freg r)
+        | none => match lookupVar (buildVarMap (collectVars p)) v with
+          | some off => some (v, VarLoc.stack off)
+          | none => none) = some (v, loc) := by
+    cases h1 : varToArmReg v with
+    | some r => exact ⟨.ireg r, rfl⟩
+    | none =>
+      cases h2 : varToArmFReg v with
+      | some r => exact ⟨.freg r, rfl⟩
+      | none =>
+        obtain ⟨off, hoff⟩ := lookupVar_of_mem hv
+        exact ⟨.stack off, by rw [hoff]⟩
+  obtain ⟨loc, hfv⟩ := hfv
+  -- (v, loc) is in the filterMap result (= layout entries)
+  unfold buildVarLayout; simp only
+  -- (v, loc) ∈ filterMap result
+  have hmem : (v, loc) ∈ (collectVars p).filterMap (fun v =>
+      match varToArmReg v with
+      | some r => some (v, VarLoc.ireg r)
+      | none => match varToArmFReg v with
+        | some r => some (v, VarLoc.freg r)
+        | none => match lookupVar (buildVarMap (collectVars p)) v with
+          | some off => some (v, VarLoc.stack off)
+          | none => none) :=
+    List.mem_filterMap.mpr ⟨v, hv, hfv⟩
+  -- List.lookup succeeds when key is in list
+  generalize (collectVars p).filterMap _ = entries at hmem ⊢
+  induction entries with
+  | nil => simp at hmem
+  | cons hd tl ih =>
+    simp only [List.lookup]
+    split
+    · simp
+    · cases hmem with
+      | head => rename_i hne; simp [BEq.beq] at hne
+      | tail _ htl => exact ih htl
 
 /-- Every variable in `TAC.vars instr` for any instruction in `p.code` is in `collectVars p`. -/
 private theorem vars_subset_collectVars {p : Prog} {pc : Nat} (hpc : pc < p.code.size)
