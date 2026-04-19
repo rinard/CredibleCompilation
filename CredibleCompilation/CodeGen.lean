@@ -443,31 +443,7 @@ private def isBoundsSafe (arrayDecls : List (ArrayName × Nat × VarTy))
 -- § 3. Well-formedness checks (discharge proof hypotheses at runtime)
 -- ============================================================
 
-/-- Check WellTypedLayout: no float var in ireg, no non-float var in freg,
-    and every variable referenced by the program has a layout entry.
-    Corresponds to the `hWTL` hypothesis in verifiedGenInstr_correct. -/
-private def checkWellTypedLayout (Γ : TyCtx) (layout : VarLayout)
-    (code : Array TAC) : Option String :=
-  -- Collect all variables referenced in the program
-  let allVars := code.foldl (init := ([] : List Var)) fun acc instr =>
-    acc ++ (TAC.vars instr).filter fun v => !acc.contains v
-  -- Check type/register consistency for all layout entries
-  let typeErr := layout.entries.find? fun (v, loc) =>
-    match loc with
-    | .freg _ => Γ v != .float  -- non-float in freg
-    | .ireg _ => Γ v == .float  -- float in ireg
-    | .stack _ => false
-  match typeErr with
-  | some (v, loc) =>
-    let locStr := match loc with
-      | .freg _ => "freg" | .ireg _ => "ireg" | .stack _ => "stack"
-    let tyStr := match Γ v with | .int => "int" | .bool => "bool" | .float => "float"
-    some s!"layout type mismatch: {v} (type {tyStr}) in {locStr}"
-  | none =>
-  -- Check completeness: every referenced variable must be in the layout
-  match allVars.find? fun v => (layout v).isNone with
-  | some v => some s!"variable {v} referenced but not in layout"
-  | none => none
+-- checkWellTypedLayout: imported from CodeGenLayout.lean
 
 /-- Check that all branch targets are in bounds.
     Corresponds to the `hPC_bound` hypothesis on successor PCs. -/
@@ -484,20 +460,7 @@ private def checkBranchTargets (code : Array TAC) : Option String :=
     some s!"branch at PC {pc} targets {target} (out of bounds, size = {n})"
   | none => none
 
-/-- If lookup returns some, the key-value pair is in the list. -/
-private theorem lookup_mem {v : String} {loc : VarLoc}
-    {entries : List (String × VarLoc)}
-    (h : entries.lookup v = some loc) : (v, loc) ∈ entries := by
-  induction entries with
-  | nil => simp [List.lookup] at h
-  | cons hd tl ih =>
-    simp only [List.lookup] at h
-    split at h
-    · rename_i heq
-      have hv : v = hd.fst := by simpa using heq
-      have hl : hd.snd = loc := by simpa using h
-      subst hv; subst hl; simp
-    · exact List.mem_cons_of_mem _ (ih h)
+-- lookup_mem: imported from CodeGenLayout.lean
 
 -- ============================================================
 -- § 4b. Caller-save spec checker
@@ -879,23 +842,7 @@ structure GenAsmSpec (tyCtx : TyCtx) (p : Prog) (r : VerifiedAsmResult) : Prop w
     (∀ fr off1 off2, CallerSaveEntry.freg fr off1 ∈ entries →
       CallerSaveEntry.freg fr off2 ∈ entries → off1 = off2)
 
-/-- checkWellTypedLayout returning none implies WellTypedLayout (type consistency). -/
-private theorem checkWellTypedLayout_wellTyped {Γ : TyCtx} {layout : VarLayout}
-    {code : Array TAC}
-    (h : checkWellTypedLayout Γ layout code = none) : WellTypedLayout Γ layout := by
-  simp only [checkWellTypedLayout] at h
-  split at h
-  · simp at h
-  · rename_i hTypeOk
-    split at h
-    · simp at h
-    · constructor
-      · intro v fr hNotFloat hContra
-        have := (List.find?_eq_none.mp hTypeOk) ⟨v, .freg fr⟩ (lookup_mem hContra)
-        simp at this; exact absurd this hNotFloat
-      · intro v ir hFloat hContra
-        have := (List.find?_eq_none.mp hTypeOk) ⟨v, .ireg ir⟩ (lookup_mem hContra)
-        simp at this; exact absurd hFloat this
+-- checkWellTypedLayout_wellTyped: imported from CodeGenLayout.lean
 
 /-- Foldl that appends preserves existing elements. -/
 private theorem foldl_preserves_mem {init : List Var} {instrs : List TAC} {v : Var}
@@ -2105,90 +2052,22 @@ private theorem mem_collectVars_imp {p : Prog} {v : Var} (hv : v ∈ collectVars
 
 
 /-- Layout injectivity from the direct codegen prereq check. -/
-private theorem buildVarLayout_injective (p : Prog)
-    (hPrereqs : checkCodegenPrereqs p = true) :
+private theorem buildVarLayout_injective (tyCtx : TyCtx) (p : Prog)
+    (hPrereqs : checkCodegenPrereqs tyCtx p = true) :
     (buildVarLayout (collectVars p) (buildVarMap (collectVars p))).isInjective = true := by
   simp only [checkCodegenPrereqs, Bool.and_eq_true] at hPrereqs
-  exact hPrereqs.1
+  exact hPrereqs.1.1
 
-/-- If the program is well-typed under `tyCtx` and variables follow the naming convention,
-    then `checkWellTypedLayout` returns `none` (success). -/
-private theorem checkWellTypedLayout_succeeds (tyCtx : TyCtx) (p : Prog)
-    (hWT : checkWellTypedProg tyCtx p = true)
-    (hIRegTy : ∀ v r, varToArmReg v = some r → tyCtx v ≠ .float)
-    (hFRegTy : ∀ v r, varToArmFReg v = some r → tyCtx v = .float) :
-    checkWellTypedLayout tyCtx
-      (buildVarLayout (collectVars p) (buildVarMap (collectVars p))) p.code = none := by
-  unfold checkWellTypedLayout
-  -- Step 1: show typeErr = none (no type mismatches in layout entries)
-  have hTypeOk : (buildVarLayout (collectVars p) (buildVarMap (collectVars p))).entries.find?
-      (fun x => match x with | (v, loc) => match loc with
-        | .freg _ => tyCtx v != .float | .ireg _ => tyCtx v == .float | .stack _ => false) = none := by
-    rw [List.find?_eq_none]
-    intro ⟨v, loc⟩ hmem
-    -- (v, loc) ∈ buildVarLayout entries → came from filterMap
-    unfold buildVarLayout at hmem; simp only at hmem
-    rw [List.mem_filterMap] at hmem
-    obtain ⟨w, _, hwf⟩ := hmem
-    cases h1 : varToArmReg w with
-    | some r =>
-      simp [h1] at hwf; obtain ⟨rfl, rfl⟩ := hwf
-      simp [bne_iff_ne, beq_iff_eq, hIRegTy _ _ h1]
-    | none =>
-      cases h2 : varToArmFReg w with
-      | some r =>
-        simp [h1, h2] at hwf; obtain ⟨rfl, rfl⟩ := hwf
-        simp [bne_iff_ne, hFRegTy _ _ h2]
-      | none =>
-        simp [h1, h2] at hwf
-        cases h3 : lookupVar (buildVarMap (collectVars p)) w with
-        | some off => simp [h3] at hwf; obtain ⟨_, rfl⟩ := hwf; simp
-        | none => simp [h3] at hwf
-  -- Step 2: show completeness — every referenced var has a layout entry
-  -- The goal after simp [hTypeOk] is: match find? ... allVars with | some => ... | none => none = none
-  -- Show the find? returns none, then the match reduces
-  suffices hComplete : List.find?
-      (fun v => (List.lookup v (buildVarLayout (collectVars p)
-        (buildVarMap (collectVars p))).entries).isNone)
-      (Array.foldl (fun acc instr => acc ++ (instr.vars).filter
-        fun v => !decide (v ∈ acc)) ([] : List Var) p.code) = none by
-    simp [hTypeOk, hComplete]
-  rw [List.find?_eq_none]
-  intro v hv
-  -- Goal: ¬(Option.isNone (layout v) = true), i.e., layout v ≠ none
-  simp only [Option.isNone_iff_eq_none, Bool.not_eq_true']
-  -- v ∈ allVars → v ∈ collectVars p → layout v ≠ none
-  -- First, a general foldl containment lemma for the allVars computation
-  have allVars_sub : ∀ (l : List TAC) (acc : List Var) (w : Var),
-      w ∈ l.foldl (fun acc instr => acc ++ (instr.vars).filter fun v => !decide (v ∈ acc)) acc →
-      w ∈ acc ∨ ∃ instr ∈ l, w ∈ instr.vars := by
-    intro l; induction l with
-    | nil => intro acc w hv; exact Or.inl hv
-    | cons hd tl ih =>
-      intro acc w hw; simp only [List.foldl_cons] at hw
-      rcases ih _ _ hw with h | ⟨instr, hmem, hvi⟩
-      · rcases List.mem_append.mp h with h | h
-        · exact Or.inl h
-        · exact Or.inr ⟨hd, List.mem_cons.mpr (Or.inl rfl), (List.mem_filter.mp h).1⟩
-      · exact Or.inr ⟨instr, List.mem_cons.mpr (Or.inr hmem), hvi⟩
-  -- Apply to show v ∈ collectVars p
-  have hcv : v ∈ collectVars p := by
-    rw [← Array.foldl_toList] at hv
-    rcases allVars_sub _ ([] : List Var) _ hv with h | ⟨instr, hmem, hvi⟩
-    · contradiction
-    · obtain ⟨i, hlt, heq⟩ := Array.mem_iff_getElem.mp (Array.mem_toList_iff.mp hmem)
-      rw [← heq] at hvi; exact vars_subset_collectVars hlt hvi
-  -- layout v ≠ none from buildVarLayout_complete
-  exact buildVarLayout_complete hcv
+-- checkWellTypedLayout_succeeds: no longer needed (hWTL now in checkCodegenPrereqs)
 
 /-- `checkCallerSaveSpec` passes for the constructed layout and varMap. -/
-private theorem checkCallerSaveSpec_succeeds (p : Prog)
-    (hPrereqs : checkCodegenPrereqs p = true) :
+private theorem checkCallerSaveSpec_succeeds (tyCtx : TyCtx) (p : Prog)
+    (hPrereqs : checkCodegenPrereqs tyCtx p = true) :
     checkCallerSaveSpec
       (buildVarLayout (collectVars p) (buildVarMap (collectVars p)))
       (buildVarMap (collectVars p)) = true := by
   simp only [checkCodegenPrereqs, Bool.and_eq_true] at hPrereqs
-  exact hPrereqs.2
+  exact hPrereqs.1.2
 
 /-- Successor bounds check on a program (mirrors checkSuccessorsInBounds for trans). -/
 private def checkSuccessorsInBounds_prog (p : Prog) : Bool :=
@@ -2403,17 +2282,20 @@ private theorem bodyGenStep_preserves_some
 theorem verifiedGenerateAsm_total (tyCtx : TyCtx) (p : Prog)
     (hWT : checkWellTypedProg tyCtx p = true)
     (hRC : (buildVarLayout (collectVars p) (buildVarMap (collectVars p))).regConventionSafe = true)
-    (hPrereqs : checkCodegenPrereqs p = true)
-    (hWTL : checkWellTypedLayout tyCtx
-      (buildVarLayout (collectVars p) (buildVarMap (collectVars p))) p.code = none)
+    (hPrereqs : checkCodegenPrereqs tyCtx p = true)
     (hBranch : checkBranchTargets p.code = none)
     (hSimpleOps : checkBoolExprSimpleOps p = true) :
     ∃ r, verifiedGenerateAsm tyCtx p = .ok r := by
   unfold verifiedGenerateAsm
   simp only [hWT, Bool.not_true, Bool.true_and, ↓reduceIte]
+  -- Extract WTL from checkCodegenPrereqs
+  have hWTL : checkWellTypedLayout tyCtx
+      (buildVarLayout (collectVars p) (buildVarMap (collectVars p))) p.code = none := by
+    simp only [checkCodegenPrereqs, Bool.and_eq_true, beq_iff_eq] at hPrereqs
+    exact hPrereqs.2
   -- Discharge layout checks
-  have hII := (buildVarLayout_injective p hPrereqs)
-  have hCS := (checkCallerSaveSpec_succeeds p hPrereqs)
+  have hII := (buildVarLayout_injective tyCtx p hPrereqs)
+  have hCS := (checkCallerSaveSpec_succeeds tyCtx p hPrereqs)
   simp only [hRC, hII, Bool.not_true, ↓reduceIte, hWTL, hCS, hBranch]
   -- One remaining `if false = true` guard
   split

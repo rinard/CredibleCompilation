@@ -1252,8 +1252,8 @@ def checkCertificateExec (cert : ECertificate) : Bool :=
   checkNoRegisterCollisions cert.orig &&
   checkNoRegisterCollisions cert.trans &&
   checkBoolVarsCoveredExec cert &&
-  checkCodegenPrereqs cert.orig &&
-  checkCodegenPrereqs cert.trans
+  checkCodegenPrereqs cert.tyCtx cert.orig &&
+  checkCodegenPrereqs cert.tyCtx cert.trans
 
 /-- Verbose check: returns the result of each individual condition. -/
 def checkCertificateVerboseExec (cert : ECertificate) : List (String × Bool) :=
@@ -1285,8 +1285,8 @@ def checkCertificateVerboseExec (cert : ECertificate) : List (String × Bool) :=
     ("reg_collision_orig", checkNoRegisterCollisions cert.orig),
     ("reg_collision_trans", checkNoRegisterCollisions cert.trans),
     ("bool_vars_covered",     checkBoolVarsCoveredExec cert),
-    ("codegen_prereqs_orig",  checkCodegenPrereqs cert.orig),
-    ("codegen_prereqs_trans", checkCodegenPrereqs cert.trans) ]
+    ("codegen_prereqs_orig",  checkCodegenPrereqs cert.tyCtx cert.orig),
+    ("codegen_prereqs_trans", checkCodegenPrereqs cert.tyCtx cert.trans) ]
 
 /-- Observable output of a configuration with respect to an executable certificate.
     - If the current instruction is `halt`, returns `halt` with observable variable–value pairs.

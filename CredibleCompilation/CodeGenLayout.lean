@@ -162,14 +162,72 @@ def checkCallerSaveSpec (layout : VarLayout) (varMap : List (Var × Nat)) : Bool
     | _, _ => true))
 
 -- ============================================================
--- § 5. Codegen prerequisite check
+-- § 5. Well-typed layout check
 -- ============================================================
 
-/-- Pre-check the codegen-specific properties: layout injectivity and caller-save spec.
-    Both are decidable Bool checks on the constructed layout.
+/-- Check that the layout is type-consistent and complete for all instructions.
+    Returns `none` on success, `some errMsg` on failure. -/
+def checkWellTypedLayout (Γ : TyCtx) (layout : VarLayout) (code : Array TAC) : Option String :=
+  let allVars := code.foldl (init := ([] : List Var)) fun acc instr =>
+    acc ++ (TAC.vars instr).filter fun v => !acc.contains v
+  let typeErr := layout.entries.find? fun (v, loc) =>
+    match loc with
+    | .freg _ => Γ v != .float
+    | .ireg _ => Γ v == .float
+    | .stack _ => false
+  match typeErr with
+  | some (v, loc) =>
+    let locStr := match loc with
+      | .freg _ => "freg" | .ireg _ => "ireg" | .stack _ => "stack"
+    let tyStr := match Γ v with | .int => "int" | .bool => "bool" | .float => "float"
+    some s!"layout type mismatch: {v} (type {tyStr}) in {locStr}"
+  | none =>
+  match allVars.find? fun v => (layout v).isNone with
+  | some v => some s!"variable {v} referenced but not in layout"
+  | none => none
+
+-- ============================================================
+theorem lookup_mem {v : String} {loc : VarLoc}
+    {entries : List (String × VarLoc)}
+    (h : entries.lookup v = some loc) : (v, loc) ∈ entries := by
+  induction entries with
+  | nil => simp [List.lookup] at h
+  | cons hd tl ih =>
+    simp only [List.lookup] at h
+    split at h
+    · rename_i heq
+      have hv : v = hd.fst := by simpa using heq
+      have hl : hd.snd = loc := by simpa using h
+      subst hv; subst hl; simp
+    · exact List.mem_cons_of_mem _ (ih h)
+
+/-- checkWellTypedLayout returning none implies WellTypedLayout (type consistency). -/
+theorem checkWellTypedLayout_wellTyped {Γ : TyCtx} {layout : VarLayout}
+    {code : Array TAC}
+    (h : checkWellTypedLayout Γ layout code = none) : WellTypedLayout Γ layout := by
+  simp only [checkWellTypedLayout] at h
+  split at h
+  · simp at h
+  · rename_i hTypeOk
+    split at h
+    · simp at h
+    · constructor
+      · intro v fr hNotFloat hContra
+        have := (List.find?_eq_none.mp hTypeOk) ⟨v, .freg fr⟩ (lookup_mem hContra)
+        simp at this; exact absurd this hNotFloat
+      · intro v ir hFloat hContra
+        have := (List.find?_eq_none.mp hTypeOk) ⟨v, .ireg ir⟩ (lookup_mem hContra)
+        simp at this; exact absurd hFloat this
+
+-- § 6. Codegen prerequisite check
+-- ============================================================
+
+/-- Pre-check the codegen-specific properties: layout injectivity, caller-save spec,
+    and well-typed layout. All are decidable checks on the constructed layout.
     Added to `checkCertificateExec` so that `generateAsm_total` can derive them. -/
-def checkCodegenPrereqs (p : Prog) : Bool :=
+def checkCodegenPrereqs (tyCtx : TyCtx) (p : Prog) : Bool :=
   let vars := collectVars p
   let varMap := buildVarMap vars
   let layout := buildVarLayout vars varMap
-  layout.isInjective && checkCallerSaveSpec layout varMap
+  layout.isInjective && checkCallerSaveSpec layout varMap &&
+  checkWellTypedLayout tyCtx layout p.code == none
