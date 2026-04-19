@@ -1144,11 +1144,17 @@ def checkBoolExprSimpleOps (p : Prog) : Bool :=
     Scratch registers: x0-x2 (__ir0-2/__br0-2), d0-d2 (__fr0-2).
     Reserved/platform registers: x16-x18 (__ir16-18/__br16-18). -/
 def violatesRegConvention (v : Var) : Bool :=
-  (v == "__ir0" || v == "__ir1" || v == "__ir2" ||
-   v == "__br0" || v == "__br1" || v == "__br2" ||
-   v == "__fr0" || v == "__fr1" || v == "__fr2" ||
-   v == "__ir16" || v == "__ir17" || v == "__ir18" ||
-   v == "__br16" || v == "__br17" || v == "__br18")
+  -- Use parse-based check so this agrees with varToArmReg / varToArmFReg
+  -- (exact string matching would miss aliases like "__ir00" → x0)
+  let irN := if v.startsWith "__ir" then (v.drop 4).toNat?
+             else if v.startsWith "__br" then (v.drop 4).toNat?
+             else none
+  let frN := if v.startsWith "__fr" then (v.drop 4).toNat? else none
+  match irN with
+  | some 0 | some 1 | some 2 | some 16 | some 17 | some 18 => true
+  | _ => match frN with
+    | some 0 | some 1 | some 2 => true
+    | _ => false
 
 def checkNoRegConventionViolations (p : Prog) : Bool :=
   p.code.all fun instr =>

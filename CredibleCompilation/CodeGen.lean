@@ -1536,6 +1536,85 @@ theorem verifiedGenerateAsm_spec {tyCtx : TyCtx} {p : Prog} {r : VerifiedAsmResu
 
 
 -- ──────────────────────────────────────────────────────────────
+-- § 5b-pre. Helper lemmas for register convention bridge
+-- ──────────────────────────────────────────────────────────────
+
+/-- If `varToArmReg v = some r` and `r` is a restricted register,
+    then `violatesRegConvention v = true`. Contrapositive gives:
+    pipeline passing → no restricted registers in layout. -/
+private theorem varToArmReg_restricted_implies_violates {v : Var} {r : ArmReg}
+    (hr : varToArmReg v = some r)
+    (hRestr : r = .x0 ∨ r = .x1 ∨ r = .x2 ∨ r = .x16 ∨ r = .x17 ∨ r = .x18) :
+    violatesRegConvention v = true := by
+  unfold varToArmReg at hr; unfold violatesRegConvention; dsimp only at *
+  -- Both functions compute the same irN from __ir/__br prefix + toNat?
+  -- Name the shared subexpression so split works across both
+  generalize hN : (if String.startsWith v "__ir" = true then (String.drop v 4).toNat?
+    else if String.startsWith v "__br" = true then (String.drop v 4).toNat?
+    else none) = irN at hr ⊢
+  -- Now split on irN — in hr it determines r, in goal it determines the result
+  split at hr <;> (first
+    | rfl -- restricted: match on concrete irN reduces to true = true
+    | (rcases hRestr with h | h | h | h | h | h <;> (subst h; simp at hr)) -- non-restricted: contradiction
+    | simp at hr) -- wildcard: none = some r
+
+/-- If `varToArmFReg v = some r` and `r` is a restricted FP register,
+    then `violatesRegConvention v = true`. -/
+private theorem varToArmFReg_restricted_implies_violates {v : Var} {r : ArmFReg}
+    (hr : varToArmFReg v = some r)
+    (hRestr : r = .d0 ∨ r = .d1 ∨ r = .d2) :
+    violatesRegConvention v = true := by
+  unfold varToArmFReg at hr; unfold violatesRegConvention; dsimp only at *
+  by_cases hfr : v.startsWith "__fr" = true
+  · simp only [hfr, ↓reduceIte] at hr
+    generalize (String.drop v 4).toNat? = n? at hr ⊢
+    -- Also resolve the __ir/__br if-expressions in the goal
+    by_cases hir : v.startsWith "__ir" = true <;>
+      by_cases hbr : v.startsWith "__br" = true <;>
+      simp only [hir, hbr, Bool.false_eq_true, ↓reduceIte, hfr] at ⊢ <;>
+      (split at hr <;> (first
+        | rfl
+        | (rcases hRestr with h | h | h <;> (subst h; simp at hr))
+        | simp at hr))
+  · simp [hfr] at hr
+
+-- ──────────────────────────────────────────────────────────────
+-- § 5b-pre2. Helper lemmas for collectVars monotonicity
+-- ──────────────────────────────────────────────────────────────
+
+/-- The "add if not present" pattern preserves existing membership. -/
+private theorem mem_of_mem_addIfNew {acc : List Var} {w v : Var}
+    (hw : w ∈ acc) : w ∈ (if acc.contains v then acc else acc ++ [v]) := by
+  split
+  · exact hw
+  · exact List.mem_append_left _ hw
+
+/-- The "add if not present" pattern ensures the new element is a member. -/
+private theorem self_mem_addIfNew {acc : List Var} {v : Var} :
+    v ∈ (if acc.contains v then acc else acc ++ [v]) := by
+  split
+  · next h => exact List.contains_iff_mem.mp h
+  · exact List.mem_append_right _ (List.mem_singleton.mpr rfl)
+
+/-- Folding "add if not present" over a list preserves existing membership. -/
+private theorem mem_foldl_addIfNew_of_mem {acc vs : List Var} {w : Var}
+    (hw : w ∈ acc) : w ∈ vs.foldl (fun a v => if a.contains v then a else a ++ [v]) acc := by
+  induction vs generalizing acc with
+  | nil => exact hw
+  | cons v rest ih => exact ih (mem_of_mem_addIfNew hw)
+
+/-- Folding "add if not present" over a list includes every element of that list. -/
+private theorem mem_foldl_addIfNew_of_mem_list {acc vs : List Var} {w : Var}
+    (hw : w ∈ vs) : w ∈ vs.foldl (fun a v => if a.contains v then a else a ++ [v]) acc := by
+  induction vs generalizing acc with
+  | nil => simp at hw
+  | cons v rest ih =>
+    simp only [List.foldl_cons]
+    cases List.mem_cons.mp hw with
+    | inl heq => subst heq; exact mem_foldl_addIfNew_of_mem self_mem_addIfNew
+    | inr hmem => exact ih hmem
+
+-- ──────────────────────────────────────────────────────────────
 -- § 5b. Totality: verifiedGenerateAsm succeeds for pipeline output
 -- ──────────────────────────────────────────────────────────────
 
@@ -1641,7 +1720,8 @@ private theorem checkWellTypedLayout_succeeds (tyCtx : TyCtx) (p : Prog)
   sorry
 
 /-- `checkCallerSaveSpec` passes for the constructed layout and varMap. -/
-private theorem checkCallerSaveSpec_succeeds (p : Prog) :
+private theorem checkCallerSaveSpec_succeeds (p : Prog)
+    (hNoColl : checkNoRegisterCollisions p = true) :
     checkCallerSaveSpec
       (buildVarLayout (collectVars p) (buildVarMap (collectVars p)))
       (buildVarMap (collectVars p)) = true := by
