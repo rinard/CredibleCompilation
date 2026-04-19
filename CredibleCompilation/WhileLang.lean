@@ -746,10 +746,15 @@ def typeCheck (prog : Program) : Bool :=
   noTmpDecls prog.decls &&
   checkStmt prog.lookupTy prog.arrayDecls prog.body
 
-/-- Strict type check: typeCheck + no goto/ifgoto.
-    Used by compiler correctness proofs which require structured control flow. -/
+/-- No variable name starts with `__` (reserved for compiler-generated names). -/
+def checkNoReservedNames (prog : Program) : Bool :=
+  prog.decls.all fun (v, _) => !(v.startsWith "__")
+
+/-- Strict type check: typeCheck + no goto/ifgoto + no reserved names.
+    Used by compiler correctness proofs which require structured control flow
+    and guarantee that `__ir`/`__br`/`__fr` register names are compiler-generated. -/
 def typeCheckStrict (prog : Program) : Bool :=
-  prog.typeCheck && prog.body.checkNoGoto
+  prog.typeCheck && prog.body.checkNoGoto && prog.checkNoReservedNames
 
 -- ============================================================
 -- § 5b. Compilation
@@ -892,7 +897,7 @@ theorem initStore_typedStore (prog : Program)
 /-- typeCheckStrict implies typeCheck. -/
 theorem typeCheckStrict_typeCheck (prog : Program) (h : prog.typeCheckStrict = true) :
     prog.typeCheck = true := by
-  unfold typeCheckStrict at h; simp only [Bool.and_eq_true] at h; exact h.1
+  unfold typeCheckStrict at h; simp only [Bool.and_eq_true] at h; exact h.1.1
 
 /-- Extract noDups from typeCheck (public, so other files can use it). -/
 theorem typeCheck_noDups (prog : Program) (h : prog.typeCheck = true) :

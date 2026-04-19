@@ -1092,7 +1092,7 @@ private theorem checkNoGoto_sound {s : Stmt}
 theorem Program.typeCheck_noGoto (prog : Program) (h : prog.typeCheckStrict = true) :
     prog.body.noGoto := by
   unfold Program.typeCheckStrict at h; simp only [Bool.and_eq_true] at h
-  exact checkNoGoto_sound h.2
+  exact checkNoGoto_sound h.1.2
 
 -- ============================================================
 -- § 4d. Source-level type preservation

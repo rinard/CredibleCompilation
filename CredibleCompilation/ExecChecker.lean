@@ -1,4 +1,5 @@
 import CredibleCompilation.PropChecker
+import CredibleCompilation.CodeGenLayout
 import Std.Data.HashMap
 
 /-!
@@ -1250,7 +1251,9 @@ def checkCertificateExec (cert : ECertificate) : Bool :=
   checkNoRegConventionViolations cert.trans &&
   checkNoRegisterCollisions cert.orig &&
   checkNoRegisterCollisions cert.trans &&
-  checkBoolVarsCoveredExec cert
+  checkBoolVarsCoveredExec cert &&
+  checkCodegenPrereqs cert.orig &&
+  checkCodegenPrereqs cert.trans
 
 /-- Verbose check: returns the result of each individual condition. -/
 def checkCertificateVerboseExec (cert : ECertificate) : List (String × Bool) :=
@@ -1281,7 +1284,9 @@ def checkCertificateVerboseExec (cert : ECertificate) : List (String × Bool) :=
     ("reg_convention_trans", checkNoRegConventionViolations cert.trans),
     ("reg_collision_orig", checkNoRegisterCollisions cert.orig),
     ("reg_collision_trans", checkNoRegisterCollisions cert.trans),
-    ("bool_vars_covered",     checkBoolVarsCoveredExec cert) ]
+    ("bool_vars_covered",     checkBoolVarsCoveredExec cert),
+    ("codegen_prereqs_orig",  checkCodegenPrereqs cert.orig),
+    ("codegen_prereqs_trans", checkCodegenPrereqs cert.trans) ]
 
 /-- Observable output of a configuration with respect to an executable certificate.
     - If the current instruction is `halt`, returns `halt` with observable variable–value pairs.

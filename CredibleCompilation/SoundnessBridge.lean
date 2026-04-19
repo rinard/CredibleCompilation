@@ -3713,9 +3713,11 @@ theorem soundness_bridge
   -- checkCertificateExec is: wt_orig && wt_trans && same_obs && c1..c16
   --   && bool_no_arr_{orig,trans} && bool_simple_{orig,trans}
   --   && reg_convention_{orig,trans} && reg_collision_{orig,trans} && bool_vars_cov
-  -- && is left-associative, so decompose from right to left (28 conjuncts, 27 steps)
+  -- && is left-associative, so decompose from right to left (30 conjuncts, 29 steps)
   unfold checkCertificateExec at h
-  have ⟨h27, h_boolvarscov⟩       := and_true_of_and_eq_true h
+  have ⟨h29, _h_codegenpreq_t⟩    := and_true_of_and_eq_true h
+  have ⟨h28, _h_codegenpreq_o⟩    := and_true_of_and_eq_true h29
+  have ⟨h27, h_boolvarscov⟩       := and_true_of_and_eq_true h28
   have ⟨h26, _h_regcoll_t⟩        := and_true_of_and_eq_true h27
   have ⟨h25, _h_regcoll_o⟩        := and_true_of_and_eq_true h26
   have ⟨h24, _h_noscratch_t⟩      := and_true_of_and_eq_true h25

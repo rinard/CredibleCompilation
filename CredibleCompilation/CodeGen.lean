@@ -10,6 +10,7 @@ import CredibleCompilation.DCEOpt
 import CredibleCompilation.PeepholeOpt
 import CredibleCompilation.RegAllocOpt
 import CredibleCompilation.ExecChecker
+import CredibleCompilation.CodeGenLayout
 import CredibleCompilation.BoundsOpt
 import CredibleCompilation.ArmSemantics
 import CredibleCompilation.ArmCorrectness
@@ -35,44 +36,9 @@ Rejects programs that don't type-check.
 -- ============================================================
 
 /-- Assign stack offsets to all variables that appear in the program. -/
-private def collectVars (p : Prog) : List Var :=
-  let vars := p.code.foldl (fun acc instr =>
-    match instr with
-    | .const x _       => if acc.contains x then acc else acc ++ [x]
-    | .copy x y        => let a := if acc.contains x then acc else acc ++ [x]
-                          if a.contains y then a else a ++ [y]
-    | .binop x _ y z   => let a := if acc.contains x then acc else acc ++ [x]
-                          let b := if a.contains y then a else a ++ [y]
-                          if b.contains z then b else b ++ [z]
-    | .boolop x be     => let a := if acc.contains x then acc else acc ++ [x]
-                          be.vars.foldl (fun a v => if a.contains v then a else a ++ [v]) a
-    | .arrLoad x _ idx _ => let a := if acc.contains x then acc else acc ++ [x]
-                            if a.contains idx then a else a ++ [idx]
-    | .arrStore _ idx val _ => let a := if acc.contains idx then acc else acc ++ [idx]
-                               if a.contains val then a else a ++ [val]
-    | .fbinop x _ y z  => let a := if acc.contains x then acc else acc ++ [x]
-                          let b := if a.contains y then a else a ++ [y]
-                          if b.contains z then b else b ++ [z]
-    | .intToFloat x y  => let a := if acc.contains x then acc else acc ++ [x]
-                          if a.contains y then a else a ++ [y]
-    | .floatToInt x y  => let a := if acc.contains x then acc else acc ++ [x]
-                          if a.contains y then a else a ++ [y]
-    | .floatUnary x _ y => let a := if acc.contains x then acc else acc ++ [x]
-                          if a.contains y then a else a ++ [y]
-    | .fternop x _ a b c => let acc := if acc.contains x then acc else acc ++ [x]
-                            let acc := if acc.contains a then acc else acc ++ [a]
-                            let acc := if acc.contains b then acc else acc ++ [b]
-                            if acc.contains c then acc else acc ++ [c]
-    | .print _ vs      => vs.foldl (fun a v => if a.contains v then a else a ++ [v]) acc
-    | .goto _          => acc
-    | .ifgoto be _     => be.vars.foldl (fun a v => if a.contains v then a else a ++ [v]) acc
-    | .halt            => acc
-  ) ([] : List Var)
-  -- Also add observable variables
-  p.observable.foldl (fun acc v => if acc.contains v then acc else acc ++ [v]) vars
-
-private def buildVarMap (vars : List Var) : List (Var × Nat) :=
-  (List.range vars.length).zip vars |>.map fun (i, v) => (v, (i + 1) * 8)
+-- collectVars, buildVarMap, lookupVar, varToArmReg, varToArmFReg,
+-- buildVarLayout, checkCallerSaveSpec, checkCodegenPrereqs
+-- are imported from CodeGenLayout.lean
 
 private theorem mem_fst_of_mem_zip {a : α} {b : β} {l1 : List α} {l2 : List β}
     (h : (a, b) ∈ l1.zip l2) : a ∈ l1 := by
@@ -110,8 +76,6 @@ private theorem buildVarMap_offsets_nodup (vars : List Var) :
       simp only [List.zip_cons_cons, List.pairwise_cons]
       exact ⟨fun ⟨x, w⟩ hm => hmem x (mem_fst_of_mem_zip hm), ih tl⟩
 
-private def lookupVar (varMap : List (Var × Nat)) (v : Var) : Option Nat :=
-  varMap.find? (fun (x, _) => x == v) |>.map Prod.snd
 
 /-- Collect all distinct array names used in arrLoad/arrStore instructions. -/
 private def collectArrays (p : Prog) : List String :=
@@ -358,46 +322,6 @@ where
 -- § 2b. VarLayout construction
 -- ============================================================
 
-private def varToArmReg (v : Var) : Option ArmReg :=
-  -- Int registers (__ir{N}) and bool registers (__br{N}) both use ARM x-registers
-  let n? := if v.startsWith "__ir" then (v.drop 4).toNat?
-            else if v.startsWith "__br" then (v.drop 4).toNat?
-            else none
-  match n? with
-  | some 0 => some .x0 | some 1 => some .x1 | some 2 => some .x2
-  | some 3 => some .x3 | some 4 => some .x4 | some 5 => some .x5
-  | some 6 => some .x6 | some 7 => some .x7 | some 8 => some .x8
-  | some 9 => some .x9 | some 10 => some .x10 | some 11 => some .x11
-  | some 12 => some .x12 | some 13 => some .x13 | some 14 => some .x14
-  | some 15 => some .x15 | some 16 => some .x16 | some 17 => some .x17
-  | some 18 => some .x18 | some 19 => some .x19 | some 20 => some .x20
-  | some 21 => some .x21 | some 22 => some .x22 | some 23 => some .x23
-  | some 24 => some .x24 | some 25 => some .x25 | some 26 => some .x26
-  | some 27 => some .x27 | some 28 => some .x28 | _ => none
-
-private def varToArmFReg (v : Var) : Option ArmFReg :=
-  if v.startsWith "__fr" then
-    match (v.drop 4).toNat? with
-    | some 0 => some .d0 | some 1 => some .d1 | some 2 => some .d2
-    | some 3 => some .d3 | some 4 => some .d4 | some 5 => some .d5
-    | some 6 => some .d6 | some 7 => some .d7 | some 8 => some .d8
-    | some 9 => some .d9 | some 10 => some .d10 | some 11 => some .d11
-    | some 12 => some .d12 | some 13 => some .d13 | some 14 => some .d14
-    | some 15 => some .d15 | _ => none
-  else none
-
-/-- Build a VarLayout from the variable list and stack offset map.
-    Register-allocated vars (named `__irN`/`__brN`/`__frN`) map to their register;
-    all others map to their stack slot. -/
-private def buildVarLayout (vars : List Var) (varMap : List (Var × Nat)) : VarLayout :=
-  { entries := vars.filterMap fun v =>
-      match varToArmReg v with
-      | some r => some (v, .ireg r)
-      | none => match varToArmFReg v with
-        | some r => some (v, .freg r)
-        | none => match lookupVar varMap v with
-          | some off => some (v, .stack off)
-          | none => none }
 
 -- ============================================================
 -- § 2c. Call-site save/restore for caller-saved registers
@@ -579,55 +503,7 @@ private theorem lookup_mem {v : String} {loc : VarLoc}
 -- § 4b. Caller-save spec checker
 -- ============================================================
 
-/-- Boolean no-duplicates check for a list. -/
-private def listNodupBool [BEq α] : List α → Bool
-  | [] => true
-  | x :: rest => !rest.any (· == x) && listNodupBool rest
-
-private theorem listNodupBool_sound [DecidableEq α] {l : List α}
-    (h : listNodupBool l = true) : l.Nodup := by
-  induction l with
-  | nil => exact List.nodup_nil
-  | cons x rest ih =>
-    simp only [listNodupBool, Bool.and_eq_true, Bool.not_eq_true'] at h
-    obtain ⟨hNotIn, hRest⟩ := h
-    refine List.nodup_cons.mpr ⟨?_, ih hRest⟩
-    intro hMem
-    simp only [Bool.eq_false_iff] at hNotIn
-    exact hNotIn (List.any_eq_true.mpr ⟨x, hMem, by simp⟩)
-
-/-- Check all properties needed by `callerSave_composition` for
-    the entries produced by `genCallerSaveAll layout varMap`. -/
-private def checkCallerSaveSpec (layout : VarLayout) (varMap : List (Var × Nat)) : Bool :=
-  let entries := genCallerSaveAll layout varMap
-  -- hFresh: no save offset equals a stack layout offset
-  entries.all (fun e =>
-    layout.entries.all (fun (_, loc) =>
-      match loc with | .stack o => !(o == e.off) | _ => true)) &&
-  -- hNodup: save offsets pairwise distinct
-  listNodupBool (entries.map CallerSaveEntry.off) &&
-  -- hCoversIreg: every caller-saved ireg in layout has an entry
-  layout.entries.all (fun (_, loc) =>
-    match loc with
-    | .ireg r => !r.isCallerSaved ||
-        entries.any (fun e => match e with | .ireg ir _ => ir == r | _ => false)
-    | _ => true) &&
-  -- hCoversFreg: every caller-saved freg in layout has an entry
-  layout.entries.all (fun (_, loc) =>
-    match loc with
-    | .freg r => !r.isCallerSaved ||
-        entries.any (fun e => match e with | .freg fr _ => fr == r | _ => false)
-    | _ => true) &&
-  -- hUniqIreg: any two ireg entries with the same register have equal offsets
-  entries.all (fun e1 => entries.all (fun e2 =>
-    match e1, e2 with
-    | .ireg ir1 off1, .ireg ir2 off2 => !(ir1 == ir2) || (off1 == off2)
-    | _, _ => true)) &&
-  -- hUniqFreg: any two freg entries with the same register have equal offsets
-  entries.all (fun e1 => entries.all (fun e2 =>
-    match e1, e2 with
-    | .freg fr1 off1, .freg fr2 off2 => !(fr1 == fr2) || (off1 == off2)
-    | _, _ => true))
+-- listNodupBool, checkCallerSaveSpec: imported from CodeGenLayout.lean
 
 /-- Soundness: if the caller-save check passes, all 6 properties hold. -/
 private theorem checkCallerSaveSpec_sound {layout : VarLayout} {varMap : List (Var × Nat)}
@@ -1735,17 +1611,19 @@ private theorem buildVarLayout_complete {p : Prog} {v : Var}
           | some off => some (v, VarLoc.stack off)
           | none => none) :=
     List.mem_filterMap.mpr ⟨v, hv, hfv⟩
-  -- List.lookup succeeds when key is in list
-  generalize (collectVars p).filterMap _ = entries at hmem ⊢
+  -- List.lookup v entries ≠ none when (v, loc) ∈ entries
+  suffices ∀ (entries : List (Var × VarLoc)),
+      (v, loc) ∈ entries → List.lookup v entries ≠ none by exact this _ hmem
+  intro entries hmem
   induction entries with
   | nil => simp at hmem
   | cons hd tl ih =>
-    simp only [List.lookup]
+    simp [List.lookup]
     split
     · simp
     · cases hmem with
-      | head => rename_i hne; simp [BEq.beq] at hne
-      | tail _ htl => exact ih htl
+      | head => rename_i hne; simp [beq_self_eq_true] at hne
+      | tail _ h => exact ih h
 
 /-- Every variable in `TAC.vars instr` for any instruction in `p.code` is in `collectVars p`. -/
 -- Helper: the collectVars step function adds all vars of the instruction
@@ -2225,14 +2103,6 @@ private theorem mem_collectVars_imp {p : Prog} {v : Var} (hv : v ∈ collectVars
     exact collectVars_code_pred (by simp) hP v hCode
   · exact Or.inr hObs
 
-/-- Pre-check the codegen-specific properties that are hard to derive from the pipeline:
-    layout injectivity and caller-save spec. Both are decidable Bool checks on the
-    constructed layout. Checked as a precondition to `generateAsm_total`. -/
-private def checkCodegenPrereqs (p : Prog) : Bool :=
-  let vars := collectVars p
-  let varMap := buildVarMap vars
-  let layout := buildVarLayout vars varMap
-  layout.isInjective && checkCallerSaveSpec layout varMap
 
 /-- Layout injectivity from the direct codegen prereq check. -/
 private theorem buildVarLayout_injective (p : Prog)
