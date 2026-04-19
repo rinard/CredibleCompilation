@@ -23,7 +23,122 @@ Compromises:
 
   Provability Design Decisions:
     Programming language level data types (integers, floats) identical to hardware data types. 
+
+    No gotos in source while language - interferes with while to TAC proof. 
+
+    hasSimpleOps and checkBoolExprNoArrRead checks in the certificate checker. These rule out potential expression patterns that the proofs find difficult to handle. They are true of programs that the While to TAC compiler produces and true of programs that optimizer produces (because the optimization is rejected if it does not satisfy). Not a problem in practice - checkBoolExprNoArrRead is avoided by placing read array value in variable before boolexpr. hasSimpleOps removes .bexpr issues (treats ints/floats as booleans). 
+
+  Certificate checks that typing context does not change when going from original to transformed program. So eliminated variables persist in the typing context. The original typing context also assigns a type to every possible variable name, with naming conventions for bool, integer, and float variables. So passes have to conform to this naming convention for any new variables that they add. One approach is to prepopulate the typing context with register and temporary names. I'm telling it to use this approach. Next time around make sure to enable arbitrary typctx extensions. 
+
+  Surprises: .bexpr - treats ints/floats as booleans. left over from development, was a potential blocker to totality theorem that says compiler always generates asm output. 
+    Propositional checker vs. executable checker. Introduced by Claude for proof structuring reasons. 
+
++++ Recall codegen anomaly around r18 - one app silently failed. 
+ 
+> what happens if r18 used in generated code? why is this register reserved?
+
+x18 is the platform register on macOS/iOS — the OS reserves it for thread-local storage (TLS). The kernel sets x18 to point to the thread's TLS block, and any system call or library function (like _printf, _exit) may assume it's intact. Clobbering x18 could cause crashes in libc or the OS runtime.
+
++++  Another codegen anomaly - without optimization, k18 generates a stack size larger than 4095. The prologue and epilogue use add and sub immediates to update stack pointer. Fails (does not assemble) when stack size no longer fits in immediate for add and sub. Stack offsets up to 32760 fit in the load and store immediates. Code right now supports up to this size. All of this is in the unverified code gen. 
+
+Originally used register 16 as part of the new code gen when frame size does not fit. 
+
+  Question and answer session:
+
+> is r16 ok for this - why was it reserved in the first place? why not use one of the scratch registers 0-2
+
+  Good question. x16/x17 are reserved because the linker may clobber them — when a bl target is too far away, the linker inserts a veneer (trampoline) that uses x16/x17 as scratch. So any bl _printf or bl _exit could silently destroy x16/x17 between the call site and the target.
+
+But in the prologue/epilogue, there are no bl instructions between our mov x16 and the sub/add that consumes it — it's purely local arithmetic. So x16 is safe here. This is actually the intended ABI use: x16/x17 are "intra-procedure-call scratch" registers, meant for exactly this kind of compiler-internal plumbing.
+
+As for x0–x2: they'd work in the prologue (x0 gets overwritten with mov x0, #0 right after), but in the epilogue x0 already holds the return value:
+
+> how about using x1 in epilogue
+
+    You're right — x1 is not the return value and is free at that point. It's a simpler choice since it doesn't carry the "linker might clobber it" baggage that requires reasoning about. Let me switch to x1.
+
+> how would this affect a totality proof (working on this in another session) that the compiler always generates asm
   
+It doesn't. The subSpFrame/addSpFrame/addFp are pure if/else expressions that both produce List String — neither branch can fail. They're in the unverified generateAsm wrapper, not in verifiedGenerateAsm.
+
+The totality proof (your plan in zesty-tumbling-sunrise.md) is about showing verifiedGenerateAsm tyCtx p = .ok r. The wrapper generateAsm can only fail at the defense-in-depth checks (callee-save mismatch), not at string assembly. The frame size helpers just change which strings get emitted, with no error path.
+
+> can you add a quick defense in depth check to the unverified code gen
+
+Done. Now instead of a cryptic assembler error, programs with >4095 stack variables get a clear error message up front. Note this adds a new error path to generateAsm, which would need to be discharged in the totality proof — but it's a simple vars.length bound that real programs won't hit.
+
++++ 
+
+> are you aware of all register usage conventions on this platform and can you audit the code to see if the compiler follows these conventions
+
+Let me do a systematic audit. The AArch64 macOS calling convention (AAPCS64 + Apple platform ABI) has these rules:
+
+Register	Role	Convention
+x0–x7	args/results	caller-saved
+x8	indirect result	caller-saved
+x9–x15	temporaries	caller-saved
+x16–x17	linker scratch (ip0/ip1)	clobbered by veneers at bl
+x18	platform register	never touch (macOS TLS)
+x19–x28	general purpose	callee-saved
+x29	frame pointer	callee-saved
+x30	link register	callee-saved
+sp	stack pointer	16-byte aligned at bl
+d0–d7	float args/results	caller-saved
+d8–d15	float temporaries	callee-saved
+d16–d31	float temporaries	caller-saved
+Let me check each concern:
+  
+...
+
+Here's the full audit:
+
+1. x18 never written — SAFE
+x18 is excluded from the allocatable register pool in RegAllocOpt.lean. violatesRegConvention rejects __ir18/__br18 names, RegConventionSafe formally blocks it, and there's a defense-in-depth check in generateAsm. x18 never appears in generated code.
+
+2. x16/x17 not live across bl — SAFE
+Both excluded from allocation pools and blocked by RegConventionSafe. No generated instruction puts values in x16/x17 that need to survive a bl. (Our new prologue use of x1 avoids this entirely.)
+
+3. Callee-saved int regs (x19–x28) — SAFE
+detectCalleeSavedLayout scans the layout, genVerifiedCalleeSave generates str/ldr pairs in prologue/epilogue, and there's a defense-in-depth check confirming all used callee-saved regs are actually saved.
+
+4. Callee-saved float regs (d8–d15) — SAFE
+Same mechanism. ArmFReg.isCallerSaved returns false for d8–d15, so they're detected and saved/restored. d8–d15 are allocatable but properly handled.
+
+5. SP 16-byte alignment — SAFE
+Frame size: rounded up to 16 via (... + 15) / 16 * 16
+Print calls: sub sp, sp, #16 or #32 (multiples of 16)
+Library calls: stp x29, x30, [sp, #-16]! / ldp x29, x30, [sp], #16
+6. Caller-saved regs around bl — SAFE
+Three call-site categories all handled:
+
+In-body print: genCallerSaveAll saves/restores ALL caller-saved regs in layout (formally verified via callerSaveSpec)
+Library calls (sin/exp/pow): same mechanism, excluding destination register
+Observable print at halt: haltSaveInstrs saves register values to stack first, then printf loads from stack — no live register values across bl
+7. x29/x30 save/restore — SAFE
+Prologue stores, epilogue restores. Library calls within the body use stp/ldp pairs. The bl _printf at div-by-zero/bounds-error handlers doesn't save x30, but the next instruction is bl _exit which never returns — harmless.
+
+8. d0–d7 around calls — SAFE
+d0–d2 are scratch (blocked from allocation). d3–d7 are caller-saved and handled by the genCallerSaveAll save/restore mechanism. d0 is the float argument/return register for library calls — not allocatable, so no variable value is in d0 across a bl.
+
+No violations found. The compiler has a solid layered defense: register allocator exclusion, naming convention checks, formal RegConventionSafe property, caller/callee-save protocols with formal proofs, and defense-in-depth runtime checks.
+
++++
+
+Partial def issue for proving compiler termination. This is a Lean issue:
+
+> what is the partial def issue and what is the fix
+
+10 functions in the compiler use partial def — Lean's escape hatch for functions without a termination proof. They compile and run fine, but Lean's logic treats them as opaque axioms. This means:
+
+The totality theorem ∃ asm, generateAsm ... = .ok asm is provable (Lean can't see inside the partial def to find a contradiction)
+But operationally meaningless — if analyzeLiveness loops forever, generateAsm never returns, and the "existing" asm is a fiction
+The 10 functions are all worklist/fixpoint algorithms that iterate until convergence. They always terminate in practice (bounded by lattice height × program size) but lack a Lean termination proof.
+
+The fix: Add a fuel : Nat parameter to each. The recursive call passes fuel - 1. When fuel hits 0, return a conservative default (e.g., "all variables are live" for liveness, "no constants known" for const prop). Then remove partial.
+
+This makes every function provably total. Fuel exhaustion never produces wrong code — it just produces less-optimized code, which the certificate checker validates anyway. The default fuel is set high enough (e.g., prog.size * latticeHeight) that it never triggers in practice.
+
+The conversion is mechanical — ~5 minutes per function, ~half a day total for all 10.
 
 0) Initial certificate prompt:
 

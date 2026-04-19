@@ -3194,6 +3194,21 @@ def generateAsm (tyCtx : TyCtx) (p : Prog) : Except String String := do
   -- Layout: [scratch 8B] [var1 8B] ... [varN 8B] [callee-saved slots] [padding] [x29 8B] [x30 8B]
   let calleeSaveBytes := (csIntRegs.length + csFloatRegs.length) * 8
   let frameSize := ((vars.length + 1) * 8 + calleeSaveBytes + 16 + 15) / 16 * 16
+  if frameSize > 32760 then
+    .error s!"stack frame too large ({frameSize} bytes, max 32760) — too many variables for ldr/str immediate offset"
+  -- Helpers for large immediates (AArch64 add/sub only support 12-bit unsigned imm)
+  let subSpFrame := if frameSize ≤ 4095 then
+      [s!"  sub sp, sp, #{frameSize}"]
+    else
+      [s!"  mov x1, #{frameSize}", "  sub sp, sp, x1"]
+  let addSpFrame := if frameSize ≤ 4095 then
+      [s!"  add sp, sp, #{frameSize}"]
+    else
+      [s!"  mov x1, #{frameSize}", "  add sp, sp, x1"]
+  let addFp := if frameSize - 16 ≤ 4095 then
+      [s!"  add x29, sp, #{frameSize - 16}"]
+    else
+      [s!"  mov x1, #{frameSize - 16}", "  add x29, sp, x1"]
   -- Pretty-print callee-save prologue/epilogue from verified ArmInstr
   let lbl := ppLabel r.haltS r.divS r.boundsS r.tacPcOf
   let csProlog := ppInstrs lbl r.calleeSavePrologue
@@ -3202,11 +3217,11 @@ def generateAsm (tyCtx : TyCtx) (p : Prog) : Except String String := do
     ".global _main",
     ".align 2",
     "",
-    "_main:",
-    s!"  sub sp, sp, #{frameSize}",
-    s!"  str x30, [sp, #{frameSize - 8}]",
-    s!"  str x29, [sp, #{frameSize - 16}]",
-    s!"  add x29, sp, #{frameSize - 16}"] ++
+    "_main:"] ++
+    subSpFrame ++
+    [s!"  str x30, [sp, #{frameSize - 8}]",
+    s!"  str x29, [sp, #{frameSize - 16}]"] ++
+    addFp ++
     (if csProlog.isEmpty then [] else
       ["  // Save callee-saved registers"] ++ csProlog) ++
     ["",
@@ -3262,9 +3277,9 @@ def generateAsm (tyCtx : TyCtx) (p : Prog) : Except String String := do
     (if csEpilog.isEmpty then [] else
       ["  // Restore callee-saved registers"] ++ csEpilog) ++
     [s!"  ldr x29, [sp, #{frameSize - 16}]",
-     s!"  ldr x30, [sp, #{frameSize - 8}]",
-     s!"  add sp, sp, #{frameSize}",
-     "  ret",
+     s!"  ldr x30, [sp, #{frameSize - 8}]"] ++
+    addSpFrame ++
+    ["  ret",
      "",
      ".Ldiv_by_zero:",
      "  adrp x0, .Ldiv_msg@PAGE",
