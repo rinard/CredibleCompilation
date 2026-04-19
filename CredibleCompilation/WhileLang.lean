@@ -359,6 +359,109 @@ def compileBool (b : SBool) (offset nextTmp : Nat) : List TAC × BoolExpr × Nat
     let (codeB, vb, tmp2) := compileExpr b (offset + codeA.length) tmp1
     (codeA ++ codeB, .fcmp op (.var va) (.var vb), tmp2)
 
+/-- The BoolExpr returned by `compileBool` always has simple ops. -/
+theorem compileBool_hasSimpleOps (b : SBool) (offset nextTmp : Nat) :
+    (compileBool b offset nextTmp).2.1.hasSimpleOps = true := by
+  induction b with
+  | lit => simp [compileBool, BoolExpr.hasSimpleOps]
+  | bvar => simp [compileBool, BoolExpr.hasSimpleOps]
+  | cmp => simp [compileBool, BoolExpr.hasSimpleOps]
+  | not e ih => simp [compileBool, BoolExpr.hasSimpleOps, ih]
+  | and a b iha ihb =>
+    simp [compileBool, BoolExpr.hasSimpleOps]
+  | or a b iha ihb =>
+    simp [compileBool, BoolExpr.hasSimpleOps]
+  | barrRead => simp [compileBool, BoolExpr.hasSimpleOps]
+  | fcmp => simp [compileBool, BoolExpr.hasSimpleOps]
+
+/-- `compileExpr` never produces `boolop` or `ifgoto` instructions. -/
+theorem compileExpr_code_simpleOps (e : SExpr) (offset nextTmp : Nat) :
+    (compileExpr e offset nextTmp).1.all (fun instr =>
+      match instr with | .boolop _ _ | .ifgoto _ _ => false | _ => true) = true := by
+  induction e generalizing offset nextTmp with
+  | lit | flit | var => simp [compileExpr]
+  | bin _ a b iha ihb =>
+    simp only [compileExpr, List.all_append, Bool.and_eq_true, List.all_cons, List.all_nil,
+      Bool.true_and, and_true]
+    exact ⟨iha _ _, ihb _ _⟩
+  | fbin _ a b iha ihb =>
+    simp only [compileExpr, List.all_append, Bool.and_eq_true, List.all_cons, List.all_nil,
+      Bool.true_and, and_true]
+    exact ⟨iha _ _, ihb _ _⟩
+  | intToFloat a ih =>
+    simp only [compileExpr, List.all_append, Bool.and_eq_true, List.all_cons, List.all_nil,
+      Bool.true_and, and_true]
+    exact ih _ _
+  | floatToInt a ih =>
+    simp only [compileExpr, List.all_append, Bool.and_eq_true, List.all_cons, List.all_nil,
+      Bool.true_and, and_true]
+    exact ih _ _
+  | floatUnary _ a ih =>
+    simp only [compileExpr, List.all_append, Bool.and_eq_true, List.all_cons, List.all_nil,
+      Bool.true_and, and_true]
+    exact ih _ _
+  | arrRead _ idx ih =>
+    simp only [compileExpr, List.all_append, Bool.and_eq_true, List.all_cons, List.all_nil,
+      Bool.true_and, and_true]
+    exact ih _ _
+  | farrRead _ idx ih =>
+    simp only [compileExpr, List.all_append, Bool.and_eq_true, List.all_cons, List.all_nil,
+      Bool.true_and, and_true]
+    exact ih _ _
+
+/-- compileExpr code trivially satisfies instrSimpleOps (no boolop/ifgoto). -/
+private theorem compileExpr_simpleOps (e : SExpr) (offset nextTmp : Nat) :
+    (compileExpr e offset nextTmp).1.all (fun instr =>
+      match instr with | .boolop _ be | .ifgoto be _ => be.hasSimpleOps | _ => true) = true := by
+  have h := compileExpr_code_simpleOps e offset nextTmp
+  rw [List.all_eq_true] at h ⊢
+  intro x hx; have := h x hx; cases x <;> simp_all
+
+/-- All instructions in the code produced by `compileBool` have simple bool ops. -/
+theorem compileBool_code_simpleOps (b : SBool) (offset nextTmp : Nat) :
+    ∀ instr ∈ (compileBool b offset nextTmp).1,
+      match instr with | .boolop _ be | .ifgoto be _ => be.hasSimpleOps = true | _ => True := by
+  induction b generalizing offset nextTmp with
+  | lit | bvar => simp [compileBool]
+  | cmp _ a b =>
+    intro instr hmem; unfold compileBool at hmem
+    simp only [List.mem_append] at hmem
+    rcases hmem with h | h <;>
+      (have := List.all_eq_true.mp (compileExpr_simpleOps _ _ _) _ h
+       cases instr <;> simp_all)
+  | not e ih => intro instr hmem; exact ih _ _ instr (by unfold compileBool at hmem; exact hmem)
+  | fcmp _ a b =>
+    intro instr hmem; unfold compileBool at hmem
+    simp only [List.mem_append] at hmem
+    rcases hmem with h | h <;>
+      (have := List.all_eq_true.mp (compileExpr_simpleOps _ _ _) _ h
+       cases instr <;> simp_all)
+  | and a b iha ihb =>
+    intro instr hmem; unfold compileBool at hmem
+    simp only [List.mem_append, List.mem_cons, List.mem_nil_iff, or_false] at hmem
+    rcases hmem with ((h | h) | h) | (h | h | h | h)
+    · exact iha _ _ _ h
+    · subst h; simp [BoolExpr.hasSimpleOps, compileBool_hasSimpleOps]
+    · exact ihb _ _ _ h
+    · subst h; simp [BoolExpr.hasSimpleOps, compileBool_hasSimpleOps]
+    all_goals (subst h; simp)
+  | or a b iha ihb =>
+    intro instr hmem; unfold compileBool at hmem
+    simp only [List.mem_append, List.mem_cons, List.mem_nil_iff, or_false] at hmem
+    rcases hmem with ((h | h) | h) | (h | h | h | h)
+    · exact iha _ _ _ h
+    · subst h; simp [BoolExpr.hasSimpleOps, compileBool_hasSimpleOps]
+    · exact ihb _ _ _ h
+    · subst h; simp [BoolExpr.hasSimpleOps, compileBool_hasSimpleOps]
+    all_goals (subst h; simp)
+  | barrRead _ idx =>
+    intro instr hmem; unfold compileBool at hmem
+    simp only [List.mem_append, List.mem_cons, List.mem_nil_iff, or_false] at hmem
+    rcases hmem with h | h
+    · have := List.all_eq_true.mp (compileExpr_simpleOps idx _ _) _ h
+      cases instr <;> simp_all
+    · subst h; simp
+
 /-- Compute code length of a compiled expression (offset-independent). -/
 def exprCodeLen : SExpr → Nat
   | .lit _ | .flit _ => 1

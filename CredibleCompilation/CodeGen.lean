@@ -2374,7 +2374,8 @@ theorem verifiedGenerateAsm_total (tyCtx : TyCtx) (p : Prog)
     (hPrereqs : checkCodegenPrereqs p = true)
     (hWTL : checkWellTypedLayout tyCtx
       (buildVarLayout (collectVars p) (buildVarMap (collectVars p))) p.code = none)
-    (hBranch : checkBranchTargets p.code = none) :
+    (hBranch : checkBranchTargets p.code = none)
+    (hSimpleOps : checkBoolExprSimpleOps p = true) :
     ∃ r, verifiedGenerateAsm tyCtx p = .ok r := by
   unfold verifiedGenerateAsm
   simp only [hWT, Bool.not_true, Bool.true_and, ↓reduceIte]
