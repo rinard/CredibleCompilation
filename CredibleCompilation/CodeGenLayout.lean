@@ -60,11 +60,17 @@ def lookupVar (varMap : List (Var × Nat)) (v : Var) : Option Nat :=
 -- § 2. Register mapping
 -- ============================================================
 
+/-- Proof-friendly `startsWith`: checks whether `pre.toList` is a prefix of `v.toList`.
+    Unlike `String.startsWith` (which uses opaque byte comparison), this reduces
+    under `simp [startsWithList, List.isPrefixOf]` for concrete prefixes. -/
+def startsWithList (v : Var) (pre : String) : Bool :=
+  pre.toList.isPrefixOf v.toList
+
 /-- Map a variable name to an ARM integer register.
     `__irN` and `__brN` both map to xN (they share the integer register file). -/
 def varToArmReg (v : Var) : Option ArmReg :=
-  let n? := if v.startsWith "__ir" then (v.drop 4).toNat?
-            else if v.startsWith "__br" then (v.drop 4).toNat?
+  let n? := if startsWithList v "__ir" then (v.drop 4).toNat?
+            else if startsWithList v "__br" then (v.drop 4).toNat?
             else none
   match n? with
   | some 0 => some .x0 | some 1 => some .x1 | some 2 => some .x2
@@ -81,7 +87,7 @@ def varToArmReg (v : Var) : Option ArmReg :=
 /-- Map a variable name to an ARM floating-point register.
     `__frN` maps to dN. -/
 def varToArmFReg (v : Var) : Option ArmFReg :=
-  if v.startsWith "__fr" then
+  if startsWithList v "__fr" then
     match (v.drop 4).toNat? with
     | some 0 => some .d0 | some 1 => some .d1 | some 2 => some .d2
     | some 3 => some .d3 | some 4 => some .d4 | some 5 => some .d5
@@ -229,5 +235,5 @@ def checkCodegenPrereqs (tyCtx : TyCtx) (p : Prog) : Bool :=
   let vars := collectVars p
   let varMap := buildVarMap vars
   let layout := buildVarLayout vars varMap
-  layout.isInjective && checkCallerSaveSpec layout varMap &&
+  layout.regConventionSafe && layout.isInjective && checkCallerSaveSpec layout varMap &&
   checkWellTypedLayout tyCtx layout p.code == none

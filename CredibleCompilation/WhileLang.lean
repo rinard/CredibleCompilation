@@ -2024,6 +2024,198 @@ theorem compileExprs_allSeq (args : List SExpr) (offset nextTmp : Nat) :
     · exact compileExpr_allSeq e _ _ instr he
     · exact ih _ _ instr hrest
 
+/-- compileExpr output has simple ops (it never emits boolop/ifgoto). -/
+private theorem compileExpr_hasSimpleOps_mem (e : SExpr) (offset nextTmp : Nat) :
+    ∀ instr ∈ (compileExpr e offset nextTmp).1, instr.hasSimpleOps = true := by
+  intro instr hmem
+  exact List.all_eq_true.mp (compileExpr_simpleOps e offset nextTmp) instr hmem
+
+/-- compileExprs output has simple ops. -/
+private theorem compileExprs_hasSimpleOps_mem (args : List SExpr) (offset nextTmp : Nat) :
+    ∀ instr ∈ (compileExprs args offset nextTmp).1, instr.hasSimpleOps = true := by
+  induction args generalizing offset nextTmp with
+  | nil => intro _ hmem; simp [compileExprs] at hmem
+  | cons e rest ih =>
+    intro instr hmem
+    simp only [compileExprs, List.mem_append] at hmem
+    rcases hmem with he | hrest
+    · exact compileExpr_hasSimpleOps_mem e _ _ instr he
+    · exact ih _ _ instr hrest
+
+/-- compileBool output has simple ops (bridge from Prop form to Bool). -/
+private theorem compileBool_hasSimpleOps_mem (b : SBool) (offset nextTmp : Nat) :
+    ∀ instr ∈ (compileBool b offset nextTmp).1, instr.hasSimpleOps = true := by
+  intro instr hmem
+  have := compileBool_code_simpleOps b offset nextTmp instr hmem
+  cases instr <;> simp_all [TAC.hasSimpleOps]
+
+/-- All instructions in compiled statement code have simple boolean ops. -/
+theorem compileStmt_code_simpleOps (s : Stmt) (offset nextTmp : Nat)
+    (labels : List (String × Nat)) :
+    ∀ instr ∈ (compileStmt s offset nextTmp labels).1, instr.hasSimpleOps = true := by
+  induction s generalizing offset nextTmp labels with
+  | skip => intro _ hmem; simp [compileStmt] at hmem
+  | assign x e =>
+    cases e with
+    | lit _ => intro _ hmem; simp [compileStmt] at hmem; subst hmem; rfl
+    | var _ => intro _ hmem; simp [compileStmt] at hmem; subst hmem; rfl
+    | bin _ a b =>
+      intro instr hmem; simp [compileStmt, List.mem_append] at hmem
+      rcases hmem with ha | hb | rfl
+      · exact compileExpr_hasSimpleOps_mem a _ _ instr ha
+      · exact compileExpr_hasSimpleOps_mem b _ _ instr hb
+      · rfl
+    | arrRead _ idx =>
+      intro instr hmem; simp [compileStmt, List.mem_append] at hmem
+      rcases hmem with hi | rfl | rfl
+      · exact compileExpr_hasSimpleOps_mem idx _ _ instr hi
+      · rfl
+      · rfl
+    | _ =>
+      intro instr hmem; simp [compileStmt, List.mem_append] at hmem
+      rcases hmem with he | rfl
+      · exact compileExpr_hasSimpleOps_mem _ _ _ instr he
+      · rfl
+  | bassign _ b =>
+    simp only [compileStmt]
+    intro instr hmem
+    simp only [List.mem_append, List.mem_cons, List.mem_nil_iff, or_false] at hmem
+    rcases hmem with hcode | rfl
+    · exact compileBool_hasSimpleOps_mem b _ _ instr hcode
+    · simp [TAC.hasSimpleOps, compileBool_hasSimpleOps]
+  | arrWrite _ idx val =>
+    intro instr hmem; simp [compileStmt, List.mem_append] at hmem
+    rcases hmem with hi | hv | rfl
+    · exact compileExpr_hasSimpleOps_mem idx _ _ instr hi
+    · exact compileExpr_hasSimpleOps_mem val _ _ instr hv
+    · rfl
+  | barrWrite arr idx bval =>
+    match hci : compileExpr idx offset nextTmp with
+    | (codeIdx, vIdx, tmp1) =>
+    match hcb : compileBool bval (offset + codeIdx.length) tmp1 with
+    | (codeBool, be, tmp2) =>
+    have hbe : be.hasSimpleOps = true := by
+      have : be = (compileBool bval (offset + codeIdx.length) tmp1).2.1 := by simp [hcb]
+      rw [this]; exact compileBool_hasSimpleOps bval _ _
+    simp only [compileStmt, hci, hcb]
+    intro instr hmem
+    simp only [List.mem_append, List.mem_cons, List.mem_nil_iff, or_false] at hmem
+    rcases hmem with ((hi | hb) | rfl | rfl | rfl | rfl) | rfl
+    · have := compileExpr_hasSimpleOps_mem idx offset nextTmp instr
+      simp [hci] at this; exact this hi
+    · have := compileBool_hasSimpleOps_mem bval (offset + codeIdx.length) tmp1 instr
+      simp [hcb] at this; exact this hb
+    · simp [TAC.hasSimpleOps, hbe]
+    · rfl
+    · rfl
+    · rfl
+    · rfl
+  | seq s1 s2 ih1 ih2 =>
+    intro instr hmem
+    simp only [compileStmt, List.mem_append] at hmem
+    rcases hmem with h1 | h2
+    · exact ih1 _ _ labels instr h1
+    · exact ih2 _ _ labels instr h2
+  | ite b s1 s2 ih1 ih2 =>
+    match hcb : compileBool b offset nextTmp with
+    | (codeB, be, tmpB) =>
+    match hs2 : compileStmt s2 (offset + codeB.length + 1) tmpB labels with
+    | (codeElse, tmpE) =>
+    match hs1 : compileStmt s1 (offset + codeB.length + 1 + codeElse.length + 1) tmpE labels with
+    | (codeThen, _) =>
+    have hbe : be.hasSimpleOps = true := by
+      have : be = (compileBool b offset nextTmp).2.1 := by simp [hcb]
+      rw [this]; exact compileBool_hasSimpleOps b _ _
+    simp only [compileStmt, hcb, hs2, hs1]
+    intro instr hmem
+    simp only [List.mem_append, List.mem_cons, List.mem_nil_iff, or_false] at hmem
+    -- structure: ((((∈ codeB ∨ = ifgoto) ∨ ∈ codeElse) ∨ = goto) ∨ ∈ codeThen)
+    rcases hmem with (((hb | rfl) | h2) | rfl) | h1
+    · have := compileBool_hasSimpleOps_mem b offset nextTmp instr
+      simp [hcb] at this; exact this hb
+    · simp [TAC.hasSimpleOps, hbe]
+    · have h2' := ih2 (offset + codeB.length + 1) tmpB labels instr
+      simp only [hs2] at h2'; exact h2' h2
+    · rfl
+    · have h1' := ih1 (offset + codeB.length + 1 + codeElse.length + 1) tmpE labels instr
+      simp only [hs1] at h1'; exact h1' h1
+  | loop b body ih =>
+    match hcb : compileBool b offset nextTmp with
+    | (codeB, be, tmpB) =>
+    match hsbody : compileStmt body (offset + codeB.length + 1) tmpB labels with
+    | (codeBody, _) =>
+    have hbe : be.hasSimpleOps = true := by
+      have : be = (compileBool b offset nextTmp).2.1 := by simp [hcb]
+      rw [this]; exact compileBool_hasSimpleOps b _ _
+    simp only [compileStmt, hcb, hsbody]
+    intro instr hmem
+    simp only [List.mem_append, List.mem_cons, List.mem_nil_iff, or_false] at hmem
+    -- structure: (((∈ codeB ∨ = ifgoto) ∨ ∈ codeBody) ∨ = goto)
+    rcases hmem with ((hb | rfl) | hbody) | rfl
+    · have := compileBool_hasSimpleOps_mem b offset nextTmp instr
+      simp [hcb] at this; exact this hb
+    · simp [TAC.hasSimpleOps, BoolExpr.hasSimpleOps, hbe]
+    · have hih := ih (offset + codeB.length + 1) tmpB labels instr
+      simp only [hsbody] at hih; exact hih hbody
+    · rfl
+  | fassign x e =>
+    cases e with
+    | flit _ => intro _ hmem; simp [compileStmt] at hmem; subst hmem; rfl
+    | var _ => intro _ hmem; simp [compileStmt] at hmem; subst hmem; rfl
+    | fbin _ a b =>
+      intro instr hmem; simp [compileStmt, List.mem_append] at hmem
+      rcases hmem with ha | hb | rfl
+      · exact compileExpr_hasSimpleOps_mem a _ _ instr ha
+      · exact compileExpr_hasSimpleOps_mem b _ _ instr hb
+      · rfl
+    | intToFloat e =>
+      intro instr hmem; simp [compileStmt, List.mem_append] at hmem
+      rcases hmem with he | rfl
+      · exact compileExpr_hasSimpleOps_mem e _ _ instr he
+      · rfl
+    | floatUnary _ e =>
+      intro instr hmem; simp [compileStmt, List.mem_append] at hmem
+      rcases hmem with he | rfl
+      · exact compileExpr_hasSimpleOps_mem e _ _ instr he
+      · rfl
+    | farrRead _ idx =>
+      intro instr hmem; simp [compileStmt, List.mem_append] at hmem
+      rcases hmem with hi | rfl | rfl
+      · exact compileExpr_hasSimpleOps_mem idx _ _ instr hi
+      · rfl
+      · rfl
+    | _ =>
+      intro instr hmem; simp [compileStmt, List.mem_append] at hmem
+      rcases hmem with he | rfl
+      · exact compileExpr_hasSimpleOps_mem _ _ _ instr he
+      · rfl
+  | farrWrite _ idx val =>
+    intro instr hmem; simp [compileStmt, List.mem_append] at hmem
+    rcases hmem with hi | hv | rfl
+    · exact compileExpr_hasSimpleOps_mem idx _ _ instr hi
+    · exact compileExpr_hasSimpleOps_mem val _ _ instr hv
+    · rfl
+  | label _ => intro _ hmem; simp [compileStmt] at hmem
+  | goto _ => intro _ hmem; simp [compileStmt] at hmem; subst hmem; rfl
+  | ifgoto b _ =>
+    match hcb : compileBool b offset nextTmp with
+    | (codeB, be, tmpB) =>
+    have hbe : be.hasSimpleOps = true := by
+      have : be = (compileBool b offset nextTmp).2.1 := by simp [hcb]
+      rw [this]; exact compileBool_hasSimpleOps b _ _
+    simp only [compileStmt, hcb]
+    intro instr hmem
+    simp only [List.mem_append, List.mem_cons, List.mem_nil_iff, or_false] at hmem
+    rcases hmem with hb | rfl
+    · have := compileBool_hasSimpleOps_mem b offset nextTmp instr
+      simp [hcb] at this; exact this hb
+    · simp [TAC.hasSimpleOps, hbe]
+  | print _ args =>
+    intro instr hmem; simp [compileStmt, List.mem_append] at hmem
+    rcases hmem with he | rfl
+    · exact compileExprs_hasSimpleOps_mem args _ _ instr he
+    · rfl
+
 /-- All values in a label map are ≤ bound. -/
 def AllLabelsLe (bound : Nat) (labels : List (String × Nat)) : Prop :=
   ∀ k v, (k, v) ∈ labels → v ≤ bound
@@ -2421,6 +2613,82 @@ theorem compileToTAC_stepClosed (prog : Program) (_h : prog.typeCheck = true) :
         (by intro k v hmem
             have := collectLabels_allLabelsLe prog.body (initCode prog.decls).length k v hmem
             rw [compileStmt_length]; exact this)
+
+/-- initCode instructions have simple ops (they are all `const`, never boolop/ifgoto). -/
+theorem initCode_hasSimpleOps (decls : List (Var × VarTy)) :
+    ∀ instr ∈ initCode decls, instr.hasSimpleOps = true := by
+  intro instr hmem; simp only [initCode, List.mem_map] at hmem
+  obtain ⟨⟨_, ty⟩, _, rfl⟩ := hmem; cases ty <;> rfl
+
+/-- All instructions in `compileToTAC` output have simple boolean ops. -/
+theorem compileToTAC_allSimpleOps (prog : Program) :
+    ∀ instr, instr ∈ prog.compileToTAC.code.toList → instr.hasSimpleOps = true := by
+  intro instr hmem
+  have : prog.compileToTAC.code.toList =
+      initCode prog.decls ++ (compileStmt prog.body (initCode prog.decls).length 0
+        (collectLabels prog.body (initCode prog.decls).length)).1 ++ [TAC.halt] := by
+    simp [Program.compileToTAC, List.append_assoc]
+  rw [this] at hmem
+  simp only [List.mem_append] at hmem
+  rcases hmem with (hinit | hbody) | hhalt
+  · exact initCode_hasSimpleOps prog.decls _ hinit
+  · exact compileStmt_code_simpleOps prog.body _ _ _ _ hbody
+  · simp [List.mem_cons] at hhalt; subst hhalt; rfl
+
+/-- All goto/ifgoto targets in `compileToTAC` output are strictly less than the
+    program size. Stated without `match` to avoid dependent type issues. -/
+theorem compileToTAC_jumpTargetsBound (prog : Program) :
+    prog.compileToTAC.size > 0 ∧
+    (∀ l, .goto l ∈ prog.compileToTAC.code.toList → l < prog.compileToTAC.size) ∧
+    (∀ be l, .ifgoto be l ∈ prog.compileToTAC.code.toList → l < prog.compileToTAC.size) := by
+  -- Decompose the compiled code
+  have hcode : prog.compileToTAC.code =
+      (initCode prog.decls ++ (compileStmt prog.body (initCode prog.decls).length 0
+        (collectLabels prog.body (initCode prog.decls).length)).1 ++ [TAC.halt]).toArray := by
+    simp [Program.compileToTAC, List.append_assoc]
+  -- Size fact
+  have hsize : prog.compileToTAC.size =
+      (initCode prog.decls).length +
+      (compileStmt prog.body (initCode prog.decls).length 0
+        (collectLabels prog.body (initCode prog.decls).length)).1.length + 1 := by
+    simp [Prog.size, hcode]; omega
+  -- AllJumpsLe for the code body
+  have hjumps : AllJumpsLe
+      ((initCode prog.decls).length +
+        (compileStmt prog.body (initCode prog.decls).length 0
+          (collectLabels prog.body (initCode prog.decls).length)).1.length)
+      (initCode prog.decls ++ (compileStmt prog.body (initCode prog.decls).length 0
+        (collectLabels prog.body (initCode prog.decls).length)).1) := by
+    apply AllJumpsLe_append
+    · exact AllJumpsLe_of_allSeq (initCode_allSeq prog.decls)
+    · exact compileStmt_allJumpsLe prog.body (initCode prog.decls).length 0
+        (collectLabels prog.body (initCode prog.decls).length) _ (by omega)
+        (by intro k v hmem
+            have := collectLabels_allLabelsLe prog.body (initCode prog.decls).length k v hmem
+            rw [compileStmt_length]; exact this)
+  -- Helper: convert toList membership to the list form
+  have hmem_conv : ∀ instr, instr ∈ prog.compileToTAC.code.toList →
+      instr ∈ initCode prog.decls ++
+        (compileStmt prog.body (initCode prog.decls).length 0
+          (collectLabels prog.body (initCode prog.decls).length)).1 ∨
+      instr = TAC.halt := by
+    intro instr hmem
+    rwa [show prog.compileToTAC.code.toList =
+        (initCode prog.decls ++ (compileStmt prog.body (initCode prog.decls).length 0
+          (collectLabels prog.body (initCode prog.decls).length)).1 ++ [TAC.halt]) from by
+      simp [hcode],
+      List.mem_append, List.mem_cons, List.mem_nil_iff, or_false] at hmem
+  refine ⟨by omega, ?_, ?_⟩
+  · intro l hmem
+    rcases hmem_conv _ hmem with hcode_mem | habs
+    · have h := hjumps (.goto l) hcode_mem
+      change l ≤ _ at h; omega
+    · simp at habs
+  · intro be l hmem
+    rcases hmem_conv _ hmem with hcode_mem | habs
+    · have h := hjumps (.ifgoto be l) hcode_mem
+      change l ≤ _ at h; omega
+    · simp at habs
 
 /-- **No-stuck guarantee**: A type-checked program always has a behavior —
     it either halts, errors (div-by-zero), or diverges. No execution can

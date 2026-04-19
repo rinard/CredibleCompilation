@@ -1147,10 +1147,10 @@ def checkBoolExprSimpleOps (p : Prog) : Bool :=
 def violatesRegConvention (v : Var) : Bool :=
   -- Use parse-based check so this agrees with varToArmReg / varToArmFReg
   -- (exact string matching would miss aliases like "__ir00" → x0)
-  let irN := if v.startsWith "__ir" then (v.drop 4).toNat?
-             else if v.startsWith "__br" then (v.drop 4).toNat?
+  let irN := if startsWithList v "__ir" then (v.drop 4).toNat?
+             else if startsWithList v "__br" then (v.drop 4).toNat?
              else none
-  let frN := if v.startsWith "__fr" then (v.drop 4).toNat? else none
+  let frN := if startsWithList v "__fr" then (v.drop 4).toNat? else none
   match irN with
   | some 0 | some 1 | some 2 | some 16 | some 17 | some 18 => true
   | _ => match frN with

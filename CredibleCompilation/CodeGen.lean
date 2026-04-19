@@ -1362,6 +1362,25 @@ theorem verifiedGenerateAsm_spec {tyCtx : TyCtx} {p : Prog} {r : VerifiedAsmResu
 -- § 5b-pre. Helper lemmas for register convention bridge
 -- ──────────────────────────────────────────────────────────────
 
+-- String literal toList reductions (enable simp to reduce startsWithList for concrete prefixes)
+@[simp] private theorem toList_ir : ("__ir" : String).toList = ['_', '_', 'i', 'r'] := rfl
+@[simp] private theorem toList_br : ("__br" : String).toList = ['_', '_', 'b', 'r'] := rfl
+@[simp] private theorem toList_fr : ("__fr" : String).toList = ['_', '_', 'f', 'r'] := rfl
+@[simp] private theorem toList_t  : ("__t" : String).toList = ['_', '_', 't'] := rfl
+@[simp] private theorem toList_ft : ("__ft" : String).toList = ['_', '_', 'f', 't'] := rfl
+private theorem ts_t  : (toString "__t" : String) = "__t" := rfl
+private theorem ts_ft : (toString "__ft" : String) = "__ft" := rfl
+
+/-- Compiler int temps don't violate the register convention. -/
+private theorem tmpName_not_violates (k : Nat) : violatesRegConvention (tmpName k) = false := by
+  unfold violatesRegConvention startsWithList tmpName
+  simp [String.toList_append, ts_t, List.isPrefixOf]
+
+/-- Compiler float temps don't violate the register convention. -/
+private theorem ftmpName_not_violates (k : Nat) : violatesRegConvention (ftmpName k) = false := by
+  unfold violatesRegConvention startsWithList ftmpName
+  simp [String.toList_append, ts_ft, List.isPrefixOf]
+
 /-- If `varToArmReg v = some r` and `r` is a restricted register,
     then `violatesRegConvention v = true`. Contrapositive gives:
     pipeline passing → no restricted registers in layout. -/
@@ -1372,8 +1391,8 @@ private theorem varToArmReg_restricted_implies_violates {v : Var} {r : ArmReg}
   unfold varToArmReg at hr; unfold violatesRegConvention; dsimp only at *
   -- Both functions compute the same irN from __ir/__br prefix + toNat?
   -- Name the shared subexpression so split works across both
-  generalize hN : (if String.startsWith v "__ir" = true then (String.drop v 4).toNat?
-    else if String.startsWith v "__br" = true then (String.drop v 4).toNat?
+  generalize hN : (if startsWithList v "__ir" = true then (String.drop v 4).toNat?
+    else if startsWithList v "__br" = true then (String.drop v 4).toNat?
     else none) = irN at hr ⊢
   -- Now split on irN — in hr it determines r, in goal it determines the result
   split at hr <;> (first
@@ -1388,12 +1407,12 @@ private theorem varToArmFReg_restricted_implies_violates {v : Var} {r : ArmFReg}
     (hRestr : r = .d0 ∨ r = .d1 ∨ r = .d2) :
     violatesRegConvention v = true := by
   unfold varToArmFReg at hr; unfold violatesRegConvention; dsimp only at *
-  by_cases hfr : v.startsWith "__fr" = true
+  by_cases hfr : startsWithList v "__fr" = true
   · simp only [hfr, ↓reduceIte] at hr
     generalize (String.drop v 4).toNat? = n? at hr ⊢
     -- Also resolve the __ir/__br if-expressions in the goal
-    by_cases hir : v.startsWith "__ir" = true <;>
-      by_cases hbr : v.startsWith "__br" = true <;>
+    by_cases hir : startsWithList v "__ir" = true <;>
+      by_cases hbr : startsWithList v "__br" = true <;>
       simp only [hir, hbr, Bool.false_eq_true, ↓reduceIte, hfr] at ⊢ <;>
       (split at hr <;> (first
         | rfl
@@ -2056,7 +2075,7 @@ private theorem buildVarLayout_injective (tyCtx : TyCtx) (p : Prog)
     (hPrereqs : checkCodegenPrereqs tyCtx p = true) :
     (buildVarLayout (collectVars p) (buildVarMap (collectVars p))).isInjective = true := by
   simp only [checkCodegenPrereqs, Bool.and_eq_true] at hPrereqs
-  exact hPrereqs.1.1
+  exact hPrereqs.1.1.2
 
 -- checkWellTypedLayout_succeeds: no longer needed (hWTL now in checkCodegenPrereqs)
 
@@ -2121,6 +2140,44 @@ private theorem checkBranchTargets_of_successorsInBounds (p : Prog)
     rw [List.find?_eq_none]; intro pc hpc
     exact Bool.eq_false_iff.mp (hfind pc hpc)
   simp [this]
+
+/-- `checkBoolExprSimpleOps` passes for `compileToTAC` output. -/
+theorem compileToTAC_checkBoolExprSimpleOps (prog : Program) :
+    checkBoolExprSimpleOps prog.compileToTAC = true := by
+  unfold checkBoolExprSimpleOps
+  simp only [Array.all_eq_true]
+  intro i hi
+  have hmem : prog.compileToTAC.code[i] ∈ prog.compileToTAC.code.toList :=
+    List.getElem_mem (by simp at hi ⊢; exact hi)
+  exact prog.compileToTAC_allSimpleOps _ hmem
+
+
+/-- `checkBranchTargets` passes for `compileToTAC` output. -/
+theorem compileToTAC_checkBranchTargets (prog : Program) :
+    checkBranchTargets prog.compileToTAC.code = none := by
+  apply checkBranchTargets_of_successorsInBounds
+  -- Prove checkSuccessorsInBounds_prog from compileToTAC_jumpTargetsBound
+  obtain ⟨hpos, hgoto, hifgoto⟩ := prog.compileToTAC_jumpTargetsBound
+  unfold checkSuccessorsInBounds_prog
+  simp only [Bool.and_eq_true, decide_eq_true_eq, List.all_eq_true]
+  refine ⟨hpos, ?_⟩
+  intro pc hpc
+  rw [List.mem_range] at hpc
+  simp only [Prog.getElem?_code]
+  -- Case split on what's at this PC
+  cases hget : prog.compileToTAC.code[pc]? with
+  | none => simp
+  | some instr =>
+    cases instr with
+    | goto l =>
+      rw [decide_eq_true_eq]
+      exact hgoto l (List.mem_of_getElem? (by simp [List.getElem?_toArray]; exact hget))
+    | ifgoto be l =>
+      rw [decide_eq_true_eq]
+      exact hifgoto be l (List.mem_of_getElem? (by simp [List.getElem?_toArray]; exact hget))
+    | _ => simp
+
+
 
 /-- `verifiedGenInstr` returns `some` for any instruction in a well-typed program
     whose layout is complete, well-typed, regConventionSafe, and injective,
@@ -2281,14 +2338,16 @@ private theorem bodyGenStep_preserves_some
     passes the codegen prerequisite checks. -/
 theorem verifiedGenerateAsm_total (tyCtx : TyCtx) (p : Prog)
     (hWT : checkWellTypedProg tyCtx p = true)
-    (hRC : (buildVarLayout (collectVars p) (buildVarMap (collectVars p))).regConventionSafe = true)
     (hPrereqs : checkCodegenPrereqs tyCtx p = true)
     (hBranch : checkBranchTargets p.code = none)
     (hSimpleOps : checkBoolExprSimpleOps p = true) :
     ∃ r, verifiedGenerateAsm tyCtx p = .ok r := by
   unfold verifiedGenerateAsm
   simp only [hWT, Bool.not_true, Bool.true_and, ↓reduceIte]
-  -- Extract WTL from checkCodegenPrereqs
+  -- Extract regConventionSafe and WTL from checkCodegenPrereqs
+  have hRC : (buildVarLayout (collectVars p) (buildVarMap (collectVars p))).regConventionSafe = true := by
+    simp only [checkCodegenPrereqs, Bool.and_eq_true] at hPrereqs
+    exact hPrereqs.1.1.1
   have hWTL : checkWellTypedLayout tyCtx
       (buildVarLayout (collectVars p) (buildVarMap (collectVars p))) p.code = none := by
     simp only [checkCodegenPrereqs, Bool.and_eq_true, beq_iff_eq] at hPrereqs
@@ -2329,6 +2388,23 @@ theorem verifiedGenerateAsm_total (tyCtx : TyCtx) (p : Prog)
           (by simp only [checkBoolExprSimpleOps, TAC.hasSimpleOps, Array.all_eq_true] at hSimpleOps
               exact hSimpleOps pc hpc))
     rw [hbp]; exact ⟨_, rfl⟩
+
+/-- End-to-end totality: `generateAsm` succeeds for any well-typed program
+    (no-optimization path, directly from `compileToTAC`). -/
+theorem generateAsm_total (prog : Program) (htcs : prog.typeCheckStrict = true) :
+    ∃ asm, verifiedGenerateAsm prog.tyCtx prog.compileToTAC = .ok asm := by
+  have htc := prog.typeCheckStrict_typeCheck htcs
+  -- Item 1: checkWellTypedProg
+  have hWT : checkWellTypedProg prog.tyCtx prog.compileToTAC = true :=
+    checkWellTypedProg_complete (prog.compileToTAC_wellTyped htc)
+  -- Item 4: hBranch (proved)
+  have hBranch := compileToTAC_checkBranchTargets prog
+  -- Item 5: hSimpleOps (proved)
+  have hSimpleOps := compileToTAC_checkBoolExprSimpleOps prog
+  -- Item 2+3: codegenPrereqs (includes regConventionSafe, isInjective, callerSaveSpec, wellTypedLayout)
+  have hPrereqs : checkCodegenPrereqs prog.tyCtx prog.compileToTAC = true := by
+    sorry
+  exact verifiedGenerateAsm_total prog.tyCtx prog.compileToTAC hWT hPrereqs hBranch hSimpleOps
 
 -- ──────────────────────────────────────────────────────────────
 -- buildPcMap prefix-sum lemmas
