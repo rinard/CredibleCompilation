@@ -2388,9 +2388,48 @@ private theorem verifiedGenInstr_total
     (hSimple : match instr with | .boolop _ be | .ifgoto be _ => be.hasSimpleOps = true | _ => True)
     (hNotPrint : ∀ fmt vs, instr ≠ .print fmt vs) :
     ∃ instrs, verifiedGenInstr layout pcMap instr haltS divS boundsS arrayDecls safe = some instrs := by
-  -- NOTE: copy case has a gap — verifiedGenInstr returns none when src is
-  -- stack/ireg and dst is freg. Fix: add FP load path for non-freg → freg copy.
-  sorry
+  cases hWT
+  case print => exact absurd rfl (hNotPrint _ _)
+  case goto => unfold verifiedGenInstr; simp [hRC, hII]
+  case halt => unfold verifiedGenInstr; simp [hRC, hII]
+  case copy hty =>
+    rename_i dst src
+    unfold verifiedGenInstr; simp only [hRC, hII, Bool.not_true, Bool.false_or]
+    clear hSimple hty hComplete hNotPrint
+    cases List.lookup src layout.entries <;> cases List.lookup dst layout.entries <;> dsimp
+    all_goals (first | exact ⟨_, rfl⟩ | skip)
+    all_goals split <;> (first | exact ⟨_, rfl⟩ | skip)
+    all_goals split <;> exact ⟨_, rfl⟩
+  case const hty =>
+    rename_i x v
+    have hx := hComplete x (List.mem_cons.mpr (Or.inl rfl))
+    unfold verifiedGenInstr; simp only [hRC, hII, Bool.not_true, Bool.false_or, ↓reduceIte]
+    cases v with
+    | int n =>
+      simp only [Value.typeOf] at hty
+      cases hlx : layout x with
+      | none => exact absurd hlx hx
+      | some loc => cases loc with
+        | freg r => exact absurd hlx (hWTL.int_not_freg hty.symm r)
+        | ireg _ => simp_all
+        | stack _ => simp_all
+    | bool b =>
+      simp only [Value.typeOf] at hty
+      cases hlx : layout x with
+      | none => exact absurd hlx hx
+      | some loc => cases loc with
+        | freg r => exact absurd hlx (hWTL.bool_not_freg hty.symm r)
+        | ireg _ => simp_all
+        | stack _ => simp_all
+    | float f =>
+      simp only [Value.typeOf] at hty
+      cases hlx : layout x with
+      | none => exact absurd hlx hx
+      | some loc => cases loc with
+        | ireg r => exact absurd hlx (hWTL.float_not_ireg hty.symm r)
+        | freg _ => simp_all
+        | stack _ => simp_all
+  all_goals sorry
   -- NOTE: copy case has a codegen gap — verifiedGenInstr returns none when
   -- src is in stack/ireg and dst is in freg. Fix needed in verifiedGenInstr:
   -- add vLoadVar + fmovToFP path for non-freg → freg copy.
