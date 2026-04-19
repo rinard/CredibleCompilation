@@ -2676,6 +2676,20 @@ private theorem compileExprs_noArmReg (args : List SExpr) (offset nextTmp : Nat)
     · exact (compileExpr_noArmReg e offset nextTmp hSrc.1).1 instr he v hv
     · exact ih _ _ hSrc.2 instr hrest v hv
 
+/-- Every result var produced by compileExprs has varToArmReg = none. -/
+private theorem compileExprs_result_noArmReg (args : List SExpr) (offset nextTmp : Nat)
+    (hSrc : args.all Program.SExpr.noReservedVars = true) :
+    ∀ v ∈ (compileExprs args offset nextTmp).2.1, varToArmReg v = none := by
+  induction args generalizing offset nextTmp with
+  | nil => intro _ hmem; simp [compileExprs] at hmem
+  | cons e rest ih =>
+    simp only [List.all_cons, Bool.and_eq_true] at hSrc
+    intro v hv
+    simp only [compileExprs, List.mem_cons] at hv
+    rcases hv with rfl | hrest
+    · exact (compileExpr_noArmReg e offset nextTmp hSrc.1).2
+    · exact ih _ _ hSrc.2 v hrest
+
 set_option maxHeartbeats 400000 in
 /-- Every var in compileStmt output has varToArmReg = none. -/
 private theorem compileStmt_noArmReg (s : Stmt) (offset nextTmp : Nat)
@@ -2785,7 +2799,8 @@ private theorem compileStmt_noArmReg (s : Stmt) (offset nextTmp : Nat)
     intro instr hmem v hv; simp [compileStmt, List.mem_append] at hmem
     rcases hmem with h | rfl
     · exact compileExprs_noArmReg args offset nextTmp hSrc instr h v hv
-    · simp [TAC.vars] at hv; sorry -- print vars are result vars from compileExprs
+    · simp [TAC.vars] at hv
+      exact compileExprs_result_noArmReg args offset nextTmp hSrc v hv
   | assign x e =>
     simp only [Program.Stmt.noReservedVars, Bool.and_eq_true, Bool.not_eq_true'] at hSrc
     intro instr hmem v hv
@@ -2827,7 +2842,13 @@ private theorem compileStmt_noArmReg (s : Stmt) (offset nextTmp : Nat)
         · exact varToArmReg_none_of_not_dunder _ hSrc.1
         · exact tmpName_noArmReg _
     | flit _ | fbin _ _ _ | intToFloat _ | floatToInt _ | floatUnary _ _ | farrRead _ _ =>
-      sorry -- float exprs in int assign: same pattern, compileExpr + [copy x ve]
+      have ⟨he_i, he_r⟩ := compileExpr_noArmReg _ offset nextTmp hSrc.2
+      simp [compileStmt, List.mem_append] at hmem
+      rcases hmem with h | rfl
+      · exact he_i instr h v hv
+      · simp [TAC.vars] at hv; rcases hv with rfl | rfl
+        · exact varToArmReg_none_of_not_dunder _ hSrc.1
+        · exact he_r
   | fassign x e =>
     simp only [Program.Stmt.noReservedVars, Bool.and_eq_true, Bool.not_eq_true'] at hSrc
     intro instr hmem v hv
@@ -2886,10 +2907,32 @@ private theorem compileStmt_noArmReg (s : Stmt) (offset nextTmp : Nat)
       · simp [TAC.vars] at hv; rcases hv with rfl | rfl
         · exact varToArmReg_none_of_not_dunder _ hSrc.1
         · exact ftmpName_noArmReg _
-    | _ => sorry -- remaining float expr fallback
+    | lit _ | bin _ _ _ | arrRead _ _ | floatToInt _ =>
+      have ⟨he_i, he_r⟩ := compileExpr_noArmReg _ offset nextTmp hSrc.2
+      simp [compileStmt, List.mem_append] at hmem
+      rcases hmem with h | rfl
+      · exact he_i instr h v hv
+      · simp [TAC.vars] at hv; rcases hv with rfl | rfl
+        · exact varToArmReg_none_of_not_dunder _ hSrc.1
+        · exact he_r
   | barrWrite arr idx bval =>
     simp only [Program.Stmt.noReservedVars, Bool.and_eq_true] at hSrc
-    sorry -- complex case with compileExpr + compileBool + convCode
+    have ⟨hi_i, hi_r⟩ := compileExpr_noArmReg idx offset nextTmp hSrc.1
+    have ⟨hb_i, hb_be⟩ := compileBool_noArmReg bval
+      (offset + (compileExpr idx offset nextTmp).1.length)
+      (compileExpr idx offset nextTmp).2.2 hSrc.2
+    intro instr hmem v hv
+    simp only [compileStmt, List.mem_append, List.mem_cons, List.mem_nil_iff, or_false] at hmem
+    rcases hmem with ((hi | hb) | (rfl | rfl | rfl | rfl)) | rfl
+    · exact hi_i instr hi v hv
+    · exact hb_i instr hb v hv
+    · simp [TAC.vars] at hv; exact hb_be v hv
+    · simp [TAC.vars] at hv; subst hv; exact tmpName_noArmReg _
+    · simp [TAC.vars] at hv
+    · simp [TAC.vars] at hv; subst hv; exact tmpName_noArmReg _
+    · simp [TAC.vars] at hv; rcases hv with rfl | rfl
+      · exact hi_r
+      · exact tmpName_noArmReg _
 
 /-- End-to-end totality: `generateAsm` succeeds for any well-typed program
     (no-optimization path, directly from `compileToTAC`). -/
