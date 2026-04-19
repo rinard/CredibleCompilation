@@ -13,39 +13,8 @@ import CredibleCompilation.ArmSemantics
 /-- Collect all distinct variables in a program (instruction vars + observables).
     Uses addIfNew pattern to deduplicate. -/
 def collectVars (p : Prog) : List Var :=
-  let vars := p.code.foldl (fun acc instr =>
-    match instr with
-    | .const x _       => if acc.contains x then acc else acc ++ [x]
-    | .copy x y        => let a := if acc.contains x then acc else acc ++ [x]
-                          if a.contains y then a else a ++ [y]
-    | .binop x _ y z   => let a := if acc.contains x then acc else acc ++ [x]
-                          let b := if a.contains y then a else a ++ [y]
-                          if b.contains z then b else b ++ [z]
-    | .boolop x be     => let a := if acc.contains x then acc else acc ++ [x]
-                          be.vars.foldl (fun a v => if a.contains v then a else a ++ [v]) a
-    | .arrLoad x _ idx _ => let a := if acc.contains x then acc else acc ++ [x]
-                            if a.contains idx then a else a ++ [idx]
-    | .arrStore _ idx val _ => let a := if acc.contains idx then acc else acc ++ [idx]
-                               if a.contains val then a else a ++ [val]
-    | .fbinop x _ y z  => let a := if acc.contains x then acc else acc ++ [x]
-                          let b := if a.contains y then a else a ++ [y]
-                          if b.contains z then b else b ++ [z]
-    | .intToFloat x y  => let a := if acc.contains x then acc else acc ++ [x]
-                          if a.contains y then a else a ++ [y]
-    | .floatToInt x y  => let a := if acc.contains x then acc else acc ++ [x]
-                          if a.contains y then a else a ++ [y]
-    | .floatUnary x _ y => let a := if acc.contains x then acc else acc ++ [x]
-                          if a.contains y then a else a ++ [y]
-    | .fternop x _ a b c => let acc := if acc.contains x then acc else acc ++ [x]
-                            let acc := if acc.contains a then acc else acc ++ [a]
-                            let acc := if acc.contains b then acc else acc ++ [b]
-                            if acc.contains c then acc else acc ++ [c]
-    | .print _ vs      => vs.foldl (fun a v => if a.contains v then a else a ++ [v]) acc
-    | .goto _          => acc
-    | .ifgoto be _     => be.vars.foldl (fun a v => if a.contains v then a else a ++ [v]) acc
-    | .halt            => acc
-  ) ([] : List Var)
-  -- Also add observable variables
+  let vars := p.code.foldl (init := ([] : List Var)) fun acc instr =>
+    (TAC.vars instr).foldl (fun a v => if a.contains v then a else a ++ [v]) acc
   p.observable.foldl (fun acc v => if acc.contains v then acc else acc ++ [v]) vars
 
 /-- Build stack offset map: var i gets offset (i+1)*8. -/
