@@ -897,7 +897,7 @@ def typeCheckStrict (prog : Program) : Bool :=
 -- ============================================================
 
 /-- Emit initialization code for declared variables. -/
-private def initCode (decls : List (Var × VarTy)) : List TAC :=
+def initCode (decls : List (Var × VarTy)) : List TAC :=
   decls.map fun (x, ty) =>
     match ty with
     | .int   => .const x (.int (0 : BitVec 64))

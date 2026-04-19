@@ -2686,6 +2686,140 @@ private theorem compileStmt_noRegVar (s : Stmt) (offset nextTmp : Nat)
       · exact hi_r
       · exact tmpName_noRegVar _
 
+-- ──────────────────────────────────────────────────────────────
+-- § 5b-pre5. compileToTAC output has noRegVar on all vars
+-- ──────────────────────────────────────────────────────────────
+
+/-- Extract `checkNoReservedNames` from `typeCheckStrict`. -/
+private theorem typeCheckStrict_checkNoReservedNames (prog : Program)
+    (h : prog.typeCheckStrict = true) : prog.checkNoReservedNames = true := by
+  unfold Program.typeCheckStrict at h
+  simp only [Bool.and_eq_true] at h
+  exact h.1.2
+
+/-- Extract `Stmt.noReservedVars prog.body` from `typeCheckStrict`. -/
+private theorem typeCheckStrict_body_noReservedVars (prog : Program)
+    (h : prog.typeCheckStrict = true) : Program.Stmt.noReservedVars prog.body = true := by
+  unfold Program.typeCheckStrict at h
+  simp only [Bool.and_eq_true] at h
+  exact h.2
+
+/-- Every var in `Program.initCode decls` satisfies `noRegVar`, provided decl names don't start with `__`. -/
+private theorem initCode_noRegVar {decls : List (Var × VarTy)}
+    (h : decls.all (fun p => !(startsWithList p.1 "__")) = true) :
+    ∀ instr ∈ Program.initCode decls, ∀ v ∈ instr.vars, noRegVar v := by
+  intro instr hmem v hv
+  simp only [Program.initCode, List.mem_map] at hmem
+  obtain ⟨⟨x, ty⟩, hxdecls, hxinstr⟩ := hmem
+  simp only [List.all_eq_true] at h
+  have hx : startsWithList x "__" = false := by
+    have := h (x, ty) hxdecls
+    simpa [Bool.not_eq_true'] using this
+  have hvarsx : instr.vars = [x] := by
+    rw [← hxinstr]; cases ty <;> rfl
+  rw [hvarsx] at hv
+  rcases List.mem_singleton.mp hv with rfl
+  exact noRegVar_of_not_dunder _ hx
+
+/-- Every var in `(compileToTAC prog).code` satisfies `noRegVar`. -/
+private theorem compileToTAC_code_noRegVar (prog : Program) (htcs : prog.typeCheckStrict = true) :
+    ∀ instr ∈ prog.compileToTAC.code.toList, ∀ v ∈ instr.vars, noRegVar v := by
+  have hBody := typeCheckStrict_body_noReservedVars prog htcs
+  have hDecls := typeCheckStrict_checkNoReservedNames prog htcs
+  unfold Program.checkNoReservedNames at hDecls
+  intro instr hmem v hv
+  -- code.toList = initCode decls ++ body ++ [halt]
+  have hcode : prog.compileToTAC.code.toList =
+      Program.initCode prog.decls ++ (compileStmt prog.body (Program.initCode prog.decls).length 0
+        (collectLabels prog.body (Program.initCode prog.decls).length)).1 ++ [TAC.halt] := by
+    simp [Program.compileToTAC]
+  rw [hcode] at hmem
+  rcases List.mem_append.mp hmem with hleft | hhalt
+  · rcases List.mem_append.mp hleft with hinit | hbody
+    · exact initCode_noRegVar hDecls instr hinit v hv
+    · exact compileStmt_noRegVar prog.body _ _ _ hBody instr hbody v hv
+  · simp at hhalt; subst hhalt; simp [TAC.vars] at hv
+
+/-- Every var in `(compileToTAC prog).observable` satisfies `noRegVar`. -/
+private theorem compileToTAC_observable_noRegVar (prog : Program)
+    (htcs : prog.typeCheckStrict = true) :
+    ∀ v ∈ prog.compileToTAC.observable, noRegVar v := by
+  have hDecls := typeCheckStrict_checkNoReservedNames prog htcs
+  unfold Program.checkNoReservedNames at hDecls
+  simp only [List.all_eq_true] at hDecls
+  intro v hv
+  -- observable = prog.decls.map Prod.fst
+  simp only [Program.compileToTAC, List.mem_map] at hv
+  obtain ⟨⟨x, ty⟩, hxdecls, rfl⟩ := hv
+  have hx : startsWithList x "__" = false := by
+    have := hDecls (x, ty) hxdecls
+    simpa [Bool.not_eq_true'] using this
+  exact noRegVar_of_not_dunder x hx
+
+/-- Every var in `collectVars (compileToTAC prog)` satisfies `noRegVar`. -/
+private theorem collectVars_compileToTAC_noRegVar (prog : Program)
+    (htcs : prog.typeCheckStrict = true) :
+    ∀ v ∈ collectVars prog.compileToTAC, noRegVar v := by
+  intro v hv
+  -- collectVars = observable-fold (code-fold [] p.code) p.observable
+  unfold collectVars at hv
+  rcases mem_foldl_addIfNew_imp hv with hCode | hObs
+  · -- v is in the code foldl result
+    apply collectVars_code_pred (by simp) _ v hCode
+    intro i hi w hw
+    have : prog.compileToTAC.code[i] ∈ prog.compileToTAC.code.toList :=
+      Array.getElem_mem_toList hi
+    exact compileToTAC_code_noRegVar prog htcs _ this w hw
+  · exact compileToTAC_observable_noRegVar prog htcs v hObs
+
+/-- `filterMap` produces `[]` when the function returns `none` on every element. -/
+private theorem filterMap_eq_nil_of_forall_none {α β : Type} (f : α → Option β)
+    (l : List α) (h : ∀ x ∈ l, f x = none) : l.filterMap f = [] := by
+  induction l with
+  | nil => rfl
+  | cons hd tl ih =>
+    have hhd : f hd = none := h hd List.mem_cons_self
+    rw [List.filterMap_cons, hhd]
+    exact ih (fun x hx => h x (List.mem_cons_of_mem hd hx))
+
+/-- If `v` is in the `allVars` fold from `checkWellTypedLayout`, then `v` was in
+    some instruction's vars. -/
+private theorem list_foldl_allVars_mem_imp (l : List TAC) (init : List Var) (v : Var)
+    (h : v ∈ l.foldl (fun acc instr =>
+      acc ++ (TAC.vars instr).filter fun w => !acc.contains w) init) :
+    v ∈ init ∨ ∃ instr ∈ l, v ∈ TAC.vars instr := by
+  induction l generalizing init with
+  | nil => left; exact h
+  | cons hd tl ih =>
+    simp only [List.foldl_cons] at h
+    rcases ih _ h with hinit | ⟨instr, hmem, hv⟩
+    · rcases List.mem_append.mp hinit with h' | hf
+      · left; exact h'
+      · right; refine ⟨hd, List.mem_cons_self, ?_⟩
+        exact (List.mem_filter.mp hf).1
+    · right; exact ⟨instr, List.mem_cons_of_mem hd hmem, hv⟩
+
+/-- Under the `noRegVar` assumption on `vars`, every layout entry is a `.stack` entry. -/
+private theorem buildVarLayout_entries_stack_of_noRegVar
+    {vars : List Var} {varMap : List (Var × Nat)}
+    (hvars : ∀ v ∈ vars, noRegVar v)
+    {v : Var} {loc : VarLoc}
+    (hmem : (v, loc) ∈ (buildVarLayout vars varMap).entries) :
+    ∃ off, loc = .stack off := by
+  unfold buildVarLayout at hmem
+  simp only at hmem
+  rw [List.mem_filterMap] at hmem
+  obtain ⟨v', hv'mem, hfeq⟩ := hmem
+  have hnr := hvars v' hv'mem
+  rw [hnr.1, hnr.2.1] at hfeq
+  simp only at hfeq
+  cases hlu : lookupVar varMap v' with
+  | none => rw [hlu] at hfeq; simp at hfeq
+  | some off =>
+    rw [hlu] at hfeq
+    simp at hfeq
+    exact ⟨off, by rw [hfeq.2]⟩
+
 /-- End-to-end totality: `generateAsm` succeeds for any well-typed program
     (no-optimization path, directly from `compileToTAC`). -/
 theorem generateAsm_total (prog : Program) (htcs : prog.typeCheckStrict = true) :
@@ -2700,7 +2834,80 @@ theorem generateAsm_total (prog : Program) (htcs : prog.typeCheckStrict = true) 
   have hSimpleOps := compileToTAC_checkBoolExprSimpleOps prog
   -- Item 2+3: codegenPrereqs (includes regConventionSafe, isInjective, callerSaveSpec, wellTypedLayout)
   have hPrereqs : checkCodegenPrereqs prog.tyCtx prog.compileToTAC = true := by
-    sorry
+    have hNoRegVar : ∀ v ∈ collectVars prog.compileToTAC, noRegVar v :=
+      collectVars_compileToTAC_noRegVar prog htcs
+    have hAllStack : ∀ v loc,
+        (v, loc) ∈ (buildVarLayout (collectVars prog.compileToTAC)
+          (buildVarMap (collectVars prog.compileToTAC))).entries →
+        ∃ off, loc = .stack off :=
+      fun v loc hmem => buildVarLayout_entries_stack_of_noRegVar hNoRegVar hmem
+    unfold checkCodegenPrereqs
+    simp only [Bool.and_eq_true, beq_iff_eq]
+    refine ⟨⟨⟨?_, ?_⟩, ?_⟩, ?_⟩
+    · -- regConventionSafe: all entries are .stack, so none are restricted .ireg / .freg
+      unfold VarLayout.regConventionSafe
+      rw [List.all_eq_true]
+      intro ⟨v, loc⟩ hmem
+      obtain ⟨off, rfl⟩ := hAllStack v loc hmem
+      simp
+    · sorry -- isInjective
+    · -- checkCallerSaveSpec: with all-stack layout, genCallerSaveAll produces []
+      -- so all six conjuncts are vacuous or trivial.
+      have hEmpty : genCallerSaveAll
+          (buildVarLayout (collectVars prog.compileToTAC)
+            (buildVarMap (collectVars prog.compileToTAC)))
+          (buildVarMap (collectVars prog.compileToTAC)) = [] := by
+        unfold genCallerSaveAll
+        apply filterMap_eq_nil_of_forall_none
+        intro ⟨v, loc⟩ hmem
+        obtain ⟨off, rfl⟩ := hAllStack v loc hmem
+        rfl
+      unfold checkCallerSaveSpec
+      rw [hEmpty]
+      simp [listNodupBool]
+      -- Remaining: hCoversIreg and hCoversFreg over layout.entries
+      refine ⟨?_, ?_⟩ <;>
+        (intro v loc hmem;
+         obtain ⟨off, rfl⟩ := hAllStack v loc hmem; rfl)
+    · -- checkWellTypedLayout = none
+      -- Prove typeErr = none and allVars.find? = none, then the nested match is none.
+      have htypeErr :
+          (buildVarLayout (collectVars prog.compileToTAC)
+              (buildVarMap (collectVars prog.compileToTAC))).entries.find?
+            (fun x => match x.snd with
+              | .freg _ => prog.tyCtx x.fst != .float
+              | .ireg _ => prog.tyCtx x.fst == .float
+              | .stack _ => false) = none := by
+        rw [List.find?_eq_none]
+        intro ⟨v, loc⟩ hmem
+        obtain ⟨off, rfl⟩ := hAllStack v loc hmem
+        simp
+      have hAllMapped :
+          (prog.compileToTAC.code.foldl (init := ([] : List Var)) fun acc instr =>
+            acc ++ (TAC.vars instr).filter fun w => !acc.contains w).find?
+            (fun v => ((buildVarLayout (collectVars prog.compileToTAC)
+                (buildVarMap (collectVars prog.compileToTAC))) v).isNone) = none := by
+        rw [List.find?_eq_none]
+        intro v hv
+        rw [← Array.foldl_toList] at hv
+        rcases list_foldl_allVars_mem_imp _ _ _ hv with hinit | ⟨instr, hmem, hvars⟩
+        · simp at hinit
+        · have ⟨pc, hpc, heq⟩ := Array.mem_iff_getElem.mp (Array.mem_toList_iff.mp hmem)
+          rw [← heq] at hvars
+          have hvc : v ∈ collectVars prog.compileToTAC := vars_subset_collectVars hpc hvars
+          have hne := buildVarLayout_complete hvc
+          dsimp only at hne ⊢
+          simp [Option.isNone_iff_eq_none, hne]
+      -- Close by showing both find?s are none via the stored hypotheses.
+      unfold checkWellTypedLayout
+      simp only []
+      split
+      · rename_i _ _ _ heq
+        exact absurd (heq.symm.trans htypeErr) (by simp)
+      · split
+        · rename_i _ _ heq
+          exact absurd (heq.symm.trans hAllMapped) (by simp)
+        · rfl
   exact verifiedGenerateAsm_total prog.tyCtx prog.compileToTAC hWT hPrereqs hBranch hSimpleOps
 
 -- ──────────────────────────────────────────────────────────────

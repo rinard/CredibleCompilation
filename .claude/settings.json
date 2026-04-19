@@ -267,7 +267,11 @@
       "Bash(/tmp/k18_noopt2)",
       "Bash(.lake/build/bin/compiler benchmarks/livermore/k18_hydro_2d.w -O0 -o /tmp/k18_noopt_new)",
       "Bash(.lake/build/bin/compiler benchmarks/livermore/k18_hydro_2d.w -O0 -o /tmp/k18_check)",
-      "Bash(grep -v '-- ')"
+      "Bash(grep -v '-- ')",
+      "Bash(grep -c \"uses \\\\`sorry\\\\`\")",
+      "Bash(awk 'NR==1615,/^$/' /Users/mr/CredibleCompilation/CredibleCompilation/CodeGen.lean)",
+      "Bash(grep -E \"\\\\.lean$\")",
+      "Bash(xargs -I {} basename {})"
     ],
     "additionalDirectories": [
       "/Users/mr/CredibleCompilation/tests/programs",
