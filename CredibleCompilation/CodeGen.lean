@@ -1596,6 +1596,29 @@ private theorem self_mem_addIfNew {acc : List Var} {v : Var} :
   · next h => exact List.contains_iff_mem.mp h
   · exact List.mem_append_right _ (List.mem_singleton.mpr rfl)
 
+/-- Containment: addIfNew only adds from {v} ∪ acc. -/
+private theorem mem_of_mem_addIfNew_imp {acc : List Var} {v w : Var}
+    (hw : w ∈ (if acc.contains v then acc else acc ++ [v])) : w ∈ acc ∨ w = v := by
+  split at hw
+  · exact Or.inl hw
+  · cases List.mem_append.mp hw with
+    | inl h => exact Or.inl h
+    | inr h => exact Or.inr (List.mem_singleton.mp h)
+
+/-- Containment: foldl addIfNew only adds from vs ∪ acc. -/
+private theorem mem_foldl_addIfNew_imp {acc vs : List Var} {w : Var}
+    (hw : w ∈ vs.foldl (fun a v => if a.contains v then a else a ++ [v]) acc) :
+    w ∈ acc ∨ w ∈ vs := by
+  induction vs generalizing acc with
+  | nil => exact Or.inl hw
+  | cons v rest ih =>
+    simp only [List.foldl_cons] at hw
+    rcases ih hw with h | h
+    · rcases mem_of_mem_addIfNew_imp h with h | rfl
+      · exact Or.inl h
+      · exact Or.inr (List.mem_cons.mpr (Or.inl rfl))
+    · exact Or.inr (List.mem_cons_of_mem _ h)
+
 /-- Folding "add if not present" over a list preserves existing membership. -/
 private theorem mem_foldl_addIfNew_of_mem {acc vs : List Var} {w : Var}
     (hw : w ∈ acc) : w ∈ vs.foldl (fun a v => if a.contains v then a else a ++ [v]) acc := by
@@ -1854,6 +1877,213 @@ private theorem collectVars_step_mono {acc : List Var} {instr : TAC} {w : Var}
     | exact mem_of_mem_addIfNew (mem_of_mem_addIfNew hw)
     | exact mem_of_mem_addIfNew hw
 
+-- Helper: the collectVars step function only adds vars from instr.vars
+private theorem collectVars_step_subset {acc : List Var} {instr : TAC} {w : Var}
+    (hw : w ∈ (match instr with
+    | .const x _       => if acc.contains x then acc else acc ++ [x]
+    | .copy x y        => let a := if acc.contains x then acc else acc ++ [x]
+                          if a.contains y then a else a ++ [y]
+    | .binop x _ y z   => let a := if acc.contains x then acc else acc ++ [x]
+                          let b := if a.contains y then a else a ++ [y]
+                          if b.contains z then b else b ++ [z]
+    | .boolop x be     => let a := if acc.contains x then acc else acc ++ [x]
+                          be.vars.foldl (fun a v => if a.contains v then a else a ++ [v]) a
+    | .arrLoad x _ idx _ => let a := if acc.contains x then acc else acc ++ [x]
+                            if a.contains idx then a else a ++ [idx]
+    | .arrStore _ idx val _ => let a := if acc.contains idx then acc else acc ++ [idx]
+                               if a.contains val then a else a ++ [val]
+    | .fbinop x _ y z  => let a := if acc.contains x then acc else acc ++ [x]
+                          let b := if a.contains y then a else a ++ [y]
+                          if b.contains z then b else b ++ [z]
+    | .intToFloat x y  => let a := if acc.contains x then acc else acc ++ [x]
+                          if a.contains y then a else a ++ [y]
+    | .floatToInt x y  => let a := if acc.contains x then acc else acc ++ [x]
+                          if a.contains y then a else a ++ [y]
+    | .floatUnary x _ y => let a := if acc.contains x then acc else acc ++ [x]
+                          if a.contains y then a else a ++ [y]
+    | .fternop x _ a b c => let acc := if acc.contains x then acc else acc ++ [x]
+                            let acc := if acc.contains a then acc else acc ++ [a]
+                            let acc := if acc.contains b then acc else acc ++ [b]
+                            if acc.contains c then acc else acc ++ [c]
+    | .print _ vs      => vs.foldl (fun a v => if a.contains v then a else a ++ [v]) acc
+    | .goto _          => acc
+    | .ifgoto be _     => be.vars.foldl (fun a v => if a.contains v then a else a ++ [v]) acc
+    | .halt            => acc)) :
+    w ∈ acc ∨ w ∈ instr.vars := by
+  cases instr with
+  | const x _ =>
+    rcases mem_of_mem_addIfNew_imp hw with h | rfl
+    · exact Or.inl h
+    · exact Or.inr (by simp [TAC.vars])
+  | copy x y =>
+    rcases mem_of_mem_addIfNew_imp hw with h | rfl
+    · rcases mem_of_mem_addIfNew_imp h with h | rfl
+      · exact Or.inl h
+      · exact Or.inr (by simp [TAC.vars])
+    · exact Or.inr (by simp [TAC.vars])
+  | binop x _ y z =>
+    rcases mem_of_mem_addIfNew_imp hw with h | rfl
+    · rcases mem_of_mem_addIfNew_imp h with h | rfl
+      · rcases mem_of_mem_addIfNew_imp h with h | rfl
+        · exact Or.inl h
+        · exact Or.inr (by simp [TAC.vars])
+      · exact Or.inr (by simp [TAC.vars])
+    · exact Or.inr (by simp [TAC.vars])
+  | boolop x be =>
+    rcases mem_foldl_addIfNew_imp hw with h | h
+    · rcases mem_of_mem_addIfNew_imp h with h | rfl
+      · exact Or.inl h
+      · exact Or.inr (by simp [TAC.vars])
+    · exact Or.inr (by simp [TAC.vars, h])
+  | arrLoad x _ idx _ =>
+    rcases mem_of_mem_addIfNew_imp hw with h | rfl
+    · rcases mem_of_mem_addIfNew_imp h with h | rfl
+      · exact Or.inl h
+      · exact Or.inr (by simp [TAC.vars])
+    · exact Or.inr (by simp [TAC.vars])
+  | arrStore _ idx val _ =>
+    rcases mem_of_mem_addIfNew_imp hw with h | rfl
+    · rcases mem_of_mem_addIfNew_imp h with h | rfl
+      · exact Or.inl h
+      · exact Or.inr (by simp [TAC.vars])
+    · exact Or.inr (by simp [TAC.vars])
+  | fbinop x _ y z =>
+    rcases mem_of_mem_addIfNew_imp hw with h | rfl
+    · rcases mem_of_mem_addIfNew_imp h with h | rfl
+      · rcases mem_of_mem_addIfNew_imp h with h | rfl
+        · exact Or.inl h
+        · exact Or.inr (by simp [TAC.vars])
+      · exact Or.inr (by simp [TAC.vars])
+    · exact Or.inr (by simp [TAC.vars])
+  | intToFloat x y =>
+    rcases mem_of_mem_addIfNew_imp hw with h | rfl
+    · rcases mem_of_mem_addIfNew_imp h with h | rfl
+      · exact Or.inl h
+      · exact Or.inr (by simp [TAC.vars])
+    · exact Or.inr (by simp [TAC.vars])
+  | floatToInt x y =>
+    rcases mem_of_mem_addIfNew_imp hw with h | rfl
+    · rcases mem_of_mem_addIfNew_imp h with h | rfl
+      · exact Or.inl h
+      · exact Or.inr (by simp [TAC.vars])
+    · exact Or.inr (by simp [TAC.vars])
+  | floatUnary x _ y =>
+    rcases mem_of_mem_addIfNew_imp hw with h | rfl
+    · rcases mem_of_mem_addIfNew_imp h with h | rfl
+      · exact Or.inl h
+      · exact Or.inr (by simp [TAC.vars])
+    · exact Or.inr (by simp [TAC.vars])
+  | fternop x _ a b c =>
+    rcases mem_of_mem_addIfNew_imp hw with h | rfl
+    · rcases mem_of_mem_addIfNew_imp h with h | rfl
+      · rcases mem_of_mem_addIfNew_imp h with h | rfl
+        · rcases mem_of_mem_addIfNew_imp h with h | rfl
+          · exact Or.inl h
+          · exact Or.inr (by simp [TAC.vars])
+        · exact Or.inr (by simp [TAC.vars])
+      · exact Or.inr (by simp [TAC.vars])
+    · exact Or.inr (by simp [TAC.vars])
+  | print _ vs =>
+    rcases mem_foldl_addIfNew_imp hw with h | h
+    · exact Or.inl h
+    · exact Or.inr (by simp [TAC.vars, h])
+  | goto _ => exact Or.inl hw
+  | ifgoto be _ =>
+    rcases mem_foldl_addIfNew_imp hw with h | h
+    · exact Or.inl h
+    · exact Or.inr (by simp [TAC.vars, h])
+  | halt => exact Or.inl hw
+
+-- Predicate propagation: if P holds for acc and for all instruction vars,
+-- then P holds for all vars in the code foldl result.
+-- Uses collectVars_step_subset to show each step only adds from instr.vars.
+private theorem collectVars_code_pred {P : Var → Prop}
+    {code : Array TAC} {acc : List Var}
+    (hacc : ∀ v ∈ acc, P v)
+    (hcode : ∀ (i : Nat) (hi : i < code.size), ∀ v ∈ code[i].vars, P v) :
+    ∀ v ∈ code.foldl (fun acc instr =>
+    match instr with
+    | .const x _       => if acc.contains x then acc else acc ++ [x]
+    | .copy x y        => let a := if acc.contains x then acc else acc ++ [x]
+                          if a.contains y then a else a ++ [y]
+    | .binop x _ y z   => let a := if acc.contains x then acc else acc ++ [x]
+                          let b := if a.contains y then a else a ++ [y]
+                          if b.contains z then b else b ++ [z]
+    | .boolop x be     => let a := if acc.contains x then acc else acc ++ [x]
+                          be.vars.foldl (fun a v => if a.contains v then a else a ++ [v]) a
+    | .arrLoad x _ idx _ => let a := if acc.contains x then acc else acc ++ [x]
+                            if a.contains idx then a else a ++ [idx]
+    | .arrStore _ idx val _ => let a := if acc.contains idx then acc else acc ++ [idx]
+                               if a.contains val then a else a ++ [val]
+    | .fbinop x _ y z  => let a := if acc.contains x then acc else acc ++ [x]
+                          let b := if a.contains y then a else a ++ [y]
+                          if b.contains z then b else b ++ [z]
+    | .intToFloat x y  => let a := if acc.contains x then acc else acc ++ [x]
+                          if a.contains y then a else a ++ [y]
+    | .floatToInt x y  => let a := if acc.contains x then acc else acc ++ [x]
+                          if a.contains y then a else a ++ [y]
+    | .floatUnary x _ y => let a := if acc.contains x then acc else acc ++ [x]
+                          if a.contains y then a else a ++ [y]
+    | .fternop x _ a b c => let acc := if acc.contains x then acc else acc ++ [x]
+                            let acc := if acc.contains a then acc else acc ++ [a]
+                            let acc := if acc.contains b then acc else acc ++ [b]
+                            if acc.contains c then acc else acc ++ [c]
+    | .print _ vs      => vs.foldl (fun a v => if a.contains v then a else a ++ [v]) acc
+    | .goto _          => acc
+    | .ifgoto be _     => be.vars.foldl (fun a v => if a.contains v then a else a ++ [v]) acc
+    | .halt            => acc) acc, P v := by
+  -- Convert Array.foldl to List.foldl, then induction on the list
+  rw [← Array.foldl_toList]
+  intro v hv
+  -- Induction: at each step, all acc elements satisfy P
+  suffices ∀ (l : List TAC) (acc : List Var),
+      (∀ w ∈ acc, P w) →
+      (∀ instr ∈ l, ∀ w ∈ instr.vars, P w) →
+      ∀ w ∈ l.foldl (fun acc instr => match instr with
+        | .const x _ => if acc.contains x then acc else acc ++ [x]
+        | .copy x y => let a := if acc.contains x then acc else acc ++ [x]
+                        if a.contains y then a else a ++ [y]
+        | .binop x _ y z => let a := if acc.contains x then acc else acc ++ [x]
+                            let b := if a.contains y then a else a ++ [y]
+                            if b.contains z then b else b ++ [z]
+        | .boolop x be => let a := if acc.contains x then acc else acc ++ [x]
+                          be.vars.foldl (fun a v => if a.contains v then a else a ++ [v]) a
+        | .arrLoad x _ idx _ => let a := if acc.contains x then acc else acc ++ [x]
+                                if a.contains idx then a else a ++ [idx]
+        | .arrStore _ idx val _ => let a := if acc.contains idx then acc else acc ++ [idx]
+                                   if a.contains val then a else a ++ [val]
+        | .fbinop x _ y z => let a := if acc.contains x then acc else acc ++ [x]
+                              let b := if a.contains y then a else a ++ [y]
+                              if b.contains z then b else b ++ [z]
+        | .intToFloat x y => let a := if acc.contains x then acc else acc ++ [x]
+                              if a.contains y then a else a ++ [y]
+        | .floatToInt x y => let a := if acc.contains x then acc else acc ++ [x]
+                              if a.contains y then a else a ++ [y]
+        | .floatUnary x _ y => let a := if acc.contains x then acc else acc ++ [x]
+                                if a.contains y then a else a ++ [y]
+        | .fternop x _ a b c => let acc := if acc.contains x then acc else acc ++ [x]
+                                let acc := if acc.contains a then acc else acc ++ [a]
+                                let acc := if acc.contains b then acc else acc ++ [b]
+                                if acc.contains c then acc else acc ++ [c]
+        | .print _ vs => vs.foldl (fun a v => if a.contains v then a else a ++ [v]) acc
+        | .goto _ => acc
+        | .ifgoto be _ => be.vars.foldl (fun a v => if a.contains v then a else a ++ [v]) acc
+        | .halt => acc) acc, P w by
+    refine this code.toList acc hacc (fun instr hi w hw => ?_) v hv
+    have ⟨i, hlt, heq⟩ := Array.mem_iff_getElem.mp (Array.mem_toList_iff.mp hi)
+    rw [← heq] at hw; exact hcode i hlt w hw
+  intro l
+  induction l with
+  | nil => intro acc hacc _; exact hacc
+  | cons hd tl ih =>
+    intro acc hacc hinstrs w hw
+    simp only [List.foldl_cons] at hw
+    apply ih _ _ (fun instr hi => hinstrs instr (List.mem_cons_of_mem _ hi)) _ hw
+    intro u hu
+    rcases collectVars_step_subset hu with h | h
+    · exact hacc u h
+    · exact hinstrs hd (List.mem_cons.mpr (Or.inl rfl)) u h
+
 -- Monotone foldl: if v ∈ acc and each step preserves membership, v stays in the result
 private theorem mem_foldl_mono
     {f : List Var → TAC → List Var}
@@ -1899,9 +2129,67 @@ private theorem vars_subset_collectVars {p : Prog} {pc : Nat} (hpc : pc < p.code
     no variable to a restricted register: `varToArmReg` on non-restricted names
     produces non-restricted registers, `varToArmFReg` likewise. -/
 private theorem buildVarLayout_regConventionSafe (p : Prog)
-    (hNoViol : checkNoRegConventionViolations p = true) :
+    (hNoViol : checkNoRegConventionViolations p = true)
+    (hObsOk : p.observable.all fun v => !violatesRegConvention v) :
     (buildVarLayout (collectVars p) (buildVarMap (collectVars p))).regConventionSafe = true := by
-  sorry
+  -- regConventionSafe checks entries.all — show each entry is safe
+  unfold buildVarLayout VarLayout.regConventionSafe
+  simp only
+  -- entries = filterMap f (collectVars p); show all are safe
+  rw [List.all_eq_true]
+  intro ⟨w, loc⟩ hmem
+  -- (w, loc) ∈ filterMap result → f w = some (w, loc) for some w ∈ collectVars p
+  rw [List.mem_filterMap] at hmem
+  obtain ⟨w', hw'mem, hw'eq⟩ := hmem
+  -- w' ∈ collectVars p → ¬violatesRegConvention w'
+  -- (collectVars adds code vars checked by hNoViol, and observable vars checked by hObsOk)
+  have hw'ok : violatesRegConvention w' = false := by
+    -- Every var in collectVars comes from either p.code instructions or p.observable
+    -- hNoViol checks code vars, hObsOk checks observable vars
+    -- Strategy: show the collectVars step only adds vars from instr.vars,
+    -- and all such vars satisfy ¬violatesRegConvention
+    unfold checkNoRegConventionViolations at hNoViol
+    simp only [Array.all_eq_true, List.all_eq_true, Bool.not_eq_true'] at hNoViol hObsOk
+    -- hNoViol: ∀ instr ∈ p.code, ∀ v ∈ instr.vars, ¬violatesRegConvention v
+    -- hObsOk: ∀ v ∈ p.observable, ¬violatesRegConvention v
+    -- w' ∈ collectVars p = observable-fold (code-fold [] p.code)
+    -- collectVars p = observable-fold (code-fold [] p.code)
+    -- w' ∈ collectVars p → w' ∈ code-fold ∨ w' ∈ p.observable (by mem_foldl_addIfNew_imp)
+    unfold collectVars at hw'mem
+    rcases mem_foldl_addIfNew_imp hw'mem with hCode | hObs
+    · -- w' ∈ code foldl result → predicate propagation gives the result
+      exact collectVars_code_pred (by simp) hNoViol _ hCode
+    · exact hObsOk _ hObs
+  -- Case split on which branch of the filterMap produced the entry
+  cases h1 : varToArmReg w' with
+  | some r =>
+    simp [h1] at hw'eq; obtain ⟨rfl, rfl⟩ := hw'eq
+    simp only [Prod.snd, bne_iff_ne, Bool.and_eq_true, ne_eq]
+    repeat' constructor
+    -- 9 goals: each is ¬(.ireg r = .ireg .xN) or ¬(.ireg r = .freg .dN)
+    all_goals intro heq
+    -- .ireg = .freg cases are absurd
+    all_goals first
+      | exact VarLoc.noConfusion heq
+      | (obtain rfl := VarLoc.ireg.inj heq; exact absurd
+          (varToArmReg_restricted_implies_violates h1 (by simp)) (by simp [hw'ok]))
+  | none =>
+    cases h2 : varToArmFReg w' with
+    | some r =>
+      simp [h1, h2] at hw'eq; obtain ⟨rfl, rfl⟩ := hw'eq
+      simp only [Prod.snd, bne_iff_ne, Bool.and_eq_true, ne_eq]
+      repeat' constructor
+      all_goals intro heq
+      all_goals first
+        | exact VarLoc.noConfusion heq
+        | (obtain rfl := VarLoc.freg.inj heq
+           exact absurd
+            (varToArmFReg_restricted_implies_violates h2 (by simp)) (by simp [hw'ok]))
+    | none =>
+      simp [h1, h2] at hw'eq
+      cases h3 : lookupVar (buildVarMap (collectVars p)) w' with
+      | some off => simp [h3] at hw'eq; obtain ⟨_, rfl⟩ := hw'eq; simp [bne_iff_ne]
+      | none => simp [h3] at hw'eq
 
 /-- If no two variable names collide on register number (`checkNoRegisterCollisions`),
     and no variable name violates the register convention, then `buildVarLayout` is injective. -/
