@@ -488,8 +488,9 @@ partial def parseStmtAtom (toks : List Token) : Except String (Stmt × List Toke
     | Token.rparen :: rest'' => .ok (.printFloat e, rest'')
     | _ => .error "expected ')' after printfloat argument"
   | Token.kw "printfloat" :: _ => .error "expected '(' after 'printfloat'"
-  | Token.kw "printstring" :: Token.str lit :: rest => .ok (.printString lit, rest)
-  | Token.kw "printstring" :: _ => .error "expected string literal after 'printstring'"
+  | Token.kw "printstring" :: Token.lparen :: Token.str lit :: Token.rparen :: rest =>
+    .ok (.printString lit, rest)
+  | Token.kw "printstring" :: _ => .error "expected '(\"<literal>\")' after 'printstring'"
   | tok :: _ => .error s!"expected statement, got {repr tok}"
   | [] => .error "expected statement, got end of input"
 
