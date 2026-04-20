@@ -1,5 +1,15 @@
 import CredibleCompilation.CodeGen
 
+/-- Embedded C runtime stubs for typed-print library calls (printInt, printBool,
+    printFloat, printString). Written to a temp file at link time. -/
+def runtimeSrc : String := include_str "Compiler/runtime.c"
+
+/-- Materialize `runtimeSrc` to a temp file and return its path. -/
+def writeRuntime : IO String := do
+  let path := "/tmp/credible_runtime.c"
+  IO.FS.writeFile ⟨path⟩ runtimeSrc
+  return path
+
 def main (args : List String) : IO UInt32 := do
   -- Parse -O0 flag from anywhere in args
   let noOpt := args.contains "-O0"
@@ -16,7 +26,8 @@ def main (args : List String) : IO UInt32 := do
     | .ok asm =>
       let asmFile := outputFile ++ ".s"
       IO.FS.writeFile ⟨asmFile⟩ asm
-      let cc ← IO.Process.output { cmd := "cc", args := #["-o", outputFile, asmFile] }
+      let runtimePath ← writeRuntime
+      let cc ← IO.Process.output { cmd := "cc", args := #["-o", outputFile, asmFile, runtimePath] }
       if cc.exitCode != 0 then IO.eprintln cc.stderr; return 1
       IO.eprintln s!"compiled: {outputFile}"; return 0
     | .error e => IO.eprintln s!"error: {e}"; return 1
@@ -27,7 +38,8 @@ def main (args : List String) : IO UInt32 := do
       let asmFile := "/tmp/while_out.s"
       let binFile := "/tmp/while_out"
       IO.FS.writeFile ⟨asmFile⟩ asm
-      let cc ← IO.Process.output { cmd := "cc", args := #["-o", binFile, asmFile] }
+      let runtimePath ← writeRuntime
+      let cc ← IO.Process.output { cmd := "cc", args := #["-o", binFile, asmFile, runtimePath] }
       if cc.exitCode != 0 then IO.eprintln cc.stderr; return 1
       let run ← IO.Process.spawn { cmd := binFile, stdin := .inherit, stdout := .inherit, stderr := .inherit }
       let exit ← run.wait; return exit
