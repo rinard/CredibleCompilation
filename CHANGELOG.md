@@ -4,6 +4,30 @@ Chronological record of what was built and why, to reconstruct the sequence of d
 
 ---
 
+## Add `printInt` typed library call (2026-04-20)
+
+**Goal:** Replace the unverified variadic `print` path with single-argument typed print variants that flow through standard ARM64 calling conventions and the existing verified codegen lib-call machinery (like `pow`, `exp`). First slice: `printInt` only, end-to-end.
+
+**Architecture:** `printInt v` is a void library call — argument in `x0`, no return, havocs caller-saved. At the IR level (TAC), it's a no-op; at the ARM level, it's `vLoadVar v x0 ++ [bl _printInt]` wrapped with caller-save save/restore via the existing lib-call infrastructure (`isLibCallTAC`, `callerSaveEntries`).
+
+**Changes:**
+- **TAC.lean:** Added `printInt : Var → TAC` constructor, `Step.printInt` rule (no-op), `TAC.successors`/`vars`/`isScalar`/`Step.mem_successors`/`Step.store_congr` cases.
+- **WhileLang.lean:** Added `printInt` to `IsSeqInstr` and the `compileToTAC` exhaustiveness pattern.
+- **ArmDefs.lean / ArmSemantics.lean:** Added `ArmInstr.callPrintI` (no operands — argument in `x0` by ABI) and `ArmStep.callPrintI` (havoc caller-saved, increment PC).
+- **TypeSystem.lean:** `WellTypedInstr.printInt : Γ v = .int → ...` — type constraint propagates to `verifiedGenInstr` so layout knows to use ireg/stack for the load. `checkWellTypedInstr`/sound/complete updated. Type-preservation cases added (no-op).
+- **CodeGen.lean / ArmSemantics.lean § verifiedGenInstr:** New case emits `vLoadVar layout v .x0 ++ [.callPrintI]` (rejects float layouts as ill-typed). `isLibCallTAC` extended so the existing lib-call wrapping path (save → load → call → restore, with `callerSaveEntries layout varMap none` since printInt has no destination — `DAEOpt.instrDef = none` — already returns the full set) handles it for free.
+- **ArmCorrectness.lean:** Real backward simulation proof for `printInt` in `verifiedGenInstr_correct` (~40 lines). Mirrors the existing `floatUnary` lib-call template, adapted for void semantics. Added `hNCSLPrintInt` hypothesis (vacuously discharged at the non-lib-call call site in `step_simulation`).
+- **CodeGen.lean § totality:** `verifiedGenInstr_total` `printInt` case uses `WellTypedLayout.int_not_freg` to dispatch — mechanical. `instrLength_eq_length` and `verifiedGenInstr_length_pcMap_ind` extended.
+- **Pattern-match exhaustiveness across 18 files:** PropChecker (5 sites), DAEOpt (`instrUse`/`isDead`), DCEOpt (`transformInstr` + `buildInstrCerts`), PeepholeOpt, RegAllocOpt (`renameInstr`), ExecChecker (`buildInstrCerts1to1` + `computeNextPC`), SoundnessBridge (8 sites including `transBranchInfo` and bound-failure dispatches), PipelineCorrectness (`Step_of_code_arrayDecls_eq`).
+
+**Probe-driven design:** Before committing to the void-call generalization, ran three quick probes in `step_simulation`'s lib-call branch: (a) `DAEOpt.instrDef` already returns `Option Var` and gives `none` for prints — no rework. (b) `callerSaveEntries (exclude := none)` already returns the full set — exactly the void-print semantics. (c) Both `ExtStateRel.callerSave_composition` (for void calls) and `ExtStateRel.callerSave_composition_excluding` (for valued calls) already exist. All green — the infrastructure was already split along the void-vs-valued axis.
+
+**One sorry remaining (Phase 1 partial):** [CodeGen.lean:4178](CredibleCompilation/CodeGen.lean) — the void sub-case in `step_simulation`'s lib-call branch. The branch currently dispatches `cases hInstr : p.code[pc]` with arms for `floatUnary` and `fbinop .fpow`, both of which assume a destination var (`σ' = σ[dst ↦ result]`) and use `callerSave_composition_excluding`. The new `printInt` arm needs the void analog — a routing-style change to use `callerSave_composition` (no exclusion). Mechanical but ~150 lines of plumbing; deferred to next session.
+
+**Deferred:** WhileLang `Stmt.printInt` surface syntax + variadic-`print`-to-typed-print lowering in `compileToTAC`. Test programs continue using the old variadic `print` for now.
+
+---
+
 ## Dedupe successor-bounds checks (2026-04-20)
 
 **Goal:** Eliminate duplication flagged in the post-refactor audit. Three nearly-identical "all successors in bounds" checks existed: `TAC.checkStepClosed` (Prog-based, with soundness `StepClosedInBounds`), `checkSuccessorsInBounds` (ECertificate-based, mirrored checkStepClosed but on `cert.trans`), and `checkSuccessorsInBounds_prog` (Prog, goto/ifgoto only — strictly weaker, used by `checkBranchTargets_of_successorsInBounds`). On top of that, `successors` was duplicated as a bare `def` in ExecChecker.lean and as `TAC.successors` in TAC.lean.

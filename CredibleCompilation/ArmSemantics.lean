@@ -146,6 +146,14 @@ inductive ArmStep (prog : ArmProg) : ArmState → ArmState → Prop where
     prog[s.pc]? = some (.printCall lines) →
     ArmStep prog s (s.havocCallerSaved newRegs newFregs |>.nextPC)
 
+  /-- Typed integer print library call (`bl _printInt`): havocs all
+      caller-saved registers, no return value. Argument is consumed from `x0`
+      by the C runtime; no part of the modeled state observes that read. -/
+  | callPrintI
+    (newRegs : ArmReg → BitVec 64) (newFregs : ArmFReg → BitVec 64) :
+    prog[s.pc]? = some .callPrintI →
+    ArmStep prog s (s.havocCallerSaved newRegs newFregs |>.nextPC)
+
   | arrLd (dst : ArmReg) (arr : ArrayName) (idxReg : ArmReg) :
     prog[s.pc]? = some (.arrLd dst arr idxReg) →
     ArmStep prog s (s.setReg dst (s.arrayMem arr (s.regs idxReg)) |>.nextPC)
@@ -1585,6 +1593,12 @@ def verifiedGenInstr (layout : VarLayout) (pcMap : Nat → Nat) (instr : TAC)
       some (vLoadVarFP layout a a_reg ++ vLoadVarFP layout b b_reg ++
         vLoadVarFP layout c c_reg ++ [fpInstr] ++ vStoreVarFP layout dst dst_reg)
   | .print _ _ => none      -- handled by unverified codegen path
+  | .printInt v =>
+    -- Verified path: load value into x0, then bl _printInt.
+    -- Argument register is fixed by ARM64 calling convention.
+    match layout v with
+    | some (.freg _) => none    -- printInt requires int operand, not float
+    | _ => some (vLoadVar layout v .x0 ++ [.callPrintI])
 
 -- ────────────────────────────────────────────────────────────
 -- § 8e. verifiedGenInstr output length is pcMap-independent
@@ -1651,6 +1665,9 @@ theorem verifiedGenInstr_length_pcMap_ind
     split at h1 <;> simp_all <;> split at h2 <;> simp_all
   | print fmt vs =>
     simp [verifiedGenInstr] at h1
+  | printInt v =>
+    simp only [verifiedGenInstr] at h1 h2
+    split at h1 <;> simp_all <;> split at h2 <;> simp_all
 
 -- ============================================================
 -- § 9. CodeAt and helper lemmas

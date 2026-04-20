@@ -230,6 +230,8 @@ private def ppInstr (lbl : Nat → String) (afterFcmp : Bool)
   | .b target =>
     [s!"  b {lbl target}"]
   | .printCall lines => lines
+  | .callPrintI =>
+    ["  stp x29, x30, [sp, #-16]!", "  bl _printInt", "  ldp x29, x30, [sp], #16"]
   | .bCond c target =>
     [s!"  b.{if afterFcmp then ppCondFloat c else ppCond c} {lbl target}"]
   | .arrLd dst arr idxReg =>
@@ -333,6 +335,7 @@ where
 private def isLibCallTAC : TAC → Bool
   | .floatUnary _ op _ => !op.isNative
   | .fbinop _ .fpow _ _ => true
+  | .printInt _ => true
   | _ => false
 
 /-- Generate save/restore ArmInstr lists for caller-saved registers that are live
@@ -1057,6 +1060,9 @@ private theorem verifiedGenInstr_length_pcMap_indep {layout : VarLayout}
     have : some l₁ = some l₂ := by rw [← h₁, ← h₂]; simp [verifiedGenInstr]
     exact congrArg _ (Option.some.inj this)
   | print _ _ => simp [verifiedGenInstr] at h₁
+  | printInt v =>
+    simp only [verifiedGenInstr] at h₁ h₂
+    split at h₁ <;> simp_all <;> split at h₂ <;> simp_all
 
 /-- instrLength equals the length of the generated instruction list (including
     save/restore wrapping at call sites). -/
@@ -1075,6 +1081,19 @@ private theorem instrLength_eq_length {layout : VarLayout} {pcMap : Nat → Nat}
   -- Lib-call: also need callSaveRestoreLen = saves.length + restores.length (definitional)
   cases instr with
   | print => simp [verifiedGenInstr] at h
+  | printInt v =>
+    simp only [instrLength, isLibCallTAC, callSaveRestoreLen, callerSaveEntries, DAEOpt.instrDef]
+    generalize hd : verifiedGenInstr layout (fun _ => 0)
+      (.printInt v) haltS divS boundsS arrayDecls safe = dr
+    cases dr with
+    | none =>
+      simp only [verifiedGenInstr] at h hd
+      split at hd <;> simp_all <;> split at h <;> simp_all
+    | some dl =>
+      have hLen := verifiedGenInstr_length_pcMap_ind layout (.printInt v) haltS divS boundsS
+          arrayDecls safe _ pcMap dl instrs hd h
+      simp only [hLen, List.length_append, entriesToSaves_length, entriesToRestores_length]
+      simp [Nat.add_comm, Nat.add_left_comm]
   | const v val =>
     simp only [instrLength, isLibCallTAC, verifiedGenInstr] at *
     cases val <;> simp_all <;> split at h <;> simp_all
@@ -2067,6 +2086,12 @@ private theorem verifiedGenInstr_total
     · next _ _ _ r h _ => exact absurd h (hWTL.float_not_ireg hb r)
     · next _ _ r h _ _ => exact absurd h (hWTL.float_not_ireg hc r)
     · next _ r h _ _ _ => exact absurd h (hWTL.float_not_ireg hx r)
+    · exact ⟨_, rfl⟩
+  case printInt hv =>
+    rename_i v
+    unfold verifiedGenInstr; simp only [hRC, hII, Bool.not_true, Bool.false_or]; dsimp
+    split
+    · next r h => exact absurd h (hWTL.int_not_freg hv r)
     · exact ⟨_, rfl⟩
   -- NOTE: copy case has a codegen gap — verifiedGenInstr returns none when
   -- src is in stack/ireg and dst is in freg. Fix needed in verifiedGenInstr:
@@ -4147,6 +4172,10 @@ private theorem step_simulation {tyCtx : TyCtx} {p : Prog} {r : VerifiedAsmResul
                   intro h; subst h; rw [hlx] at hLoc; cases hLoc
                 rw [hDstOnly v hne]
         | _ => simp [isLibCallTAC, show p[pc] = p.code[pc] from rfl, hInstr] at hLib
+      | printInt v =>
+        -- Void lib call: bl _printInt, no destination, σ' = σ.
+        -- TODO: proper proof; placeholder while wiring is set up.
+        sorry
       | _ => simp [isLibCallTAC, show p[pc] = p.code[pc] from rfl, hInstr] at hLib
     obtain ⟨s_mid, hBaseSteps, hMidPC, hMidAM, hSaveSlots, hNEI, hNEF, hSV⟩ :=
       hBaseExists
@@ -4346,12 +4375,16 @@ private theorem step_simulation {tyCtx : TyCtx} {p : Prog} {r : VerifiedAsmResul
           NoCallerSavedLayout r.layout := by
         intro x y z heq
         simp [isLibCallTAC, heq] at hNotLib
+      have hNCSLPrintInt : ∀ v, p[pc] = .printInt v →
+          NoCallerSavedLayout r.layout := by
+        intro v heq
+        simp [isLibCallTAC, heq] at hNotLib
       exact ext_backward_simulation p r.bodyFlat r.layout r.pcMap
         r.haltS r.divS r.boundsS p.arrayDecls safe
         hStep hRel hPC tyCtx spec.wellTypedProg hTS spec.wellTypedLayout
         p[pc] (Prog.getElem?_eq_getElem hPC)
         (r.bodyPerPC[pc]'hpcB) hSome hCodeAt hPcNext
-        (spec.layoutComplete pc hPC) rfl hNCSL hNCSLBin
+        (spec.layoutComplete pc hPC) rfl hNCSL hNCSLBin hNCSLPrintInt
 
 -- ──────────────────────────────────────────────────────────────
 -- Multi-step simulation (main theorem)
@@ -4423,6 +4456,7 @@ private theorem step_run_or_terminal {tyCtx : TyCtx} {p : Prog} {pc : Nat} {σ :
   | floatUnary_typeError _ _ => exact .inr fun _ h => Step.no_step_from_typeError h
   | fternop_typeError _ _ => exact .inr fun _ h => Step.no_step_from_typeError h
   | print _ => exact .inl ⟨_, _, _, rfl, hts⟩
+  | printInt _ => exact .inl ⟨_, _, _, rfl, hts⟩
 
 /-- Whole-program backward simulation for `verifiedGenerateAsm`.
 

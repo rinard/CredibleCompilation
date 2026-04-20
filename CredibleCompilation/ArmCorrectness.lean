@@ -1766,7 +1766,8 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
       pcMap (pc + 1) = pcMap pc + instrs.length)
     (hAD : arrayDecls = p.arrayDecls)
     (hNCSL : ∀ x op y, instr = .floatUnary x op y → op.isNative = false → NoCallerSavedLayout layout)
-    (hNCSLBin : ∀ x y z, instr = .fbinop x .fpow y z → NoCallerSavedLayout layout) :
+    (hNCSLBin : ∀ x y z, instr = .fbinop x .fpow y z → NoCallerSavedLayout layout)
+    (hNCSLPrintInt : ∀ v, instr = .printInt v → NoCallerSavedLayout layout) :
     ∃ s', ArmSteps prog s s' ∧ ExtSimRel layout pcMap cfg' s' := by
   -- Derive regConventionSafe and injective from hSome (the if-guard passed)
   have hRC : layout.regConventionSafe = true := by
@@ -1822,6 +1823,49 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
   | print hinstr =>
     have heq : instr = .print _ _ := Option.some.inj (hInstr.symm.trans hinstr)
     rw [heq] at hSome; simp [verifiedGenInstr] at hSome
+  | printInt hinstr =>
+    rename_i v
+    have heq : instr = .printInt v := Option.some.inj (hInstr.symm.trans hinstr)
+    rw [heq] at hSome hMapped
+    -- verifiedGenInstr returns: vLoadVar layout v .x0 ++ [.callPrintI]
+    -- (provided layout v is not a freg)
+    have hNotFreg : ∀ r, layout v ≠ some (.freg r) := by
+      intro r h
+      simp [verifiedGenInstr, hRC, hII, h] at hSome
+    have hVMapped : layout v ≠ none := hMapped v (by simp [TAC.vars])
+    have hInstrs : instrs = vLoadVar layout v .x0 ++ [.callPrintI] := by
+      simp only [verifiedGenInstr, hRC, hII, Bool.not_true, Bool.false_or] at hSome
+      split at hSome
+      · simp at hSome
+      · simp at hSome; exact hSome.symm
+    rw [hInstrs] at hCodeInstr
+    -- Step 1: load v into x0
+    have hCodeLoad := hCodeInstr.append_left (l2 := [ArmInstr.callPrintI])
+    obtain ⟨s1, hSteps1, _, hRel1, _, hPC1, hAM1, _⟩ :=
+      vLoadVar_exec prog layout v .x0 σ s (pcMap pc)
+        hStateRel hRegConv hPcRel hCodeLoad (.inl rfl) hNotFreg hVMapped
+    -- Step 2: bl _printInt — havocs caller-saved
+    have hCodeCall : prog[s1.pc]? = some .callPrintI := by
+      have h := hCodeInstr.append_right (l1 := vLoadVar layout v .x0) 0 (by simp)
+      simp at h
+      rw [hPC1]; exact h
+    let newRegs : ArmReg → BitVec 64 := fun _ => 0
+    let newFregs : ArmFReg → BitVec 64 := fun _ => 0
+    let s2 := (s1.havocCallerSaved newRegs newFregs).nextPC
+    have hSteps2 : ArmSteps prog s1 s2 :=
+      .single (.callPrintI newRegs newFregs hCodeCall)
+    -- ExtStateRel preserved: havoc is safe under NoCallerSavedLayout
+    have hNCS : NoCallerSavedLayout layout := hNCSLPrintInt v heq
+    have hRel2 : ExtStateRel layout σ s2 :=
+      (ExtStateRel.havocCallerSaved_preserved hRel1 hNCS).nextPC
+    refine ⟨s2, hSteps1.trans hSteps2, ⟨hRel2, ?_, ?_⟩⟩
+    · -- PcRel: s2.pc = pcMap (pc + 1)
+      show s2.pc = pcMap (pc + 1)
+      have hNext := hPcNext _ _ rfl
+      simp [s2, ArmState.nextPC, ArmState.havocCallerSaved] at *
+      rw [hPC1, hNext, hInstrs]; simp [List.length_append]; omega
+    · -- ArrayMem preserved
+      simp [s2, ArmState.nextPC, ArmState.havocCallerSaved, hAM1, hArrayMem]
   | const hinstr =>
     rename_i x v
     have heq : instr = .const x v := Option.some.inj (hInstr.symm.trans hinstr)
@@ -5092,7 +5136,8 @@ theorem ext_backward_simulation (p : Prog) (armProg : ArmProg)
     (hMapped : ∀ v, v ∈ instr.vars → layout v ≠ none)
     (hAD : arrayDecls = p.arrayDecls)
     (hNCSL : ∀ x op y, instr = .floatUnary x op y → op.isNative = false → NoCallerSavedLayout layout)
-    (hNCSLBin : ∀ x y z, instr = .fbinop x .fpow y z → NoCallerSavedLayout layout) :
+    (hNCSLBin : ∀ x y z, instr = .fbinop x .fpow y z → NoCallerSavedLayout layout)
+    (hNCSLPrintInt : ∀ v, instr = .printInt v → NoCallerSavedLayout layout) :
     ∃ s', ArmSteps armProg s s' ∧ ExtSimRel layout pcMap cfg' s' :=
   verifiedGenInstr_correct armProg layout pcMap p pc σ am s haltLabel divLabel boundsLabel
-    arrayDecls boundsSafe instr hInstr hRel instrs hSome hPC tyCtx hWT hTS hWTL hMapped cfg' hStep hCode hPcNext hAD hNCSL hNCSLBin
+    arrayDecls boundsSafe instr hInstr hRel instrs hSome hPC tyCtx hWT hTS hWTL hMapped cfg' hStep hCode hPcNext hAD hNCSL hNCSLBin hNCSLPrintInt

@@ -245,6 +245,9 @@ inductive ArmInstr where
       Carries pre-computed assembly lines for the printf body (sub sp, arg
       loads, adrp/add for format string, bl _printf, add sp). -/
   | printCall : List String → ArmInstr
+  /-- Typed integer print library call (`bl _printInt`): expects argument
+      already in `x0`, havocs all caller-saved registers, no return value. -/
+  | callPrintI : ArmInstr
   /-- `b.cc label` — conditional branch based on flags. -/
   | bCond    : Cond → Nat → ArmInstr
   /-- Load from global array: `dst ← arrayMem[arr][idxReg]`. -/
