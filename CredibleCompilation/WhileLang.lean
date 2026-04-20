@@ -533,7 +533,7 @@ def stmtCodeLen : Stmt → Nat
   | .ifgoto b _ => boolCodeLen b + 1  -- condition code + ifgoto
   | .print _ args => exprsCodeLen args + 1
   | .printInt e => exprCodeLen e + 1
-  | .printBool b => boolCodeLen b + 2  -- boolop + printBool
+  | .printBool b => boolCodeLen b + 5  -- 4 conv instrs (ifgoto+const+goto+const) + printBool
   | .printFloat e => exprCodeLen e + 1
   | .printString _ => 1
 
@@ -665,9 +665,20 @@ def compileStmt (s : Stmt) (offset nextTmp : Nat)
     let (codeE, ve, tmp1) := compileExpr e offset nextTmp
     (codeE ++ [.printInt ve], tmp1)
   | .printBool b =>
+    -- Materialize the bool expression into an int temp via ifgoto+const sequence,
+    -- then call printBool with the int value. Avoids needing a bool temp class.
+    -- (printBool's well-typedness now accepts both .bool and .int.)
     let (codeB, be, tmpB) := compileBool b offset nextTmp
-    let tBool := btmpName tmpB
-    (codeB ++ [.boolop tBool be, .printBool tBool], tmpB + 1)
+    let tInt := tmpName tmpB
+    let afterCodeB := offset + codeB.length
+    let trueL := afterCodeB + 3  -- ifgoto + const 0 + goto
+    let endL := trueL + 1
+    let convCode : List TAC :=
+      [TAC.ifgoto be trueL,
+       TAC.const tInt (.int (0 : BitVec 64)),
+       TAC.goto endL,
+       TAC.const tInt (.int (1 : BitVec 64))]
+    (codeB ++ convCode ++ [.printBool tInt], tmpB + 1)
   | .printFloat e =>
     let (codeE, ve, tmp1) := compileExpr e offset nextTmp
     (codeE ++ [.printFloat ve], tmp1)
@@ -1892,9 +1903,16 @@ theorem compileStmt_wt (prog : Program)
     simp only [Program.checkStmt] at hchk
     simp only [compileStmt]
     have ⟨hb_wt, hb_ty⟩ := compileBool_wt prog hnt b hchk offset nextTmp
-    have htBool := tyCtx_btmp_wt prog hnt (compileBool b offset nextTmp).2.2
-    exact allWTI_append' hb_wt
-      (allWTI_cons' (.boolop htBool hb_ty) (allWTI_one (.printBool htBool)))
+    have htInt := tyCtx_tmp_wt prog hnt (compileBool b offset nextTmp).2.2
+    -- Output: (codeB ++ [4 conv instrs]) ++ [printBool tmp]
+    refine allWTI_append' (allWTI_append' hb_wt ?_) (allWTI_one (.printBool (Or.inr htInt)))
+    intro instr hmem
+    simp only [List.mem_cons, List.mem_singleton, List.mem_nil_iff, or_false] at hmem
+    rcases hmem with rfl | rfl | rfl | rfl
+    · exact .ifgoto hb_ty
+    · exact .const (by simp [Value.typeOf, htInt])
+    · exact .goto
+    · exact .const (by simp [Value.typeOf, htInt])
   | printFloat e =>
     simp only [Program.checkStmt] at hchk
     simp only [compileStmt]
@@ -2369,9 +2387,14 @@ theorem compileStmt_code_simpleOps (s : Stmt) (offset nextTmp : Nat)
   | printBool b =>
     intro instr hmem; simp only [compileStmt] at hmem
     simp only [List.mem_append, List.mem_cons, List.mem_nil_iff, or_false] at hmem
-    rcases hmem with hb | rfl | rfl
+    rcases hmem with (hb | hconv) | rfl
     · exact compileBool_hasSimpleOps_mem b offset nextTmp instr hb
-    · simp [TAC.hasSimpleOps, compileBool_hasSimpleOps]
+    · -- 4 conv instrs (ifgoto + 3 simple ones)
+      rcases hconv with rfl | rfl | rfl | rfl
+      · simp [TAC.hasSimpleOps, compileBool_hasSimpleOps]
+      · rfl
+      · rfl
+      · rfl
     · rfl
   | printFloat e =>
     intro instr hmem; simp [compileStmt, List.mem_append] at hmem
@@ -2732,11 +2755,25 @@ theorem compileStmt_allJumpsLe (s : Stmt) (offset nextTmp : Nat)
       · exact compileExpr_allSeq e _ _ instr he
       · trivial)
   | printBool b =>
-    simp only [compileStmt, List.length_append, List.length_cons, List.length_nil] at hbound ⊢
-    exact AllJumpsLe_append
-      (AllJumpsLe_mono (compileBool_allJumpsLe b offset nextTmp _ (Nat.le_refl _)) (by omega))
-      (AllJumpsLe_of_allSeq (fun instr hmem => by
-        simp at hmem; rcases hmem with rfl | rfl <;> trivial))
+    match hcb : compileBool b offset nextTmp with
+    | (codeB, be, tmpB) =>
+    simp only [compileStmt, hcb]
+    have hb : AllJumpsLe (offset + codeB.length) codeB := by
+      have := compileBool_allJumpsLe b offset nextTmp (offset + codeB.length) (by simp [hcb])
+      simp [hcb] at this; exact this
+    simp only [compileStmt, hcb, List.length_append, List.length_cons, List.length_nil] at hbound
+    apply AllJumpsLe_append
+    · apply AllJumpsLe_append
+      · exact AllJumpsLe_mono hb (by omega)
+      · have h_ifgt : offset + codeB.length + 3 ≤ bound := by omega
+        have h_goto : offset + codeB.length + 3 + 1 ≤ bound := by omega
+        intro instr hmem; simp at hmem
+        rcases hmem with rfl | rfl | rfl | rfl
+        · exact h_ifgt
+        · exact trivial
+        · exact h_goto
+        · exact trivial
+    · exact AllJumpsLe_of_allSeq (fun instr hmem => by simp at hmem; subst hmem; trivial)
   | printFloat e =>
     exact AllJumpsLe_of_allSeq (by
       intro instr hmem; simp [compileStmt, List.mem_append] at hmem

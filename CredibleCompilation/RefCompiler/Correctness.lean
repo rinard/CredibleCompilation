@@ -1304,9 +1304,70 @@ theorem compileStmt_correct (s : Stmt) (fuel : Nat) (σ σ' : Store) (am am' : A
     simp only [List.length_cons, List.length_nil, Nat.add_zero]
     exact hexec_ps
   | printBool b =>
-    -- printBool requires bool temp infrastructure; for now this case is a sketch
-    -- and will be filled in with the boolop+printBool sequence proof.
-    sorry
+    simp only [Stmt.safe] at hsafe
+    simp only [Stmt.typedVars] at htypedv
+    have htf_b : ∀ v ∈ b.freeVars, v.isTmp = false :=
+      fun v hv => htmpfree v (by simp only [Stmt.allVars]; exact hv)
+    have hftf_b : ∀ v ∈ b.freeVars, v.isFTmp = false :=
+      fun v hv => hftmpfree v (by simp only [Stmt.allVars]; exact hv)
+    simp only [Stmt.interp] at hinterp
+    split at hinterp <;> [skip; simp at hinterp]
+    obtain ⟨rfl, rfl⟩ := Prod.mk.inj (Option.some.inj hinterp)
+    dsimp only [compileStmt] at hcode ⊢
+    generalize hrcb : compileBool b offset nextTmp = rcb at hcode ⊢
+    obtain ⟨codeB, be, tmpB⟩ := rcb
+    simp only [] at hcode ⊢
+    -- Execute compileBool b
+    obtain ⟨σ_b, hexec_b, heval_b, hntmp_b, hprev_b, hfprev_b⟩ :=
+      compileBool_correct b offset nextTmp σ σ_tac am p htf_b hftf_b
+        htypedv hsafe hagree (by rw [hrcb]; exact hcode.left.left)
+    rw [hrcb] at hexec_b heval_b; simp at hexec_b heval_b
+    set tInt := tmpName tmpB with tInt_def
+    -- Conv code at offset + codeB.length
+    have hconv_adj : RC.CodeAt [TAC.ifgoto be (offset + codeB.length + 3),
+        TAC.const tInt (.int 0),
+        TAC.goto (offset + codeB.length + 3 + 1),
+        TAC.const tInt (.int 1)] p (offset + codeB.length) := hcode.left.right
+    have h_ifg : p[offset + codeB.length]? = some (.ifgoto be (offset + codeB.length + 3)) :=
+      hconv_adj.head
+    have h_const0 : p[offset + codeB.length + 1]? = some (.const tInt (.int 0)) := by
+      have := hconv_adj 1 (by simp); simpa using this
+    have h_goto_end : p[offset + codeB.length + 2]? = some (.goto (offset + codeB.length + 4)) := by
+      have := hconv_adj 2 (by simp)
+      simpa [show offset + codeB.length + 3 + 1 = offset + codeB.length + 4 from by omega] using this
+    have h_const1 : p[offset + codeB.length + 3]? = some (.const tInt (.int 1)) := by
+      have := hconv_adj 3 (by simp); simpa using this
+    have h_printBool : p[offset + codeB.length + 4]? = some (.printBool tInt) := by
+      have := hcode.right.head
+      simp only [List.length_append, List.length_cons, List.length_nil] at this
+      rwa [show offset + (codeB.length + 4) = offset + codeB.length + 4 from by omega] at this
+    -- Case split on bool value
+    cases hbval : b.eval σ am
+    · -- false → ifgoto falls through, const 0, goto endL, printBool
+      have hexec_ifg := FragExec.single_iffalse (am := am) h_ifg (by rw [heval_b, hbval])
+      have hexec_c0 := FragExec.single_const (am := am) h_const0 (σ := σ_b)
+      have hexec_goto := FragExec.single_goto (am := am) h_goto_end (σ := σ_b[tInt ↦ .int 0])
+      have hexec_pb := FragExec.single_printBool (am := am) h_printBool (σ := σ_b[tInt ↦ .int 0])
+      refine ⟨σ_b[tInt ↦ .int (0 : BitVec 64)], ?_, ?_⟩
+      · have h := FragExec.trans' (FragExec.trans' (FragExec.trans' (FragExec.trans'
+            hexec_b hexec_ifg) hexec_c0) hexec_goto) hexec_pb
+        simp only [List.length_append, List.length_cons, List.length_nil] at h ⊢
+        convert h using 1
+      · intro v hv1 hv2
+        rw [Store.update_isTmp_ne (tmpName_isTmp tmpB) hv1,
+            hntmp_b v hv1 hv2]; exact hagree v hv1 hv2
+    · -- true → ifgoto jumps to trueL, const 1, printBool
+      have hexec_ifg := FragExec.single_iftrue (am := am) h_ifg (by rw [heval_b, hbval])
+      have hexec_c1 := FragExec.single_const (am := am) h_const1 (σ := σ_b)
+      have hexec_pb := FragExec.single_printBool (am := am) h_printBool (σ := σ_b[tInt ↦ .int 1])
+      refine ⟨σ_b[tInt ↦ .int (1 : BitVec 64)], ?_, ?_⟩
+      · have h := FragExec.trans' (FragExec.trans' (FragExec.trans'
+            hexec_b hexec_ifg) hexec_c1) hexec_pb
+        simp only [List.length_append, List.length_cons, List.length_nil] at h ⊢
+        convert h using 1
+      · intro v hv1 hv2
+        rw [Store.update_isTmp_ne (tmpName_isTmp tmpB) hv1,
+            hntmp_b v hv1 hv2]; exact hagree v hv1 hv2
   | assign x e =>
     simp only [Stmt.safe] at hsafe
     simp only [Stmt.typedVars] at htypedv

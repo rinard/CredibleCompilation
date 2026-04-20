@@ -2174,7 +2174,10 @@ private theorem verifiedGenInstr_total
     rename_i v
     unfold verifiedGenInstr; simp only [hRC, hII, Bool.not_true, Bool.false_or]; dsimp
     split
-    · next r h => exact absurd h (hWTL.bool_not_freg hv r)
+    · next r h =>
+      rcases hv with h_bool | h_int
+      · exact absurd h (hWTL.bool_not_freg h_bool r)
+      · exact absurd h (hWTL.int_not_freg h_int r)
     · exact ⟨_, rfl⟩
   case printFloat hv =>
     rename_i v
@@ -2744,13 +2747,17 @@ private theorem compileStmt_noRegVar (s : Stmt) (offset nextTmp : Nat)
     have ⟨hb_i, hb_be⟩ := compileBool_noRegVar b offset nextTmp hSrc
     intro instr hmem v hv
     simp only [compileStmt, List.mem_append, List.mem_cons, List.mem_nil_iff, or_false] at hmem
-    rcases hmem with h | rfl | rfl
+    rcases hmem with (h | hconv) | rfl
     · exact hb_i instr h v hv
-    · simp [TAC.vars] at hv
-      rcases hv with rfl | hbev
-      · exact btmpName_noRegVar _
-      · exact hb_be v hbev
-    · simp [TAC.vars] at hv; subst hv; exact btmpName_noRegVar _
+    · -- conv code: 4 instrs (ifgoto, const, goto, const)
+      rcases hconv with rfl | rfl | rfl | rfl
+      · -- ifgoto: vars = be.vars
+        simp [TAC.vars] at hv; exact hb_be v hv
+      · simp [TAC.vars] at hv; subst hv; exact tmpName_noRegVar _
+      · simp [TAC.vars] at hv  -- goto has no vars
+      · simp [TAC.vars] at hv; subst hv; exact tmpName_noRegVar _
+    · -- printBool tmp
+      simp [TAC.vars] at hv; subst hv; exact tmpName_noRegVar _
   | printFloat e =>
     simp only [Program.Stmt.noReservedVars] at hSrc
     have ⟨he_i, he_r⟩ := compileExpr_noRegVar e offset nextTmp hSrc

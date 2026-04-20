@@ -947,7 +947,8 @@ theorem compileStmt_unsafe (s : Stmt) (fuel : Nat) (σ : Store) (am : ArrayMem)
     have htf_b : ∀ v ∈ b.freeVars, v.isTmp = false := fun v hv => htmpfree v hv
     have hftf_b : ∀ v ∈ b.freeVars, v.isFTmp = false := fun v hv => hftmpfree v hv
     dsimp only [compileStmt] at hcode ⊢
-    have hcodeB : RC.CodeAt (compileBool b offset nextTmp).1 p offset := hcode.left
+    -- Output: (codeB ++ convCode) ++ [printBool tmp]
+    have hcodeB : RC.CodeAt (compileBool b offset nextTmp).1 p offset := hcode.left.left
     obtain ⟨pc_s, σ_s, hfrag, herr, hlt⟩ :=
       compileBool_stuck b offset nextTmp σ σ_tac am p htf_b hftf_b htypedv hunsafe hagree hcodeB
     refine ⟨pc_s, σ_s, am, hfrag, herr, ?_⟩

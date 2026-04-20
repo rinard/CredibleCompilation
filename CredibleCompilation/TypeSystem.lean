@@ -68,7 +68,7 @@ inductive WellTypedInstr (Γ : TyCtx) (decls : List (ArrayName × Nat × VarTy))
       WellTypedInstr Γ decls (.fternop x op a b c)
   | print     : WellTypedInstr Γ decls (.print fmt vs)
   | printInt  : Γ v = .int → WellTypedInstr Γ decls (.printInt v)
-  | printBool : Γ v = .bool → WellTypedInstr Γ decls (.printBool v)
+  | printBool : (Γ v = .bool ∨ Γ v = .int) → WellTypedInstr Γ decls (.printBool v)
   | printFloat : Γ v = .float → WellTypedInstr Γ decls (.printFloat v)
   | printString : WellTypedInstr Γ decls (.printString lit)
 
@@ -342,7 +342,7 @@ def checkWellTypedInstr (Γ : TyCtx) (decls : List (ArrayName × Nat × VarTy)) 
   | .fternop x _ a b c => decide (Γ x = .float) && decide (Γ a = .float) && decide (Γ b = .float) && decide (Γ c = .float)
   | .print _ _    => true
   | .printInt v   => decide (Γ v = .int)
-  | .printBool v  => decide (Γ v = .bool)
+  | .printBool v  => decide (Γ v = .bool) || decide (Γ v = .int)
   | .printFloat v => decide (Γ v = .float)
   | .printString _ => true
 
@@ -411,8 +411,8 @@ theorem checkWellTypedInstr_sound {Γ : TyCtx} {decls : List (ArrayName × Nat �
     simp only [checkWellTypedInstr, decide_eq_true_eq] at h
     exact .printInt h
   | printBool v =>
-    simp only [checkWellTypedInstr, decide_eq_true_eq] at h
-    exact .printBool h
+    simp only [checkWellTypedInstr, Bool.or_eq_true, decide_eq_true_eq] at h
+    exact .printBool (h.imp id id)
   | printFloat v =>
     simp only [checkWellTypedInstr, decide_eq_true_eq] at h
     exact .printFloat h
@@ -452,7 +452,7 @@ theorem checkWellTypedInstr_complete {Γ : TyCtx} {decls : List (ArrayName × Na
   | fternop hx ha hb hc => simp [checkWellTypedInstr, hx, ha, hb, hc]
   | print => rfl
   | printInt h => simp [checkWellTypedInstr, h]
-  | printBool h => simp [checkWellTypedInstr, h]
+  | printBool h => rcases h with h | h <;> simp [checkWellTypedInstr, h]
   | printFloat h => simp [checkWellTypedInstr, h]
   | printString => rfl
 

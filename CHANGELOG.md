@@ -4,6 +4,37 @@ Chronological record of what was built and why, to reconstruct the sequence of d
 
 ---
 
+## Close `Stmt.printBool` sorry; loosen TAC.printBool to accept int (2026-04-20)
+
+**Goal:** Close the 1 sorry from the previous commit by eliminating the bool-temp-class issue at its root.
+
+**Root cause:** The previous design materialized `Stmt.printBool b`'s result into a `__bt`-prefixed bool temp via `boolop`. The `hagree` invariant in `RefCompiler/Correctness` only recognizes `__t`/`__ft` prefixes as compiler temps — `__bt` looked like a "user variable" requiring source-vs-TAC store agreement, which the compiler-introduced bool temp couldn't satisfy.
+
+**Fix:** Two coordinated changes:
+
+1. **Loosen `WellTypedInstr.printBool`** from `Γ v = .bool` to `Γ v = .bool ∨ Γ v = .int`. Justification: `_printBool` runtime function reads `x0` as a 64-bit int and prints "true"/"false" based on 0/non-0. Bools and ints both live in iregs/stack at the codegen level, both go through `vLoadVar`. No soundness loss — purely type-discipline relaxation matching the runtime's actual behavior.
+
+2. **Rewrite `compileStmt` for `Stmt.printBool b`** to use the `barrWrite`-style ifgoto+const sequence to materialize the bool result into an int temp (`tmpName`), then call `printBool` with the int:
+   ```
+   compileBool b ++
+   [ifgoto be trueL, const tmp 0, goto endL, const tmp 1] ++
+   [printBool tmp]
+   ```
+   No bool temp introduced. `tmpName k` is a `__t`-prefixed int temp that `hagree`'s existing `isTmp` check correctly excludes.
+
+**Knock-on changes:**
+- `verifiedGenInstr_correct`'s printBool case: now case-splits on the `.bool ∨ .int` disjunction (both arms work — bool/int both land in ireg/stack)
+- `WhileLang` lemmas about printBool: `compileStmt_wt`, `compileStmt_length`, `compileStmt_allJumpsLe`, `compileStmt_code_simpleOps` updated for the new 5-instruction structure (compileBool + 4 conv + printBool)
+- `compileStmt_noRegVar` updated for new conv-instr layout
+- `compileStmt_correct`'s printBool case: full proof modeled on `barrWrite`'s correctness proof. Case-splits on `b.eval σ am`, walks the ifgoto-falls-through-then-const-0-then-goto path or the ifgoto-jumps-then-const-1 path, composes with `compileBool_correct`. ~70 lines.
+- TypeSystem checker updated for disjunction: `decide (Γ v = .bool) || decide (Γ v = .int)`
+
+**Btmp infrastructure (`btmpName`, `String.isBTmp`, `tyCtx_btmp_wt`, etc.) is no longer reachable** but left in place since it builds clean and could be useful for a future clean refactor (Phase 1 of the temp-class unification design discussed earlier). It can be removed in a follow-up cleanup commit.
+
+**All four typed Stmt constructors** (`printInt`, `printBool`, `printFloat`, `printString`) now flow through the entire verified compiler pipeline (Stmt → TAC → ARM) at **0 sorrys**.
+
+---
+
 ## Add typed `Stmt` constructors (Option A, partial — 1 sorry) (2026-04-20)
 
 **Goal:** Lift the four typed prints from TAC into WhileLang at the surface (`Stmt`) level so they flow through the entire verified compilation pipeline (source `Stmt` → TAC → ARM), not just the TAC layer.
