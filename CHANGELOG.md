@@ -4,6 +4,30 @@ Chronological record of what was built and why, to reconstruct the sequence of d
 
 ---
 
+## Add parser support for typed-print surface syntax (2026-04-20)
+
+**Goal:** Surface the four typed `Stmt` constructors in the WhileLang concrete syntax so `.w` files can use them directly.
+
+**New surface syntax:**
+```
+printint(<expr>)         -- prints int-typed expression
+printbool(<bexpr>)       -- prints bool expression  
+printfloat(<expr>)       -- prints float-typed expression
+printstring "literal"    -- prints string literal
+```
+
+**Variadic `print "fmt", args` syntax kept** working as before — its parsing is unchanged. Both surfaces coexist; the variadic form still compiles via the unverified TAC.print path while the typed forms flow through the verified pipeline.
+
+**Changes:**
+- Tokenizer: added `printint`, `printbool`, `printfloat`, `printstring` to the keywords list
+- Parser: added 4 cases in `parseStmtAtom`, each parsing the appropriate operand (`parseExpr` for int/float, `parseBOr` for bool, string literal for string)
+
+**Smoke-tested:** All four typed-print syntaxes parse correctly and a benchmark-style `.w` program with `printfloat(q); printstring "\n"` parses, type-checks, and codegens end-to-end.
+
+**Livermore benchmarks: still use variadic print** — they're not edited yet. Migrating them is the next step.
+
+---
+
 ## Close `Stmt.printBool` sorry; loosen TAC.printBool to accept int (2026-04-20)
 
 **Goal:** Close the 1 sorry from the previous commit by eliminating the bool-temp-class issue at its root.
