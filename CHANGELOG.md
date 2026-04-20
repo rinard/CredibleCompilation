@@ -22,7 +22,11 @@ Chronological record of what was built and why, to reconstruct the sequence of d
 
 **Probe-driven design:** Before committing to the void-call generalization, ran three quick probes in `step_simulation`'s lib-call branch: (a) `DAEOpt.instrDef` already returns `Option Var` and gives `none` for prints — no rework. (b) `callerSaveEntries (exclude := none)` already returns the full set — exactly the void-print semantics. (c) Both `ExtStateRel.callerSave_composition` (for void calls) and `ExtStateRel.callerSave_composition_excluding` (for valued calls) already exist. All green — the infrastructure was already split along the void-vs-valued axis.
 
-**One sorry remaining (Phase 1 partial):** [CodeGen.lean:4178](CredibleCompilation/CodeGen.lean) — the void sub-case in `step_simulation`'s lib-call branch. The branch currently dispatches `cases hInstr : p.code[pc]` with arms for `floatUnary` and `fbinop .fpow`, both of which assume a destination var (`σ' = σ[dst ↦ result]`) and use `callerSave_composition_excluding`. The new `printInt` arm needs the void analog — a routing-style change to use `callerSave_composition` (no exclusion). Mechanical but ~150 lines of plumbing; deferred to next session.
+**Closed the void sub-case in step_simulation (2026-04-20).** Added the `printInt` arm in `step_simulation`'s lib-call branch that proves `hBaseExists` for the void library call. ~180 lines, mostly mechanical mirror of the `floatUnary` template but simpler (no destination layout split, no setFReg, no vStoreVarFP, σ' = σ everywhere).
+
+Key trick: the load-step (vLoadVar) was constructed inline with a 3-way case split on `layout v` (`ireg .x0` / `ireg r ≠ .x0` / `stack off`) so that the resulting state `s1` has a concrete shape — needed to prove `s1.stack = s_saved.stack`, which the existing `vLoadVar_exec` doesn't return. Tried first to extend `vLoadVar_exec` itself with stack preservation, but that broke 39 call sites; the inline 3-way split was lower risk.
+
+**Project at 0 sorrys again** after the printInt addition.
 
 **Deferred:** WhileLang `Stmt.printInt` surface syntax + variadic-`print`-to-typed-print lowering in `compileToTAC`. Test programs continue using the old variadic `print` for now.
 
