@@ -79,6 +79,7 @@ def instrUse (instr : TAC) : List Var :=
   | .halt            => []
   | .print _ vs     => vs
   | .printInt v     => [v]
+  | .printString _  => []
 
 /-- Remove a variable from a list. -/
 private def listRemove (xs : List Var) (v : Var) : List Var :=
@@ -161,6 +162,7 @@ def isDead (instr : TAC) (liveOut : List Var) : Bool :=
   | .goto _ | .ifgoto _ _ | .halt => false
   | .print _ _ => false  -- side effect, never eliminate
   | .printInt _ => false -- side effect, never eliminate
+  | .printString _ => false -- side effect, never eliminate
 
 -- ============================================================
 -- § 3. Trans-side value tracking via ConstProp

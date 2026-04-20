@@ -1767,7 +1767,8 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
     (hAD : arrayDecls = p.arrayDecls)
     (hNCSL : ∀ x op y, instr = .floatUnary x op y → op.isNative = false → NoCallerSavedLayout layout)
     (hNCSLBin : ∀ x y z, instr = .fbinop x .fpow y z → NoCallerSavedLayout layout)
-    (hNCSLPrintInt : ∀ v, instr = .printInt v → NoCallerSavedLayout layout) :
+    (hNCSLPrintInt : ∀ v, instr = .printInt v → NoCallerSavedLayout layout)
+    (hNCSLPrintStr : ∀ lit, instr = .printString lit → NoCallerSavedLayout layout) :
     ∃ s', ArmSteps prog s s' ∧ ExtSimRel layout pcMap cfg' s' := by
   -- Derive regConventionSafe and injective from hSome (the if-guard passed)
   have hRC : layout.regConventionSafe = true := by
@@ -1866,6 +1867,37 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
       rw [hPC1, hNext, hInstrs]; simp [List.length_append]; omega
     · -- ArrayMem preserved
       simp [s2, ArmState.nextPC, ArmState.havocCallerSaved, hAM1, hArrayMem]
+  | printString hinstr =>
+    rename_i lit
+    have heq : instr = .printString lit := Option.some.inj (hInstr.symm.trans hinstr)
+    rw [heq] at hSome
+    -- verifiedGenInstr returns: [.callPrintS lit] (single instruction, no load)
+    have hInstrs : instrs = [.callPrintS lit] := by
+      simp only [verifiedGenInstr, hRC, hII, Bool.not_true, Bool.or_self,
+                 Bool.false_eq_true, ↓reduceIte] at hSome
+      exact (Option.some.inj hSome).symm
+    rw [hInstrs] at hCodeInstr
+    -- Single step: bl _printString — havocs caller-saved
+    have hCodeCall : prog[pcMap pc]? = some (.callPrintS lit) := by
+      have h := hCodeInstr 0 (by simp)
+      simp at h; exact h
+    rw [← hPcRel] at hCodeCall
+    let newRegs : ArmReg → BitVec 64 := fun _ => 0
+    let newFregs : ArmFReg → BitVec 64 := fun _ => 0
+    let s2 := (s.havocCallerSaved newRegs newFregs).nextPC
+    have hSteps : ArmSteps prog s s2 :=
+      .single (.callPrintS lit newRegs newFregs hCodeCall)
+    have hNCS : NoCallerSavedLayout layout := hNCSLPrintStr lit heq
+    have hRel2 : ExtStateRel layout σ s2 :=
+      (ExtStateRel.havocCallerSaved_preserved hStateRel hNCS).nextPC
+    refine ⟨s2, hSteps, ⟨hRel2, ?_, ?_⟩⟩
+    · -- PcRel: s2.pc = pcMap (pc + 1)
+      show s2.pc = pcMap (pc + 1)
+      have hNext := hPcNext _ _ rfl
+      simp [s2, ArmState.nextPC, ArmState.havocCallerSaved] at *
+      rw [hPcRel, hNext, hInstrs]; simp
+    · -- ArrayMem preserved
+      simp [s2, ArmState.nextPC, ArmState.havocCallerSaved, hArrayMem]
   | const hinstr =>
     rename_i x v
     have heq : instr = .const x v := Option.some.inj (hInstr.symm.trans hinstr)
@@ -5137,7 +5169,8 @@ theorem ext_backward_simulation (p : Prog) (armProg : ArmProg)
     (hAD : arrayDecls = p.arrayDecls)
     (hNCSL : ∀ x op y, instr = .floatUnary x op y → op.isNative = false → NoCallerSavedLayout layout)
     (hNCSLBin : ∀ x y z, instr = .fbinop x .fpow y z → NoCallerSavedLayout layout)
-    (hNCSLPrintInt : ∀ v, instr = .printInt v → NoCallerSavedLayout layout) :
+    (hNCSLPrintInt : ∀ v, instr = .printInt v → NoCallerSavedLayout layout)
+    (hNCSLPrintStr : ∀ lit, instr = .printString lit → NoCallerSavedLayout layout) :
     ∃ s', ArmSteps armProg s s' ∧ ExtSimRel layout pcMap cfg' s' :=
   verifiedGenInstr_correct armProg layout pcMap p pc σ am s haltLabel divLabel boundsLabel
-    arrayDecls boundsSafe instr hInstr hRel instrs hSome hPC tyCtx hWT hTS hWTL hMapped cfg' hStep hCode hPcNext hAD hNCSL hNCSLBin hNCSLPrintInt
+    arrayDecls boundsSafe instr hInstr hRel instrs hSome hPC tyCtx hWT hTS hWTL hMapped cfg' hStep hCode hPcNext hAD hNCSL hNCSLBin hNCSLPrintInt hNCSLPrintStr

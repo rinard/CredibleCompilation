@@ -154,6 +154,15 @@ inductive ArmStep (prog : ArmProg) : ArmState → ArmState → Prop where
     prog[s.pc]? = some .callPrintI →
     ArmStep prog s (s.havocCallerSaved newRegs newFregs |>.nextPC)
 
+  /-- Typed string print library call (`bl _printString`): self-contained;
+      the string literal is loaded into `x0` from rodata by the emitted
+      `adrp`/`add` sequence, then the call havocs all caller-saved registers.
+      No return value. The string label is derived purely from the literal. -/
+  | callPrintS (lit : String)
+    (newRegs : ArmReg → BitVec 64) (newFregs : ArmFReg → BitVec 64) :
+    prog[s.pc]? = some (.callPrintS lit) →
+    ArmStep prog s (s.havocCallerSaved newRegs newFregs |>.nextPC)
+
   | arrLd (dst : ArmReg) (arr : ArrayName) (idxReg : ArmReg) :
     prog[s.pc]? = some (.arrLd dst arr idxReg) →
     ArmStep prog s (s.setReg dst (s.arrayMem arr (s.regs idxReg)) |>.nextPC)
@@ -1599,6 +1608,10 @@ def verifiedGenInstr (layout : VarLayout) (pcMap : Nat → Nat) (instr : TAC)
     match layout v with
     | some (.freg _) => none    -- printInt requires int operand, not float
     | _ => some (vLoadVar layout v .x0 ++ [.callPrintI])
+  | .printString lit =>
+    -- Self-contained: callPrintS sets x0 to the rodata pointer and bl _printString.
+    -- No layout dependency (no Var operand).
+    some [.callPrintS lit]
 
 -- ────────────────────────────────────────────────────────────
 -- § 8e. verifiedGenInstr output length is pcMap-independent
@@ -1668,6 +1681,9 @@ theorem verifiedGenInstr_length_pcMap_ind
   | printInt v =>
     simp only [verifiedGenInstr] at h1 h2
     split at h1 <;> simp_all <;> split at h2 <;> simp_all
+  | printString lit =>
+    simp only [verifiedGenInstr] at h1 h2
+    simp_all
 
 -- ============================================================
 -- § 9. CodeAt and helper lemmas

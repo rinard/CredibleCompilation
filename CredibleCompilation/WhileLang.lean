@@ -1931,7 +1931,7 @@ def IsSeqInstr (instr : TAC) : Prop :=
   | .const _ _ | .copy _ _ | .binop _ _ _ _ | .boolop _ _
   | .arrLoad _ _ _ _ | .arrStore _ _ _ _
   | .fbinop _ _ _ _ | .intToFloat _ _ | .floatToInt _ _ | .floatUnary _ _ _
-  | .print _ _ | .printInt _ => True
+  | .print _ _ | .printInt _ | .printString _ => True
   | _ => False
 
 theorem AllJumpsLe_of_allSeq {code : List TAC}
@@ -2610,7 +2610,7 @@ private theorem stepClosed_of_allJumpsLe {code : List TAC} {p : Prog}
       | arrLoad _ _ _ _ | arrStore _ _ _ _ =>
         simp [TAC.successors] at hmem; omega
       | fbinop _ _ _ _ | intToFloat _ _ | floatToInt _ _ | floatUnary _ _ _
-      | fternop _ _ _ _ _ | print _ _ | printInt _ =>
+      | fternop _ _ _ _ _ | print _ _ | printInt _ | printString _ =>
         simp [TAC.successors] at hmem; omega
       | goto l => simp [TAC.successors] at hmem; subst hmem; exact Nat.lt_of_le_of_lt hj (by omega)
       | ifgoto _ l =>

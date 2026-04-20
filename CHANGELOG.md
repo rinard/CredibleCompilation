@@ -28,6 +28,32 @@ Key trick: the load-step (vLoadVar) was constructed inline with a 3-way case spl
 
 **Project at 0 sorrys again** after the printInt addition.
 
+---
+
+## Add `printString` typed library call (2026-04-20)
+
+**Goal:** Second typed-print variant. Unlike printInt (which loads a Var into x0), printString is fully self-contained — the literal is embedded in rodata and the call sets x0 to its address.
+
+**Probe-driven design:** Initially worried that printString would need pc threaded through `verifiedGenInstr` to generate unique format-string labels (mirroring the existing variadic `print`'s `.Lfmt_print_{pc}`). On reflection, that was anchoring on the wrong template — the label only needs to be **a deterministic function of the string content**, not pc-keyed. Switched to `stringPoolLabel : String → String` which encodes UTF-8 bytes as lowercase hex (`.Lstr_<hex>`). Pure function: identical strings dedupe automatically, distinct strings never collide.
+
+**Pipeline:**
+- TAC.printString : String → TAC (no-op step semantics)
+- ArmInstr.callPrintS : String → ArmInstr
+- ArmStep.callPrintS havocs caller-saved (no return value, no operand observation)
+- verifiedGenInstr returns `[.callPrintS lit]` — a single instruction, no load (simpler than printInt)
+- ppInstr emits `adrp x0, <label>@PAGE; add x0, x0, <label>@PAGEOFF; bl _printString`
+- String-pool emission at end of generateAsm walks `p.code`, dedupes printString literals, emits one `.asciz` per distinct string under the deterministic label
+- isLibCallTAC printString = true → flows through existing lib-call save/restore
+
+**Proofs:**
+- verifiedGenInstr_correct: ~25 lines (no load step, just havoc)
+- step_simulation lib-call branch: new printString arm parallels printInt's structure but skips the load — just callPrintS step + 7 hBaseExists obligations. ~100 lines, simpler than printInt because no vLoadVar to thread through.
+- 18 files updated for pattern-match exhaustiveness
+
+**WellTypedInstr.printString is unconstrained** — no operand to type-check.
+
+**Project remains at 0 sorrys.**
+
 **Deferred:** WhileLang `Stmt.printInt` surface syntax + variadic-`print`-to-typed-print lowering in `compileToTAC`. Test programs continue using the old variadic `print` for now.
 
 ---

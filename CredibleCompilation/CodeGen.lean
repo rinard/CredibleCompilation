@@ -169,6 +169,22 @@ private def ppLabel (haltS divS boundsS : Nat) (tacPcOf : Nat → Option Nat)
     | some tacPC => s!".L{tacPC}"
     | none => s!".Larm{target}"
 
+/-- Encode a byte as a fixed-width hex digit pair (e.g. `0x41` → `"41"`).
+    Used by `stringPoolLabel` to produce a deterministic, collision-free
+    encoding of arbitrary string content as a valid assembler identifier. -/
+private def hexByte (b : UInt8) : String :=
+  let digit (n : Nat) : Char :=
+    if n < 10 then Char.ofNat (n + '0'.toNat)
+    else Char.ofNat (n - 10 + 'a'.toNat)
+  String.mk [digit (b.toNat / 16), digit (b.toNat % 16)]
+
+/-- Deterministic label for a printString literal: `.Lstr_<hex>` where `<hex>`
+    is the lowercase hex encoding of the UTF-8 bytes of the literal. Pure
+    function of the string — identical literals share a label (deduplication)
+    and distinct literals never collide. -/
+def stringPoolLabel (lit : String) : String :=
+  ".Lstr_" ++ String.join (lit.toUTF8.toList.map hexByte)
+
 /-- Pretty-print a single ArmInstr to one or more assembly lines.
     `afterFcmp` indicates the preceding instruction was `fcmpR`, so
     condition codes for `cset` use the float convention.
@@ -232,6 +248,12 @@ private def ppInstr (lbl : Nat → String) (afterFcmp : Bool)
   | .printCall lines => lines
   | .callPrintI =>
     ["  stp x29, x30, [sp, #-16]!", "  bl _printInt", "  ldp x29, x30, [sp], #16"]
+  | .callPrintS lit =>
+    [s!"  adrp x0, {stringPoolLabel lit}@PAGE",
+     s!"  add x0, x0, {stringPoolLabel lit}@PAGEOFF",
+     "  stp x29, x30, [sp, #-16]!",
+     "  bl _printString",
+     "  ldp x29, x30, [sp], #16"]
   | .bCond c target =>
     [s!"  b.{if afterFcmp then ppCondFloat c else ppCond c} {lbl target}"]
   | .arrLd dst arr idxReg =>
@@ -336,6 +358,7 @@ private def isLibCallTAC : TAC → Bool
   | .floatUnary _ op _ => !op.isNative
   | .fbinop _ .fpow _ _ => true
   | .printInt _ => true
+  | .printString _ => true
   | _ => false
 
 /-- Generate save/restore ArmInstr lists for caller-saved registers that are live
@@ -1063,6 +1086,9 @@ private theorem verifiedGenInstr_length_pcMap_indep {layout : VarLayout}
   | printInt v =>
     simp only [verifiedGenInstr] at h₁ h₂
     split at h₁ <;> simp_all <;> split at h₂ <;> simp_all
+  | printString lit =>
+    simp only [verifiedGenInstr] at h₁ h₂
+    simp_all
 
 /-- instrLength equals the length of the generated instruction list (including
     save/restore wrapping at call sites). -/
@@ -1094,6 +1120,11 @@ private theorem instrLength_eq_length {layout : VarLayout} {pcMap : Nat → Nat}
           arrayDecls safe _ pcMap dl instrs hd h
       simp only [hLen, List.length_append, entriesToSaves_length, entriesToRestores_length]
       simp [Nat.add_comm, Nat.add_left_comm]
+  | printString lit =>
+    simp only [instrLength, isLibCallTAC, callSaveRestoreLen, callerSaveEntries, DAEOpt.instrDef,
+               verifiedGenInstr] at h ⊢
+    simp_all [List.length_append, entriesToSaves_length, entriesToRestores_length,
+              Nat.add_comm, Nat.add_left_comm]
   | const v val =>
     simp only [instrLength, isLibCallTAC, verifiedGenInstr] at *
     cases val <;> simp_all <;> split at h <;> simp_all
@@ -2093,6 +2124,8 @@ private theorem verifiedGenInstr_total
     split
     · next r h => exact absurd h (hWTL.int_not_freg hv r)
     · exact ⟨_, rfl⟩
+  case printString =>
+    unfold verifiedGenInstr; simp [hRC, hII]
   -- NOTE: copy case has a codegen gap — verifiedGenInstr returns none when
   -- src is in stack/ireg and dst is in freg. Fix needed in verifiedGenInstr:
   -- add vLoadVar + fmovToFP path for non-freg → freg copy.
@@ -4362,6 +4395,108 @@ private theorem step_simulation {tyCtx : TyCtx} {p : Prog} {r : VerifiedAsmResul
           have h3 := hStateRel w (.stack off) hLoc
           simp at h3
           rw [h1, h2, h3]
+      | printString lit =>
+        -- Void lib call, no operand: bl _printString. Single ARM step.
+        rw [show p[pc] = p.code[pc] from rfl, hInstr] at hGenInstr
+        have hRC : r.layout.regConventionSafe = true := by
+          cases h : r.layout.regConventionSafe
+          · simp [verifiedGenInstr, h] at hGenInstr
+          · rfl
+        have hII : r.layout.isInjective = true := by
+          cases h : r.layout.isInjective
+          · simp [verifiedGenInstr, hRC, h] at hGenInstr
+          · rfl
+        have hInstrs : baseInstrs = [.callPrintS lit] := by
+          simp only [verifiedGenInstr, hRC, hII, Bool.not_true, Bool.or_self,
+                     Bool.false_eq_true, ↓reduceIte] at hGenInstr
+          exact (Option.some.inj hGenInstr).symm
+        have hσ_eq : σ' = σ := by
+          funext w
+          apply hDstOnly
+          simp [show p[pc] = p.code[pc] from rfl, hInstr, DAEOpt.instrDef]
+        have hEntriesFull : entries = genCallerSaveAll r.layout r.varMap := by
+          show callerSaveEntries r.layout r.varMap (DAEOpt.instrDef p[pc]) = _
+          rw [show p[pc] = p.code[pc] from rfl, hInstr]
+          simp [callerSaveEntries, DAEOpt.instrDef]
+        rw [hInstrs] at hCodeBase
+        have hCodeCall : r.bodyFlat[s_saved.pc]? = some (.callPrintS lit) := by
+          have h := hCodeBase 0 (by simp); simp at h; rw [hSavedPC]
+          rw [show r.pcMap pc + (entriesToSaves entries).length =
+              r.pcMap pc + entries.length from by simp [entriesToSaves_length]]
+          exact h
+        let newRegs : ArmReg → BitVec 64 := fun _ => 0
+        let newFregs : ArmFReg → BitVec 64 := fun _ => 0
+        let s_mid := (s_saved.havocCallerSaved newRegs newFregs).nextPC
+        have hSteps : ArmSteps r.bodyFlat s_saved s_mid :=
+          .single (.callPrintS lit newRegs newFregs hCodeCall)
+        refine ⟨s_mid, hSteps, ?_, ?_, ?_, ?_, ?_, ?_⟩
+        · -- (2) PC
+          show s_mid.pc = s_saved.pc + baseInstrs.length
+          simp [s_mid, ArmState.nextPC, ArmState.havocCallerSaved, hInstrs]
+        · -- (3) arrayMem
+          show s_mid.arrayMem = am
+          simp [s_mid, ArmState.nextPC, ArmState.havocCallerSaved, s_saved,
+                applyCallerSaves_arrayMem, hArrayMem]
+        · -- (4) Save slots
+          intro e he
+          show s_mid.stack e.off = (applyCallerSaves entries s).stack e.off
+          simp [s_mid, ArmState.nextPC, ArmState.havocCallerSaved_stack, s_saved]
+        · -- (5) Callee-saved iregs
+          intro w ir hLoc hNE
+          show s_mid.regs ir = (σ' w).encode
+          rw [hσ_eq]
+          have hCS : ir.isCallerSaved = false := by
+            cases hcs : ir.isCallerSaved with
+            | false => rfl
+            | true =>
+              obtain ⟨_, _, hCoversIreg, _⟩ := spec.callerSaveSpec
+              obtain ⟨coff, hMem⟩ := hCoversIreg w ir hLoc hcs
+              rw [← hEntriesFull] at hMem
+              exact absurd hMem (hNE coff)
+          have h1 : s_mid.regs ir = s_saved.regs ir := by
+            simp [s_mid, ArmState.nextPC, ArmState.havocCallerSaved, hCS]
+          have h2 : s_saved.regs ir = s.regs ir := by
+            simp [s_saved, applyCallerSaves_regs]
+          have h3 := hStateRel w (.ireg ir) hLoc
+          simp at h3
+          rw [h1, h2, h3]
+        · -- (6) Callee-saved fregs
+          intro w fr hLoc hNE
+          show s_mid.fregs fr = (σ' w).encode
+          rw [hσ_eq]
+          have hCS : fr.isCallerSaved = false := by
+            cases hcs : fr.isCallerSaved with
+            | false => rfl
+            | true =>
+              obtain ⟨_, _, _, hCoversFreg, _⟩ := spec.callerSaveSpec
+              obtain ⟨coff, hMem⟩ := hCoversFreg w fr hLoc hcs
+              rw [← hEntriesFull] at hMem
+              exact absurd hMem (hNE coff)
+          have h1 : s_mid.fregs fr = s_saved.fregs fr := by
+            simp [s_mid, ArmState.nextPC, ArmState.havocCallerSaved, hCS]
+          have h2 : s_saved.fregs fr = s.fregs fr := by
+            simp [s_saved, applyCallerSaves_fregs]
+          have h3 := hStateRel w (.freg fr) hLoc
+          simp at h3
+          rw [h1, h2, h3]
+        · -- (7) Stack vars
+          intro w off hLoc
+          show s_mid.stack off = (σ' w).encode
+          rw [hσ_eq]
+          have h1 : s_mid.stack off = s_saved.stack off := by
+            simp [s_mid, ArmState.nextPC, ArmState.havocCallerSaved_stack]
+          obtain ⟨hFresh, _, _, _, _, _⟩ := spec.callerSaveSpec
+          have hOff : ∀ e ∈ genCallerSaveAll r.layout r.varMap, e.off ≠ off := by
+            intro e he hEq
+            exact hFresh e he w (hEq ▸ hLoc)
+          have hOff' : ∀ e ∈ entries, e.off ≠ off := by
+            rw [hEntriesFull]; exact hOff
+          have h2 : s_saved.stack off = s.stack off := by
+            simp [s_saved]
+            exact applyCallerSaves_stack_other entries s off hOff'
+          have h3 := hStateRel w (.stack off) hLoc
+          simp at h3
+          rw [h1, h2, h3]
       | _ => simp [isLibCallTAC, show p[pc] = p.code[pc] from rfl, hInstr] at hLib
     obtain ⟨s_mid, hBaseSteps, hMidPC, hMidAM, hSaveSlots, hNEI, hNEF, hSV⟩ :=
       hBaseExists
@@ -4565,12 +4700,16 @@ private theorem step_simulation {tyCtx : TyCtx} {p : Prog} {r : VerifiedAsmResul
           NoCallerSavedLayout r.layout := by
         intro v heq
         simp [isLibCallTAC, heq] at hNotLib
+      have hNCSLPrintStr : ∀ lit, p[pc] = .printString lit →
+          NoCallerSavedLayout r.layout := by
+        intro lit heq
+        simp [isLibCallTAC, heq] at hNotLib
       exact ext_backward_simulation p r.bodyFlat r.layout r.pcMap
         r.haltS r.divS r.boundsS p.arrayDecls safe
         hStep hRel hPC tyCtx spec.wellTypedProg hTS spec.wellTypedLayout
         p[pc] (Prog.getElem?_eq_getElem hPC)
         (r.bodyPerPC[pc]'hpcB) hSome hCodeAt hPcNext
-        (spec.layoutComplete pc hPC) rfl hNCSL hNCSLBin hNCSLPrintInt
+        (spec.layoutComplete pc hPC) rfl hNCSL hNCSLBin hNCSLPrintInt hNCSLPrintStr
 
 -- ──────────────────────────────────────────────────────────────
 -- Multi-step simulation (main theorem)
@@ -4643,6 +4782,7 @@ private theorem step_run_or_terminal {tyCtx : TyCtx} {p : Prog} {pc : Nat} {σ :
   | fternop_typeError _ _ => exact .inr fun _ h => Step.no_step_from_typeError h
   | print _ => exact .inl ⟨_, _, _, rfl, hts⟩
   | printInt _ => exact .inl ⟨_, _, _, rfl, hts⟩
+  | printString _ => exact .inl ⟨_, _, _, rfl, hts⟩
 
 /-- Whole-program backward simulation for `verifiedGenerateAsm`.
 
@@ -4925,8 +5065,22 @@ def generateAsm (tyCtx : TyCtx) (p : Prog) : Except String String := do
         some s!".Lfmt_print_{pc}:\n  .asciz \"{escaped}\""
       | _ => none) ++
     [""] ++
-    p.observable.map fun v =>
-     s!".Lname_{v}:\n  .asciz \"{v}\""
+    p.observable.map (fun v =>
+     s!".Lname_{v}:\n  .asciz \"{v}\"") ++
+    -- Per-distinct-string entries for printString instructions
+    [""] ++
+    (((List.range p.code.size).filterMap (fun pc =>
+      match p.code.getD pc .halt with
+      | .printString lit => some lit
+      | _ => none)).dedup.map (fun lit =>
+        let escaped := lit.foldl (fun acc c =>
+          match c with
+          | '\n' => acc ++ "\\n"
+          | '\t' => acc ++ "\\t"
+          | '\\' => acc ++ "\\\\"
+          | '"'  => acc ++ "\\\""
+          | c    => acc ++ c.toString) ""
+        s!"{stringPoolLabel lit}:\n  .asciz \"{escaped}\""))
   -- Emit .data section for each array (size × 8 bytes, zero-initialized)
   let arrays := collectArrays p
   let arrayData := if arrays.isEmpty then [] else

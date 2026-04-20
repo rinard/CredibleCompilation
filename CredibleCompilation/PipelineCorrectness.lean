@@ -71,6 +71,7 @@ theorem Step_of_code_arrayDecls_eq {p q : Prog}
   | floatUnary_typeError h ht => exact .floatUnary_typeError (hg _ ▸ h) ht
   | print h => exact .print (hg _ ▸ h)
   | printInt h => exact .printInt (hg _ ▸ h)
+  | printString h => exact .printString (hg _ ▸ h)
 
 /-- Multi-step transfers across programs with the same code and arrayDecls. -/
 theorem Steps_of_code_arrayDecls_eq {p q : Prog}
