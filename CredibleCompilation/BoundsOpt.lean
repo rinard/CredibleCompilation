@@ -152,7 +152,7 @@ partial def analyzeIntervalsLoop (prog : Prog)
   | pc :: rest =>
     match ivals[pc]?, prog[pc]? with
     | some (some m), some instr =>
-      let succs := successors instr pc
+      let succs := instr.successors pc
       let (ivals', newWork) := succs.foldl (fun (ivs, work) pc' =>
         if pc' >= prog.size then (ivs, work)
         else

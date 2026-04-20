@@ -955,25 +955,25 @@ theorem step_run_instr {p : Prog} {pc pc' : Label} {σ σ' : Store} {am am' : Ar
 theorem step_successor {p : Prog} {pc pc' : Label} {σ σ' : Store} {am am' : ArrayMem}
     (hstep : Step p (Cfg.run pc σ am) (Cfg.run pc' σ' am'))
     {instr : TAC} (hinstr : p[pc]? = some instr) :
-    pc' ∈ successors instr pc := by
+    pc' ∈ instr.successors pc := by
   have instr_eq {i : TAC} (h : p[pc]? = some i) : instr = i :=
     Option.some.inj (hinstr.symm.trans h)
   cases hstep with
-  | const h => have := instr_eq h; subst this; simp [successors]
-  | copy h => have := instr_eq h; subst this; simp [successors]
-  | binop h => have := instr_eq h; subst this; simp [successors]
-  | boolop h => have := instr_eq h; subst this; simp [successors]
-  | goto h => have := instr_eq h; subst this; simp [successors]
-  | iftrue h _ => have := instr_eq h; subst this; simp [successors]
-  | iffall h _ => have := instr_eq h; subst this; simp [successors]
-  | arrLoad h _ _ => have := instr_eq h; subst this; simp [successors]
-  | arrStore h _ _ _ => have := instr_eq h; subst this; simp [successors]
-  | fbinop h _ _ => have := instr_eq h; subst this; simp [successors]
-  | fternop h _ _ _ => have := instr_eq h; subst this; simp [successors]
-  | intToFloat h _ => have := instr_eq h; subst this; simp [successors]
-  | floatToInt h _ => have := instr_eq h; subst this; simp [successors]
-  | floatUnary h _ => have := instr_eq h; subst this; simp [successors]
-  | print h => have := instr_eq h; subst this; simp [successors]
+  | const h => have := instr_eq h; subst this; simp [TAC.successors]
+  | copy h => have := instr_eq h; subst this; simp [TAC.successors]
+  | binop h => have := instr_eq h; subst this; simp [TAC.successors]
+  | boolop h => have := instr_eq h; subst this; simp [TAC.successors]
+  | goto h => have := instr_eq h; subst this; simp [TAC.successors]
+  | iftrue h _ => have := instr_eq h; subst this; simp [TAC.successors]
+  | iffall h _ => have := instr_eq h; subst this; simp [TAC.successors]
+  | arrLoad h _ _ => have := instr_eq h; subst this; simp [TAC.successors]
+  | arrStore h _ _ _ => have := instr_eq h; subst this; simp [TAC.successors]
+  | fbinop h _ _ => have := instr_eq h; subst this; simp [TAC.successors]
+  | fternop h _ _ _ => have := instr_eq h; subst this; simp [TAC.successors]
+  | intToFloat h _ => have := instr_eq h; subst this; simp [TAC.successors]
+  | floatToInt h _ => have := instr_eq h; subst this; simp [TAC.successors]
+  | floatUnary h _ => have := instr_eq h; subst this; simp [TAC.successors]
+  | print h => have := instr_eq h; subst this; simp [TAC.successors]
 
 private theorem and_true_split {a b : Bool} (h : (a && b) = true) :
     a = true ∧ b = true := by
@@ -1015,7 +1015,7 @@ private theorem checkProg_sound (prog : Prog) (inv : Array EInv)
     (h : (List.range prog.size).all (fun pc =>
       match prog[pc]? with
       | some instr =>
-        (successors instr pc).all fun pc' =>
+        (instr.successors pc).all fun pc' =>
           (inv.getD pc' ([] : EInv)).all (checkInvAtom (inv.getD pc ([] : EInv)) instr)
       | none => true) = true)
     (hnoarr : checkNoArrReadInInvs inv = true) :
@@ -3172,7 +3172,7 @@ private theorem extractTransCheck (dc : ECertificate)
     (pc_t pc_t' : Label) (instr : TAC)
     (hinstr : dc.trans[pc_t]? = some instr)
     (hne : instr ≠ .halt)
-    (hsucc : pc_t' ∈ successors instr pc_t) :
+    (hsucc : pc_t' ∈ instr.successors pc_t) :
     ∃ dic, dc.instrCerts[pc_t]? = some dic ∧
     ∃ dtc ∈ dic.transitions,
       dtc.rel = dic.rel ∧
@@ -3378,7 +3378,7 @@ theorem checkAllTransitionsExec_sound (dc : ECertificate)
 private theorem nonterm_inner (dc : ECertificate)
     (h : checkNonterminationExec dc = true) (pc_t pc_t' : Label)
     (instr : TAC) (hinstr : dc.trans[pc_t]? = some instr) (hne : instr ≠ .halt)
-    (hsucc : pc_t' ∈ successors instr pc_t)
+    (hsucc : pc_t' ∈ instr.successors pc_t)
     (horig_eq : (dc.instrCerts.getD pc_t default).pc_orig =
                 (dc.instrCerts.getD pc_t' default).pc_orig) :
     dc.measure.getD pc_t' 0 < dc.measure.getD pc_t 0 := by
@@ -3390,7 +3390,7 @@ private theorem nonterm_inner (dc : ECertificate)
   -- For each non-halt constructor, Lean definitionally reduces match some (.const/copy/...)
   -- to the non-halt branch. Use `cases instr` + `exact hpc` to let the kernel reduce.
   -- First extract the body for the instrCerts match:
-  suffices h_inner : ∀ pc_t' ∈ successors instr pc_t,
+  suffices h_inner : ∀ pc_t' ∈ instr.successors pc_t,
       (match dc.instrCerts[pc_t]? with
        | some ic =>
          let ic' := dc.instrCerts.getD pc_t' default
@@ -3668,44 +3668,8 @@ private theorem and_true_of_and_eq_true {a b : Bool} (h : (a && b) = true) :
     the transformed program is step-closed in bounds. -/
 theorem checkSuccessorsInBounds_sound (dc : ECertificate)
     (h : checkSuccessorsInBounds dc = true) :
-    StepClosedInBounds dc.trans := by
-  simp only [checkSuccessorsInBounds, Bool.and_eq_true, decide_eq_true_eq,
-    List.all_eq_true, List.mem_range] at h
-  obtain ⟨hpos, hall⟩ := h
-  constructor
-  · exact hpos
-  · intro pc pc' σ σ' am am' hpc hstep
-    cases hstep with
-    | const hi =>
-      have := hall pc hpc; simp [hi, successors] at this; exact this
-    | copy hi =>
-      have := hall pc hpc; simp [hi, successors] at this; exact this
-    | binop hi =>
-      have := hall pc hpc; simp [hi, successors] at this; exact this
-    | boolop hi =>
-      have := hall pc hpc; simp [hi, successors] at this; exact this
-    | goto hi =>
-      have := hall pc hpc; simp [hi, successors] at this; exact this
-    | iftrue hi _ =>
-      have := hall pc hpc; simp [hi, successors] at this; exact this.1
-    | iffall hi _ =>
-      have := hall pc hpc; simp [hi, successors] at this; exact this.2
-    | arrLoad hi _ _ =>
-      have := hall pc hpc; simp [hi, successors] at this; exact this
-    | arrStore hi _ _ _ =>
-      have := hall pc hpc; simp [hi, successors] at this; exact this
-    | fbinop hi _ _ =>
-      have := hall pc hpc; simp [hi, successors] at this; exact this
-    | fternop hi _ _ _ =>
-      have := hall pc hpc; simp [hi, successors] at this; exact this
-    | intToFloat hi _ =>
-      have := hall pc hpc; simp [hi, successors] at this; exact this
-    | floatToInt hi _ =>
-      have := hall pc hpc; simp [hi, successors] at this; exact this
-    | floatUnary hi _ =>
-      have := hall pc hpc; simp [hi, successors] at this; exact this
-    | print hi =>
-      have := hall pc hpc; simp [hi, successors] at this; exact this
+    StepClosedInBounds dc.trans :=
+  checkStepClosed_sound h
 
 theorem soundness_bridge
     (dc : ECertificate) (h : checkCertificateExec dc = true) :

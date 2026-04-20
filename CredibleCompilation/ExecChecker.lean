@@ -195,18 +195,8 @@ def execPath (orig : Prog) (ss : SymStore) (sam : SymArrayMem) (pc : Label) :
 -- § 4. Instruction helpers
 -- ============================================================
 
-def successors (instr : TAC) (pc : Label) : List Label :=
-  match instr with
-  | .const _ _ | .copy _ _ | .binop _ _ _ _ | .boolop _ _ => [pc + 1]
-  | .fbinop _ _ _ _ | .intToFloat _ _ | .floatToInt _ _ | .floatUnary _ _ _ | .fternop _ _ _ _ _ => [pc + 1]
-  | .arrLoad _ _ _ _ | .arrStore _ _ _ _ => [pc + 1]
-  | .print _ _ => [pc + 1]
-  | .goto l        => [l]
-  | .ifgoto _ l    => [l, pc + 1]
-  | .halt          => []
-
 def canReach (instr : TAC) (pc next : Label) : Bool :=
-  (successors instr pc).contains next
+  (instr.successors pc).contains next
 
 /-- Check whether an expression is a non-zero literal. -/
 def Expr.isNonZeroLit : Expr → Bool
@@ -727,7 +717,7 @@ partial def reachable (prog : Prog) : Array Bool :=
       if pc < prog.size && !(visited.getD pc false) then
         let visited' := visited.set! pc true
         let succs := match prog[pc]? with
-          | some instr => successors instr pc
+          | some instr => instr.successors pc
           | none => []
         go visited' (succs ++ rest)
       else go visited rest
@@ -757,7 +747,7 @@ def checkInvariantsPreservedExec (cert : ECertificate) : Bool :=
     (List.range prog.size).all fun pc =>
       match prog[pc]? with
       | some instr =>
-        (successors instr pc).all fun pc' =>
+        (instr.successors pc).all fun pc' =>
           (inv.getD pc' ([] : EInv)).all (checkInvAtom (inv.getD pc ([] : EInv)) instr)
       | none => true
   checkProg cert.orig cert.inv_orig &&
@@ -910,7 +900,7 @@ def checkAllTransitionsExec (cert : ECertificate) : Bool :=
     | some instr =>
       match cert.instrCerts[pc_t]? with
       | some ic =>
-        (successors instr pc_t).all fun pc_t' =>
+        (instr.successors pc_t).all fun pc_t' =>
           let ic' := cert.instrCerts.getD pc_t' default
           let branchInfo := match instr with
             | .ifgoto b l =>
@@ -938,7 +928,7 @@ def checkNonterminationExec (cert : ECertificate) : Bool :=
     | some instr =>
       match cert.instrCerts[pc_t]? with
       | some ic =>
-        (successors instr pc_t).all fun pc_t' =>
+        (instr.successors pc_t).all fun pc_t' =>
           let ic' := cert.instrCerts.getD pc_t' default
           if ic.pc_orig == ic'.pc_orig then
             cert.measure.getD pc_t' 0 < cert.measure.getD pc_t 0
@@ -948,13 +938,9 @@ def checkNonterminationExec (cert : ECertificate) : Bool :=
 
 /-- **Condition 6**: The transformed program is non-empty and every successor
     PC is in bounds.  This ensures the transformed program never reaches an
-    error state from an out-of-bounds PC. -/
+    error state from an out-of-bounds PC.  Thin wrapper over `TAC.checkStepClosed`. -/
 def checkSuccessorsInBounds (cert : ECertificate) : Bool :=
-  cert.trans.size > 0 &&
-  (List.range cert.trans.size).all fun pc =>
-    match cert.trans[pc]? with
-    | some instr => (successors instr pc).all (· < cert.trans.size)
-    | none => true
+  checkStepClosed cert.trans
 
 -- ============================================================
 -- § 7. Main checker

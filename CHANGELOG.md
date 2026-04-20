@@ -4,6 +4,21 @@ Chronological record of what was built and why, to reconstruct the sequence of d
 
 ---
 
+## Dedupe successor-bounds checks (2026-04-20)
+
+**Goal:** Eliminate duplication flagged in the post-refactor audit. Three nearly-identical "all successors in bounds" checks existed: `TAC.checkStepClosed` (Prog-based, with soundness `StepClosedInBounds`), `checkSuccessorsInBounds` (ECertificate-based, mirrored checkStepClosed but on `cert.trans`), and `checkSuccessorsInBounds_prog` (Prog, goto/ifgoto only — strictly weaker, used by `checkBranchTargets_of_successorsInBounds`). On top of that, `successors` was duplicated as a bare `def` in ExecChecker.lean and as `TAC.successors` in TAC.lean.
+
+**Changes:**
+- Deleted the bare `successors` from ExecChecker.lean; all callers now use dot notation `instr.successors pc`, which resolves to `TAC.successors`. Updated: ConstPropOpt, CSEOpt, DCEOpt, DAEOpt, BoundsOpt, LICMOpt, RegAllocOpt, and ExecChecker's own use sites.
+- Redefined `checkSuccessorsInBounds cert := TAC.checkStepClosed cert.trans`. Its soundness theorem collapses to a one-liner invoking `checkStepClosed_sound`.
+- Renamed the PipelineCorrectness bridge from `checkSuccessorsInBounds_prog_of_exec` to `checkSuccessorsInBounds_prog_of_stepClosed` (the input is now on `Prog`, not `ECertificate`). Caller in `invariants_of_checkCertificateExec` adjusted — the chain `checkSuccessorsInBounds cert = true` → `checkStepClosed cert.trans = true` is now definitional.
+- `SoundnessBridge.checkSuccessorsInBounds_sound` shrank from 42 lines of case-bashing to a single `checkStepClosed_sound h`.
+- Kept `checkSuccessorsInBounds_prog` (the weaker goto/ifgoto-only check) — it's still needed as the argument to `checkBranchTargets_of_successorsInBounds`, which only cares about branch targets.
+
+**Result:** ~40 lines removed across SoundnessBridge, ExecChecker, and PipelineCorrectness. Full build passes, 0 sorrys. No behavioral changes — all transformations are definitional or local.
+
+---
+
 ## Totality over the optimization pipeline (2026-04-19)
 
 **Goal:** Extend `generateAsm_total` to cover `applyPassesPure`, so we have a logical totality theorem for the full optimized codegen pipeline, not just the direct `compileToTAC` path.

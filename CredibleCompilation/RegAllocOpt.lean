@@ -336,7 +336,7 @@ where
       match prog[pc]?, rels[pc]? with
       | some instr, some (some rel) =>
         let out := relTransfer rel pc instr coloring
-        let succs := successors instr pc
+        let succs := instr.successors pc
         let (rels', newWork) := succs.foldl (fun (arr, wl) pc' =>
           if pc' < arr.size then
             match arr[pc']? with

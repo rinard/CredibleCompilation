@@ -36,7 +36,7 @@ def buildPredecessors (prog : Prog) : Array (List Nat) :=
   (List.range prog.size).foldl (fun preds pc =>
     match prog[pc]? with
     | some instr =>
-      (successors instr pc).foldl (fun preds' succ =>
+      (instr.successors pc).foldl (fun preds' succ =>
         if succ < preds'.size then
           preds'.set! succ (pc :: (preds'.getD succ ([] : List Nat)))
         else preds'
@@ -285,7 +285,7 @@ where
       match prog[pc]?, rels[pc]? with
       | some instr, some (some rel) =>
         let out := relTransfer rel pc instr deadPCs consts
-        let succs := successors instr pc
+        let succs := instr.successors pc
         let (rels', newWork) := succs.foldl (fun (arr, wl) pc' =>
           if pc' < arr.size then
             match arr[pc']? with

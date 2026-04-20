@@ -435,28 +435,28 @@ theorem while_to_arm_divergence_preservation
 -- § 7. Totality of generateAsm on the optimized pipeline
 -- ============================================================
 
-/-- Bridge: the exec-side `checkSuccessorsInBounds` (which checks every successor
-    of every instruction) is strictly stronger than the codegen-facing
-    `checkSuccessorsInBounds_prog` (which only looks at goto/ifgoto targets). -/
-theorem checkSuccessorsInBounds_prog_of_exec {cert : ECertificate}
-    (h : checkSuccessorsInBounds cert = true) :
-    checkSuccessorsInBounds_prog cert.trans = true := by
-  unfold checkSuccessorsInBounds at h
+/-- Bridge: `checkStepClosed p` (all successors of every instruction in bounds)
+    implies `checkSuccessorsInBounds_prog p` (only goto/ifgoto targets in bounds).
+    The former is strictly stronger; the latter suffices for `checkBranchTargets`. -/
+theorem checkSuccessorsInBounds_prog_of_stepClosed {p : Prog}
+    (h : checkStepClosed p = true) :
+    checkSuccessorsInBounds_prog p = true := by
+  unfold checkStepClosed at h
   unfold checkSuccessorsInBounds_prog
   simp only [Bool.and_eq_true, decide_eq_true_eq, List.all_eq_true] at h ⊢
   obtain ⟨hpos, hAll⟩ := h
   refine ⟨hpos, ?_⟩
   intro pc hpc
   have hext := hAll pc hpc
-  cases hp : cert.trans[pc]? with
+  cases hp : p[pc]? with
   | none => simp
   | some instr =>
     rw [hp] at hext
     simp only at hext
     cases instr with
-    | goto l => simp [successors, decide_eq_true_eq] at hext ⊢; exact hext
+    | goto l => simp [TAC.successors, decide_eq_true_eq] at hext ⊢; exact hext
     | ifgoto _ l =>
-      simp [successors, decide_eq_true_eq] at hext ⊢
+      simp [TAC.successors, decide_eq_true_eq] at hext ⊢
       exact hext.1
     | _ => simp
 
@@ -504,8 +504,9 @@ private theorem invariants_of_checkCertificateExec {cert : ECertificate}
   have ⟨h3,  _⟩           := and_true_split h4
   have ⟨h2,  _⟩           := and_true_split h3
   have ⟨_,   hWT_t⟩       := and_true_split h2
+  -- hSIB : checkSuccessorsInBounds cert = checkStepClosed cert.trans = true (by defn)
   exact ⟨hWT_t, hPrereqs_t,
-    checkBranchTargets_of_successorsInBounds _ (checkSuccessorsInBounds_prog_of_exec hSIB),
+    checkBranchTargets_of_successorsInBounds _ (checkSuccessorsInBounds_prog_of_stepClosed hSIB),
     hSimple_t⟩
 
 /-- A single pass preserves the four codegen invariants: if the invariants hold

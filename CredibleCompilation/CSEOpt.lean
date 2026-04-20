@@ -201,7 +201,7 @@ private def propagate (prog : Prog) (states : Array (Option CSEState))
   match prog[pc]?, states[pc]? with
   | some instr, some (some st) =>
     let out := transfer st instr
-    let succs := successors instr pc
+    let succs := instr.successors pc
     succs.foldl (fun (arr, wl) pc' =>
       if pc' < arr.size then
         match arr[pc']? with

@@ -110,7 +110,7 @@ private def propagate (prog : Prog) (consts : Array (Option ConstMap))
   match prog[pc]?, consts[pc]? with
   | some instr, some (some cm) =>
     let out := transfer cm instr
-    let succs := successors instr pc
+    let succs := instr.successors pc
     succs.foldl (fun (cs, wl) pc' =>
       if pc' < cs.size then
         match cs[pc']? with

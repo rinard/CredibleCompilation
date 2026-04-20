@@ -25,7 +25,7 @@ private partial def reachLoop (prog : Prog)
     if pc < prog.size && !(visited.getD pc false) then
       let visited' := visited.set! pc true
       let succs := match prog[pc]? with
-        | some instr => successors instr pc
+        | some instr => instr.successors pc
         | none => []
       reachLoop prog visited' (succs ++ rest)
     else

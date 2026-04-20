@@ -29,7 +29,7 @@ def findLoopPCs (prog : Prog) : Array Bool :=
   (List.range prog.size).foldl (fun arr pc =>
     match prog[pc]? with
     | some instr =>
-      (successors instr pc).foldl (fun arr target =>
+      (instr.successors pc).foldl (fun arr target =>
         if target ≤ pc then
           (List.range (pc - target + 1)).foldl (fun arr offset =>
             arr.set! (target + offset) true
@@ -44,7 +44,7 @@ def findOutermostHeader (prog : Prog) (pc : Nat) : Option Nat :=
   let backEdges := (List.range prog.size).foldl (fun acc spc =>
     match prog[spc]? with
     | some instr =>
-      (successors instr spc).foldl (fun acc target =>
+      (instr.successors spc).foldl (fun acc target =>
         if target ≤ spc then acc ++ [(target, spc)] else acc
       ) acc
     | none => acc
@@ -60,7 +60,7 @@ def isReducibleLoop (prog : Prog) (header tail : Nat) : Bool :=
     if pc >= header && pc <= tail then true  -- inside loop: ok
     else match prog[pc]? with
     | some instr =>
-      (successors instr pc).all fun target =>
+      (instr.successors pc).all fun target =>
         target < header || target > tail || target == header  -- only enter at header
     | none => true
 
@@ -86,7 +86,7 @@ def findHoistable (prog : Prog) (inLoop : Array Bool) : List (Nat × Nat × Var 
         let backEdgeTail := (List.range prog.size).foldl (fun best spc =>
           match prog[spc]? with
           | some instr =>
-            if (successors instr spc).any (· == header) && header ≤ spc then
+            if (instr.successors spc).any (· == header) && header ≤ spc then
               match best with | none => some spc | some b => some (max b spc)
             else best
           | none => best) (none : Option Nat)
