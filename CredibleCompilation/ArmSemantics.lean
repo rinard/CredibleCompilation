@@ -6,8 +6,6 @@ import CredibleCompilation.ArmDefs
 
 Small-step semantics, value encoding/decoding, state relation,
 formal instruction generation, CodeAt and simp lemmas.
-
-Split from `AsmSemantics.lean`.
 -/
 
 -- ============================================================

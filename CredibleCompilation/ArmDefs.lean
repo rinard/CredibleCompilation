@@ -6,8 +6,6 @@ import CredibleCompilation.Core
 ARM64 register, instruction, condition, flags, and state definitions
 for the code generator subset. Only models the ~18 instructions
 actually emitted by `CodeGen.lean`.
-
-Split from `AsmSemantics.lean`.
 -/
 
 -- ============================================================

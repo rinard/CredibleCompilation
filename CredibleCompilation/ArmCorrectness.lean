@@ -9,8 +9,6 @@ import Std.Tactic.BVDecide
 Correctness theorems for the ARM64 code generation: loadImm64_correct,
 Flags.condHolds_correct, verifiedGenBoolExpr_correct,
 verifiedGenInstr_correct, and ext_backward_simulation.
-
-Split from `AsmSemantics.lean`.
 -/
 
 -- === Helpers for loadImm64_correct large case ===
