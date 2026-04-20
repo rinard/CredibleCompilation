@@ -248,6 +248,9 @@ inductive ArmInstr where
   /-- Typed integer print library call (`bl _printInt`): expects argument
       already in `x0`, havocs all caller-saved registers, no return value. -/
   | callPrintI : ArmInstr
+  /-- Typed float print library call (`bl _printFloat`): expects argument
+      already in `d0`, havocs all caller-saved registers, no return value. -/
+  | callPrintF : ArmInstr
   /-- Typed string print library call (`bl _printString`): the string literal
       is embedded in the rodata section; the call sets `x0` to its address
       and havocs all caller-saved registers. No return value. -/

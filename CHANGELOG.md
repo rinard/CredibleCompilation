@@ -54,6 +54,33 @@ Key trick: the load-step (vLoadVar) was constructed inline with a 3-way case spl
 
 **Project remains at 0 sorrys.**
 
+---
+
+## Add `printFloat` typed library call (2026-04-20)
+
+**Goal:** Third typed-print variant. The freg-mirror of printInt — argument passed in `d0` instead of `x0`, follows the standard ARM64 calling convention for double-precision arguments.
+
+**Pipeline:**
+- TAC.printFloat : Var → TAC (no-op step semantics)
+- ArmInstr.callPrintF + ArmStep.callPrintF (havoc caller-saved)
+- WellTypedInstr.printFloat requires `Γ v = .float`
+- verifiedGenInstr returns `vLoadVarFP layout v .d0 ++ [.callPrintF]` (rejects ireg layouts as ill-typed)
+- ppInstr emits `bl _printFloat`
+- isLibCallTAC = true → existing lib-call save/restore wrapping
+
+**Easier than printInt in two ways:**
+1. `vLoadVarFP_exec` (and `vLoadVarFP_eff_exec`) already returns `s'.stack = s.stack` as a conjunct — no need for the inline 3-way layout case-split that printInt's step_simulation arm required to derive stack preservation.
+2. `WellTypedLayout.float_not_ireg` already exists — drops in directly to `verifiedGenInstr_total` for the totality proof.
+
+**Proofs:**
+- verifiedGenInstr_correct: ~40 lines (mirrors printInt template)
+- step_simulation lib-call branch: ~110 lines (cleaner than printInt's ~190 because hStack1 comes for free from vLoadVarFP_exec)
+- 18 files updated for pattern-match exhaustiveness
+
+**Three of four typed-print variants now end-to-end verified.** printInt on x0/ireg path; printFloat on d0/freg path; printString on rodata-pointer-x0 path. printBool still pending — would mirror printInt almost verbatim. The original variadic `print` constructor is still alive in TAC for backwards compat with unverified codegen.
+
+**Project remains at 0 sorrys.**
+
 **Deferred:** WhileLang `Stmt.printInt` surface syntax + variadic-`print`-to-typed-print lowering in `compileToTAC`. Test programs continue using the old variadic `print` for now.
 
 ---

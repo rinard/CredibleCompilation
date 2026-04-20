@@ -46,6 +46,7 @@ inductive TAC where
   | fternop  : Var → FloatTernOp → Var → Var → Var → TAC -- x := op(a, b, c) (float ternary)
   | print     : String → List Var → TAC                   -- print fmt_string [args]
   | printInt  : Var → TAC                                 -- printInt(v): bl _printInt with v in x0
+  | printFloat : Var → TAC                                -- printFloat(v): bl _printFloat with v in d0
   | printString : String → TAC                            -- printString(lit): bl _printString with lit ptr in x0
   deriving Repr, DecidableEq
 
@@ -67,6 +68,7 @@ def TAC.vars : TAC → List Var
   | .halt               => []
   | .print _ vs         => vs
   | .printInt v         => [v]
+  | .printFloat v       => [v]
   | .printString _      => []
 
 /-- Whether a TAC instruction's boolean sub-expressions (if any) use only simple ops. -/
@@ -80,6 +82,7 @@ def TAC.isScalar : TAC → Bool
   | .fbinop .. | .intToFloat .. | .floatToInt .. | .floatUnary .. | .fternop .. => true
   | .print .. => true
   | .printInt .. => true
+  | .printFloat .. => true
   | .printString .. => true
   | .arrLoad .. | .arrStore .. => false
 
@@ -292,6 +295,9 @@ inductive Step (p : Prog) : Cfg → Cfg → Prop where
   | printInt : p[pc]? = some (.printInt v) →
       Step p (.run pc σ am) (.run (pc + 1) σ am)
 
+  | printFloat : p[pc]? = some (.printFloat v) →
+      Step p (.run pc σ am) (.run (pc + 1) σ am)
+
   | printString : p[pc]? = some (.printString lit) →
       Step p (.run pc σ am) (.run (pc + 1) σ am)
 
@@ -310,6 +316,7 @@ def TAC.successors (instr : TAC) (pc : Label) : List Label :=
   | .halt          => []
   | .print _ _     => [pc + 1]
   | .printInt _    => [pc + 1]
+  | .printFloat _  => [pc + 1]
   | .printString _ => [pc + 1]
 
 /-- A step from `Cfg.run pc σ am` to `Cfg.run pc' σ' am'` implies `pc'` is
@@ -334,6 +341,7 @@ theorem Step.mem_successors {p : Prog} {pc pc' : Nat} {σ σ' : Store} {am am' :
   | fternop h _ _ _    => exact ⟨_, h, by simp [TAC.successors]⟩
   | print h            => exact ⟨_, h, by simp [TAC.successors]⟩
   | printInt h         => exact ⟨_, h, by simp [TAC.successors]⟩
+  | printFloat h       => exact ⟨_, h, by simp [TAC.successors]⟩
   | printString h      => exact ⟨_, h, by simp [TAC.successors]⟩
 
 /-- A step from an in-bounds PC to a run-config stays in-bounds.
@@ -519,6 +527,7 @@ theorem Step.store_congr {p : Prog} {pc : Nat} {σ τ : Store} {am : ArrayMem} {
       · right; right; simp [Value.typeOf] at hr ⊢; rwa [← hagree]
   | print h     => exact ⟨_, .print h⟩
   | printInt h  => exact ⟨_, .printInt h⟩
+  | printFloat h => exact ⟨_, .printFloat h⟩
   | printString h => exact ⟨_, .printString h⟩
 
 -- ============================================================

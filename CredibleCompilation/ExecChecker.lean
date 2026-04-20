@@ -415,7 +415,7 @@ def buildInstrCerts1to1 (trans : Prog) (allVars : List Var) : Array EInstrCert :
     | some (.fbinop _ _ _ _) | some (.intToFloat _ _) | some (.floatToInt _ _) | some (.floatUnary _ _ _)
     | some (.fternop _ _ _ _ _)
     | some (.arrLoad _ _ _ _) | some (.arrStore _ _ _ _)
-    | some (.print _ _) | some (.printInt _) | some (.printString _) =>
+    | some (.print _ _) | some (.printInt _) | some (.printFloat _) | some (.printString _) =>
       { pc_orig := i, rel := idRel,
         transitions := [{ origLabels := [i + 1], rel := idRel, rel_next := idRel }] }
     | some (.goto l) =>
@@ -784,7 +784,7 @@ def computeNextPC (instr : TAC) (pc : Label) (ss : SymStore) (inv : EInv) : Opti
   | .const _ _ | .copy _ _ | .binop _ _ _ _ | .boolop _ _ => some (pc + 1)
   | .fbinop _ _ _ _ | .intToFloat _ _ | .floatToInt _ _ | .floatUnary _ _ _ | .fternop _ _ _ _ _ => some (pc + 1)
   | .arrLoad _ _ _ _ | .arrStore _ _ _ _ => some (pc + 1)
-  | .print _ _ | .printInt _ | .printString _ => some (pc + 1)
+  | .print _ _ | .printInt _ | .printFloat _ | .printString _ => some (pc + 1)
   | .goto l => some l
   | .ifgoto b l =>
     match b.symEval ss inv with

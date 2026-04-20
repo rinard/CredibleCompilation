@@ -229,6 +229,7 @@ def renameInstr (coloring : List (Var × String)) (instr : TAC) : TAC :=
   | .halt            => .halt
   | .print fmt vs    => .print fmt (vs.map r)
   | .printInt v      => .printInt (r v)
+  | .printFloat v    => .printFloat (r v)
   | .printString lit => .printString lit
 where
   renameBoolExpr (coloring : List (Var × String)) (be : BoolExpr) : BoolExpr :=
