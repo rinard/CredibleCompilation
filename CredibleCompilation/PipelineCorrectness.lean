@@ -368,7 +368,7 @@ theorem while_to_arm_correctness
     simp only [Program.noTmpDecls, List.all_eq_true] at hnt
     have hntw := hnt ⟨w, ty⟩ hp
     simp only [Bool.and_eq_true, Bool.not_eq_true'] at hntw
-    exact hobs_src w hntw.1 hntw.2
+    exact hobs_src w hntw.1.1 hntw.1.2
   exact ⟨fuel, σ_src, am_src, s', hinterp, hArm,
     ⟨fun v hv loc hloc => by
       have := hStateRel v loc hloc

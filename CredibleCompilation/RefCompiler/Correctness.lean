@@ -1241,6 +1241,72 @@ theorem compileStmt_correct (s : Stmt) (fuel : Nat) (σ σ' : Store) (am am' : A
       simp only [List.length_append, List.length_cons, List.length_nil, Nat.add_zero]
       exact htrans
     · simp at hinterp
+  | printInt e =>
+    simp only [Stmt.interp] at hinterp
+    split at hinterp
+    · obtain ⟨rfl, rfl⟩ := Prod.mk.inj (Option.some.inj hinterp)
+      simp only [Stmt.safe] at hsafe
+      simp only [Stmt.typedVars] at htypedv
+      have htf_e : ∀ v ∈ e.freeVars, v.isTmp = false :=
+        fun v hv => htmpfree v (by simp only [Stmt.allVars]; exact hv)
+      have hftf_e : ∀ v ∈ e.freeVars, v.isFTmp = false :=
+        fun v hv => hftmpfree v (by simp only [Stmt.allVars]; exact hv)
+      dsimp only [compileStmt] at hcode ⊢
+      generalize hre : compileExpr e offset nextTmp = re at hcode ⊢
+      obtain ⟨codeE, ve, tmp1⟩ := re; simp only [] at hcode ⊢
+      have hcodeE : RC.CodeAt (compileExpr e offset nextTmp).1 p offset := by
+        rw [hre]; exact hcode.left
+      obtain ⟨σ_e, hexec_e, _, hntmp, _, _⟩ :=
+        compileExpr_correct e offset nextTmp σ σ_tac am p htf_e hftf_e htypedv hsafe hagree hcodeE
+      rw [hre] at hexec_e; simp only [] at hexec_e
+      have hpi_instr : p[offset + codeE.length]? = some (.printInt ve) := hcode.right.head
+      have hexec_pi := FragExec.single_printInt (am := am) hpi_instr (σ := σ_e)
+      refine ⟨σ_e, ?_, fun v hv1 hv2 => by rw [hntmp v hv1 hv2]; exact hagree v hv1 hv2⟩
+      have htrans := FragExec.trans' hexec_e hexec_pi
+      show FragExec p offset σ_tac (offset + (codeE ++ [TAC.printInt ve]).length) σ_e am am
+      simp only [List.length_append, List.length_cons, List.length_nil, Nat.add_zero]
+      exact htrans
+    · simp at hinterp
+  | printFloat e =>
+    simp only [Stmt.interp] at hinterp
+    split at hinterp
+    · obtain ⟨rfl, rfl⟩ := Prod.mk.inj (Option.some.inj hinterp)
+      simp only [Stmt.safe] at hsafe
+      simp only [Stmt.typedVars] at htypedv
+      have htf_e : ∀ v ∈ e.freeVars, v.isTmp = false :=
+        fun v hv => htmpfree v (by simp only [Stmt.allVars]; exact hv)
+      have hftf_e : ∀ v ∈ e.freeVars, v.isFTmp = false :=
+        fun v hv => hftmpfree v (by simp only [Stmt.allVars]; exact hv)
+      dsimp only [compileStmt] at hcode ⊢
+      generalize hre : compileExpr e offset nextTmp = re at hcode ⊢
+      obtain ⟨codeE, ve, tmp1⟩ := re; simp only [] at hcode ⊢
+      have hcodeE : RC.CodeAt (compileExpr e offset nextTmp).1 p offset := by
+        rw [hre]; exact hcode.left
+      obtain ⟨σ_e, hexec_e, _, hntmp, _, _⟩ :=
+        compileExpr_correct e offset nextTmp σ σ_tac am p htf_e hftf_e htypedv hsafe hagree hcodeE
+      rw [hre] at hexec_e; simp only [] at hexec_e
+      have hpf_instr : p[offset + codeE.length]? = some (.printFloat ve) := hcode.right.head
+      have hexec_pf := FragExec.single_printFloat (am := am) hpf_instr (σ := σ_e)
+      refine ⟨σ_e, ?_, fun v hv1 hv2 => by rw [hntmp v hv1 hv2]; exact hagree v hv1 hv2⟩
+      have htrans := FragExec.trans' hexec_e hexec_pf
+      show FragExec p offset σ_tac (offset + (codeE ++ [TAC.printFloat ve]).length) σ_e am am
+      simp only [List.length_append, List.length_cons, List.length_nil, Nat.add_zero]
+      exact htrans
+    · simp at hinterp
+  | printString lit =>
+    simp only [Stmt.interp] at hinterp
+    obtain ⟨rfl, rfl⟩ := Prod.mk.inj (Option.some.inj hinterp)
+    dsimp only [compileStmt] at hcode ⊢
+    have hps_instr : p[offset]? = some (.printString lit) := hcode.head
+    refine ⟨σ_tac, ?_, hagree⟩
+    have hexec_ps := FragExec.single_printString (am := am) hps_instr (σ := σ_tac)
+    show FragExec p offset σ_tac (offset + [TAC.printString lit].length) σ_tac am am
+    simp only [List.length_cons, List.length_nil, Nat.add_zero]
+    exact hexec_ps
+  | printBool b =>
+    -- printBool requires bool temp infrastructure; for now this case is a sketch
+    -- and will be filled in with the boolop+printBool sequence proof.
+    sorry
   | assign x e =>
     simp only [Stmt.safe] at hsafe
     simp only [Stmt.typedVars] at htypedv

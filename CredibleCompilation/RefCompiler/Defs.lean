@@ -192,6 +192,10 @@ def Stmt.intSafe (fuel : Nat) (σ : Store) (am : ArrayMem) (decls : List (ArrayN
   | .goto _ => True
   | .ifgoto b _ => ∀ v ∈ b.exprFreeVars, ∃ n, σ v = .int n
   | .print _ args => ∀ e ∈ args, ∀ v ∈ e.freeVars, ∃ n, σ v = .int n
+  | .printInt e => ∀ v ∈ e.freeVars, ∃ n, σ v = .int n
+  | .printBool b => ∀ v ∈ b.exprFreeVars, ∃ n, σ v = .int n
+  | .printFloat e => ∀ v ∈ e.freeVars, ∃ n, σ v = .int n
+  | .printString _ => True
 
 -- § 2. Compiler definitions are in WhileLang.lean (compileExpr, compileBool, compileStmt).
 -- This module provides proofs and infrastructure about them.
@@ -350,6 +354,26 @@ theorem FragExec.single_print {p : Prog} {pc : Nat} {σ : Store} {am : ArrayMem}
     (h : p[pc]? = some (.print fmt vs)) :
     FragExec p pc σ (pc + 1) σ am am :=
   Steps.single (Step.print h)
+
+theorem FragExec.single_printInt {p : Prog} {pc : Nat} {σ : Store} {am : ArrayMem}
+    {v : Var} (h : p[pc]? = some (.printInt v)) :
+    FragExec p pc σ (pc + 1) σ am am :=
+  Steps.single (Step.printInt h)
+
+theorem FragExec.single_printBool {p : Prog} {pc : Nat} {σ : Store} {am : ArrayMem}
+    {v : Var} (h : p[pc]? = some (.printBool v)) :
+    FragExec p pc σ (pc + 1) σ am am :=
+  Steps.single (Step.printBool h)
+
+theorem FragExec.single_printFloat {p : Prog} {pc : Nat} {σ : Store} {am : ArrayMem}
+    {v : Var} (h : p[pc]? = some (.printFloat v)) :
+    FragExec p pc σ (pc + 1) σ am am :=
+  Steps.single (Step.printFloat h)
+
+theorem FragExec.single_printString {p : Prog} {pc : Nat} {σ : Store} {am : ArrayMem}
+    {lit : String} (h : p[pc]? = some (.printString lit)) :
+    FragExec p pc σ (pc + 1) σ am am :=
+  Steps.single (Step.printString h)
 
 -- ============================================================
 -- § 6. Division safety helpers

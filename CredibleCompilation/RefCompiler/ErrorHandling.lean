@@ -520,6 +520,26 @@ theorem compileStmt_stuck (s : Stmt) (fuel : Nat) (σ σ' : Store) (am am' : Arr
       obtain ⟨e, he, hne⟩ := hunsafe
       exact absurd (SExpr.isSafe_implies_safe e σ am _ (List.all_eq_true.mp hall e he)) hne
     · simp at hinterp
+  | printInt e =>
+    simp only [Stmt.safe] at hunsafe
+    simp only [Stmt.interp] at hinterp
+    split at hinterp
+    · exact absurd (SExpr.isSafe_implies_safe e σ am p.arrayDecls ‹_›) hunsafe
+    · simp at hinterp
+  | printBool b =>
+    simp only [Stmt.safe] at hunsafe
+    simp only [Stmt.interp] at hinterp
+    split at hinterp
+    · exact absurd (SBool.isSafe_implies_safe b σ am p.arrayDecls ‹_›) hunsafe
+    · simp at hinterp
+  | printFloat e =>
+    simp only [Stmt.safe] at hunsafe
+    simp only [Stmt.interp] at hinterp
+    split at hinterp
+    · exact absurd (SExpr.isSafe_implies_safe e σ am p.arrayDecls ‹_›) hunsafe
+    · simp at hinterp
+  | printString _ =>
+    simp only [Stmt.safe] at hunsafe; exact absurd trivial hunsafe
   | ifgoto b _ =>
     simp only [Stmt.safe] at hunsafe
     simp only [Stmt.interp] at hinterp
@@ -899,6 +919,41 @@ theorem compileStmt_unsafe (s : Stmt) (fuel : Nat) (σ : Store) (am : ArrayMem)
       compileExprs_unsafe args offset nextTmp σ σ_tac am p htmpfree hftmpfree htypedv hunsafe hagree hcodeExprs
     refine ⟨pc_s, σ_s, am, hfrag, herr, ?_⟩
     simp only [List.length_append, List.length_cons, List.length_nil, Nat.add_zero]; omega
+  | printInt e =>
+    simp only [Stmt.safe] at hunsafe
+    simp only [Stmt.typedVars] at htypedv
+    have htf_e : ∀ v ∈ e.freeVars, v.isTmp = false := fun v hv => htmpfree v hv
+    have hftf_e : ∀ v ∈ e.freeVars, v.isFTmp = false := fun v hv => hftmpfree v hv
+    dsimp only [compileStmt] at hcode ⊢
+    have hcodeE : RC.CodeAt (compileExpr e offset nextTmp).1 p offset := hcode.left
+    obtain ⟨pc_s, σ_s, hfrag, herr, hlt⟩ :=
+      compileExpr_stuck e offset nextTmp σ σ_tac am p htf_e hftf_e htypedv hunsafe hagree hcodeE
+    refine ⟨pc_s, σ_s, am, hfrag, herr, ?_⟩
+    simp only [List.length_append, List.length_cons, List.length_nil, Nat.add_zero]; omega
+  | printFloat e =>
+    simp only [Stmt.safe] at hunsafe
+    simp only [Stmt.typedVars] at htypedv
+    have htf_e : ∀ v ∈ e.freeVars, v.isTmp = false := fun v hv => htmpfree v hv
+    have hftf_e : ∀ v ∈ e.freeVars, v.isFTmp = false := fun v hv => hftmpfree v hv
+    dsimp only [compileStmt] at hcode ⊢
+    have hcodeE : RC.CodeAt (compileExpr e offset nextTmp).1 p offset := hcode.left
+    obtain ⟨pc_s, σ_s, hfrag, herr, hlt⟩ :=
+      compileExpr_stuck e offset nextTmp σ σ_tac am p htf_e hftf_e htypedv hunsafe hagree hcodeE
+    refine ⟨pc_s, σ_s, am, hfrag, herr, ?_⟩
+    simp only [List.length_append, List.length_cons, List.length_nil, Nat.add_zero]; omega
+  | printBool b =>
+    simp only [Stmt.safe] at hunsafe
+    simp only [Stmt.typedVars] at htypedv
+    have htf_b : ∀ v ∈ b.freeVars, v.isTmp = false := fun v hv => htmpfree v hv
+    have hftf_b : ∀ v ∈ b.freeVars, v.isFTmp = false := fun v hv => hftmpfree v hv
+    dsimp only [compileStmt] at hcode ⊢
+    have hcodeB : RC.CodeAt (compileBool b offset nextTmp).1 p offset := hcode.left
+    obtain ⟨pc_s, σ_s, hfrag, herr, hlt⟩ :=
+      compileBool_stuck b offset nextTmp σ σ_tac am p htf_b hftf_b htypedv hunsafe hagree hcodeB
+    refine ⟨pc_s, σ_s, am, hfrag, herr, ?_⟩
+    simp only [List.length_append, List.length_cons, List.length_nil, Nat.add_zero]; omega
+  | printString _ =>
+    simp only [Stmt.safe] at hunsafe; exact absurd trivial hunsafe
   | ifgoto b _ =>
     simp only [Stmt.safe] at hunsafe
     simp only [Stmt.typedVars] at htypedv

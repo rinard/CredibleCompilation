@@ -4,6 +4,44 @@ Chronological record of what was built and why, to reconstruct the sequence of d
 
 ---
 
+## Add typed `Stmt` constructors (Option A, partial — 1 sorry) (2026-04-20)
+
+**Goal:** Lift the four typed prints from TAC into WhileLang at the surface (`Stmt`) level so they flow through the entire verified compilation pipeline (source `Stmt` → TAC → ARM), not just the TAC layer.
+
+**Constructors added:**
+- `Stmt.printInt : SExpr → Stmt`
+- `Stmt.printBool : SBool → Stmt`
+- `Stmt.printFloat : SExpr → Stmt`
+- `Stmt.printString : String → Stmt`
+
+**Type rules:** `Stmt.printInt e` requires `e` is int-typed; `Stmt.printFloat e` requires float-typed; `Stmt.printBool b` requires SBool; `Stmt.printString` is unconstrained.
+
+**compileStmt lowering:**
+- `printInt e` → compile `e` to int temp, emit `TAC.printInt temp`
+- `printFloat e` → compile `e` to float temp, emit `TAC.printFloat temp`
+- `printBool b` → compile `b` to BoolExpr, materialize to bool temp via `boolop`, emit `TAC.printBool btmp`
+- `printString lit` → emit `TAC.printString lit` (no operand)
+
+**New infrastructure:**
+- `btmpName k = s!"__bt{k}"` for bool temps; `String.isBTmp` predicate; `noTmpDecls` extended to reject btmp prefixes; `tyCtx_btmp_wt` shows `tyCtx (btmpName k) = .bool` (via existing `__b → .bool` defaultVarTy mapping)
+- `FragExec.single_printInt/Bool/Float/String` helpers in RefCompiler
+- New ARM-level helpers `btmpName_noArmReg`, `btmpName_noArmFReg`, `btmpName_not_violates`, `btmpName_noRegVar` for the regalloc safety side
+
+**Pattern-match exhaustiveness updates** across 11 files: WhileLang (bigStep, isSafe, stmtCodeLen, checkStmt, noReservedVars, compileStmt, plus 4 supporting lemmas), Parser (resolveStmt), CompilerCorrectness (interp_tmpAgree, Stmt.safe, safe_of_terminating, typedVars, typeCheck_typedVars, type_preservation), RefCompiler (Defs.intSafe + 4 single-step FragExec helpers, Correctness.compileStmt_correct, ErrorHandling 2 sites, Metatheory 2 sites, Refinement.compileStmt_shape_labels), CodeGen (compileStmt_noRegVar), PipelineCorrectness (1 destructure adjustment for the new noTmpDecls 3-conjunct shape).
+
+**Status:** Build clean; **1 sorry** in `RefCompiler/Correctness.compileStmt_correct` for the `printBool` case.
+
+**The sorry's design issue:** the `boolop` step writes to `btmp = btmpName k`. The `hagree` invariant requires source-vs-TAC store agreement on non-temp variables (`isTmp = false → isFTmp = false → ...`). `btmp.isTmp = false` (since `__bt` doesn't match the `__t`-prefix check), so the invariant requires `σ_tac btmp = σ btmp` — but `σ_tac` was just updated. Three resolutions identified:
+- Add `isBTmp = false` as a 3rd `hagree` conjunct (touches ~30 sites in CompilerCorrectness/RefCompiler)
+- Loosen `WellTypedInstr.printBool` to accept `.bool ∨ .int` and use `tmpName` for the bool temp (~5 sites in TAC layer)
+- Drop `Stmt.printBool` entirely and surface bool printing only via the parser-level desugaring path (commit 2)
+
+**printInt, printFloat, and printString flow through end-to-end at 0 sorrys** — they don't have the bool-temp issue because their temps already use the `__t` (int) or `__ft` (float) prefix that `hagree` recognizes, or use no temp at all (printString).
+
+**Deferred (commit 2):** Parser desugaring — variadic `print "fmt", args` parses into a sequence of typed Stmt prints + literal segments, eliminating the variadic `Stmt.print` from any post-parse AST.
+
+---
+
 ## Add `printInt` typed library call (2026-04-20)
 
 **Goal:** Replace the unverified variadic `print` path with single-argument typed print variants that flow through standard ARM64 calling conventions and the existing verified codegen lib-call machinery (like `pow`, `exp`). First slice: `printInt` only, end-to-end.

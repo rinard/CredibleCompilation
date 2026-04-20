@@ -177,7 +177,7 @@ theorem no_halt_of_unbounded_am {p : Prog} {pc : Nat} {σ : Store} {am : ArrayMe
 theorem Stmt.interp_fuel_succ (s : Stmt) :
     ∀ fuel σ am decls r, s.interp fuel σ am decls = some r → s.interp (fuel + 1) σ am decls = some r := by
   induction s with
-  | skip | assign _ _ | bassign _ _ | arrWrite _ _ _ | barrWrite _ _ _ | fassign _ _ | farrWrite _ _ _ | label _ | goto _ | ifgoto _ _ | print _ _ =>
+  | skip | assign _ _ | bassign _ _ | arrWrite _ _ _ | barrWrite _ _ _ | fassign _ _ | farrWrite _ _ _ | label _ | goto _ | ifgoto _ _ | print _ _ | printInt _ | printBool _ | printFloat _ | printString _ =>
     intro fuel σ am decls r h; simp only [Stmt.interp] at h ⊢; exact h
   | seq s1 s2 ih1 ih2 =>
     intro fuel σ am decls r h
@@ -239,7 +239,7 @@ theorem Stmt.interp_none_of_le (s : Stmt) (fuel fuel' : Nat) (σ : Store) (am : 
 theorem Stmt.safe_fuel_succ (s : Stmt) :
     ∀ fuel σ am decls, s.safe (fuel + 1) σ am decls → s.safe fuel σ am decls := by
   induction s with
-  | skip | assign _ _ | bassign _ _ | arrWrite _ _ _ | barrWrite _ _ _ | fassign _ _ | farrWrite _ _ _ | label _ | goto _ | ifgoto _ _ | print _ _ =>
+  | skip | assign _ _ | bassign _ _ | arrWrite _ _ _ | barrWrite _ _ _ | fassign _ _ | farrWrite _ _ _ | label _ | goto _ | ifgoto _ _ | print _ _ | printInt _ | printBool _ | printFloat _ | printString _ =>
     intro fuel σ am decls h; simp only [Stmt.safe] at h ⊢; try exact h
   | seq s1 s2 ih1 ih2 =>
     intro fuel σ am decls h
@@ -301,7 +301,7 @@ theorem Stmt.safe_of_le (s : Stmt) (fuel fuel' : Nat) (σ : Store) (am : ArrayMe
 theorem Stmt.typedVars_fuel_succ (s : Stmt) :
     ∀ fuel σ am decls, s.typedVars (fuel + 1) σ am decls → s.typedVars fuel σ am decls := by
   induction s with
-  | skip | assign _ _ | bassign _ _ | arrWrite _ _ _ | barrWrite _ _ _ | fassign _ _ | farrWrite _ _ _ | label _ | goto _ | ifgoto _ _ | print _ _ =>
+  | skip | assign _ _ | bassign _ _ | arrWrite _ _ _ | barrWrite _ _ _ | fassign _ _ | farrWrite _ _ _ | label _ | goto _ | ifgoto _ _ | print _ _ | printInt _ | printBool _ | printFloat _ | printString _ =>
     intro fuel σ am decls h; simp only [Stmt.typedVars] at h ⊢; try exact h
   | seq s1 s2 ih1 ih2 =>
     intro fuel σ am decls h
@@ -490,6 +490,17 @@ theorem compileStmt_diverges (s : Stmt) (σ : Store) (am : ArrayMem)
       rw [List.all_eq_true]; intro e he
       exact SExpr.isSafe_of_safe e σ am _ (hsafe 0 e he)
     exact absurd (hdiv 0) (by simp [Stmt.interp, hall])
+  | printInt e =>
+    have := SExpr.isSafe_of_safe e σ am p.arrayDecls (by simpa [Stmt.safe] using hsafe 0)
+    exact absurd (hdiv 0) (by simp [Stmt.interp, this])
+  | printBool b =>
+    have := SBool.isSafe_of_safe b σ am p.arrayDecls (by simpa [Stmt.safe] using hsafe 0)
+    exact absurd (hdiv 0) (by simp [Stmt.interp, this])
+  | printFloat e =>
+    have := SExpr.isSafe_of_safe e σ am p.arrayDecls (by simpa [Stmt.safe] using hsafe 0)
+    exact absurd (hdiv 0) (by simp [Stmt.interp, this])
+  | printString _ =>
+    exact absurd (hdiv 0) (by simp [Stmt.interp])
   | ifgoto b _ =>
     have hbs := SBool.isSafe_of_safe b σ am p.arrayDecls (by simpa [Stmt.safe] using hsafe 0)
     exact absurd (hdiv 0) (by simp [Stmt.interp, hbs])

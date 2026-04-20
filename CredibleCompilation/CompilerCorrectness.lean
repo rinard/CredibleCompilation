@@ -56,6 +56,10 @@ def Stmt.allVars : Stmt → List Var
   | .goto _ => []
   | .ifgoto b _ => b.freeVars
   | .print _ args => args.flatMap SExpr.freeVars
+  | .printInt e => e.freeVars
+  | .printBool b => b.freeVars
+  | .printFloat e => e.freeVars
+  | .printString _ => []
 
 def Stmt.tmpFree (s : Stmt) : Prop := ∀ v ∈ s.allVars, v.isTmp = false
 def Stmt.ftmpFree (s : Stmt) : Prop := ∀ v ∈ s.allVars, v.isFTmp = false
@@ -63,7 +67,8 @@ def Stmt.ftmpFree (s : Stmt) : Prop := ∀ v ∈ s.allVars, v.isFTmp = false
 /-- A statement contains no goto/ifgoto. -/
 def Stmt.noGoto : Stmt → Prop
   | .skip | .assign .. | .bassign .. | .arrWrite .. | .barrWrite ..
-  | .fassign .. | .farrWrite .. | .label .. | .print .. => True
+  | .fassign .. | .farrWrite .. | .label .. | .print ..
+  | .printInt .. | .printBool .. | .printFloat .. | .printString .. => True
   | .goto .. => False
   | .ifgoto .. => False
   | .seq s₁ s₂ => s₁.noGoto ∧ s₂.noGoto
@@ -445,6 +450,40 @@ theorem Stmt.interp_tmpAgree (s : Stmt) (fuel : Nat) (σ τ : Store) (am : Array
           (fun v hv => htf v (List.mem_flatMap.mpr ⟨e, he, hv⟩))] at this
       simp [this]
     · simp at h
+  | printInt e =>
+    simp only [Stmt.interp] at h
+    split at h
+    · obtain ⟨rfl, rfl⟩ := h
+      unfold Stmt.tmpFree Stmt.allVars at htf
+      refine ⟨τ, am, ?_, hagree, rfl⟩
+      simp only [Stmt.interp]
+      rw [← SExpr.isSafe_tmpAgree e σ τ am decls hagree (fun v hv => htf v hv)]
+      simp [‹_ = true›]
+    · simp at h
+  | printBool b =>
+    simp only [Stmt.interp] at h
+    split at h
+    · obtain ⟨rfl, rfl⟩ := h
+      unfold Stmt.tmpFree Stmt.allVars at htf
+      refine ⟨τ, am, ?_, hagree, rfl⟩
+      simp only [Stmt.interp]
+      rw [← SBool.isSafe_tmpAgree b σ τ am decls hagree (fun v hv => htf v hv)]
+      simp [‹_ = true›]
+    · simp at h
+  | printFloat e =>
+    simp only [Stmt.interp] at h
+    split at h
+    · obtain ⟨rfl, rfl⟩ := h
+      unfold Stmt.tmpFree Stmt.allVars at htf
+      refine ⟨τ, am, ?_, hagree, rfl⟩
+      simp only [Stmt.interp]
+      rw [← SExpr.isSafe_tmpAgree e σ τ am decls hagree (fun v hv => htf v hv)]
+      simp [‹_ = true›]
+    · simp at h
+  | printString lit =>
+    simp only [Stmt.interp] at h
+    obtain ⟨rfl, rfl⟩ := h
+    refine ⟨τ, am, by simp [Stmt.interp], hagree, rfl⟩
 
 -- ============================================================
 -- § 4. Safety (division + bounds)
@@ -508,6 +547,10 @@ def Stmt.safe (fuel : Nat) (σ : Store) (am : ArrayMem)
   | .goto _ => True
   | .ifgoto b _ => b.safe σ am decls
   | .print _ args => ∀ e ∈ args, e.safe σ am decls
+  | .printInt e => e.safe σ am decls
+  | .printBool b => b.safe σ am decls
+  | .printFloat e => e.safe σ am decls
+  | .printString _ => True
 
 -- ============================================================
 -- § 4a. isSafe → safe bridge
@@ -668,6 +711,25 @@ theorem Stmt.interp_some_implies_safe (s : Stmt) (fuel : Nat)
     intro e he
     exact SExpr.isSafe_implies_safe e σ am decls
       (List.all_eq_true.mp hs e he)
+  | printInt e =>
+    intro h; simp only [Stmt.interp] at h
+    split at h <;> simp at h
+    rename_i hs
+    simp only [Stmt.safe]
+    exact SExpr.isSafe_implies_safe e σ am decls hs
+  | printBool b =>
+    intro h; simp only [Stmt.interp] at h
+    split at h <;> simp at h
+    rename_i hs
+    simp only [Stmt.safe]
+    exact SBool.isSafe_implies_safe b σ am decls hs
+  | printFloat e =>
+    intro h; simp only [Stmt.interp] at h
+    split at h <;> simp at h
+    rename_i hs
+    simp only [Stmt.safe]
+    exact SExpr.isSafe_implies_safe e σ am decls hs
+  | printString lit => intro _; simp only [Stmt.safe]
 
 -- ============================================================
 -- § 4b. Integer typing (all arithmetic-position variables have int values)
@@ -711,6 +773,10 @@ def Stmt.typedVars (fuel : Nat) (σ : Store) (am : ArrayMem)
   | .goto _ => True
   | .ifgoto b _ => b.typedVars σ am
   | .print _ args => ∀ e ∈ args, e.typedVars σ am
+  | .printInt e => e.typedVars σ am
+  | .printBool b => b.typedVars σ am
+  | .printFloat e => e.typedVars σ am
+  | .printString _ => True
 
 -- ============================================================
 -- § 4c. Bridge: typeCheck → tmpFree
@@ -1052,6 +1118,20 @@ private theorem checkStmt_declared {lookup : Var → Option VarTy}
     rcases h e he with hc | hc
     · exact checkSExpr_declared hc v hv
     · exact checkExpr_declared hc v hv
+  | printInt e =>
+    simp [Program.checkStmt] at h
+    intro v hv; simp [Stmt.allVars] at hv
+    exact checkSExpr_declared h v hv
+  | printBool b =>
+    simp [Program.checkStmt] at h
+    intro v hv; simp [Stmt.allVars] at hv
+    exact checkSBool_declared h v hv
+  | printFloat e =>
+    simp [Program.checkStmt] at h
+    intro v hv; simp [Stmt.allVars] at hv
+    exact checkExpr_declared h v hv
+  | printString lit =>
+    intro v hv; simp [Stmt.allVars] at hv
 
 /-- **Bridge lemma**: A type-checked program's body is tmp-free — no variable
     in the source program uses the compiler-reserved `__t` prefix. -/
@@ -1201,6 +1281,24 @@ theorem Stmt.interp_preserves_typedStore
     split at hinterp
     · obtain ⟨rfl, _⟩ := Option.some.inj hinterp; exact hts
     · simp at hinterp
+  | printInt e =>
+    simp only [Stmt.interp] at hinterp
+    split at hinterp
+    · obtain ⟨rfl, _⟩ := Option.some.inj hinterp; exact hts
+    · simp at hinterp
+  | printBool b =>
+    simp only [Stmt.interp] at hinterp
+    split at hinterp
+    · obtain ⟨rfl, _⟩ := Option.some.inj hinterp; exact hts
+    · simp at hinterp
+  | printFloat e =>
+    simp only [Stmt.interp] at hinterp
+    split at hinterp
+    · obtain ⟨rfl, _⟩ := Option.some.inj hinterp; exact hts
+    · simp at hinterp
+  | printString lit =>
+    simp only [Stmt.interp] at hinterp
+    obtain ⟨rfl, _⟩ := Option.some.inj hinterp; exact hts
 
 -- ============================================================
 -- § 4e. Bridge: typeCheck + TypedStore → typedVars
@@ -1335,6 +1433,19 @@ theorem checkStmt_typedVars
     rcases hchk e he with hc | hc
     · exact (checkExpr_typedVars (am := am) hcompat hc hts).1
     · exact (checkExpr_typedVars (am := am) hcompat hc hts).1
+  | printInt e =>
+    simp [Program.checkStmt] at hchk
+    simp only [Stmt.typedVars]
+    exact (checkExpr_typedVars (am := am) hcompat hchk hts).1
+  | printBool b =>
+    simp [Program.checkStmt] at hchk
+    simp only [Stmt.typedVars]
+    exact checkSBool_typedVars hcompat hchk hts
+  | printFloat e =>
+    simp [Program.checkStmt] at hchk
+    simp only [Stmt.typedVars]
+    exact (checkExpr_typedVars (am := am) hcompat hchk hts).1
+  | printString lit => simp only [Stmt.typedVars]
 
 /-- **Bridge lemma**: A type-checked program with a well-typed store satisfies typedVars. -/
 theorem Program.typeCheck_typedVars (prog : Program) (h : prog.typeCheck = true)

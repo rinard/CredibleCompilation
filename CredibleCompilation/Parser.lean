@@ -650,6 +650,10 @@ private partial def resolveStmt (lookupVar : Var → Option VarTy)
   | .goto lbl => .goto lbl
   | .ifgoto b lbl => .ifgoto (resolveSBool lookupVar lookupArr b) lbl
   | .print fmt args => .print fmt (args.map (resolveSExpr lookupVar lookupArr))
+  | .printInt e => .printInt (resolveSExpr lookupVar lookupArr e)
+  | .printBool b => .printBool (resolveSBool lookupVar lookupArr b)
+  | .printFloat e => .printFloat (resolveSExpr lookupVar lookupArr e)
+  | .printString lit => .printString lit
 
 /-- Parse a string into a `Program`. -/
 def parseProgram (input : String) : Except String Program := do

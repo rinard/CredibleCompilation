@@ -68,6 +68,10 @@ inductive Stmt where
   | goto     : String → Stmt                      -- unconditional jump
   | ifgoto   : SBool → String → Stmt             -- conditional jump
   | print      : String → List SExpr → Stmt        -- print fmt_string [args]
+  | printInt    : SExpr → Stmt                     -- printint(e): bl _printInt with int e in x0
+  | printBool   : SBool → Stmt                     -- printbool(b): bl _printBool with bool b in x0
+  | printFloat  : SExpr → Stmt                     -- printfloat(e): bl _printFloat with float e in d0
+  | printString : String → Stmt                    -- printstring "lit": bl _printString with lit ptr in x0
   deriving Repr
 
 -- Syntactic sugar
@@ -231,6 +235,13 @@ def Stmt.interp (fuel : Nat) (σ : Store) (am : ArrayMem)
     if b.isSafe σ am decls then some (σ, am) else none
   | .print _ args =>
     if args.all (·.isSafe σ am decls) then some (σ, am) else none
+  | .printInt e =>
+    if e.isSafe σ am decls then some (σ, am) else none
+  | .printBool b =>
+    if b.isSafe σ am decls then some (σ, am) else none
+  | .printFloat e =>
+    if e.isSafe σ am decls then some (σ, am) else none
+  | .printString _ => some (σ, am)
 
 -- ============================================================
 -- § 3. Compiler: While language → TAC (pure functional)
@@ -253,6 +264,15 @@ def ftmpName (k : Nat) : Var := s!"__ft{k}"
 def String.isFTmp (v : String) : Bool :=
   match v.toList with
   | '_' :: '_' :: 'f' :: 't' :: _ => true
+  | _ => false
+
+/-- Bool temporary variable name from index. -/
+def btmpName (k : Nat) : Var := s!"__bt{k}"
+
+/-- A variable is a bool temporary iff its name starts with `__bt`. -/
+def String.isBTmp (v : String) : Bool :=
+  match v.toList with
+  | '_' :: '_' :: 'b' :: 't' :: _ => true
   | _ => false
 
 /-- Compile an arithmetic expression. Returns (code, result variable, next temp index).
@@ -512,6 +532,10 @@ def stmtCodeLen : Stmt → Nat
   | .goto _ => 1     -- single goto instruction
   | .ifgoto b _ => boolCodeLen b + 1  -- condition code + ifgoto
   | .print _ args => exprsCodeLen args + 1
+  | .printInt e => exprCodeLen e + 1
+  | .printBool b => boolCodeLen b + 2  -- boolop + printBool
+  | .printFloat e => exprCodeLen e + 1
+  | .printString _ => 1
 
 /-- Collect label→PC mappings from a statement, given the starting offset. -/
 def collectLabels : Stmt → Nat → List (String × Nat)
@@ -637,6 +661,17 @@ def compileStmt (s : Stmt) (offset nextTmp : Nat)
   | .print fmt args =>
     let (allCode, allVars, tmp') := compileExprs args offset nextTmp
     (allCode ++ [.print fmt allVars], tmp')
+  | .printInt e =>
+    let (codeE, ve, tmp1) := compileExpr e offset nextTmp
+    (codeE ++ [.printInt ve], tmp1)
+  | .printBool b =>
+    let (codeB, be, tmpB) := compileBool b offset nextTmp
+    let tBool := btmpName tmpB
+    (codeB ++ [.boolop tBool be, .printBool tBool], tmpB + 1)
+  | .printFloat e =>
+    let (codeE, ve, tmp1) := compileExpr e offset nextTmp
+    (codeE ++ [.printFloat ve], tmp1)
+  | .printString lit => ([.printString lit], nextTmp)
 
 -- ============================================================
 -- § 4. Pretty-printing
@@ -700,6 +735,10 @@ def Stmt.toString : Stmt → String
   | .goto lbl => s!"goto {lbl}"
   | .ifgoto b lbl => s!"if {b.toString} goto {lbl}"
   | .print fmt args => s!"print \"{fmt}\", {", ".intercalate (args.map SExpr.toString)}"
+  | .printInt e => s!"printint({e.toString})"
+  | .printBool b => s!"printbool({b.toString})"
+  | .printFloat e => s!"printfloat({e.toString})"
+  | .printString lit => s!"printstring \"{lit}\""
 
 instance : ToString Stmt := ⟨Stmt.toString⟩
 instance : ToString SExpr := ⟨SExpr.toString⟩
@@ -779,7 +818,7 @@ private def noDups : List Var → Bool
     by `tyCtx` (int temps default to `.int`, float temps to `.float`).
     Not private: used by `CompilerCorrectness.typeCheck_tmpFree`. -/
 def noTmpDecls (decls : List (Var × VarTy)) : Bool :=
-  decls.all fun (x, _) => !x.isTmp && !x.isFTmp
+  decls.all fun (x, _) => !x.isTmp && !x.isFTmp && !x.isBTmp
 
 /-- Check that an array name is declared. -/
 private def arrayDeclared (arrayDecls : List (ArrayName × Nat × VarTy)) (arr : ArrayName) : Bool :=
@@ -840,6 +879,10 @@ def checkStmt (lookup : Var → Option VarTy) (arrayDecls : List (ArrayName × N
   | .goto _ => true
   | .ifgoto b _ => checkSBool lookup arrayDecls b
   | .print _ args => args.all fun e => checkSExpr lookup arrayDecls e || checkFExpr lookup arrayDecls e
+  | .printInt e => checkSExpr lookup arrayDecls e
+  | .printBool b => checkSBool lookup arrayDecls b
+  | .printFloat e => checkFExpr lookup arrayDecls e
+  | .printString _ => true
 
 /-- Full static type check: no duplicate declarations, no compiler-reserved
     temporary names in declarations, and the body is well-typed w.r.t.
@@ -884,6 +927,10 @@ def Stmt.noReservedVars : Stmt → Bool
   | .loop b body => SBool.noReservedVars b && Stmt.noReservedVars body
   | .ifgoto b _ => SBool.noReservedVars b
   | .print _ args => args.all SExpr.noReservedVars
+  | .printInt e => SExpr.noReservedVars e
+  | .printBool b => SBool.noReservedVars b
+  | .printFloat e => SExpr.noReservedVars e
+  | .printString _ => true
 
 /-- Strict type check: typeCheck + no goto/ifgoto + no reserved names (in decls and body).
     Used by compiler correctness proofs which require structured control flow
@@ -1255,7 +1302,7 @@ theorem lookup_none_of_isTmp_wt {decls : List (Var × VarTy)}
   | cons hd rest ih =>
     obtain ⟨y, ty⟩ := hd
     simp only [Program.noTmpDecls, List.all_cons, Bool.and_eq_true] at hnt
-    obtain ⟨⟨hny, _⟩, hnt_rest⟩ := hnt
+    obtain ⟨⟨⟨hny, _⟩, _⟩, hnt_rest⟩ := hnt
     simp only [List.lookup_cons]
     have hne : (x == y) = false := by
       simp only [beq_eq_false_iff_ne, ne_eq]
@@ -1268,6 +1315,25 @@ theorem lookup_none_of_isTmp_wt {decls : List (Var × VarTy)}
 -- If noTmpDecls and x.isFTmp, then lookup returns none
 theorem lookup_none_of_isFTmp_wt {decls : List (Var × VarTy)}
     (hnt : Program.noTmpDecls decls = true) {x : Var} (hx : x.isFTmp = true) :
+    decls.lookup x = none := by
+  induction decls with
+  | nil => rfl
+  | cons hd rest ih =>
+    obtain ⟨y, ty⟩ := hd
+    simp only [Program.noTmpDecls, List.all_cons, Bool.and_eq_true] at hnt
+    obtain ⟨⟨⟨_, hny⟩, _⟩, hnt_rest⟩ := hnt
+    simp only [List.lookup_cons]
+    have hne : (x == y) = false := by
+      simp only [beq_eq_false_iff_ne, ne_eq]
+      intro heq; subst heq
+      simp only [Bool.not_eq_true'] at hny
+      rw [hx] at hny; exact Bool.noConfusion hny
+    simp only [hne]
+    exact ih hnt_rest
+
+-- If noTmpDecls and x.isBTmp, then lookup returns none
+theorem lookup_none_of_isBTmp_wt {decls : List (Var × VarTy)}
+    (hnt : Program.noTmpDecls decls = true) {x : Var} (hx : x.isBTmp = true) :
     decls.lookup x = none := by
   induction decls with
   | nil => rfl
@@ -1329,6 +1395,33 @@ theorem tyCtx_ftmp_wt (prog : Program)
   rw [lookup_none_of_isFTmp_wt hnt (ftmpName_isFTmp_wt k)]
   simp only [Option.getD]
   exact Program.defaultVarTy_of_isFTmp _ (ftmpName_isFTmp_wt k)
+
+-- btmpName k is a bool temporary
+theorem btmpName_isBTmp_wt (k : Nat) : (btmpName k).isBTmp = true := by
+  simp only [String.isBTmp, btmpName, String.toList_append]
+  show (match '_' :: '_' :: 'b' :: 't' :: (toString k).toList with
+    | '_' :: '_' :: 'b' :: 't' :: _ => true | _ => false) = true
+  rfl
+
+-- defaultVarTy maps bool temporaries to .bool (via __b prefix)
+theorem defaultVarTy_of_isBTmp (x : Var) (h : x.isBTmp = true) :
+    Program.defaultVarTy x = .bool := by
+  unfold Program.defaultVarTy
+  split
+  · next heq => unfold String.isBTmp at h; rw [heq] at h; simp at h
+  · next heq => rfl
+  · next heq =>
+    unfold String.isBTmp at h
+    rcases hl : x.toList with _ | ⟨a, _ | ⟨b, _ | ⟨c, t⟩⟩⟩ <;> simp_all
+
+-- tyCtx maps bool temporaries to .bool
+theorem tyCtx_btmp_wt (prog : Program)
+    (hnt : Program.noTmpDecls prog.decls = true) (k : Nat) :
+    prog.tyCtx (btmpName k) = .bool := by
+  unfold Program.tyCtx Program.lookupTy
+  rw [lookup_none_of_isBTmp_wt hnt (btmpName_isBTmp_wt k)]
+  simp only [Option.getD]
+  exact defaultVarTy_of_isBTmp _ (btmpName_isBTmp_wt k)
 
 -- If lookupTy x = some ty, then tyCtx x = ty
 theorem tyCtx_of_lookup_wt (prog : Program) (x : Var) (ty : VarTy)
@@ -1790,6 +1883,26 @@ theorem compileStmt_wt (prog : Program)
     simp only [Program.checkStmt] at hchk
     simp only [compileStmt]
     exact allWTI_append' (compileExprs_wt prog hnt args offset nextTmp hchk) (allWTI_one .print)
+  | printInt e =>
+    simp only [Program.checkStmt] at hchk
+    simp only [compileStmt]
+    have ⟨he_wt, he_ty⟩ := compileExpr_wt prog hnt e hchk offset nextTmp
+    exact allWTI_append' he_wt (allWTI_one (.printInt he_ty))
+  | printBool b =>
+    simp only [Program.checkStmt] at hchk
+    simp only [compileStmt]
+    have ⟨hb_wt, hb_ty⟩ := compileBool_wt prog hnt b hchk offset nextTmp
+    have htBool := tyCtx_btmp_wt prog hnt (compileBool b offset nextTmp).2.2
+    exact allWTI_append' hb_wt
+      (allWTI_cons' (.boolop htBool hb_ty) (allWTI_one (.printBool htBool)))
+  | printFloat e =>
+    simp only [Program.checkStmt] at hchk
+    simp only [compileStmt]
+    have ⟨he_wt, he_ty⟩ := compileExpr_float_wt prog hnt e hchk offset nextTmp
+    exact allWTI_append' he_wt (allWTI_one (.printFloat he_ty))
+  | printString lit =>
+    simp only [compileStmt]
+    exact allWTI_one .printString
 
 -- initCode produces well-typed instructions
 theorem initCode_wt (prog : Program)
@@ -2248,6 +2361,25 @@ theorem compileStmt_code_simpleOps (s : Stmt) (offset nextTmp : Nat)
     rcases hmem with he | rfl
     · exact compileExprs_hasSimpleOps_mem args _ _ instr he
     · rfl
+  | printInt e =>
+    intro instr hmem; simp [compileStmt, List.mem_append] at hmem
+    rcases hmem with he | rfl
+    · exact compileExpr_hasSimpleOps_mem e _ _ instr he
+    · rfl
+  | printBool b =>
+    intro instr hmem; simp only [compileStmt] at hmem
+    simp only [List.mem_append, List.mem_cons, List.mem_nil_iff, or_false] at hmem
+    rcases hmem with hb | rfl | rfl
+    · exact compileBool_hasSimpleOps_mem b offset nextTmp instr hb
+    · simp [TAC.hasSimpleOps, compileBool_hasSimpleOps]
+    · rfl
+  | printFloat e =>
+    intro instr hmem; simp [compileStmt, List.mem_append] at hmem
+    rcases hmem with he | rfl
+    · exact compileExpr_hasSimpleOps_mem e _ _ instr he
+    · rfl
+  | printString lit =>
+    intro instr hmem; simp [compileStmt] at hmem; subst hmem; rfl
 
 /-- All values in a label map are ≤ bound. -/
 def AllLabelsLe (bound : Nat) (labels : List (String × Nat)) : Prop :=
@@ -2367,6 +2499,14 @@ theorem compileStmt_length (s : Stmt) (offset nextTmp : Nat)
   | print fmt args =>
     simp only [compileStmt, stmtCodeLen, List.length_append, List.length_cons, List.length_nil]
     rw [compileExprs_length]
+  | printInt e =>
+    simp [compileStmt, stmtCodeLen, List.length_append, compileExpr_length]
+  | printBool b =>
+    simp [compileStmt, stmtCodeLen, List.length_append, compileBool_length]
+  | printFloat e =>
+    simp [compileStmt, stmtCodeLen, List.length_append, compileExpr_length]
+  | printString lit =>
+    simp [compileStmt, stmtCodeLen]
 
 -- collectLabels produces label values ≤ offset + stmtCodeLen s
 theorem collectLabels_allLabelsLe (s : Stmt) (offset : Nat) :
@@ -2397,7 +2537,8 @@ theorem collectLabels_allLabelsLe (s : Stmt) (offset : Nat) :
     simp only [stmtCodeLen]
     have := ih (offset + boolCodeLen b + 1) k v hmem; omega
   | skip | assign _ _ | bassign _ _ | arrWrite _ _ _ | barrWrite _ _ _
-  | fassign _ _ | farrWrite _ _ _ | goto _ | ifgoto _ _ | print _ _ =>
+  | fassign _ _ | farrWrite _ _ _ | goto _ | ifgoto _ _ | print _ _
+  | printInt _ | printBool _ | printFloat _ | printString _ =>
     intro k v hmem; simp [collectLabels] at hmem
 
 /-- All jump targets in compiled statement code are ≤ bound,
@@ -2584,6 +2725,27 @@ theorem compileStmt_allJumpsLe (s : Stmt) (offset nextTmp : Nat)
       rcases hmem with he | rfl
       · exact compileExprs_allSeq args _ _ instr he
       · trivial)
+  | printInt e =>
+    exact AllJumpsLe_of_allSeq (by
+      intro instr hmem; simp [compileStmt, List.mem_append] at hmem
+      rcases hmem with he | rfl
+      · exact compileExpr_allSeq e _ _ instr he
+      · trivial)
+  | printBool b =>
+    simp only [compileStmt, List.length_append, List.length_cons, List.length_nil] at hbound ⊢
+    exact AllJumpsLe_append
+      (AllJumpsLe_mono (compileBool_allJumpsLe b offset nextTmp _ (Nat.le_refl _)) (by omega))
+      (AllJumpsLe_of_allSeq (fun instr hmem => by
+        simp at hmem; rcases hmem with rfl | rfl <;> trivial))
+  | printFloat e =>
+    exact AllJumpsLe_of_allSeq (by
+      intro instr hmem; simp [compileStmt, List.mem_append] at hmem
+      rcases hmem with he | rfl
+      · exact compileExpr_allSeq e _ _ instr he
+      · trivial)
+  | printString lit =>
+    exact AllJumpsLe_of_allSeq (by
+      intro instr hmem; simp [compileStmt] at hmem; subst hmem; trivial)
 
 /-- Bridge: if all jump targets in `code` are ≤ `code.length`, then
     `(code ++ [halt]).toArray` is step-closed in bounds. -/

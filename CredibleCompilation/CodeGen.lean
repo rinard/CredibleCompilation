@@ -1469,6 +1469,14 @@ private theorem ftmpName_not_violates (k : Nat) : violatesRegConvention (ftmpNam
   unfold violatesRegConvention startsWithList ftmpName
   simp [String.toList_append, ts_ft, List.isPrefixOf]
 
+private theorem ts_bt : (toString "__bt" : String) = "__bt" := rfl
+
+/-- Compiler bool temps don't violate the register convention. -/
+private theorem btmpName_not_violates (k : Nat) : violatesRegConvention (btmpName k) = false := by
+  unfold violatesRegConvention startsWithList btmpName
+  simp [String.toList_append, ts_bt, List.isPrefixOf]
+  rfl
+
 /-- Variables without `__` prefix don't map to integer registers. -/
 private theorem varToArmReg_none_of_not_dunder (v : Var) (h : startsWithList v "__" = false) :
     varToArmReg v = none := by
@@ -2295,6 +2303,24 @@ private theorem ftmpName_noArmFReg (k : Nat) : varToArmFReg (ftmpName k) = none 
   unfold varToArmFReg startsWithList ftmpName
   simp [String.toList_append, ts_ft, List.isPrefixOf]
 
+/-- btmpName doesn't map to an integer register. -/
+private theorem btmpName_noArmReg (k : Nat) : varToArmReg (btmpName k) = none := by
+  unfold varToArmReg startsWithList btmpName
+  simp [String.toList_append, ts_bt, List.isPrefixOf]
+  rfl
+
+/-- btmpName doesn't map to a float register. -/
+private theorem btmpName_noArmFReg (k : Nat) : varToArmFReg (btmpName k) = none := by
+  unfold varToArmFReg startsWithList btmpName
+  simp [String.toList_append, ts_bt, List.isPrefixOf]
+  intro h
+  have h_bt : ("__bt" : String).toList = ['_', '_', 'b', 't'] := by decide
+  rw [h_bt] at h
+  -- h : ['_', '_', 'f', 'r'] <+: ['_', '_', 'b', 't'] ++ (toString k).toList
+  -- This is false: position 2 is 'b', not 'f'
+  obtain ⟨t, ht⟩ := h
+  simp at ht
+
 /-- Unified predicate: `v` does not correspond to any restricted register name.
     This combines three facts needed for `checkCodegenPrereqs`:
     1. `v` is not an integer register (`varToArmReg v = none`),
@@ -2332,6 +2358,10 @@ private theorem tmpName_noRegVar (k : Nat) : noRegVar (tmpName k) :=
 /-- Float temporaries `__ftK` satisfy `noRegVar`. -/
 private theorem ftmpName_noRegVar (k : Nat) : noRegVar (ftmpName k) :=
   ⟨ftmpName_noArmReg k, ftmpName_noArmFReg k, ftmpName_not_violates k⟩
+
+/-- Bool temporaries `__btK` satisfy `noRegVar`. -/
+private theorem btmpName_noRegVar (k : Nat) : noRegVar (btmpName k) :=
+  ⟨btmpName_noArmReg k, btmpName_noArmFReg k, btmpName_not_violates k⟩
 
 /-- Every var in compileExpr output has varToArmReg = none, and so does the result var. -/
 private theorem compileExpr_noRegVar (e : SExpr) (offset nextTmp : Nat)
@@ -2702,6 +2732,35 @@ private theorem compileStmt_noRegVar (s : Stmt) (offset nextTmp : Nat)
     · exact compileExprs_noRegVar args offset nextTmp hSrc instr h v hv
     · simp [TAC.vars] at hv
       exact compileExprs_result_noRegVar args offset nextTmp hSrc v hv
+  | printInt e =>
+    simp only [Program.Stmt.noReservedVars] at hSrc
+    have ⟨he_i, he_r⟩ := compileExpr_noRegVar e offset nextTmp hSrc
+    intro instr hmem v hv; simp [compileStmt, List.mem_append] at hmem
+    rcases hmem with h | rfl
+    · exact he_i instr h v hv
+    · simp [TAC.vars] at hv; subst hv; exact he_r
+  | printBool b =>
+    simp only [Program.Stmt.noReservedVars] at hSrc
+    have ⟨hb_i, hb_be⟩ := compileBool_noRegVar b offset nextTmp hSrc
+    intro instr hmem v hv
+    simp only [compileStmt, List.mem_append, List.mem_cons, List.mem_nil_iff, or_false] at hmem
+    rcases hmem with h | rfl | rfl
+    · exact hb_i instr h v hv
+    · simp [TAC.vars] at hv
+      rcases hv with rfl | hbev
+      · exact btmpName_noRegVar _
+      · exact hb_be v hbev
+    · simp [TAC.vars] at hv; subst hv; exact btmpName_noRegVar _
+  | printFloat e =>
+    simp only [Program.Stmt.noReservedVars] at hSrc
+    have ⟨he_i, he_r⟩ := compileExpr_noRegVar e offset nextTmp hSrc
+    intro instr hmem v hv; simp [compileStmt, List.mem_append] at hmem
+    rcases hmem with h | rfl
+    · exact he_i instr h v hv
+    · simp [TAC.vars] at hv; subst hv; exact he_r
+  | printString lit =>
+    intro instr hmem v hv; simp [compileStmt] at hmem
+    subst hmem; simp [TAC.vars] at hv
   | assign x e =>
     simp only [Program.Stmt.noReservedVars, Bool.and_eq_true, Bool.not_eq_true'] at hSrc
     intro instr hmem v hv

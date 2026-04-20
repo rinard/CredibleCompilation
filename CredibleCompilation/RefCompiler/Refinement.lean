@@ -15,7 +15,10 @@ theorem compileStmt_shape_labels (s : Stmt) (o t : Nat) (labels labels' : List (
     (compileStmt s o t labels).1.length = (compileStmt s o t labels').1.length ∧
     (compileStmt s o t labels).2 = (compileStmt s o t labels').2 := by
   induction s generalizing o t labels labels' with
-  | skip | label _ | print _ _ => exact ⟨rfl, rfl⟩
+  | skip | label _ | print _ _ | printString _ => exact ⟨rfl, rfl⟩
+  | printInt e => cases e <;> exact ⟨rfl, rfl⟩
+  | printBool b => cases b <;> exact ⟨rfl, rfl⟩
+  | printFloat e => cases e <;> exact ⟨rfl, rfl⟩
   | assign x e => cases e <;> exact ⟨rfl, rfl⟩
   | bassign _ _ | arrWrite _ _ _ | barrWrite _ _ _ => exact ⟨rfl, rfl⟩
   | fassign x e => cases e <;> exact ⟨rfl, rfl⟩
