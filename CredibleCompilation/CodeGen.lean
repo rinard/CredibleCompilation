@@ -5397,43 +5397,16 @@ def generateAsm (tyCtx : TyCtx) (p : Prog) : Except String String := do
   -- including print — printCall in bodyPerPC carries pre-computed printf lines)
   let body := (List.range r.bodyPerPC.size).flatMap fun pc =>
     [s!".L{pc}:"] ++ ppInstrs lbl ((r.bodyPerPC[pc]!))
-  -- Print observable variables at halt (loads from stack, safe after saveRegs)
-  let printCode := p.observable.flatMap fun v =>
-    let isFloat := tyCtx v == .float
-    let fmtLabel := if isFloat then s!".Lfmt_float" else ".Lfmt"
-    if isFloat then
-      s!"  // print {v} (float)" ::
-      (loadVarFP r.varMap v "d0") ::
-      "  sub sp, sp, #32" ::
-      s!"  adrp x1, .Lname_{v}@PAGE" ::
-      s!"  add x1, x1, .Lname_{v}@PAGEOFF" ::
-      "  str x1, [sp]" ::
-      "  str d0, [sp, #8]" ::
-      s!"  adrp x0, {fmtLabel}@PAGE" ::
-      s!"  add x0, x0, {fmtLabel}@PAGEOFF" ::
-      "  bl _printf" ::
-      "  add sp, sp, #32" :: List.nil
-    else
-      s!"  // print {v}" ::
-      (loadVar r.varMap v "x9") ::
-      "  sub sp, sp, #16" ::
-      s!"  adrp x1, .Lname_{v}@PAGE" ::
-      s!"  add x1, x1, .Lname_{v}@PAGEOFF" ::
-      "  str x1, [sp]" ::
-      "  str x9, [sp, #8]" ::
-      s!"  adrp x0, {fmtLabel}@PAGE" ::
-      s!"  add x0, x0, {fmtLabel}@PAGEOFF" ::
-      "  bl _printf" ::
-      "  add sp, sp, #16" :: List.nil
-  -- Pretty-print halt-save instructions
+  -- Halt epilogue: spill observable values to stack so they're inspectable from
+  -- outside the process (e.g., a debugger), then exit. Output happens only via
+  -- explicit print* statements during program execution; observable values are
+  -- a semantic-preservation contract for the verified compiler, not I/O.
   let saveLines := ppInstrs lbl r.haltSaveInstrs.toList
   let footer := [
     "",
     ".Lhalt:",
-    "  // Save register values to stack for printf"] ++
+    "  // Spill observable values to stack (semantic-preservation contract)"] ++
     saveLines ++
-    ["  // Print observable variables"] ++
-    printCode ++
     ["",
      "  // Exit with code 0",
      "  mov x0, #0"] ++
@@ -5459,16 +5432,15 @@ def generateAsm (tyCtx : TyCtx) (p : Prog) : Except String String := do
      "  bl _exit",
      "",
      ".section __TEXT,__cstring",
-     ".Lfmt:",
-     "  .asciz \"%s = %ld\\n\"",
-     ".Lfmt_float:",
-     "  .asciz \"%s = %f\\n\"",
      ".Ldiv_msg:",
      "  .asciz \"error: division by zero\\n\"",
      ".Lbounds_msg:",
      "  .asciz \"error: array index out of bounds\\n\"",
      ""] ++
-    -- Per-instruction format strings for print statements
+    -- Per-instruction format strings for variadic-print statements (legacy path).
+    -- The .Lfmt:/.Lfmt_float:/.Lname_* labels used by the old auto-dump are
+    -- gone; observable values are spilled to stack at .Lhalt for inspection but
+    -- no longer printed. Output happens only via explicit print* statements.
     (List.range p.code.size).filterMap (fun pc =>
       match p.code.getD pc .halt with
       | .print fmt _ =>
@@ -5482,9 +5454,6 @@ def generateAsm (tyCtx : TyCtx) (p : Prog) : Except String String := do
           | c    => acc ++ c.toString) ""
         some s!".Lfmt_print_{pc}:\n  .asciz \"{escaped}\""
       | _ => none) ++
-    [""] ++
-    p.observable.map (fun v =>
-     s!".Lname_{v}:\n  .asciz \"{v}\"") ++
     -- Per-distinct-string entries for printString instructions
     [""] ++
     (((List.range p.code.size).filterMap (fun pc =>

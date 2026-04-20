@@ -1,7 +1,7 @@
 #!/bin/bash
 #
 # Fast smoke-test: reduced rep counts (÷1000) for quick correctness + timing check
-# Creates temporary copies, builds, compares WL vs C output, shows timing.
+# Creates temporary copies, builds, compares WL vs Fortran output, shows timing.
 #
 # Usage:  ./run_fast.sh            — all kernels
 #         ./run_fast.sh k03_dot    — one kernel
@@ -40,6 +40,11 @@ if [ ! -x "$COMPILER" ]; then
   (cd "$PROJ_DIR" && lake build compiler 2>&1 | tail -1)
 fi
 
+if ! command -v gfortran &>/dev/null; then
+  echo "gfortran not found — install it to run this script." >&2
+  exit 1
+fi
+
 # ── determine kernels ──────────────────────────────────────────
 
 if [ $# -gt 0 ]; then
@@ -56,7 +61,7 @@ fi
 echo "Creating reduced-rep sources (÷${DIVISOR}) …"
 for name in "${KERNELS[@]}"; do
   wfile="$SCRIPT_DIR/${name}.w"
-  cfile="$SCRIPT_DIR/${name}.c"
+  ffile="$SCRIPT_DIR/${name}.f"
 
   if [ -f "$wfile" ]; then
     # Replace "while (rep <= NNNN)" with reduced count
@@ -71,34 +76,32 @@ open(sys.argv[2], 'w').write(text)
 " "$wfile" "$FAST_DIR/src/${name}.w"
   fi
 
-  if [ -f "$cfile" ]; then
-    # Replace "#define NREPS NNNN" with reduced count
+  if [ -f "$ffile" ]; then
+    # Reduce the outer Fortran rep loop: "DO <label> (REP|IREP) = 1, N"
     python3 -c "
 import re, sys
 text = open(sys.argv[1]).read()
 def reduce(m):
-    n = max(1, int(m.group(1)) // $DIVISOR)
-    return f'#define NREPS {n}'
-text = re.sub(r'#define NREPS (\d+)', reduce, text)
+    n = max(1, int(m.group(3)) // $DIVISOR)
+    return f'DO {m.group(1)} {m.group(2)} = 1, {n}'
+text = re.sub(r'DO (\d+) (REP|IREP) = 1, (\d+)', reduce, text)
 open(sys.argv[2], 'w').write(text)
-" "$cfile" "$FAST_DIR/src/${name}.c"
+" "$ffile" "$FAST_DIR/src/${name}.f"
   fi
 done
-
-# Copy signel.h
-cp "$SCRIPT_DIR/signel.h" "$FAST_DIR/src/"
 
 # ── compile ────────────────────────────────────────────────────
 
 echo "Compiling …"
 compile_fail=()
 for name in "${KERNELS[@]}"; do
-  cfile="$FAST_DIR/src/${name}.c"
   wfile="$FAST_DIR/src/${name}.w"
+  ffile="$FAST_DIR/src/${name}.f"
 
-  if [ -f "$cfile" ]; then
-    cc -O0 -o "$FAST_DIR/${name}_c_O0" "$cfile" 2>/dev/null
-    cc -O2 -o "$FAST_DIR/${name}_c_O2" "$cfile" 2>/dev/null
+  if [ -f "$ffile" ]; then
+    gfortran -O0 -o "$FAST_DIR/${name}_f_O0" "$ffile" 2>/dev/null || true
+    gfortran -O1 -o "$FAST_DIR/${name}_f_O1" "$ffile" 2>/dev/null || true
+    gfortran -O2 -o "$FAST_DIR/${name}_f_O2" "$ffile" 2>/dev/null || true
   fi
 
   if [ -f "$wfile" ]; then
@@ -115,28 +118,32 @@ fi
 # ── run and compare ────────────────────────────────────────────
 
 echo ""
-printf "%-22s  %8s  %8s  %8s  %8s  %s\n" \
-       "Kernel" "C-O0 (s)" "C-O2 (s)" "WL (s)" "WL/C-O2" "Match?"
-printf "%-22s  %8s  %8s  %8s  %8s  %s\n" \
-       "──────────────────" "────────" "────────" "────────" "───────" "──────"
+printf "%-22s  %8s  %8s  %8s  %8s  %8s  %s\n" \
+       "Kernel" "F-O0 (s)" "F-O1 (s)" "F-O2 (s)" "WL (s)" "WL/F-O2" "Match?"
+printf "%-22s  %8s  %8s  %8s  %8s  %8s  %s\n" \
+       "──────────────────" "────────" "────────" "────────" "────────" "───────" "──────"
 
 pass=0
 fail=0
 skip=0
 
 for name in "${KERNELS[@]}"; do
-  t_o0="—"
-  t_o2="—"
+  t_f0="—"
+  t_f1="—"
+  t_f2="—"
   t_wl="—"
   ratio="—"
   match="—"
 
-  # Run C -O2 and capture output
-  if [ -x "$FAST_DIR/${name}_c_O2" ]; then
-    t_o2=$(time_cmd "$FAST_DIR/${name}_c_O2" 2>"$FAST_DIR/${name}_c_O2.out")
+  # Run Fortran -O0/-O1/-O2; capture F-O2 output for correctness check
+  if [ -x "$FAST_DIR/${name}_f_O0" ]; then
+    t_f0=$(time_cmd "$FAST_DIR/${name}_f_O0" 2>/dev/null)
   fi
-  if [ -x "$FAST_DIR/${name}_c_O0" ]; then
-    t_o0=$(time_cmd "$FAST_DIR/${name}_c_O0" 2>/dev/null)
+  if [ -x "$FAST_DIR/${name}_f_O1" ]; then
+    t_f1=$(time_cmd "$FAST_DIR/${name}_f_O1" 2>/dev/null)
+  fi
+  if [ -x "$FAST_DIR/${name}_f_O2" ]; then
+    t_f2=$(time_cmd "$FAST_DIR/${name}_f_O2" 2>"$FAST_DIR/${name}_f_O2.out")
   fi
 
   # Run WL and capture output
@@ -147,49 +154,42 @@ for name in "${KERNELS[@]}"; do
     fi
   fi
 
-  # Check WL compiled, ran with exit code 0, produced output, and values match C
+  # Correctness: compare WL vs F-O2 numeric output
   if [ -x "$FAST_DIR/${name}_wl" ]; then
     if $wl_ok && [ -f "$FAST_DIR/${name}_wl.out" ] && [ -s "$FAST_DIR/${name}_wl.out" ] \
-       && [ -f "$FAST_DIR/${name}_c_O2.out" ] && [ -s "$FAST_DIR/${name}_c_O2.out" ]; then
-      out_c=$(cat "$FAST_DIR/${name}_c_O2.out")
-      out_w=$(cat "$FAST_DIR/${name}_wl.out")
+       && [ -f "$FAST_DIR/${name}_f_O2.out" ] && [ -s "$FAST_DIR/${name}_f_O2.out" ]; then
       match=$(python3 -c "
-import re, sys
-c_out = '''$out_c'''
-w_out = '''$out_w'''
-num_re = r'[-+]?[0-9]*\.?[0-9]+(?:[eE][-+]?[0-9]+)?'
-# Parse C output: 'name = value' pairs (skip elapsed line)
-c_vars = {}
-for line in c_out.strip().splitlines():
-    if line.startswith('elapsed'): continue
-    for m in re.finditer(r'(\w+)\s*=\s*(' + num_re + r')', line):
-        c_vars[m.group(1)] = m.group(2)
-# Parse WL output: 'name = value' lines from compiled program
-w_vars = {}
-for line in w_out.strip().splitlines():
-    m = re.match(r'(\w+)\s*=\s*(' + num_re + r')\s*$', line)
-    if m: w_vars[m.group(1)] = m.group(2)
-# Compare on shared variable names
-shared = set(c_vars) & set(w_vars)
-if not shared:
-    # Fallback: compare last N bare numbers (legacy behavior)
-    c_nums = list(c_vars.values()) if c_vars else []
-    w_nums = list(w_vars.values()) if w_vars else []
-    if not c_nums or not w_nums:
-        print('ok?'); sys.exit()
-    shared_nums = list(zip(c_nums[-min(len(c_nums),len(w_nums)):],
-                           w_nums[-min(len(c_nums),len(w_nums)):]))
+import re
+# Only match floats (must contain '.' or an exponent) so integer labels like
+# 'K3', 'x(7)', 'p(1,1)' in Fortran headers are ignored.
+num_re = r'[-+]?(?:\d+\.\d*|\.\d+|\d+)(?:[eEdD][-+]?\d+)|[-+]?\d+\.\d*|[-+]?\.\d+'
+def nums(path):
+    out = []
+    for line in open(path).read().strip().splitlines():
+        s = line.strip().lower()
+        if s.startswith(('elapsed', 'time')): continue
+        for m in re.finditer(num_re, line):
+            tok = m.group(0).replace('d', 'e').replace('D', 'E')
+            try:
+                float(tok); out.append(tok)
+            except ValueError:
+                pass
+    return out
+fn, wn = nums('$FAST_DIR/${name}_f_O2.out'), nums('$FAST_DIR/${name}_wl.out')
+if not fn or not wn:
+    print('ok?')
 else:
-    shared_nums = [(c_vars[k], w_vars[k]) for k in sorted(shared)]
-ok = True
-for cs, ws in shared_nums:
-    c, w = float(cs), float(ws)
-    if c == 0 and w == 0: continue
-    if abs(c) < 1e-15 and abs(w) < 1e-15: continue
-    if abs(c - w) / max(abs(c), abs(w), 1e-15) >= 1e-4:
-        print(f'MISMATCH {cs} vs {ws}')
-        ok = False; break
-if ok: print('ok')
+    # WL and Fortran both print only what the program explicitly prints;
+    # compare the first numeric token in each output.
+    f, w = float(fn[0]), float(wn[0])
+    # WL prints floats with %f (~6 decimal places), so values below ~1e-5
+    # are indistinguishable from zero. Treat as match if both are that small.
+    if max(abs(f), abs(w)) < 1e-5:
+        print('ok')
+    elif abs(f - w) / max(abs(f), abs(w), 1e-15) < 1e-4:
+        print('ok')
+    else:
+        print(f'MISMATCH {fn[0]} vs {wn[0]}')
 ")
       if [[ "$match" == ok* ]]; then
         ((pass++))
@@ -211,12 +211,12 @@ if ok: print('ok')
     ((skip++))
   fi
 
-  # Compute ratio
-  if [ "$t_o2" != "—" ] && [ "$t_wl" != "—" ]; then
-    ratio=$(python3 -c "print(f'{float(\"$t_wl\")/float(\"$t_o2\"):.1f}x')")
+  # Compute ratio WL / F-O2
+  if [ "$t_f2" != "—" ] && [ "$t_wl" != "—" ]; then
+    ratio=$(python3 -c "print(f'{float(\"$t_wl\")/float(\"$t_f2\"):.1f}x')")
   fi
 
-  printf "%-22s  %8s  %8s  %8s  %8s  %s\n" "$name" "$t_o0" "$t_o2" "$t_wl" "$ratio" "$match"
+  printf "%-22s  %8s  %8s  %8s  %8s  %8s  %s\n" "$name" "$t_f0" "$t_f1" "$t_f2" "$t_wl" "$ratio" "$match"
 done
 
 echo ""

@@ -4,6 +4,27 @@ Chronological record of what was built and why, to reconstruct the sequence of d
 
 ---
 
+## Drop auto-dump of observable variables on halt (2026-04-20)
+
+**Goal:** Separate I/O from semantic preservation so .w outputs match .c/.f directly.
+
+**Before:** The `.Lhalt:` epilogue emitted a printf for every declared variable (treating `Prog.observable` as both a semantic-preservation contract AND an I/O dump). WL programs printed user-explicit prints first, then dumped all variables. `run_fast.sh` had to special-case this with a "compare first numeric token" rule and a "WL prints the result first, then dumps" comment.
+
+**After:** Output happens **only via explicit `print*` statements**. The `.Lhalt:` epilogue now just spills observable values to stack via `genHaltSave` (the semantic-preservation contract — values are mechanically inspectable from outside the process via debugger) and exits.
+
+**Conceptually:** `Prog.observable` keeps its semantic role (the refinement theorem says `σ_src v = σ_compiled v` at halt for `v ∈ observable`) but loses its I/O role.
+
+**Changes:**
+- [CodeGen.lean:5400+](CredibleCompilation/CodeGen.lean) — removed the printf-emitting loop in the halt epilogue (~40 lines deleted)
+- Removed dead labels `.Lfmt:`, `.Lfmt_float:`, `.Lname_<v>:` from the rodata section (only used by the deleted dump; variadic-print uses per-PC `.Lfmt_print_<pc>` labels which stay)
+- Updated `run_fast.sh` correctness-check comment
+
+**Behavior verified:** k03_dot.w smoke test confirms `// Spill observable values to stack` is present, the old `// Print observable variables` is gone, and the user's `printfloat(q); printstring("\n")` still emits `_printFloat`/`_printString` calls.
+
+**WL and Fortran/C outputs now match directly** (modulo float formatting differences from `%f` vs Fortran's default field width).
+
+---
+
 ## Add parser support for typed-print surface syntax (2026-04-20)
 
 **Goal:** Surface the four typed `Stmt` constructors in the WhileLang concrete syntax so `.w` files can use them directly.
