@@ -121,4 +121,4 @@ while (rep <= 4249000) {
   };
   rep := rep + 1
 };
-print "%f\n", vy[(4 - 1) * 101 + 51]
+printfloat(vy[(4 - 1) * 101 + 51]); printstring("\n")

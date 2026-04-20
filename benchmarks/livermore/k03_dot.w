@@ -34,4 +34,4 @@ while (rep <= 31726000) {
   };
   rep := rep + 1
 };
-print "%f\n", q
+printfloat(q); printstring("\n")

@@ -51,4 +51,4 @@ while (rep <= 48656000) {
   };
   rep := rep + 1
 };
-print "%f\n", px[(5 - 1) * 101 + 51]
+printfloat(px[(5 - 1) * 101 + 51]); printstring("\n")

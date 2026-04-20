@@ -153,4 +153,4 @@ while (rep <= 1570000) {
   };
   rep := rep + 1
 };
-print "%f\n", x[1]
+printfloat(x[1]); printstring("\n")
