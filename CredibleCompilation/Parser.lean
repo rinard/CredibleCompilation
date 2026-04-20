@@ -39,7 +39,7 @@ private def keywords : List String :=
   ["var", "array", "int", "bool", "float", "if", "else", "while", "skip", "true", "false",
    "intToFloat", "floatToInt", "exp", "sqrt", "sin", "cos", "tan",
    "log", "log2", "log10", "abs", "neg", "round", "pow", "fmin", "fmax", "goto",
-   "print", "printint", "printbool", "printfloat", "printstring"]
+   "print", "printInt", "printBool", "printFloat", "printString"]
 
 private def spanDigits : List Char → List Char × List Char
   | c :: rest => if c.isDigit then let (d, r) := spanDigits rest; (c :: d, r) else ([], c :: rest)
@@ -470,27 +470,27 @@ partial def parseStmtAtom (toks : List Token) : Except String (Stmt × List Toke
     let (args, rest') ← parsePrintArgs rest ([] : List SExpr)
     .ok (.print fmt args, rest')
   | Token.kw "print" :: _ => .error "expected string literal after 'print'"
-  | Token.kw "printint" :: Token.lparen :: rest => do
+  | Token.kw "printInt" :: Token.lparen :: rest => do
     let (e, rest') ← parseExpr rest
     match rest' with
     | Token.rparen :: rest'' => .ok (.printInt e, rest'')
-    | _ => .error "expected ')' after printint argument"
-  | Token.kw "printint" :: _ => .error "expected '(' after 'printint'"
-  | Token.kw "printbool" :: Token.lparen :: rest => do
+    | _ => .error "expected ')' after printInt argument"
+  | Token.kw "printInt" :: _ => .error "expected '(' after 'printInt'"
+  | Token.kw "printBool" :: Token.lparen :: rest => do
     let (b, rest') ← parseBOr rest
     match rest' with
     | Token.rparen :: rest'' => .ok (.printBool b, rest'')
-    | _ => .error "expected ')' after printbool argument"
-  | Token.kw "printbool" :: _ => .error "expected '(' after 'printbool'"
-  | Token.kw "printfloat" :: Token.lparen :: rest => do
+    | _ => .error "expected ')' after printBool argument"
+  | Token.kw "printBool" :: _ => .error "expected '(' after 'printBool'"
+  | Token.kw "printFloat" :: Token.lparen :: rest => do
     let (e, rest') ← parseExpr rest
     match rest' with
     | Token.rparen :: rest'' => .ok (.printFloat e, rest'')
-    | _ => .error "expected ')' after printfloat argument"
-  | Token.kw "printfloat" :: _ => .error "expected '(' after 'printfloat'"
-  | Token.kw "printstring" :: Token.lparen :: Token.str lit :: Token.rparen :: rest =>
+    | _ => .error "expected ')' after printFloat argument"
+  | Token.kw "printFloat" :: _ => .error "expected '(' after 'printFloat'"
+  | Token.kw "printString" :: Token.lparen :: Token.str lit :: Token.rparen :: rest =>
     .ok (.printString lit, rest)
-  | Token.kw "printstring" :: _ => .error "expected '(\"<literal>\")' after 'printstring'"
+  | Token.kw "printString" :: _ => .error "expected '(\"<literal>\")' after 'printString'"
   | tok :: _ => .error s!"expected statement, got {repr tok}"
   | [] => .error "expected statement, got end of input"
 

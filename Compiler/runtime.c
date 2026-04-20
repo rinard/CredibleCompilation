@@ -6,7 +6,7 @@
  * linker convention (Mach-O) — define them without the underscore in C.
  *
  * Print* functions print *only the value* — no automatic newline. Source
- * programs emit newlines explicitly via `printstring("\n")`.
+ * programs emit newlines explicitly via `printString("\n")`.
  */
 
 #include <stdio.h>

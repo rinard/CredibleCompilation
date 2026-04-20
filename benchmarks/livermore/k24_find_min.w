@@ -28,5 +28,5 @@ while (rep <= 30595000) {
   };
   rep := rep + 1
 };
-printint(m); printstring("\n");
-printfloat(x[m]); printstring("\n")
+printInt(m); printString("\n");
+printFloat(x[m]); printString("\n")

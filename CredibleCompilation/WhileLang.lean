@@ -68,10 +68,10 @@ inductive Stmt where
   | goto     : String → Stmt                      -- unconditional jump
   | ifgoto   : SBool → String → Stmt             -- conditional jump
   | print      : String → List SExpr → Stmt        -- print fmt_string [args]
-  | printInt    : SExpr → Stmt                     -- printint(e): bl _printInt with int e in x0
-  | printBool   : SBool → Stmt                     -- printbool(b): bl _printBool with bool b in x0
-  | printFloat  : SExpr → Stmt                     -- printfloat(e): bl _printFloat with float e in d0
-  | printString : String → Stmt                    -- printstring "lit": bl _printString with lit ptr in x0
+  | printInt    : SExpr → Stmt                     -- printInt(e): bl _printInt with int e in x0
+  | printBool   : SBool → Stmt                     -- printBool(b): bl _printBool with bool b in x0
+  | printFloat  : SExpr → Stmt                     -- printFloat(e): bl _printFloat with float e in d0
+  | printString : String → Stmt                    -- printString("lit"): bl _printString with lit ptr in x0
   deriving Repr
 
 -- Syntactic sugar
@@ -746,10 +746,10 @@ def Stmt.toString : Stmt → String
   | .goto lbl => s!"goto {lbl}"
   | .ifgoto b lbl => s!"if {b.toString} goto {lbl}"
   | .print fmt args => s!"print \"{fmt}\", {", ".intercalate (args.map SExpr.toString)}"
-  | .printInt e => s!"printint({e.toString})"
-  | .printBool b => s!"printbool({b.toString})"
-  | .printFloat e => s!"printfloat({e.toString})"
-  | .printString lit => s!"printstring \"{lit}\""
+  | .printInt e => s!"printInt({e.toString})"
+  | .printBool b => s!"printBool({b.toString})"
+  | .printFloat e => s!"printFloat({e.toString})"
+  | .printString lit => s!"printString(\"{lit}\")"
 
 instance : ToString Stmt := ⟨Stmt.toString⟩
 instance : ToString SExpr := ⟨SExpr.toString⟩

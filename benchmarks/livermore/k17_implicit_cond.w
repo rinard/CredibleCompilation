@@ -75,4 +75,4 @@ while (rep <= 23048000) {
   };
   rep := rep + 1
 };
-printfloat(ve3[51]); printstring("\n")
+printFloat(ve3[51]); printString("\n")

@@ -132,4 +132,4 @@ while (rep <= 2570000) {
   };
   rep := rep + 1
 };
-printfloat(p[(1 - 1) * 64 + 1]); printstring("\n")
+printFloat(p[(1 - 1) * 64 + 1]); printString("\n")

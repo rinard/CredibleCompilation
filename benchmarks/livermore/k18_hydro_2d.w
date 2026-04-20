@@ -144,4 +144,4 @@ while (rep <= 1382000) {
 
   rep := rep + 1
 };
-printfloat(zu[(4 - 1) * 101 + 51]); printstring("\n")
+printFloat(zu[(4 - 1) * 101 + 51]); printString("\n")

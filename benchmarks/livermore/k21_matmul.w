@@ -64,4 +64,4 @@ while (rep <= 2476000) {
   };
   rep := rep + 1
 };
-printfloat(px[(51 - 1) * 25 + 13]); printstring("\n")
+printFloat(px[(51 - 1) * 25 + 13]); printString("\n")

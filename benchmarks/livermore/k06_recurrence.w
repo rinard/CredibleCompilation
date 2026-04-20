@@ -32,4 +32,4 @@ while (rep <= 2781000) {
   };
   rep := rep + 1
 };
-printfloat(w[64]); printstring("\n")
+printFloat(w[64]); printString("\n")

@@ -23,4 +23,4 @@ while (rep <= 35249000) {
   };
   rep := rep + 1
 };
-printfloat(x[1001]); printstring("\n")
+printFloat(x[1001]); printString("\n")

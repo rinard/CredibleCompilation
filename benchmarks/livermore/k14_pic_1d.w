@@ -99,4 +99,4 @@ while (rep <= 1867000) {
   };
   rep := rep + 1
 };
-printfloat(xx[1]); printstring("\n")
+printFloat(xx[1]); printString("\n")

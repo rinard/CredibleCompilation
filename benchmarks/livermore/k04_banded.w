@@ -42,4 +42,4 @@ while (rep <= 11250000) {
   };
   rep := rep + 1
 };
-printfloat(x[7]); printstring("\n")
+printFloat(x[7]); printString("\n")

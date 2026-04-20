@@ -114,5 +114,5 @@ while (rep <= 694000) {
   };
   rep := rep + 1
 };
-printint(k2); printstring("\n");
-printint(k3); printstring("\n")
+printInt(k2); printString("\n");
+printInt(k3); printString("\n")

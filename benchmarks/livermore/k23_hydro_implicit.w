@@ -108,4 +108,4 @@ while (rep <= 8581000) {
   };
   rep := rep + 1
 };
-printfloat(za[(4 - 1) * 101 + 51]); printstring("\n")
+printFloat(za[(4 - 1) * 101 + 51]); printString("\n")
