@@ -1,1 +1,9 @@
 .lake/
+benchmarks/livermore/build/
+benchmarks/livermore/build_fast/
+benchmarks/livermore/build_full/
+benchmarks/livermore/build_bench/
+benchmarks/livermore/build_bench5/
+benchmarks/livermore/build_opt_compare/
+benchmarks/livermore/bench_results.txt
+benchmarks/livermore/__pycache__/
