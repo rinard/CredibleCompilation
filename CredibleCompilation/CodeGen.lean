@@ -3064,15 +3064,9 @@ theorem compileToTAC_codegenPrereqs (prog : Program) (htcs : prog.typeCheckStric
         exact absurd (heq.symm.trans hAllMapped) (by simp)
       · rfl
 
-/-- End-to-end totality: `generateAsm` succeeds for any well-typed program
-    (no-optimization path, directly from `compileToTAC`). -/
-theorem generateAsm_total (prog : Program) (htcs : prog.typeCheckStrict = true) :
-    ∃ asm, verifiedGenerateAsm prog.tyCtx prog.compileToTAC = .ok asm :=
-  verifiedGenerateAsm_total prog.tyCtx prog.compileToTAC
-    (checkWellTypedProg_complete (prog.compileToTAC_wellTyped (prog.typeCheckStrict_typeCheck htcs)))
-    (compileToTAC_codegenPrereqs prog htcs)
-    (compileToTAC_checkBranchTargets prog)
-    (compileToTAC_checkBoolExprSimpleOps prog)
+-- `generateAsm_total` (no-optimization path) is a corollary of
+-- `generateAsm_total_with_passes` in PipelineCorrectness.lean — defined there
+-- because it needs `applyPassesPure` which is declared later in this file.
 
 -- ──────────────────────────────────────────────────────────────
 -- buildPcMap prefix-sum lemmas

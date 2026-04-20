@@ -569,3 +569,10 @@ theorem generateAsm_total_with_passes (prog : Program) (htcs : prog.typeCheckStr
     applyPassesPure_preserves_invariants prog.tyCtx passes prog.compileToTAC
       hWT0 hPrereqs0 hBranch0 hSimple0
   exact verifiedGenerateAsm_total prog.tyCtx _ hWT hPrereqs hBranch hSimple
+
+/-- End-to-end totality on the no-optimization path. Corollary of
+    `generateAsm_total_with_passes` at `passes = []`, where `applyPassesPure`
+    is the identity definitionally. -/
+theorem generateAsm_total (prog : Program) (htcs : prog.typeCheckStrict = true) :
+    ∃ asm, verifiedGenerateAsm prog.tyCtx prog.compileToTAC = .ok asm :=
+  generateAsm_total_with_passes prog htcs ([] : List (String × (Prog → ECertificate)))
