@@ -154,6 +154,14 @@ inductive ArmStep (prog : ArmProg) : ArmState → ArmState → Prop where
     prog[s.pc]? = some .callPrintI →
     ArmStep prog s (s.havocCallerSaved newRegs newFregs |>.nextPC)
 
+  /-- Typed bool print library call (`bl _printBool`): havocs all
+      caller-saved registers, no return value. Argument is consumed from `x0`
+      by the C runtime; no part of the modeled state observes that read. -/
+  | callPrintB
+    (newRegs : ArmReg → BitVec 64) (newFregs : ArmFReg → BitVec 64) :
+    prog[s.pc]? = some .callPrintB →
+    ArmStep prog s (s.havocCallerSaved newRegs newFregs |>.nextPC)
+
   /-- Typed float print library call (`bl _printFloat`): havocs all
       caller-saved registers, no return value. Argument is consumed from `d0`
       by the C runtime; no part of the modeled state observes that read. -/
@@ -1616,6 +1624,12 @@ def verifiedGenInstr (layout : VarLayout) (pcMap : Nat → Nat) (instr : TAC)
     match layout v with
     | some (.freg _) => none    -- printInt requires int operand, not float
     | _ => some (vLoadVar layout v .x0 ++ [.callPrintI])
+  | .printBool v =>
+    -- Verified path: load value into x0, then bl _printBool.
+    -- Same calling convention as printInt; bool fits in 64-bit reg.
+    match layout v with
+    | some (.freg _) => none    -- printBool requires bool operand, not float
+    | _ => some (vLoadVar layout v .x0 ++ [.callPrintB])
   | .printFloat v =>
     -- Verified path: load value into d0, then bl _printFloat.
     match layout v with
@@ -1692,6 +1706,9 @@ theorem verifiedGenInstr_length_pcMap_ind
   | print fmt vs =>
     simp [verifiedGenInstr] at h1
   | printInt v =>
+    simp only [verifiedGenInstr] at h1 h2
+    split at h1 <;> simp_all <;> split at h2 <;> simp_all
+  | printBool v =>
     simp only [verifiedGenInstr] at h1 h2
     split at h1 <;> simp_all <;> split at h2 <;> simp_all
   | printFloat v =>

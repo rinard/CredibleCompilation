@@ -68,6 +68,7 @@ inductive WellTypedInstr (Γ : TyCtx) (decls : List (ArrayName × Nat × VarTy))
       WellTypedInstr Γ decls (.fternop x op a b c)
   | print     : WellTypedInstr Γ decls (.print fmt vs)
   | printInt  : Γ v = .int → WellTypedInstr Γ decls (.printInt v)
+  | printBool : Γ v = .bool → WellTypedInstr Γ decls (.printBool v)
   | printFloat : Γ v = .float → WellTypedInstr Γ decls (.printFloat v)
   | printString : WellTypedInstr Γ decls (.printString lit)
 
@@ -156,6 +157,7 @@ theorem Step.progress (p : Prog) (pc : Nat) (σ : Store) (am : ArrayMem) (Γ : T
       exact ⟨_, .fternop (hp ▸ hinstr) hfa hfb hfc⟩
   | .print _ _     => exact ⟨_, .print (hp ▸ hinstr)⟩
   | .printInt _    => exact ⟨_, .printInt (hp ▸ hinstr)⟩
+  | .printBool _   => exact ⟨_, .printBool (hp ▸ hinstr)⟩
   | .printFloat _  => exact ⟨_, .printFloat (hp ▸ hinstr)⟩
   | .printString _ => exact ⟨_, .printString (hp ▸ hinstr)⟩
 
@@ -307,6 +309,7 @@ theorem Step.progress_untyped (p : Prog) (pc : Nat) (σ : Store) (am : ArrayMem)
     · exact ⟨_, .fternop_typeError (hp ▸ hinstr) (.inl ha)⟩
   | .print _ _     => exact ⟨_, .print (hp ▸ hinstr)⟩
   | .printInt _    => exact ⟨_, .printInt (hp ▸ hinstr)⟩
+  | .printBool _   => exact ⟨_, .printBool (hp ▸ hinstr)⟩
   | .printFloat _  => exact ⟨_, .printFloat (hp ▸ hinstr)⟩
   | .printString _ => exact ⟨_, .printString (hp ▸ hinstr)⟩
 
@@ -339,6 +342,7 @@ def checkWellTypedInstr (Γ : TyCtx) (decls : List (ArrayName × Nat × VarTy)) 
   | .fternop x _ a b c => decide (Γ x = .float) && decide (Γ a = .float) && decide (Γ b = .float) && decide (Γ c = .float)
   | .print _ _    => true
   | .printInt v   => decide (Γ v = .int)
+  | .printBool v  => decide (Γ v = .bool)
   | .printFloat v => decide (Γ v = .float)
   | .printString _ => true
 
@@ -406,6 +410,9 @@ theorem checkWellTypedInstr_sound {Γ : TyCtx} {decls : List (ArrayName × Nat �
   | printInt v =>
     simp only [checkWellTypedInstr, decide_eq_true_eq] at h
     exact .printInt h
+  | printBool v =>
+    simp only [checkWellTypedInstr, decide_eq_true_eq] at h
+    exact .printBool h
   | printFloat v =>
     simp only [checkWellTypedInstr, decide_eq_true_eq] at h
     exact .printFloat h
@@ -445,6 +452,7 @@ theorem checkWellTypedInstr_complete {Γ : TyCtx} {decls : List (ArrayName × Na
   | fternop hx ha hb hc => simp [checkWellTypedInstr, hx, ha, hb, hc]
   | print => rfl
   | printInt h => simp [checkWellTypedInstr, h]
+  | printBool h => simp [checkWellTypedInstr, h]
   | printFloat h => simp [checkWellTypedInstr, h]
   | printString => rfl
 
@@ -542,6 +550,7 @@ theorem type_preservation {Γ : TyCtx} {p : Prog} {pc pc' : Nat} {σ σ' : Store
     | .fternop hx _ _ _ => exact TypedStore.update_typed hts (by simp [Value.typeOf]; exact hx.symm)
   | print _ => exact hts
   | printInt _ => exact hts
+  | printBool _ => exact hts
   | printFloat _ => exact hts
   | printString _ => exact hts
 
@@ -679,6 +688,10 @@ theorem type_safety {p : Prog} {σ₀ σ' : Store} {am₀ am' : ArrayMem} {Γ : 
       exact ih _ _ am rfl hc'
         (hclosed.2 pc _ σ _ am am hpc (Step.printInt (am := am) h))
         (type_preservation (am := am) (am' := am) hwtp hts hpc (Step.printInt (am := am) h))
+    | printBool h =>
+      exact ih _ _ am rfl hc'
+        (hclosed.2 pc _ σ _ am am hpc (Step.printBool (am := am) h))
+        (type_preservation (am := am) (am' := am) hwtp hts hpc (Step.printBool (am := am) h))
     | printFloat h =>
       exact ih _ _ am rfl hc'
         (hclosed.2 pc _ σ _ am am hpc (Step.printFloat (am := am) h))

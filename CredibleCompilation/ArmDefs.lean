@@ -248,6 +248,9 @@ inductive ArmInstr where
   /-- Typed integer print library call (`bl _printInt`): expects argument
       already in `x0`, havocs all caller-saved registers, no return value. -/
   | callPrintI : ArmInstr
+  /-- Typed bool print library call (`bl _printBool`): expects argument
+      already in `x0`, havocs all caller-saved registers, no return value. -/
+  | callPrintB : ArmInstr
   /-- Typed float print library call (`bl _printFloat`): expects argument
       already in `d0`, havocs all caller-saved registers, no return value. -/
   | callPrintF : ArmInstr

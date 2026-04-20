@@ -79,6 +79,7 @@ def instrUse (instr : TAC) : List Var :=
   | .halt            => []
   | .print _ vs     => vs
   | .printInt v     => [v]
+  | .printBool v    => [v]
   | .printFloat v   => [v]
   | .printString _  => []
 
@@ -163,6 +164,7 @@ def isDead (instr : TAC) (liveOut : List Var) : Bool :=
   | .goto _ | .ifgoto _ _ | .halt => false
   | .print _ _ => false  -- side effect, never eliminate
   | .printInt _ => false -- side effect, never eliminate
+  | .printBool _ => false -- side effect, never eliminate
   | .printFloat _ => false -- side effect, never eliminate
   | .printString _ => false -- side effect, never eliminate
 

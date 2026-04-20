@@ -79,6 +79,35 @@ Key trick: the load-step (vLoadVar) was constructed inline with a 3-way case spl
 
 **Three of four typed-print variants now end-to-end verified.** printInt on x0/ireg path; printFloat on d0/freg path; printString on rodata-pointer-x0 path. printBool still pending — would mirror printInt almost verbatim. The original variadic `print` constructor is still alive in TAC for backwards compat with unverified codegen.
 
+---
+
+## Add `printBool` typed library call (2026-04-20)
+
+**Goal:** Fourth and final typed-print variant. Structurally identical to printInt at the proof level — bool values are passed in `x0` like integers, the only difference is the runtime function name (`bl _printBool` vs `bl _printInt`).
+
+**Pipeline:**
+- TAC.printBool : Var → TAC (no-op step semantics)
+- ArmInstr.callPrintB + ArmStep.callPrintB (havoc caller-saved)
+- WellTypedInstr.printBool requires `Γ v = .bool`
+- verifiedGenInstr returns `vLoadVar layout v .x0 ++ [.callPrintB]` (rejects freg layouts)
+- ppInstr emits `bl _printBool`
+- isLibCallTAC = true → existing lib-call wrapping
+
+**Proofs are mechanical copies of printInt with substitutions:** `printInt → printBool`, `callPrintI → callPrintB`, `int_not_freg → bool_not_freg`. The verifiedGenInstr_correct case (~40 lines), the lib-call branch arm in step_simulation (~190 lines including the inline 3-way layout case-split for `s1.stack` preservation), and totality proof all transfer with no architectural changes.
+
+**All four typed-print variants now end-to-end verified.** The complete set:
+
+| Variant | Reg class | Operand | proof template |
+|---------|-----------|---------|----------------|
+| printInt | x0 (ireg) | Var | original |
+| printBool | x0 (ireg) | Var | clone of printInt |
+| printFloat | d0 (freg) | Var | mirror via vLoadVarFP |
+| printString | x0 (rodata ptr) | String literal | self-contained, no load |
+
+The original variadic `print` constructor is still alive in TAC for backwards compat with the unverified codegen path; future work could remove it once all callers are migrated to the typed variants.
+
+**Project remains at 0 sorrys.**
+
 **Project remains at 0 sorrys.**
 
 **Deferred:** WhileLang `Stmt.printInt` surface syntax + variadic-`print`-to-typed-print lowering in `compileToTAC`. Test programs continue using the old variadic `print` for now.

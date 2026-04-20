@@ -248,6 +248,8 @@ private def ppInstr (lbl : Nat → String) (afterFcmp : Bool)
   | .printCall lines => lines
   | .callPrintI =>
     ["  stp x29, x30, [sp, #-16]!", "  bl _printInt", "  ldp x29, x30, [sp], #16"]
+  | .callPrintB =>
+    ["  stp x29, x30, [sp, #-16]!", "  bl _printBool", "  ldp x29, x30, [sp], #16"]
   | .callPrintF =>
     ["  stp x29, x30, [sp, #-16]!", "  bl _printFloat", "  ldp x29, x30, [sp], #16"]
   | .callPrintS lit =>
@@ -360,6 +362,7 @@ private def isLibCallTAC : TAC → Bool
   | .floatUnary _ op _ => !op.isNative
   | .fbinop _ .fpow _ _ => true
   | .printInt _ => true
+  | .printBool _ => true
   | .printFloat _ => true
   | .printString _ => true
   | _ => false
@@ -1089,6 +1092,9 @@ private theorem verifiedGenInstr_length_pcMap_indep {layout : VarLayout}
   | printInt v =>
     simp only [verifiedGenInstr] at h₁ h₂
     split at h₁ <;> simp_all <;> split at h₂ <;> simp_all
+  | printBool v =>
+    simp only [verifiedGenInstr] at h₁ h₂
+    split at h₁ <;> simp_all <;> split at h₂ <;> simp_all
   | printFloat v =>
     simp only [verifiedGenInstr] at h₁ h₂
     split at h₁ <;> simp_all <;> split at h₂ <;> simp_all
@@ -1123,6 +1129,19 @@ private theorem instrLength_eq_length {layout : VarLayout} {pcMap : Nat → Nat}
       split at hd <;> simp_all <;> split at h <;> simp_all
     | some dl =>
       have hLen := verifiedGenInstr_length_pcMap_ind layout (.printInt v) haltS divS boundsS
+          arrayDecls safe _ pcMap dl instrs hd h
+      simp only [hLen, List.length_append, entriesToSaves_length, entriesToRestores_length]
+      simp [Nat.add_comm, Nat.add_left_comm]
+  | printBool v =>
+    simp only [instrLength, isLibCallTAC, callSaveRestoreLen, callerSaveEntries, DAEOpt.instrDef]
+    generalize hd : verifiedGenInstr layout (fun _ => 0)
+      (.printBool v) haltS divS boundsS arrayDecls safe = dr
+    cases dr with
+    | none =>
+      simp only [verifiedGenInstr] at h hd
+      split at hd <;> simp_all <;> split at h <;> simp_all
+    | some dl =>
+      have hLen := verifiedGenInstr_length_pcMap_ind layout (.printBool v) haltS divS boundsS
           arrayDecls safe _ pcMap dl instrs hd h
       simp only [hLen, List.length_append, entriesToSaves_length, entriesToRestores_length]
       simp [Nat.add_comm, Nat.add_left_comm]
@@ -2142,6 +2161,12 @@ private theorem verifiedGenInstr_total
     unfold verifiedGenInstr; simp only [hRC, hII, Bool.not_true, Bool.false_or]; dsimp
     split
     · next r h => exact absurd h (hWTL.int_not_freg hv r)
+    · exact ⟨_, rfl⟩
+  case printBool hv =>
+    rename_i v
+    unfold verifiedGenInstr; simp only [hRC, hII, Bool.not_true, Bool.false_or]; dsimp
+    split
+    · next r h => exact absurd h (hWTL.bool_not_freg hv r)
     · exact ⟨_, rfl⟩
   case printFloat hv =>
     rename_i v
@@ -4420,6 +4445,171 @@ private theorem step_simulation {tyCtx : TyCtx} {p : Prog} {r : VerifiedAsmResul
           have h3 := hStateRel w (.stack off) hLoc
           simp at h3
           rw [h1, h2, h3]
+      | printBool v =>
+        -- Void lib call: bl _printBool, no destination → σ' = σ.
+        -- Structurally identical to printInt: x0 calling convention,
+        -- vLoadVar layout v .x0 ++ [.callPrintB].
+        rw [show p[pc] = p.code[pc] from rfl, hInstr] at hGenInstr
+        have hRC : r.layout.regConventionSafe = true := by
+          cases h : r.layout.regConventionSafe
+          · simp [verifiedGenInstr, h] at hGenInstr
+          · rfl
+        have hII : r.layout.isInjective = true := by
+          cases h : r.layout.isInjective
+          · simp [verifiedGenInstr, hRC, h] at hGenInstr
+          · rfl
+        have hRegConv : RegConventionSafe r.layout :=
+          VarLayout.regConventionSafe_spec r.layout hRC
+        have hNotFreg : ∀ fr, r.layout v ≠ some (.freg fr) := by
+          intro fr h; simp [verifiedGenInstr, hRC, hII, h] at hGenInstr
+        have hVMapped : r.layout v ≠ none := by
+          have := spec.layoutComplete pc (by simp [Prog.size_eq] at hPC; exact hPC) v
+          rw [show p[pc] = p.code[pc] from rfl, hInstr] at this
+          exact this (by simp [TAC.vars])
+        have hInstrs : baseInstrs = vLoadVar r.layout v .x0 ++ [.callPrintB] := by
+          simp only [verifiedGenInstr, hRC, hII, Bool.not_true, Bool.false_or] at hGenInstr
+          split at hGenInstr
+          · simp at hGenInstr
+          · simp at hGenInstr; exact hGenInstr.symm
+        have hσ_eq : σ' = σ := by
+          funext w
+          apply hDstOnly
+          simp [show p[pc] = p.code[pc] from rfl, hInstr, DAEOpt.instrDef]
+        have hEntriesFull : entries = genCallerSaveAll r.layout r.varMap := by
+          show callerSaveEntries r.layout r.varMap (DAEOpt.instrDef p[pc]) = _
+          rw [show p[pc] = p.code[pc] from rfl, hInstr]
+          simp [callerSaveEntries, DAEOpt.instrDef]
+        rw [hInstrs] at hCodeBase
+        have hCodeLoad := hCodeBase.append_left (l2 := [ArmInstr.callPrintB])
+        have hLoadFull : ∃ s1 : ArmState, ArmSteps r.bodyFlat s_saved s1 ∧
+            ExtStateRel r.layout σ s1 ∧
+            s1.fregs = s_saved.fregs ∧
+            s1.stack = s_saved.stack ∧
+            s1.arrayMem = s_saved.arrayMem ∧
+            s1.pc = s_saved.pc + (vLoadVar r.layout v .x0).length ∧
+            (∀ ir : ArmReg, ir ≠ .x0 → s1.regs ir = s_saved.regs ir) := by
+          match hv : r.layout v with
+          | some (.stack off) =>
+            have hEq := vLoadVar_stack r.layout v .x0 off hv
+            have hCL := hCodeLoad
+            rw [hEq] at hCL
+            have hStepInstr := hCL.head; rw [← hSavedPC] at hStepInstr
+            refine ⟨(s_saved.setReg .x0 (s_saved.stack off)).nextPC,
+                    .single (.ldr .x0 off hStepInstr), ?_, ?_, ?_, ?_, ?_, ?_⟩
+            · refine (ExtStateRel.setReg_preserved hRelSaved (fun w => hRegConv.not_x0 w)).nextPC
+            · simp [ArmState.setReg, ArmState.nextPC]
+            · simp [ArmState.setReg, ArmState.nextPC]
+            · simp [ArmState.setReg, ArmState.nextPC]
+            · simp [ArmState.setReg, ArmState.nextPC, hEq]
+            · intro ir hne
+              simp [ArmState.setReg, ArmState.nextPC, beq_iff_eq]
+              intro h; exact absurd h hne
+          | some (.ireg r_v) =>
+            by_cases heq : r_v = .x0
+            · subst heq
+              have hEq := vLoadVar_ireg_same r.layout v .x0 hv
+              refine ⟨s_saved, .refl, hRelSaved, rfl, rfl, rfl, ?_, fun _ _ => rfl⟩
+              simp [hEq]
+            · have hbeq : (r_v == .x0) = false := by
+                cases h : r_v == .x0
+                · rfl
+                · simp [beq_iff_eq] at h; exact absurd h heq
+              have hEq := vLoadVar_ireg_diff r.layout v .x0 r_v hv hbeq
+              have hCL := hCodeLoad
+              rw [hEq] at hCL
+              have hStepInstr := hCL.head; rw [← hSavedPC] at hStepInstr
+              refine ⟨(s_saved.setReg .x0 (s_saved.regs r_v)).nextPC,
+                      .single (.movR .x0 r_v hStepInstr), ?_, ?_, ?_, ?_, ?_, ?_⟩
+              · refine (ExtStateRel.setReg_preserved hRelSaved (fun w => hRegConv.not_x0 w)).nextPC
+              · simp [ArmState.setReg, ArmState.nextPC]
+              · simp [ArmState.setReg, ArmState.nextPC]
+              · simp [ArmState.setReg, ArmState.nextPC]
+              · simp [ArmState.setReg, ArmState.nextPC, hEq]
+              · intro ir hne
+                simp [ArmState.setReg, ArmState.nextPC, beq_iff_eq]
+                intro h; exact absurd h hne
+          | some (.freg fr) => exact absurd hv (hNotFreg fr)
+          | none => exact absurd hv hVMapped
+        obtain ⟨s1, hSteps1, hRel1, hFregs1, hStack1, hAM1, hPC1, hOther1⟩ := hLoadFull
+        have hCodeCall : r.bodyFlat[s1.pc]? = some .callPrintB := by
+          have h := hCodeBase.append_right (l1 := vLoadVar r.layout v .x0) 0 (by simp)
+          simp at h
+          rw [hPC1, hSavedPC]
+          rw [show r.pcMap pc + (entriesToSaves entries).length = r.pcMap pc + entries.length from by
+            simp [entriesToSaves_length]]
+          exact h
+        let newRegs : ArmReg → BitVec 64 := fun _ => 0
+        let newFregs : ArmFReg → BitVec 64 := fun _ => 0
+        let s_mid := (s1.havocCallerSaved newRegs newFregs).nextPC
+        have hSteps2 : ArmSteps r.bodyFlat s1 s_mid :=
+          .single (.callPrintB newRegs newFregs hCodeCall)
+        refine ⟨s_mid, hSteps1.trans hSteps2, ?_, ?_, ?_, ?_, ?_, ?_⟩
+        · show s_mid.pc = s_saved.pc + baseInstrs.length
+          simp [s_mid, ArmState.nextPC, ArmState.havocCallerSaved]
+          rw [hPC1, hSavedPC, hInstrs]; simp [List.length_append]; omega
+        · show s_mid.arrayMem = am
+          simp [s_mid, ArmState.nextPC, ArmState.havocCallerSaved, hAM1, s_saved,
+                applyCallerSaves_arrayMem, hArrayMem]
+        · intro e he
+          show s_mid.stack e.off = (applyCallerSaves entries s).stack e.off
+          simp [s_mid, ArmState.nextPC, ArmState.havocCallerSaved_stack, hStack1, s_saved]
+        · intro w ir hLoc hNE
+          show s_mid.regs ir = (σ' w).encode
+          rw [hσ_eq]
+          have hCS : ir.isCallerSaved = false := by
+            cases hcs : ir.isCallerSaved with
+            | false => rfl
+            | true =>
+              obtain ⟨_, _, hCoversIreg, _⟩ := spec.callerSaveSpec
+              obtain ⟨coff, hMem⟩ := hCoversIreg w ir hLoc hcs
+              rw [← hEntriesFull] at hMem
+              exact absurd hMem (hNE coff)
+          have h1 : s_mid.regs ir = s1.regs ir := by
+            simp [s_mid, ArmState.nextPC, ArmState.havocCallerSaved, hCS]
+          have hIrNotX0 : ir ≠ .x0 := fun h => by
+            rw [h] at hCS; simp [ArmReg.isCallerSaved] at hCS
+          have h2 : s1.regs ir = s_saved.regs ir := hOther1 ir hIrNotX0
+          have h3 : s_saved.regs ir = s.regs ir := by
+            simp [s_saved, applyCallerSaves_regs]
+          have h4 := hStateRel w (.ireg ir) hLoc
+          simp at h4
+          rw [h1, h2, h3, h4]
+        · intro w fr hLoc hNE
+          show s_mid.fregs fr = (σ' w).encode
+          rw [hσ_eq]
+          have hCS : fr.isCallerSaved = false := by
+            cases hcs : fr.isCallerSaved with
+            | false => rfl
+            | true =>
+              obtain ⟨_, _, _, hCoversFreg, _⟩ := spec.callerSaveSpec
+              obtain ⟨coff, hMem⟩ := hCoversFreg w fr hLoc hcs
+              rw [← hEntriesFull] at hMem
+              exact absurd hMem (hNE coff)
+          have h1 : s_mid.fregs fr = s1.fregs fr := by
+            simp [s_mid, ArmState.nextPC, ArmState.havocCallerSaved, hCS]
+          have h2 : s1.fregs fr = s_saved.fregs fr := by rw [hFregs1]
+          have h3 : s_saved.fregs fr = s.fregs fr := by
+            simp [s_saved, applyCallerSaves_fregs]
+          have h4 := hStateRel w (.freg fr) hLoc
+          simp at h4
+          rw [h1, h2, h3, h4]
+        · intro w off hLoc
+          show s_mid.stack off = (σ' w).encode
+          rw [hσ_eq]
+          have h1 : s_mid.stack off = s_saved.stack off := by
+            simp [s_mid, ArmState.nextPC, ArmState.havocCallerSaved_stack, hStack1]
+          obtain ⟨hFresh, _, _, _, _, _⟩ := spec.callerSaveSpec
+          have hOff : ∀ e ∈ genCallerSaveAll r.layout r.varMap, e.off ≠ off := by
+            intro e he hEq
+            exact hFresh e he w (hEq ▸ hLoc)
+          have hOff' : ∀ e ∈ entries, e.off ≠ off := by
+            rw [hEntriesFull]; exact hOff
+          have h2 : s_saved.stack off = s.stack off := by
+            simp [s_saved]
+            exact applyCallerSaves_stack_other entries s off hOff'
+          have h3 := hStateRel w (.stack off) hLoc
+          simp at h3
+          rw [h1, h2, h3]
       | printString lit =>
         -- Void lib call, no operand: bl _printString. Single ARM step.
         rw [show p[pc] = p.code[pc] from rfl, hInstr] at hGenInstr
@@ -4852,6 +5042,10 @@ private theorem step_simulation {tyCtx : TyCtx} {p : Prog} {r : VerifiedAsmResul
           NoCallerSavedLayout r.layout := by
         intro v heq
         simp [isLibCallTAC, heq] at hNotLib
+      have hNCSLPrintBool : ∀ v, p[pc] = .printBool v →
+          NoCallerSavedLayout r.layout := by
+        intro v heq
+        simp [isLibCallTAC, heq] at hNotLib
       have hNCSLPrintFloat : ∀ v, p[pc] = .printFloat v →
           NoCallerSavedLayout r.layout := by
         intro v heq
@@ -4865,7 +5059,7 @@ private theorem step_simulation {tyCtx : TyCtx} {p : Prog} {r : VerifiedAsmResul
         hStep hRel hPC tyCtx spec.wellTypedProg hTS spec.wellTypedLayout
         p[pc] (Prog.getElem?_eq_getElem hPC)
         (r.bodyPerPC[pc]'hpcB) hSome hCodeAt hPcNext
-        (spec.layoutComplete pc hPC) rfl hNCSL hNCSLBin hNCSLPrintInt hNCSLPrintFloat hNCSLPrintStr
+        (spec.layoutComplete pc hPC) rfl hNCSL hNCSLBin hNCSLPrintInt hNCSLPrintBool hNCSLPrintFloat hNCSLPrintStr
 
 -- ──────────────────────────────────────────────────────────────
 -- Multi-step simulation (main theorem)
@@ -4938,6 +5132,7 @@ private theorem step_run_or_terminal {tyCtx : TyCtx} {p : Prog} {pc : Nat} {σ :
   | fternop_typeError _ _ => exact .inr fun _ h => Step.no_step_from_typeError h
   | print _ => exact .inl ⟨_, _, _, rfl, hts⟩
   | printInt _ => exact .inl ⟨_, _, _, rfl, hts⟩
+  | printBool _ => exact .inl ⟨_, _, _, rfl, hts⟩
   | printFloat _ => exact .inl ⟨_, _, _, rfl, hts⟩
   | printString _ => exact .inl ⟨_, _, _, rfl, hts⟩
 
