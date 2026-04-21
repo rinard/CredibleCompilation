@@ -611,20 +611,30 @@ private def genInitCode (vars : List Var) (layout : VarLayout) : List ArmInstr :
     | some (.stack off) => some (.str .x0 off)
     | none => none
 
-/-- Generate instructions to save register-allocated observable values to stack. -/
+/-- Generate halt-save instructions for a single observable.
+    - Register-allocated (ireg/freg): emit a store to the observable's stack slot.
+    - Stack-resident: no-op (value is already at its output offset).
+    - Missing layout or varMap entry: no-op (should be ruled out by a completeness
+      invariant on `VerifiedAsmResult`; only reachable if invariants are violated). -/
+private def genHaltSaveOne (v : Var) (layout : VarLayout)
+    (varMap : List (Var × Nat)) : List ArmInstr :=
+  match layout v with
+  | some (.ireg r) =>
+    match lookupVar varMap v with
+    | some off => [.str r off]
+    | none => []
+  | some (.freg r) =>
+    match lookupVar varMap v with
+    | some off => [.fstr r off]
+    | none => []
+  | some (.stack _) => []
+  | none => []
+
+/-- Generate instructions to save observable values to their halt-output stack slots.
+    Iterates per-observable via `genHaltSaveOne`; see that function for per-case behavior. -/
 private def genHaltSave (observable : List Var) (layout : VarLayout)
     (varMap : List (Var × Nat)) : List ArmInstr :=
-  observable.filterMap fun v =>
-    match layout v with
-    | some (.ireg r) =>
-      match lookupVar varMap v with
-      | some off => some (.str r off)
-      | none => none
-    | some (.freg r) =>
-      match lookupVar varMap v with
-      | some off => some (.fstr r off)
-      | none => none
-    | _ => none
+  observable.flatMap (genHaltSaveOne · layout varMap)
 
 /-- Detect callee-saved registers used in the layout. Returns (intRegNums, floatRegNums). -/
 private def detectCalleeSavedLayout (layout : VarLayout) : List Nat × List Nat :=
@@ -5185,10 +5195,10 @@ private theorem step_run_or_terminal {tyCtx : TyCtx} {p : Prog} {pc : Nat} {σ :
     exact .inl ⟨_, _, _, rfl, type_preservation hwtp hts hpc
       (show Step p (.run pc σ am) _ from .fternop h h1 h2 h3)⟩
   | halt _ => exact .inr fun _ h => Step.no_step_from_halt h
-  | error _ _ _ _ => exact .inr fun _ h => Step.no_step_from_error h
+  | binop_divByZero _ _ _ _ => exact .inr fun _ h => Step.no_step_from_errorDiv h
   | binop_typeError _ _ => exact .inr fun _ h => Step.no_step_from_typeError h
-  | arrLoad_boundsError _ _ _ => exact .inr fun _ h => Step.no_step_from_error h
-  | arrStore_boundsError _ _ _ _ => exact .inr fun _ h => Step.no_step_from_error h
+  | arrLoad_boundsError _ _ _ => exact .inr fun _ h => Step.no_step_from_errorBounds h
+  | arrStore_boundsError _ _ _ _ => exact .inr fun _ h => Step.no_step_from_errorBounds h
   | arrLoad_typeError _ _ => exact .inr fun _ h => Step.no_step_from_typeError h
   | arrStore_typeError _ _ => exact .inr fun _ h => Step.no_step_from_typeError h
   | fbinop_typeError _ _ => exact .inr fun _ h => Step.no_step_from_typeError h

@@ -3516,206 +3516,215 @@ theorem checkDivPreservationExec_sound (dc : ECertificate)
     (harrsize : checkArraySizesExec dc = true)
     (hwtp : WellTypedProg dc.tyCtx dc.orig) :
     checkErrorPreservationProp (toPCertificate dc) := by
-  intro pc_t σ_t σ_o am_t am_o hpc_bound hrel _hinv_t hinv_o htyped hstep
+  intro pc_t σ_t σ_o am_t am_o hpc_bound hrel _hinv_t hinv_o htyped
   -- Normalize toPCertificate projections
-  simp only [toCertificate_trans] at hpc_bound hstep
-  simp only [toCertificate_orig, toCertificate_tyCtx] at htyped ⊢
-  simp only [toPCertificate] at hrel ⊢
+  simp only [toCertificate_trans] at hpc_bound
+  simp only [toCertificate_tyCtx] at htyped
+  simp only [toPCertificate] at hrel
   set ic := dc.instrCerts.getD pc_t default with hic_def
-  -- Only Step.error, arrLoad_boundsError, arrStore_boundsError produce Cfg.error
-  cases hstep with
-  | error hinstr hya hzb hunsafe =>
-    rename_i _ op y z a b
-    -- Extract div-preservation checker info for pc_t
-    simp only [checkDivPreservationExec, List.all_eq_true, List.mem_range] at h
-    have hpc := h pc_t hpc_bound; rw [hinstr] at hpc
-    generalize horig : dc.orig[ic.pc_orig]? = oi at hpc
-    cases oi with
-    | none => simp at hpc
-    | some instr_o =>
-      cases instr_o with
-      | binop x' op' y' z' =>
-        rw [Bool.and_eq_true] at hpc; obtain ⟨hop_eq, hrest⟩ := hpc
-        have hop : op = op' := beq_iff_eq.mp hop_eq
-        have : op = .div ∨ op = .mod := by
-          cases op with
-          | add | sub | mul | band | bor | bxor | shl | shr => exact absurd True.intro hunsafe
-          | div => exact Or.inl rfl
-          | mod => exact Or.inr rfl
-        rcases this with rfl | rfl <;> (
-          rw [Bool.and_eq_true] at hrest; obtain ⟨hy_eq, hz_eq⟩ := hrest
-          have hy_find : relFindOrigVar ic.rel y = some y' := beq_iff_eq.mp hy_eq
-          rw [Bool.or_eq_true] at hz_eq
-          rcases hz_eq with hz_var | hz_conj
-          · -- relFindOrigVar succeeds: same as before
-            have hz_find : relFindOrigVar ic.rel z = some z' := beq_iff_eq.mp hz_var
-            have hσt_y := store_eq_of_relFindOrigVar hy_find hrel
-            have hσt_z := store_eq_of_relFindOrigVar hz_find hrel
-            have hya' : σ_o y' = .int a := by rw [← hσt_y]; exact hya
-            have hzb' : σ_o z' = .int b := by rw [← hσt_z]; exact hzb
-            exact ⟨σ_o, am_o, Steps.single (Step.error horig hya' hzb' (hop ▸ hunsafe))⟩
-          · -- Conjunction fallback: relFindOrigExpr gives contradiction
-            rw [Bool.and_eq_true] at hz_conj
-            obtain ⟨hz_rel_lit, _⟩ := hz_conj
-            -- Extract the literal from relFindOrigExpr
-            generalize hfre : relFindOrigExpr ic.rel z = fre at hz_rel_lit
-            cases fre with
-            | none => simp at hz_rel_lit
-            | some e =>
-              cases e with
-              | lit c =>
-                -- (.lit c, .var z) ∈ rel, so σ_t z = .int c
-                have hmem := relFindOrigExpr_mem hfre
-                have hσt_z := hrel _ _ hmem
-                simp [Expr.eval] at hσt_z  -- hσt_z : σ_t z = .int c
-                -- But σ_t z = .int b from the step, so b = c
-                have hbc : b = c := Value.int.inj (hzb.symm.trans hσt_z)
-                -- And c ≠ 0 from the checker
-                simp at hz_rel_lit  -- hz_rel_lit : c ≠ 0
-                -- So b ≠ 0, meaning op.safe a b = true, contradicting hunsafe
-                subst hbc; simp [BinOp.safe] at hunsafe; exact absurd hunsafe hz_rel_lit
-              | _ => simp at hz_rel_lit)
-      | const => simp at hpc
-      | copy => simp at hpc
-      | boolop => simp at hpc
-      | goto => simp at hpc
-      | ifgoto => simp at hpc
-      | halt => simp at hpc
-      | arrLoad => simp at hpc
-      | arrStore => simp at hpc
-      | fbinop => simp at hpc
-      | fternop => simp at hpc
-      | intToFloat => simp at hpc
-      | floatToInt => simp at hpc
-      | floatUnary => simp at hpc
-      | print => simp at hpc
-      | printInt => simp at hpc
-      | printBool => simp at hpc
-      | printFloat => simp at hpc
-      | printString => simp at hpc
-  | arrLoad_boundsError hinstr hidx_val hbnd_fail =>
-    rename_i idxVal arr _ idx _
-    -- Extract bounds-preservation checker info for pc_t
-    simp only [checkBoundsPreservationExec, List.all_eq_true, List.mem_range] at hbndpres
-    have hpc := hbndpres pc_t hpc_bound; rw [hinstr] at hpc
-    generalize horig : dc.orig[ic.pc_orig]? = oi at hpc
-    cases oi with
-    | none => simp at hpc
-    | some instr_o =>
-      cases instr_o with
-      | arrLoad x' arr' idx' ty' =>
-        rw [Bool.and_eq_true] at hpc; obtain ⟨harr_eq, hidx_eq⟩ := hpc
-        have harr : arr = arr' := beq_iff_eq.mp harr_eq
-        -- Index mapping: either relFindOrigVar or invariant-based constant match
-        rw [Bool.or_eq_true] at hidx_eq
-        have hidx' : σ_o idx' = .int idxVal := by
-          rcases hidx_eq with hvar | hinv_case
-          · have hidx_find : relFindOrigVar ic.rel idx = some idx' := beq_iff_eq.mp hvar
-            have hσt_idx := store_eq_of_relFindOrigVar hidx_find hrel
-            rw [← hσt_idx]; exact hidx_val
-          · -- Both indices are the same constant from invariant and relation
-            generalize hfind_inv : (dc.inv_orig.getD ic.pc_orig ([] : EInv)).find?
-              (fun (v, _) => v == idx') = fi at hinv_case
-            cases fi with
-            | none => simp at hinv_case
-            | some p =>
-              obtain ⟨v, e⟩ := p
-              cases e with
-              | lit c =>
-                generalize hfind_rel : relFindOrigExpr ic.rel idx = fr at hinv_case
-                cases fr with
-                | none => simp at hinv_case
-                | some e' =>
-                  cases e' with
-                  | lit c' =>
-                    simp at hinv_case
-                    -- From invariant: σ_o idx' = .int c
-                    have hpred := List.find?_some hfind_inv
-                    simp at hpred; symm at hpred; subst hpred
-                    have hmem := List.mem_of_find?_eq_some hfind_inv
-                    simp only [toPCertificate] at hinv_o
-                    have hinv_entry := hinv_o (idx', .lit c) hmem
-                    simp [Expr.eval] at hinv_entry
-                    -- From relation: σ_t idx = .int c'
-                    have hmem_rel := relFindOrigExpr_mem hfind_rel
-                    have hσt := hrel _ _ hmem_rel
-                    simp [Expr.eval] at hσt  -- hσt : σ_t idx = .int c'
-                    -- Combine: idxVal = c' = c, σ_o idx' = .int c
-                    have : idxVal = c' := Value.int.inj (hidx_val.symm.trans hσt)
-                    rw [hinv_entry, this, hinv_case]
-                  | _ => simp at hinv_case
-              | _ => simp at hinv_case
-        -- Transfer bounds failure via equal array sizes
-        simp only [checkArraySizesExec, beq_iff_eq] at harrsize
-        have hsize_eq : dc.orig.arraySizeBv arr' = dc.trans.arraySizeBv arr := by
-          simp [Prog.arraySizeBv, harr, harrsize]
-        have hbnd_fail' : ¬ (idxVal < dc.orig.arraySizeBv arr') := hsize_eq ▸ hbnd_fail
-        exact ⟨σ_o, am_o, Steps.single (Step.arrLoad_boundsError horig hidx' hbnd_fail')⟩
-      | _ => simp at hpc
-  | arrStore_boundsError hinstr hidx_val hty_val hbnd_fail =>
-    rename_i _ idxVal arr idx val
-    -- Extract bounds-preservation checker info for pc_t
-    simp only [checkBoundsPreservationExec, List.all_eq_true, List.mem_range] at hbndpres
-    have hpc := hbndpres pc_t hpc_bound; rw [hinstr] at hpc
-    generalize horig : dc.orig[ic.pc_orig]? = oi at hpc
-    cases oi with
-    | none => simp at hpc
-    | some instr_o =>
-      cases instr_o with
-      | arrStore arr' idx' val' ty' =>
-        rw [Bool.and_eq_true] at hpc; obtain ⟨harr_eq, hidx_eq⟩ := hpc
-        have harr : arr = arr' := beq_iff_eq.mp harr_eq
-        -- Index mapping: either relFindOrigVar or invariant-based constant match
-        rw [Bool.or_eq_true] at hidx_eq
-        have hidx' : σ_o idx' = .int idxVal := by
-          rcases hidx_eq with hvar | hinv_case
-          · have hidx_find : relFindOrigVar ic.rel idx = some idx' := beq_iff_eq.mp hvar
-            have hσt_idx := store_eq_of_relFindOrigVar hidx_find hrel
-            rw [← hσt_idx]; exact hidx_val
-          · generalize hfind_inv : (dc.inv_orig.getD ic.pc_orig ([] : EInv)).find?
-              (fun (v, _) => v == idx') = fi at hinv_case
-            cases fi with
-            | none => simp at hinv_case
-            | some p =>
-              obtain ⟨v, e⟩ := p
-              cases e with
-              | lit c =>
-                generalize hfind_rel : relFindOrigExpr ic.rel idx = fr at hinv_case
-                cases fr with
-                | none => simp at hinv_case
-                | some e' =>
-                  cases e' with
-                  | lit c' =>
-                    simp at hinv_case
-                    have hpred := List.find?_some hfind_inv
-                    simp at hpred; symm at hpred; subst hpred
-                    have hmem := List.mem_of_find?_eq_some hfind_inv
-                    simp only [toPCertificate] at hinv_o
-                    have hinv_entry := hinv_o (idx', .lit c) hmem
-                    simp [Expr.eval] at hinv_entry
-                    have hmem_rel := relFindOrigExpr_mem hfind_rel
-                    have hσt := hrel _ _ hmem_rel
-                    simp [Expr.eval] at hσt
-                    have : idxVal = c' := Value.int.inj (hidx_val.symm.trans hσt)
-                    rw [hinv_entry, this, hinv_case]
-                  | _ => simp at hinv_case
-              | _ => simp at hinv_case
-        -- Transfer bounds failure via equal array sizes
-        simp only [checkArraySizesExec, beq_iff_eq] at harrsize
-        have hsize_eq : dc.orig.arraySizeBv arr' = dc.trans.arraySizeBv arr := by
-          simp [Prog.arraySizeBv, harr, harrsize]
-        have hbnd_fail' : ¬ (idxVal < dc.orig.arraySizeBv arr') := hsize_eq ▸ hbnd_fail
-        -- Get (σ_o val').typeOf = ty' from WellTypedProg + TypedStore
-        have hpc_lt : ic.pc_orig < dc.orig.size := bound_of_getElem? horig
-        have hwti := hwtp ic.pc_orig hpc_lt
-        have hinstr_eq : dc.orig[ic.pc_orig] = .arrStore arr' idx' val' ty' :=
-          Option.some.inj ((Array.getElem?_eq_getElem hpc_lt).symm.trans horig)
-        rw [hinstr_eq] at hwti
-        have ⟨_hidx_ty, hval_ty⟩ : dc.tyCtx idx' = .int ∧ dc.tyCtx val' = ty' := by
-          cases hwti with | arrStore h1 h2 _ => exact ⟨h1, h2⟩
-        have hty' : (σ_o val').typeOf = ty' := by rw [htyped val']; exact hval_ty
-        exact ⟨σ_o, am_o, Steps.single (Step.arrStore_boundsError horig hidx' hty' hbnd_fail')⟩
-      | _ => simp at hpc
+  refine ⟨?divBranch, ?boundsBranch⟩
+  case divBranch =>
+    intro hstep
+    simp only [toCertificate_trans] at hstep
+    simp only [toPCertificate]
+    cases hstep with
+    | binop_divByZero hinstr hya hzb hunsafe =>
+      rename_i _ op y z a b
+      -- Extract div-preservation checker info for pc_t
+      simp only [checkDivPreservationExec, List.all_eq_true, List.mem_range] at h
+      have hpc := h pc_t hpc_bound; rw [hinstr] at hpc
+      generalize horig : dc.orig[ic.pc_orig]? = oi at hpc
+      cases oi with
+      | none => simp at hpc
+      | some instr_o =>
+        cases instr_o with
+        | binop x' op' y' z' =>
+          rw [Bool.and_eq_true] at hpc; obtain ⟨hop_eq, hrest⟩ := hpc
+          have hop : op = op' := beq_iff_eq.mp hop_eq
+          have : op = .div ∨ op = .mod := by
+            cases op with
+            | add | sub | mul | band | bor | bxor | shl | shr => exact absurd True.intro hunsafe
+            | div => exact Or.inl rfl
+            | mod => exact Or.inr rfl
+          rcases this with rfl | rfl <;> (
+            rw [Bool.and_eq_true] at hrest; obtain ⟨hy_eq, hz_eq⟩ := hrest
+            have hy_find : relFindOrigVar ic.rel y = some y' := beq_iff_eq.mp hy_eq
+            rw [Bool.or_eq_true] at hz_eq
+            rcases hz_eq with hz_var | hz_conj
+            · -- relFindOrigVar succeeds: same as before
+              have hz_find : relFindOrigVar ic.rel z = some z' := beq_iff_eq.mp hz_var
+              have hσt_y := store_eq_of_relFindOrigVar hy_find hrel
+              have hσt_z := store_eq_of_relFindOrigVar hz_find hrel
+              have hya' : σ_o y' = .int a := by rw [← hσt_y]; exact hya
+              have hzb' : σ_o z' = .int b := by rw [← hσt_z]; exact hzb
+              exact ⟨σ_o, am_o, Steps.single (Step.binop_divByZero horig hya' hzb' (hop ▸ hunsafe))⟩
+            · -- Conjunction fallback: relFindOrigExpr gives contradiction
+              rw [Bool.and_eq_true] at hz_conj
+              obtain ⟨hz_rel_lit, _⟩ := hz_conj
+              -- Extract the literal from relFindOrigExpr
+              generalize hfre : relFindOrigExpr ic.rel z = fre at hz_rel_lit
+              cases fre with
+              | none => simp at hz_rel_lit
+              | some e =>
+                cases e with
+                | lit c =>
+                  -- (.lit c, .var z) ∈ rel, so σ_t z = .int c
+                  have hmem := relFindOrigExpr_mem hfre
+                  have hσt_z := hrel _ _ hmem
+                  simp [Expr.eval] at hσt_z  -- hσt_z : σ_t z = .int c
+                  -- But σ_t z = .int b from the step, so b = c
+                  have hbc : b = c := Value.int.inj (hzb.symm.trans hσt_z)
+                  -- And c ≠ 0 from the checker
+                  simp at hz_rel_lit  -- hz_rel_lit : c ≠ 0
+                  -- So b ≠ 0, meaning op.safe a b = true, contradicting hunsafe
+                  subst hbc; simp [BinOp.safe] at hunsafe; exact absurd hunsafe hz_rel_lit
+                | _ => simp at hz_rel_lit)
+        | const => simp at hpc
+        | copy => simp at hpc
+        | boolop => simp at hpc
+        | goto => simp at hpc
+        | ifgoto => simp at hpc
+        | halt => simp at hpc
+        | arrLoad => simp at hpc
+        | arrStore => simp at hpc
+        | fbinop => simp at hpc
+        | fternop => simp at hpc
+        | intToFloat => simp at hpc
+        | floatToInt => simp at hpc
+        | floatUnary => simp at hpc
+        | print => simp at hpc
+        | printInt => simp at hpc
+        | printBool => simp at hpc
+        | printFloat => simp at hpc
+        | printString => simp at hpc
+  case boundsBranch =>
+    intro hstep
+    simp only [toCertificate_trans] at hstep
+    simp only [toPCertificate]
+    cases hstep with
+    | arrLoad_boundsError hinstr hidx_val hbnd_fail =>
+      rename_i idxVal arr _ idx _
+      -- Extract bounds-preservation checker info for pc_t
+      simp only [checkBoundsPreservationExec, List.all_eq_true, List.mem_range] at hbndpres
+      have hpc := hbndpres pc_t hpc_bound; rw [hinstr] at hpc
+      generalize horig : dc.orig[ic.pc_orig]? = oi at hpc
+      cases oi with
+      | none => simp at hpc
+      | some instr_o =>
+        cases instr_o with
+        | arrLoad x' arr' idx' ty' =>
+          rw [Bool.and_eq_true] at hpc; obtain ⟨harr_eq, hidx_eq⟩ := hpc
+          have harr : arr = arr' := beq_iff_eq.mp harr_eq
+          -- Index mapping: either relFindOrigVar or invariant-based constant match
+          rw [Bool.or_eq_true] at hidx_eq
+          have hidx' : σ_o idx' = .int idxVal := by
+            rcases hidx_eq with hvar | hinv_case
+            · have hidx_find : relFindOrigVar ic.rel idx = some idx' := beq_iff_eq.mp hvar
+              have hσt_idx := store_eq_of_relFindOrigVar hidx_find hrel
+              rw [← hσt_idx]; exact hidx_val
+            · -- Both indices are the same constant from invariant and relation
+              generalize hfind_inv : (dc.inv_orig.getD ic.pc_orig ([] : EInv)).find?
+                (fun (v, _) => v == idx') = fi at hinv_case
+              cases fi with
+              | none => simp at hinv_case
+              | some p =>
+                obtain ⟨v, e⟩ := p
+                cases e with
+                | lit c =>
+                  generalize hfind_rel : relFindOrigExpr ic.rel idx = fr at hinv_case
+                  cases fr with
+                  | none => simp at hinv_case
+                  | some e' =>
+                    cases e' with
+                    | lit c' =>
+                      simp at hinv_case
+                      -- From invariant: σ_o idx' = .int c
+                      have hpred := List.find?_some hfind_inv
+                      simp at hpred; symm at hpred; subst hpred
+                      have hmem := List.mem_of_find?_eq_some hfind_inv
+                      simp only [toPCertificate] at hinv_o
+                      have hinv_entry := hinv_o (idx', .lit c) hmem
+                      simp [Expr.eval] at hinv_entry
+                      -- From relation: σ_t idx = .int c'
+                      have hmem_rel := relFindOrigExpr_mem hfind_rel
+                      have hσt := hrel _ _ hmem_rel
+                      simp [Expr.eval] at hσt  -- hσt : σ_t idx = .int c'
+                      -- Combine: idxVal = c' = c, σ_o idx' = .int c
+                      have : idxVal = c' := Value.int.inj (hidx_val.symm.trans hσt)
+                      rw [hinv_entry, this, hinv_case]
+                    | _ => simp at hinv_case
+                | _ => simp at hinv_case
+          -- Transfer bounds failure via equal array sizes
+          simp only [checkArraySizesExec, beq_iff_eq] at harrsize
+          have hsize_eq : dc.orig.arraySizeBv arr' = dc.trans.arraySizeBv arr := by
+            simp [Prog.arraySizeBv, harr, harrsize]
+          have hbnd_fail' : ¬ (idxVal < dc.orig.arraySizeBv arr') := hsize_eq ▸ hbnd_fail
+          exact ⟨σ_o, am_o, Steps.single (Step.arrLoad_boundsError horig hidx' hbnd_fail')⟩
+        | _ => simp at hpc
+    | arrStore_boundsError hinstr hidx_val hty_val hbnd_fail =>
+      rename_i _ idxVal arr idx val
+      -- Extract bounds-preservation checker info for pc_t
+      simp only [checkBoundsPreservationExec, List.all_eq_true, List.mem_range] at hbndpres
+      have hpc := hbndpres pc_t hpc_bound; rw [hinstr] at hpc
+      generalize horig : dc.orig[ic.pc_orig]? = oi at hpc
+      cases oi with
+      | none => simp at hpc
+      | some instr_o =>
+        cases instr_o with
+        | arrStore arr' idx' val' ty' =>
+          rw [Bool.and_eq_true] at hpc; obtain ⟨harr_eq, hidx_eq⟩ := hpc
+          have harr : arr = arr' := beq_iff_eq.mp harr_eq
+          -- Index mapping: either relFindOrigVar or invariant-based constant match
+          rw [Bool.or_eq_true] at hidx_eq
+          have hidx' : σ_o idx' = .int idxVal := by
+            rcases hidx_eq with hvar | hinv_case
+            · have hidx_find : relFindOrigVar ic.rel idx = some idx' := beq_iff_eq.mp hvar
+              have hσt_idx := store_eq_of_relFindOrigVar hidx_find hrel
+              rw [← hσt_idx]; exact hidx_val
+            · generalize hfind_inv : (dc.inv_orig.getD ic.pc_orig ([] : EInv)).find?
+                (fun (v, _) => v == idx') = fi at hinv_case
+              cases fi with
+              | none => simp at hinv_case
+              | some p =>
+                obtain ⟨v, e⟩ := p
+                cases e with
+                | lit c =>
+                  generalize hfind_rel : relFindOrigExpr ic.rel idx = fr at hinv_case
+                  cases fr with
+                  | none => simp at hinv_case
+                  | some e' =>
+                    cases e' with
+                    | lit c' =>
+                      simp at hinv_case
+                      have hpred := List.find?_some hfind_inv
+                      simp at hpred; symm at hpred; subst hpred
+                      have hmem := List.mem_of_find?_eq_some hfind_inv
+                      simp only [toPCertificate] at hinv_o
+                      have hinv_entry := hinv_o (idx', .lit c) hmem
+                      simp [Expr.eval] at hinv_entry
+                      have hmem_rel := relFindOrigExpr_mem hfind_rel
+                      have hσt := hrel _ _ hmem_rel
+                      simp [Expr.eval] at hσt
+                      have : idxVal = c' := Value.int.inj (hidx_val.symm.trans hσt)
+                      rw [hinv_entry, this, hinv_case]
+                    | _ => simp at hinv_case
+                | _ => simp at hinv_case
+          -- Transfer bounds failure via equal array sizes
+          simp only [checkArraySizesExec, beq_iff_eq] at harrsize
+          have hsize_eq : dc.orig.arraySizeBv arr' = dc.trans.arraySizeBv arr := by
+            simp [Prog.arraySizeBv, harr, harrsize]
+          have hbnd_fail' : ¬ (idxVal < dc.orig.arraySizeBv arr') := hsize_eq ▸ hbnd_fail
+          -- Get (σ_o val').typeOf = ty' from WellTypedProg + TypedStore
+          have hpc_lt : ic.pc_orig < dc.orig.size := bound_of_getElem? horig
+          have hwti := hwtp ic.pc_orig hpc_lt
+          have hinstr_eq : dc.orig[ic.pc_orig] = .arrStore arr' idx' val' ty' :=
+            Option.some.inj ((Array.getElem?_eq_getElem hpc_lt).symm.trans horig)
+          rw [hinstr_eq] at hwti
+          have ⟨_hidx_ty, hval_ty⟩ : dc.tyCtx idx' = .int ∧ dc.tyCtx val' = ty' := by
+            cases hwti with | arrStore h1 h2 _ => exact ⟨h1, h2⟩
+          have hty' : (σ_o val').typeOf = ty' := by rw [htyped val']; exact hval_ty
+          exact ⟨σ_o, am_o, Steps.single (Step.arrStore_boundsError horig hidx' hty' hbnd_fail')⟩
+        | _ => simp at hpc
 
 -- ============================================================
 -- § 9. Main soundness theorem
@@ -3954,13 +3963,15 @@ theorem exec_halt_preservation
   soundness_halt (toPCertificate dc) (soundness_bridge dc h) σ₀ σ_t' hts₀ hexec
 
 /-- **Error preservation (executable)**: If the executable checker accepts and
-    the transformed program reaches an error state, the original
-    program also reaches an error state. -/
+    the transformed program reaches an error state (div or bounds), the original
+    program also reaches an error state of the same kind. -/
 theorem exec_error_preservation
     (dc : ECertificate) (h : checkCertificateExec dc = true)
     (σ₀ : Store) (hts₀ : TypedStore dc.tyCtx σ₀) {σ_e : Store} {am₀ am_e : ArrayMem}
-    (hreach : dc.trans ⊩ Cfg.run 0 σ₀ am₀ ⟶* Cfg.error σ_e am_e) :
-    ∃ σ_o am_o', dc.orig ⊩ Cfg.run 0 σ₀ am₀ ⟶* Cfg.error σ_o am_o' :=
+    (hreach : (dc.trans ⊩ Cfg.run 0 σ₀ am₀ ⟶* Cfg.errorDiv σ_e am_e) ∨
+              (dc.trans ⊩ Cfg.run 0 σ₀ am₀ ⟶* Cfg.errorBounds σ_e am_e)) :
+    ∃ σ_o am_o', (dc.orig ⊩ Cfg.run 0 σ₀ am₀ ⟶* Cfg.errorDiv σ_o am_o') ∨
+                 (dc.orig ⊩ Cfg.run 0 σ₀ am₀ ⟶* Cfg.errorBounds σ_o am_o') :=
   error_preservation (toPCertificate dc) (soundness_bridge dc h) σ₀ hts₀ hreach
 
 /-- **Divergence preservation (executable)**: If the executable checker accepts

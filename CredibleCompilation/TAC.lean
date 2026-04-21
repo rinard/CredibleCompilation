@@ -169,16 +169,18 @@ def Prog.ofCode (code : Array TAC) : Prog :=
 
 /--
 A **configuration** is either:
-- `Cfg.run pc σ am`    — about to execute instruction `pc` in store `σ` with array memory `am`
-- `Cfg.halt σ am`      — terminated with final store `σ` and array memory `am`
-- `Cfg.error σ am`     — runtime error (e.g. division by zero) with store `σ`
-- `Cfg.typeError σ am` — type error (e.g. binop on non-integer operands)
+- `Cfg.run pc σ am`         — about to execute instruction `pc` in store `σ` with array memory `am`
+- `Cfg.halt σ am`           — terminated with final store `σ` and array memory `am`
+- `Cfg.errorDiv σ am`       — runtime error: integer division or modulo by zero
+- `Cfg.errorBounds σ am`    — runtime error: array index out of bounds
+- `Cfg.typeError σ am`      — type error (e.g. binop on non-integer operands)
 -/
 inductive Cfg where
-  | run       : Nat → Store → ArrayMem → Cfg
-  | halt      : Store → ArrayMem → Cfg
-  | error     : Store → ArrayMem → Cfg
-  | typeError : Store → ArrayMem → Cfg
+  | run         : Nat → Store → ArrayMem → Cfg
+  | halt        : Store → ArrayMem → Cfg
+  | errorDiv    : Store → ArrayMem → Cfg
+  | errorBounds : Store → ArrayMem → Cfg
+  | typeError   : Store → ArrayMem → Cfg
 
 -- ============================================================
 -- § 5. Small-step operational semantics   ⟶
@@ -220,9 +222,9 @@ inductive Step (p : Prog) : Cfg → Cfg → Prop where
   | halt   : p[pc]? = some .halt →
       Step p (.run pc σ am) (.halt σ am)
 
-  | error  {a b : BitVec 64} : p[pc]? = some (.binop x op y z) →
+  | binop_divByZero  {a b : BitVec 64} : p[pc]? = some (.binop x op y z) →
       σ y = .int a → σ z = .int b → ¬ op.safe a b →
-      Step p (.run pc σ am) (.error σ am)
+      Step p (.run pc σ am) (.errorDiv σ am)
 
   | binop_typeError : p[pc]? = some (.binop x op y z) →
       (σ y).typeOf ≠ .int ∨ (σ z).typeOf ≠ .int →
@@ -238,11 +240,11 @@ inductive Step (p : Prog) : Cfg → Cfg → Prop where
 
   | arrLoad_boundsError : p[pc]? = some (.arrLoad x arr idx ty) →
       σ idx = .int idxVal → ¬ (idxVal < p.arraySizeBv arr) →
-      Step p (.run pc σ am) (.error σ am)
+      Step p (.run pc σ am) (.errorBounds σ am)
 
   | arrStore_boundsError : p[pc]? = some (.arrStore arr idx val ty) →
       σ idx = .int idxVal → (σ val).typeOf = ty → ¬ (idxVal < p.arraySizeBv arr) →
-      Step p (.run pc σ am) (.error σ am)
+      Step p (.run pc σ am) (.errorBounds σ am)
 
   | arrLoad_typeError : p[pc]? = some (.arrLoad x arr idx ty) →
       (σ idx).typeOf ≠ .int →
@@ -428,10 +430,30 @@ theorem Step.no_step_from_halt {p : Prog} {σ : Store} {am : ArrayMem} {c : Cfg}
     ¬ (p ⊩ Cfg.halt σ am ⟶ c) :=
   fun h => by cases h
 
-/-- An error configuration admits no further steps. -/
-theorem Step.no_step_from_error {p : Prog} {σ : Store} {am : ArrayMem} {c : Cfg} :
-    ¬ (p ⊩ Cfg.error σ am ⟶ c) :=
+/-- A division-error configuration admits no further steps. -/
+theorem Step.no_step_from_errorDiv {p : Prog} {σ : Store} {am : ArrayMem} {c : Cfg} :
+    ¬ (p ⊩ Cfg.errorDiv σ am ⟶ c) :=
   fun h => by cases h
+
+/-- A bounds-error configuration admits no further steps. -/
+theorem Step.no_step_from_errorBounds {p : Prog} {σ : Store} {am : ArrayMem} {c : Cfg} :
+    ¬ (p ⊩ Cfg.errorBounds σ am ⟶ c) :=
+  fun h => by cases h
+
+/-- Cause-agnostic "some runtime error" predicate covering both errorDiv
+    and errorBounds. Used to keep downstream proofs that only care about
+    *that* an error occurred (not which kind) concise. -/
+def Cfg.isError : Cfg → Prop
+  | .errorDiv _ _    => True
+  | .errorBounds _ _ => True
+  | _                => False
+
+/-- Any error configuration admits no further steps. -/
+theorem Step.no_step_from_isError {p : Prog} {c d : Cfg} (h : c.isError) :
+    ¬ (p ⊩ c ⟶ d) := by
+  cases c <;> simp [Cfg.isError] at h
+  · exact Step.no_step_from_errorDiv
+  · exact Step.no_step_from_errorBounds
 
 /-- A type-error configuration admits no further steps. -/
 theorem Step.no_step_from_typeError {p : Prog} {σ : Store} {am : ArrayMem} {c : Cfg} :
@@ -481,8 +503,8 @@ theorem Step.store_congr {p : Prog} {pc : Nat} {σ τ : Store} {am : ArrayMem} {
   | iftrue h hne => exact ⟨_, .iftrue h (BoolExpr.eval_congr _ σ τ am hagree ▸ hne)⟩
   | iffall h heq => exact ⟨_, .iffall h (BoolExpr.eval_congr _ σ τ am hagree ▸ heq)⟩
   | halt   h => exact ⟨_, .halt h⟩
-  | error h hy hz hs =>
-    refine ⟨_, .error h ?_ ?_ hs⟩
+  | binop_divByZero h hy hz hs =>
+    refine ⟨_, .binop_divByZero h ?_ ?_ hs⟩
     · rw [← hagree]; exact hy
     · rw [← hagree]; exact hz
   | binop_typeError h hne =>
@@ -556,9 +578,10 @@ inductive Observation where
 /-- Observe a configuration against a program and list of observable variables. -/
 def observe (p : Prog) (obs : List Var) (c : Cfg) : Observation :=
   match c with
-  | .halt σ _      => Observation.halt (obs.map fun v => (v, σ v))
-  | .error _ _     => Observation.error
-  | .typeError _ _ => Observation.typeError
+  | .halt σ _        => Observation.halt (obs.map fun v => (v, σ v))
+  | .errorDiv _ _    => Observation.error
+  | .errorBounds _ _ => Observation.error
+  | .typeError _ _   => Observation.typeError
   | .run pc σ _ =>
     match p[pc]? with
     | some .halt => Observation.halt (obs.map fun v => (v, σ v))

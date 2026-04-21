@@ -1281,10 +1281,11 @@ def checkCertificateVerboseExec (cert : ECertificate) : List (String × Bool) :=
     - Otherwise returns `nothing`. -/
 def observeExec (cert : ECertificate) (c : Cfg) : Observation :=
   match c with
-  | .halt σ _      => Observation.halt (cert.observable.map fun v => (v, σ v))
-  | .error _ _     => Observation.error
-  | .typeError _ _ => Observation.typeError
-  | .run pc σ _    =>
+  | .halt σ _        => Observation.halt (cert.observable.map fun v => (v, σ v))
+  | .errorDiv _ _    => Observation.error
+  | .errorBounds _ _ => Observation.error
+  | .typeError _ _   => Observation.typeError
+  | .run pc σ _      =>
     match cert.trans[pc]? with
     | some .halt => Observation.halt (cert.observable.map fun v => (v, σ v))
     | some _     => Observation.nothing

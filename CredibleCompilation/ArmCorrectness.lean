@@ -1799,7 +1799,7 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
     rw [← hPcRel] at hb
     exact ⟨{ s with pc := haltLabel }, .single (.branch haltLabel hb),
       ⟨hStateRel, hArrayMem⟩⟩
-  | error hinstr hy hz hs =>
+  | binop_divByZero hinstr hy hz hs =>
     exact ⟨s, .refl, trivial⟩
   | binop_typeError hinstr hne =>
     exact ⟨s, .refl, trivial⟩

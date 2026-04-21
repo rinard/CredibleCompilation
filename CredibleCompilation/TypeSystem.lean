@@ -104,7 +104,7 @@ theorem Step.progress (p : Prog) (pc : Nat) (σ : Store) (am : ArrayMem) (Γ : T
       obtain ⟨b, hb⟩ : ∃ n, σ z = .int n := Value.int_of_typeOf_int (by rw [hts z]; exact hz)
       by_cases hs : op.safe a b
       · exact ⟨_, .binop (hp ▸ hinstr) ha hb hs⟩
-      · exact ⟨_, .error (hp ▸ hinstr) ha hb hs⟩
+      · exact ⟨_, .binop_divByZero (hp ▸ hinstr) ha hb hs⟩
   | .boolop x be   => exact ⟨_, .boolop (hp ▸ hinstr)⟩
   | .goto l        => exact ⟨_, .goto (hp ▸ hinstr)⟩
   | .ifgoto b l    =>
@@ -247,7 +247,7 @@ theorem Step.progress_untyped (p : Prog) (pc : Nat) (σ : Store) (am : ArrayMem)
         obtain ⟨b, hb⟩ := Value.int_of_typeOf_int hz
         by_cases hs : op.safe a b
         · exact ⟨_, .binop (hp ▸ hinstr) ha hb hs⟩
-        · exact ⟨_, .error (hp ▸ hinstr) ha hb hs⟩
+        · exact ⟨_, .binop_divByZero (hp ▸ hinstr) ha hb hs⟩
       · exact ⟨_, .binop_typeError (hp ▸ hinstr) (.inr hz)⟩
     · exact ⟨_, .binop_typeError (hp ▸ hinstr) (.inl hy)⟩
   | .boolop x be   => exact ⟨_, .boolop (hp ▸ hinstr)⟩
@@ -575,9 +575,9 @@ theorem type_safety {p : Prog} {σ₀ σ' : Store} {am₀ am' : ArrayMem} {Γ : 
     | halt h => cases rest with
       | refl => exact Cfg.noConfusion hc'
       | step s _ => exact Step.no_step_from_halt s
-    | error h _ _ _ => cases rest with
+    | binop_divByZero h _ _ _ => cases rest with
       | refl => exact Cfg.noConfusion hc'
-      | step s _ => exact Step.no_step_from_error s
+      | step s _ => exact Step.no_step_from_errorDiv s
     | binop_typeError hinstr hne =>
       cases rest with
       | refl => exact Step.no_typeError_of_wellTyped (am := am) (am' := am) hpc hwtp hts
@@ -621,10 +621,10 @@ theorem type_safety {p : Prog} {σ₀ σ' : Store} {am₀ am' : ArrayMem} {Γ : 
         (type_preservation (am := am) hwtp hts hpc (Step.arrStore (am := am) h hidx hty hb))
     | arrLoad_boundsError _ _ _ => cases rest with
       | refl => exact Cfg.noConfusion hc'
-      | step s _ => exact Step.no_step_from_error s
+      | step s _ => exact Step.no_step_from_errorBounds s
     | arrStore_boundsError _ _ _ _ => cases rest with
       | refl => exact Cfg.noConfusion hc'
-      | step s _ => exact Step.no_step_from_error s
+      | step s _ => exact Step.no_step_from_errorBounds s
     | arrLoad_typeError hinstr hne =>
       cases rest with
       | refl => exact Step.no_typeError_of_wellTyped (am := am) (am' := am) hpc hwtp hts

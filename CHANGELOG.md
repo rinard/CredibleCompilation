@@ -4,6 +4,35 @@ Chronological record of what was built and why, to reconstruct the sequence of d
 
 ---
 
+## Phase 3: split Cfg.error into Cfg.errorDiv / Cfg.errorBounds (2026-04-21)
+
+**Goal:** TAC-level counterpart to Phase 1's source-level `unsafeDiv`/`unsafeBounds` split. Distinguishes div-by-zero errors from bounds errors in the TAC `Cfg` and `Step` types so Phase 4's forward theorems can name the specific PC (`divS` vs `boundsS`) and Phase 7's backward theorems can conclude a specific unsafe kind. Part of plans/backward-jumping-octopus.md.
+
+**Core TAC changes** ([TAC.lean](CredibleCompilation/TAC.lean)):
+- `Cfg.error σ am` → `Cfg.errorDiv σ am` and `Cfg.errorBounds σ am` (two constructors replacing one).
+- `Step.error` renamed to `Step.binop_divByZero`, now produces `.errorDiv`.
+- `Step.arrLoad_boundsError` / `Step.arrStore_boundsError` now produce `.errorBounds`.
+- New terminal-config lemmas `Step.no_step_from_errorDiv`, `Step.no_step_from_errorBounds`.
+- New cause-agnostic predicate `Cfg.isError : Cfg → Prop` plus lemma `Step.no_step_from_isError` for call sites that need "some runtime error" without caring which kind.
+
+**Threaded through 11 files**:
+- `TypeSystem.lean`: `Step.progress` / `Step.progress_untyped` / `type_safety` renamed `error` match arms to `binop_divByZero` and split bounds terminators.
+- `PropChecker.lean`: `checkErrorPreservationProp` is now a conjunction (errorDiv branch ∧ errorBounds branch), each cause-preserving. `Behavior.errors` clause in `program_behavior` is now a disjunction of errorDiv / errorBounds reach. New `steps_to_errorDiv_decompose` / `steps_to_errorBounds_decompose` and `errorDiv_preservation` / `errorBounds_preservation`, with cause-agnostic wrapper `error_preservation`. `observeProp` handles both kinds.
+- `SoundnessBridge.lean`: `checkDivPreservationExec_sound` restructured as `refine ⟨?divBranch, ?boundsBranch⟩` — div branch dispatches via `binop_divByZero`, bounds branch via `arrLoad_boundsError`/`arrStore_boundsError`. `exec_error_preservation` now uses the disjunction form.
+- `RefCompiler/Correctness.lean`: `error_run_no_halt` generalized to take a `c_err : Cfg` with `c_err.isError` witness; `unsafe_binop_errors` now produces `.errorDiv`.
+- `RefCompiler/ErrorHandling.lean`: `compileExpr_stuck`, `compileBool_stuck`, `compileStmt_stuck`, `compileStmt_unsafe`, `compileExprs_unsafe` conclusions updated to `∃ ... c_err, ... Step ... c_err ∧ c_err.isError ∧ ...`. ~40 call sites mechanically updated to destructure/construct the extra `c_err` and `hisErr` fields.
+- `RefCompiler/Refinement.lean`: `program_behavior_init` errors clause switched to disjunction; `whileToTAC_reaches_error` returns `∃ c_err, c_err.isError ∧ reach`; `RefStepsN.no_step_error` generalized to `isError`; backward refinement's errors/typeErrors/diverges cases now destructure the disjunction/isError witness.
+- `PipelineCorrectness.lean`: `Step_of_code_arrayDecls_eq` renamed `error` arm; `applyPass_preserves_error_am`, `applyPassesPure_preserves_error_am`, `while_to_arm_error_preservation` all use the disjunction form (cause preserved across passes and compilation).
+- `ArmSemantics.lean`: `ExtSimRel` pattern-matches `.errorDiv` and `.errorBounds` distinctly (both currently `True`; Phase 4 tightens to `arm.pc = divS` / `arm.pc = boundsS`).
+- `ArmCorrectness.lean`: `verifiedGenInstr_correct`'s error arm renamed `error` → `binop_divByZero`.
+- `CodeGen.lean` + `ExecChecker.lean`: `step_run_or_terminal` and `observeExec` handle both new constructors.
+
+**Philosophy — why disjunction at `Behavior.errors` level?** We preserve cause end-to-end: if the optimized TAC hits `.errorDiv`, the unoptimized TAC and source are also div-unsafe; likewise for bounds. But at the coarse `Behavior.errors σ'` level (source-visible), the user only sees "an error occurred" — hence the disjunction, which all downstream consumers (`credible_compilation_soundness`, `whileToTAC_refinement`, etc.) project out as needed.
+
+**Status:** 0 sorrys; full `lake build` green. Files touched: 11. Direct `Cfg.error` / `Step.error` sites patched: far more than the probe's 25 (the disjunction had to propagate through every `∃` / `match` that surfaced an error config). Plan estimate 1–2 days held; actual ~1 session.
+
+---
+
 ## Phase 1: split source safety into unsafeDiv / unsafeBounds (2026-04-21)
 
 **Goal:** Dormant infrastructure for the backward-correctness theorem suite (plans/backward-jumping-octopus.md). Lets Phase 3+ ask *why* an unsafe source program fails — division vs. bounds — and maps each to a distinct ARM sentinel PC.

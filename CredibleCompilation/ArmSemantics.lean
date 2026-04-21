@@ -499,13 +499,20 @@ theorem VarLayout.isInjective_spec (layout : VarLayout) (h : layout.isInjective 
   simp at h1 h2
   exact injective_of_entriesNoDupLoc layout.entries h v1 v2 loc h1 h2
 
-/-- Full extended simulation invariant (generalizes SimRel). -/
+/-- Full extended simulation invariant (generalizes SimRel).
+
+    Note (Phase 3): the error constructors split into `.errorDiv` and
+    `.errorBounds` so downstream proofs can distinguish the cause.  The
+    forward theorems in Phase 4 will tighten these cases to constrain
+    `arm.pc` (errorDiv ↔ pc=divS, errorBounds ↔ pc=boundsS); for now they
+    remain `True` to keep existing forward simulations working. -/
 def ExtSimRel (layout : VarLayout) (pcMap : Nat → Nat) (tac_cfg : Cfg) (arm : ArmState) : Prop :=
   match tac_cfg with
-  | .run pc σ am    => ExtStateRel layout σ arm ∧ PcRel pcMap pc arm.pc ∧ arm.arrayMem = am
-  | .halt σ am      => ExtStateRel layout σ arm ∧ arm.arrayMem = am
-  | .error _ _      => True
-  | .typeError _ _  => True
+  | .run pc σ am       => ExtStateRel layout σ arm ∧ PcRel pcMap pc arm.pc ∧ arm.arrayMem = am
+  | .halt σ am         => ExtStateRel layout σ arm ∧ arm.arrayMem = am
+  | .errorDiv _ _      => True
+  | .errorBounds _ _   => True
+  | .typeError _ _     => True
 
 -- Read lemmas: extract the value from ExtStateRel
 

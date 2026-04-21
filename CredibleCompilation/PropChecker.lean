@@ -94,8 +94,12 @@ def checkErrorPreservationProp (cert : PCertificate) : Prop :=
     pc_t < cert.trans.size → (cert.instrCerts pc_t).storeRel σ_o am_o σ_t am_t →
     cert.inv_trans pc_t σ_t am_t → cert.inv_orig (cert.instrCerts pc_t).pc_orig σ_o am_o →
     TypedStore cert.tyCtx σ_o →
-    (cert.trans ⊩ Cfg.run pc_t σ_t am_t ⟶ Cfg.error σ_t am_t) →
-    ∃ σ_o' am_o', cert.orig ⊩ Cfg.run (cert.instrCerts pc_t).pc_orig σ_o am_o ⟶* Cfg.error σ_o' am_o'
+    ((cert.trans ⊩ Cfg.run pc_t σ_t am_t ⟶ Cfg.errorDiv σ_t am_t) →
+      ∃ σ_o' am_o',
+        cert.orig ⊩ Cfg.run (cert.instrCerts pc_t).pc_orig σ_o am_o ⟶* Cfg.errorDiv σ_o' am_o') ∧
+    ((cert.trans ⊩ Cfg.run pc_t σ_t am_t ⟶ Cfg.errorBounds σ_t am_t) →
+      ∃ σ_o' am_o',
+        cert.orig ⊩ Cfg.run (cert.instrCerts pc_t).pc_orig σ_o am_o ⟶* Cfg.errorBounds σ_o' am_o')
 
 def checkStartCorrespondenceProp (cert : PCertificate) : Prop :=
   (cert.instrCerts 0).pc_orig = 0 ∧ ∀ σ am, (cert.instrCerts 0).storeRel σ am σ am
@@ -156,9 +160,9 @@ theorem inv_preserved_steps {inv : PInvariantMap} {p : Prog}
     | halt h => cases rest with
       | refl => exact absurd hc' Cfg.noConfusion
       | step s _ => exact absurd s Step.no_step_from_halt
-    | error h _ _ _ => cases rest with
+    | binop_divByZero h _ _ _ => cases rest with
       | refl => exact absurd hc' Cfg.noConfusion
-      | step s _ => exact absurd s Step.no_step_from_error
+      | step s _ => exact absurd s Step.no_step_from_errorDiv
     | binop_typeError h _ | arrLoad_typeError h _ | arrStore_typeError h _
     | fbinop_typeError h _ | intToFloat_typeError h _ | floatToInt_typeError h _
     | floatUnary_typeError h _ | fternop_typeError h _ => cases rest with
@@ -185,10 +189,10 @@ theorem inv_preserved_steps {inv : PInvariantMap} {p : Prog}
     | printString h => exact ih _ _ _ rfl (hpres _ _ am hinv _ _ am (Step.printString h)) _ _ _ hc'
     | arrLoad_boundsError h _ _ => cases rest with
       | refl => exact absurd hc' Cfg.noConfusion
-      | step s _ => exact absurd s Step.no_step_from_error
+      | step s _ => exact absurd s Step.no_step_from_errorBounds
     | arrStore_boundsError h _ _ _ => cases rest with
       | refl => exact absurd hc' Cfg.noConfusion
-      | step s _ => exact absurd s Step.no_step_from_error
+      | step s _ => exact absurd s Step.no_step_from_errorBounds
 
 theorem bound_of_getElem? {a : Array α} {i : Nat} {v : α}
     (h : a[i]? = some v) : i < a.size := by
@@ -211,9 +215,9 @@ theorem type_preservation_steps {Γ : TyCtx} {p : Prog} (hwtp : WellTypedProg Γ
     | halt h => cases rest with
       | refl => exact absurd hc' Cfg.noConfusion
       | step s _ => exact absurd s Step.no_step_from_halt
-    | error h _ _ _ => cases rest with
+    | binop_divByZero h _ _ _ => cases rest with
       | refl => exact absurd hc' Cfg.noConfusion
-      | step s _ => exact absurd s Step.no_step_from_error
+      | step s _ => exact absurd s Step.no_step_from_errorDiv
     | binop_typeError h _ | arrLoad_typeError h _ | arrStore_typeError h _
     | fbinop_typeError h _ | intToFloat_typeError h _ | floatToInt_typeError h _
     | floatUnary_typeError h _ | fternop_typeError h _ => cases rest with
@@ -240,10 +244,10 @@ theorem type_preservation_steps {Γ : TyCtx} {p : Prog} (hwtp : WellTypedProg Γ
     | printString h => exact ih _ _ _ rfl (type_preservation hwtp hts (bound_of_getElem? h) (Step.printString (am := am) h)) _ _ _ hc'
     | arrLoad_boundsError h _ _ => cases rest with
       | refl => exact absurd hc' Cfg.noConfusion
-      | step s _ => exact absurd s Step.no_step_from_error
+      | step s _ => exact absurd s Step.no_step_from_errorBounds
     | arrStore_boundsError h _ _ _ => cases rest with
       | refl => exact absurd hc' Cfg.noConfusion
-      | step s _ => exact absurd s Step.no_step_from_error
+      | step s _ => exact absurd s Step.no_step_from_errorBounds
 
 theorem step_sim {cert : PCertificate} (hvalid : PCertificateValid cert)
     {pc_t : Label} {σ_t σ_t' : Store} {am_t am_t' : ArrayMem}
@@ -288,9 +292,9 @@ private theorem steps_to_halt_decompose {p : Prog} {pc₀ : Nat} {σ₀ : Store}
       cases rest with
       | refl => cases hc'; exact ⟨pc₀, σ₀, am₀, Steps.refl, h, rfl, rfl⟩
       | step s _ => exact absurd s Step.no_step_from_halt
-    | error h _ _ _ => cases rest with
+    | binop_divByZero h _ _ _ => cases rest with
       | refl => exact absurd hc' Cfg.noConfusion
-      | step s _ => exact absurd s Step.no_step_from_error
+      | step s _ => exact absurd s Step.no_step_from_errorDiv
     | binop_typeError h _ | arrLoad_typeError h _ | arrStore_typeError h _
     | fbinop_typeError h _ | intToFloat_typeError h _ | floatToInt_typeError h _
     | floatUnary_typeError h _ | fternop_typeError h _ => cases rest with
@@ -355,10 +359,10 @@ private theorem steps_to_halt_decompose {p : Prog} {pc₀ : Nat} {σ₀ : Store}
       exact ⟨pc, σ, am, Steps.step (Step.printString (am := am₀) h) hpre, hhalt, heq_σ, heq_am⟩
     | arrLoad_boundsError h _ _ => cases rest with
       | refl => exact absurd hc' Cfg.noConfusion
-      | step s _ => exact absurd s Step.no_step_from_error
+      | step s _ => exact absurd s Step.no_step_from_errorBounds
     | arrStore_boundsError h _ _ _ => cases rest with
       | refl => exact absurd hc' Cfg.noConfusion
-      | step s _ => exact absurd s Step.no_step_from_error
+      | step s _ => exact absurd s Step.no_step_from_errorBounds
 
 -- ============================================================
 -- § StepsN infrastructure
@@ -421,7 +425,8 @@ theorem inf_exec_is_run {p : Prog} {f : Nat → Cfg} (hinf : IsInfiniteExec p f)
   intro n; cases hfn : f n with
   | run pc σ am => exact ⟨pc, σ, am, rfl⟩
   | halt σ am => exfalso; exact Step.no_step_from_halt (hfn ▸ hinf.2 n)
-  | error σ am => exfalso; exact Step.no_step_from_error (hfn ▸ hinf.2 n)
+  | errorDiv σ am => exfalso; exact Step.no_step_from_errorDiv (hfn ▸ hinf.2 n)
+  | errorBounds σ am => exfalso; exact Step.no_step_from_errorBounds (hfn ▸ hinf.2 n)
   | typeError σ am => exfalso; exact Step.no_step_from_typeError (hfn ▸ hinf.2 n)
 
 theorem StepsN_run_predecessor {p : Prog} {c : Cfg} {pc : Label} {σ : Store} {am : ArrayMem} {n : Nat}
@@ -561,7 +566,9 @@ inductive Behavior where
 def program_behavior (p : Prog) (σ₀ : Store) (b : Behavior) : Prop :=
   match b with
   | .halts σ'      => ∃ am am', haltsWithResult p 0 σ₀ σ' am am'
-  | .errors σ'     => ∃ am am', p ⊩ Cfg.run 0 σ₀ am ⟶* Cfg.error σ' am'
+  | .errors σ'     => ∃ am am',
+      (p ⊩ Cfg.run 0 σ₀ am ⟶* Cfg.errorDiv σ' am') ∨
+      (p ⊩ Cfg.run 0 σ₀ am ⟶* Cfg.errorBounds σ' am')
   | .typeErrors σ' => ∃ am am', p ⊩ Cfg.run 0 σ₀ am ⟶* Cfg.typeError σ' am'
   | .diverges      => ∃ f : Nat → Cfg, IsInfiniteExec p f ∧ f 0 = Cfg.run 0 σ₀ ArrayMem.init
 
@@ -576,33 +583,37 @@ theorem has_behavior (p : Prog) (σ₀ : Store) (hclosed : StepClosedInBounds p)
   by_cases h : ∃ n σ' am', StepsN p (Cfg.run 0 σ₀ ArrayMem.init) (Cfg.halt σ' am') n
   · obtain ⟨n, σ', am', hn⟩ := h
     exact ⟨.halts σ', ArrayMem.init, am', StepsN_to_Steps' hn⟩
-  · by_cases he : ∃ n σ' am', StepsN p (Cfg.run 0 σ₀ ArrayMem.init) (Cfg.error σ' am') n
-    · obtain ⟨_, σ', am', hn⟩ := he
-      exact ⟨.errors σ', ArrayMem.init, am', StepsN_to_Steps' hn⟩
-    · by_cases hte : ∃ n σ' am', StepsN p (Cfg.run 0 σ₀ ArrayMem.init) (Cfg.typeError σ' am') n
-      · obtain ⟨_, σ', am', hn⟩ := hte
-        exact ⟨.typeErrors σ', ArrayMem.init, am', StepsN_to_Steps' hn⟩
-      · have h_run : ∀ n, ∃ pc σ am, StepsN p (Cfg.run 0 σ₀ ArrayMem.init) (Cfg.run pc σ am) n ∧ pc < p.size := by
-          intro n; induction n with
-          | zero => exact ⟨0, σ₀, ArrayMem.init, rfl, hclosed.1⟩
-          | succ n ih =>
-            obtain ⟨pc, σ, am, hn, hpc⟩ := ih
-            obtain ⟨c', hstep⟩ := Step.progress_untyped p pc σ am hpc
-            match c', hstep with
-            | .halt σ' am', s => exact absurd ⟨n+1, σ', am', StepsN_extend hn s⟩ h
-            | .error σ' am', s => exact absurd ⟨n+1, σ', am', StepsN_extend hn s⟩ he
-            | .typeError σ' am', s => exact absurd ⟨n+1, σ', am', StepsN_extend hn s⟩ hte
-            | .run pc' σ' am', s => exact ⟨pc', σ', am', StepsN_extend hn s, hclosed.2 pc pc' σ σ' am am' hpc s⟩
-        have g_spec : ∀ n, ∃ c, StepsN p (Cfg.run 0 σ₀ ArrayMem.init) c n ∧ ∃ pc σ am, c = Cfg.run pc σ am := by
-          intro n; obtain ⟨pc, σ, am, hn, _⟩ := h_run n; exact ⟨_, hn, pc, σ, am, rfl⟩
-        let g := fun n => (g_spec n).choose
-        have g_stepsN : ∀ n, StepsN p (Cfg.run 0 σ₀ ArrayMem.init) (g n) n :=
-          fun n => (g_spec n).choose_spec.1
-        refine ⟨.diverges, g, ⟨⟨σ₀, ArrayMem.init, ?_⟩, fun n => ?_⟩, ?_⟩
-        · exact (g_stepsN 0).symm
-        · exact StepsN_det (g_stepsN n) (StepsN_split_last (g_stepsN (n+1))).choose_spec.1 ▸
-            (StepsN_split_last (g_stepsN (n+1))).choose_spec.2
-        · exact (g_stepsN 0).symm
+  · by_cases hed : ∃ n σ' am', StepsN p (Cfg.run 0 σ₀ ArrayMem.init) (Cfg.errorDiv σ' am') n
+    · obtain ⟨_, σ', am', hn⟩ := hed
+      exact ⟨.errors σ', ArrayMem.init, am', .inl (StepsN_to_Steps' hn)⟩
+    · by_cases heb : ∃ n σ' am', StepsN p (Cfg.run 0 σ₀ ArrayMem.init) (Cfg.errorBounds σ' am') n
+      · obtain ⟨_, σ', am', hn⟩ := heb
+        exact ⟨.errors σ', ArrayMem.init, am', .inr (StepsN_to_Steps' hn)⟩
+      · by_cases hte : ∃ n σ' am', StepsN p (Cfg.run 0 σ₀ ArrayMem.init) (Cfg.typeError σ' am') n
+        · obtain ⟨_, σ', am', hn⟩ := hte
+          exact ⟨.typeErrors σ', ArrayMem.init, am', StepsN_to_Steps' hn⟩
+        · have h_run : ∀ n, ∃ pc σ am, StepsN p (Cfg.run 0 σ₀ ArrayMem.init) (Cfg.run pc σ am) n ∧ pc < p.size := by
+            intro n; induction n with
+            | zero => exact ⟨0, σ₀, ArrayMem.init, rfl, hclosed.1⟩
+            | succ n ih =>
+              obtain ⟨pc, σ, am, hn, hpc⟩ := ih
+              obtain ⟨c', hstep⟩ := Step.progress_untyped p pc σ am hpc
+              match c', hstep with
+              | .halt σ' am', s => exact absurd ⟨n+1, σ', am', StepsN_extend hn s⟩ h
+              | .errorDiv σ' am', s => exact absurd ⟨n+1, σ', am', StepsN_extend hn s⟩ hed
+              | .errorBounds σ' am', s => exact absurd ⟨n+1, σ', am', StepsN_extend hn s⟩ heb
+              | .typeError σ' am', s => exact absurd ⟨n+1, σ', am', StepsN_extend hn s⟩ hte
+              | .run pc' σ' am', s => exact ⟨pc', σ', am', StepsN_extend hn s, hclosed.2 pc pc' σ σ' am am' hpc s⟩
+          have g_spec : ∀ n, ∃ c, StepsN p (Cfg.run 0 σ₀ ArrayMem.init) c n ∧ ∃ pc σ am, c = Cfg.run pc σ am := by
+            intro n; obtain ⟨pc, σ, am, hn, _⟩ := h_run n; exact ⟨_, hn, pc, σ, am, rfl⟩
+          let g := fun n => (g_spec n).choose
+          have g_stepsN : ∀ n, StepsN p (Cfg.run 0 σ₀ ArrayMem.init) (g n) n :=
+            fun n => (g_spec n).choose_spec.1
+          refine ⟨.diverges, g, ⟨⟨σ₀, ArrayMem.init, ?_⟩, fun n => ?_⟩, ?_⟩
+          · exact (g_stepsN 0).symm
+          · exact StepsN_det (g_stepsN n) (StepsN_split_last (g_stepsN (n+1))).choose_spec.1 ▸
+              (StepsN_split_last (g_stepsN (n+1))).choose_spec.2
+          · exact (g_stepsN 0).symm
 
 -- ============================================================
 -- § Simulation trace
@@ -634,10 +645,14 @@ private theorem simulation_trace_stepsN {cert : PCertificate} (hvalid : PCertifi
       exfalso; cases n with
       | zero => exact Cfg.noConfusion (hrest : Cfg.halt _ _ = Cfg.run _ _ _)
       | succ => obtain ⟨_, hs, _⟩ := hrest; exact Step.no_step_from_halt hs
-    | .error _ _, hstep =>
+    | .errorDiv _ _, hstep =>
       exfalso; cases n with
-      | zero => exact Cfg.noConfusion (hrest : Cfg.error _ _ = Cfg.run _ _ _)
-      | succ => obtain ⟨_, hs, _⟩ := hrest; exact Step.no_step_from_error hs
+      | zero => exact Cfg.noConfusion (hrest : Cfg.errorDiv _ _ = Cfg.run _ _ _)
+      | succ => obtain ⟨_, hs, _⟩ := hrest; exact Step.no_step_from_errorDiv hs
+    | .errorBounds _ _, hstep =>
+      exfalso; cases n with
+      | zero => exact Cfg.noConfusion (hrest : Cfg.errorBounds _ _ = Cfg.run _ _ _)
+      | succ => obtain ⟨_, hs, _⟩ := hrest; exact Step.no_step_from_errorBounds hs
     | .typeError _ _, hstep =>
       exfalso; cases n with
       | zero => exact Cfg.noConfusion (hrest : Cfg.typeError _ _ = Cfg.run _ _ _)
@@ -707,9 +722,9 @@ private theorem steps_run_in_bounds {p : Prog} (hclosed : StepClosedInBounds p)
     | halt h => cases rest with
       | refl => exact absurd hc' Cfg.noConfusion
       | step s _ => exact absurd s Step.no_step_from_halt
-    | error h _ _ _ => cases rest with
+    | binop_divByZero h _ _ _ => cases rest with
       | refl => exact absurd hc' Cfg.noConfusion
-      | step s _ => exact absurd s Step.no_step_from_error
+      | step s _ => exact absurd s Step.no_step_from_errorDiv
     | binop_typeError h _ | arrLoad_typeError h _ | arrStore_typeError h _
     | fbinop_typeError h _ | intToFloat_typeError h _ | floatToInt_typeError h _
     | floatUnary_typeError h _ | fternop_typeError h _ => cases rest with
@@ -755,10 +770,10 @@ private theorem steps_run_in_bounds {p : Prog} (hclosed : StepClosedInBounds p)
       exact ih _ _ _ rfl (hclosed.2 _ _ _ _ _ _ hpc (Step.printString (σ := σ) (am := am) h)) _ _ _ hc'
     | arrLoad_boundsError h _ _ => cases rest with
       | refl => exact absurd hc' Cfg.noConfusion
-      | step s _ => exact absurd s Step.no_step_from_error
+      | step s _ => exact absurd s Step.no_step_from_errorBounds
     | arrStore_boundsError h _ _ _ => cases rest with
       | refl => exact absurd hc' Cfg.noConfusion
-      | step s _ => exact absurd s Step.no_step_from_error
+      | step s _ => exact absurd s Step.no_step_from_errorBounds
 
 -- ============================================================
 -- § Halt preservation
@@ -794,22 +809,23 @@ theorem halt_preservation (cert : PCertificate) (hvalid : PCertificateValid cert
       exact ⟨Cfg.run pc_o σ_o a2, ⟨am₀, ho⟩, hoobs ▸
         congrArg Observation.halt (obs_map_eq (fun v hv => (hvalid.halt_obs pc_t σ_t σ_o am_t a2 hinstr hrel v hv).symm))⟩
     | _ => simp only [observe, hinstr] at hobs; exact Observation.noConfusion hobs
-  | error σ_t am_t => simp [observe] at hobs
+  | errorDiv σ_t am_t => simp [observe] at hobs
+  | errorBounds σ_t am_t => simp [observe] at hobs
   | typeError σ_t am_t => simp [observe] at hobs
 
 -- ============================================================
 -- § Error decomposition and preservation
 -- ============================================================
 
-private theorem steps_to_error_decompose {p : Prog} {pc₀ : Nat} {σ₀ σ_e : Store} {am₀ am_e : ArrayMem}
-    (hsteps : p ⊩ Cfg.run pc₀ σ₀ am₀ ⟶* Cfg.error σ_e am_e) :
+private theorem steps_to_errorDiv_decompose {p : Prog} {pc₀ : Nat} {σ₀ σ_e : Store} {am₀ am_e : ArrayMem}
+    (hsteps : p ⊩ Cfg.run pc₀ σ₀ am₀ ⟶* Cfg.errorDiv σ_e am_e) :
     ∃ pc σ am, (p ⊩ Cfg.run pc₀ σ₀ am₀ ⟶* Cfg.run pc σ am) ∧
-      (p ⊩ Cfg.run pc σ am ⟶ Cfg.error σ am) ∧ σ = σ_e := by
+      (p ⊩ Cfg.run pc σ am ⟶ Cfg.errorDiv σ am) ∧ σ = σ_e := by
   suffices h : ∀ c c', Steps p c c' →
       ∀ (pc₀ : Nat) (σ₀ : Store) (am₀ : ArrayMem), c = Cfg.run pc₀ σ₀ am₀ →
-      ∀ (σ_e : Store) (am_e : ArrayMem), c' = Cfg.error σ_e am_e →
+      ∀ (σ_e : Store) (am_e : ArrayMem), c' = Cfg.errorDiv σ_e am_e →
       ∃ pc σ am, (p ⊩ Cfg.run pc₀ σ₀ am₀ ⟶* Cfg.run pc σ am) ∧
-        (p ⊩ Cfg.run pc σ am ⟶ Cfg.error σ am) ∧ σ = σ_e from
+        (p ⊩ Cfg.run pc σ am ⟶ Cfg.errorDiv σ am) ∧ σ = σ_e from
     h _ _ hsteps pc₀ σ₀ am₀ rfl σ_e am_e rfl
   intro c c' hsteps
   induction hsteps with
@@ -820,10 +836,104 @@ private theorem steps_to_error_decompose {p : Prog} {pc₀ : Nat} {σ₀ σ_e : 
     | halt h => cases rest with
       | refl => exact absurd hc' Cfg.noConfusion
       | step s _ => exact absurd s Step.no_step_from_halt
-    | error h hy hz hs =>
+    | binop_divByZero h hy hz hs =>
       cases rest with
-      | refl => cases hc'; exact ⟨pc₀, σ₀, am₀, Steps.refl, Step.error h hy hz hs, rfl⟩
-      | step s _ => exact absurd s Step.no_step_from_error
+      | refl => cases hc'; exact ⟨pc₀, σ₀, am₀, Steps.refl, Step.binop_divByZero h hy hz hs, rfl⟩
+      | step s _ => exact absurd s Step.no_step_from_errorDiv
+    | binop_typeError h _ | arrLoad_typeError h _ | arrStore_typeError h _
+    | fbinop_typeError h _ | intToFloat_typeError h _ | floatToInt_typeError h _
+    | floatUnary_typeError h _ | fternop_typeError h _ => cases rest with
+      | refl => exact absurd hc' Cfg.noConfusion
+      | step s _ => exact absurd s Step.no_step_from_typeError
+    | const h =>
+      obtain ⟨pc, σ, am, hpre, herr, heq⟩ := ih _ _ _ rfl _ _ hc'
+      exact ⟨pc, σ, am, Steps.step (Step.const (σ := σ₀) (am := am₀) h) hpre, herr, heq⟩
+    | copy h =>
+      obtain ⟨pc, σ, am, hpre, herr, heq⟩ := ih _ _ _ rfl _ _ hc'
+      exact ⟨pc, σ, am, Steps.step (Step.copy (σ := σ₀) (am := am₀) h) hpre, herr, heq⟩
+    | binop h hy hz hs =>
+      obtain ⟨pc, σ, am, hpre, herr, heq⟩ := ih _ _ _ rfl _ _ hc'
+      exact ⟨pc, σ, am, Steps.step (Step.binop (am := am₀) h hy hz hs) hpre, herr, heq⟩
+    | boolop h =>
+      obtain ⟨pc, σ, am, hpre, herr, heq⟩ := ih _ _ _ rfl _ _ hc'
+      exact ⟨pc, σ, am, Steps.step (Step.boolop (σ := σ₀) (am := am₀) h) hpre, herr, heq⟩
+    | goto h =>
+      obtain ⟨pc, σ, am, hpre, herr, heq⟩ := ih _ _ _ rfl _ _ hc'
+      exact ⟨pc, σ, am, Steps.step (Step.goto (σ := σ₀) (am := am₀) h) hpre, herr, heq⟩
+    | iftrue h hne =>
+      obtain ⟨pc, σ, am, hpre, herr, heq⟩ := ih _ _ _ rfl _ _ hc'
+      exact ⟨pc, σ, am, Steps.step (Step.iftrue (am := am₀) h hne) hpre, herr, heq⟩
+    | iffall h heq' =>
+      obtain ⟨pc, σ, am, hpre, herr, heq⟩ := ih _ _ _ rfl _ _ hc'
+      exact ⟨pc, σ, am, Steps.step (Step.iffall (am := am₀) h heq') hpre, herr, heq⟩
+    | arrLoad h hidx hb =>
+      obtain ⟨pc, σ, am, hpre, herr, heq⟩ := ih _ _ _ rfl _ _ hc'
+      exact ⟨pc, σ, am, Steps.step (Step.arrLoad (am := am₀) h hidx hb) hpre, herr, heq⟩
+    | arrStore h hidx hv hb =>
+      obtain ⟨pc, σ, am, hpre, herr, heq⟩ := ih _ _ _ rfl _ _ hc'
+      exact ⟨pc, σ, am, Steps.step (Step.arrStore (am := am₀) h hidx hv hb) hpre, herr, heq⟩
+    | fbinop h hy hz =>
+      obtain ⟨pc, σ, am, hpre, herr, heq⟩ := ih _ _ _ rfl _ _ hc'
+      exact ⟨pc, σ, am, Steps.step (Step.fbinop (am := am₀) h hy hz) hpre, herr, heq⟩
+    | intToFloat h hy =>
+      obtain ⟨pc, σ, am, hpre, herr, heq⟩ := ih _ _ _ rfl _ _ hc'
+      exact ⟨pc, σ, am, Steps.step (Step.intToFloat (am := am₀) h hy) hpre, herr, heq⟩
+    | floatToInt h hy =>
+      obtain ⟨pc, σ, am, hpre, herr, heq⟩ := ih _ _ _ rfl _ _ hc'
+      exact ⟨pc, σ, am, Steps.step (Step.floatToInt (am := am₀) h hy) hpre, herr, heq⟩
+    | floatUnary h hy =>
+      obtain ⟨pc, σ, am, hpre, herr, heq⟩ := ih _ _ _ rfl _ _ hc'
+      exact ⟨pc, σ, am, Steps.step (Step.floatUnary (am := am₀) h hy) hpre, herr, heq⟩
+    | fternop h ha hb hc =>
+      obtain ⟨pc, σ, am, hpre, herr, heq⟩ := ih _ _ _ rfl _ _ hc'
+      exact ⟨pc, σ, am, Steps.step (Step.fternop (am := am₀) h ha hb hc) hpre, herr, heq⟩
+    | print h =>
+      obtain ⟨pc, σ, am, hpre, herr, heq⟩ := ih _ _ _ rfl _ _ hc'
+      exact ⟨pc, σ, am, Steps.step (Step.print (am := am₀) h) hpre, herr, heq⟩
+    | printInt h =>
+      obtain ⟨pc, σ, am, hpre, herr, heq⟩ := ih _ _ _ rfl _ _ hc'
+      exact ⟨pc, σ, am, Steps.step (Step.printInt (am := am₀) h) hpre, herr, heq⟩
+    | printBool h =>
+      obtain ⟨pc, σ, am, hpre, herr, heq⟩ := ih _ _ _ rfl _ _ hc'
+      exact ⟨pc, σ, am, Steps.step (Step.printBool (am := am₀) h) hpre, herr, heq⟩
+    | printFloat h =>
+      obtain ⟨pc, σ, am, hpre, herr, heq⟩ := ih _ _ _ rfl _ _ hc'
+      exact ⟨pc, σ, am, Steps.step (Step.printFloat (am := am₀) h) hpre, herr, heq⟩
+    | printString h =>
+      obtain ⟨pc, σ, am, hpre, herr, heq⟩ := ih _ _ _ rfl _ _ hc'
+      exact ⟨pc, σ, am, Steps.step (Step.printString (am := am₀) h) hpre, herr, heq⟩
+    | arrLoad_boundsError h hidx hob =>
+      cases rest with
+      | refl => exact absurd hc' Cfg.noConfusion
+      | step s _ => exact absurd s Step.no_step_from_errorBounds
+    | arrStore_boundsError h hidx hv hob =>
+      cases rest with
+      | refl => exact absurd hc' Cfg.noConfusion
+      | step s _ => exact absurd s Step.no_step_from_errorBounds
+
+private theorem steps_to_errorBounds_decompose {p : Prog} {pc₀ : Nat} {σ₀ σ_e : Store} {am₀ am_e : ArrayMem}
+    (hsteps : p ⊩ Cfg.run pc₀ σ₀ am₀ ⟶* Cfg.errorBounds σ_e am_e) :
+    ∃ pc σ am, (p ⊩ Cfg.run pc₀ σ₀ am₀ ⟶* Cfg.run pc σ am) ∧
+      (p ⊩ Cfg.run pc σ am ⟶ Cfg.errorBounds σ am) ∧ σ = σ_e := by
+  suffices h : ∀ c c', Steps p c c' →
+      ∀ (pc₀ : Nat) (σ₀ : Store) (am₀ : ArrayMem), c = Cfg.run pc₀ σ₀ am₀ →
+      ∀ (σ_e : Store) (am_e : ArrayMem), c' = Cfg.errorBounds σ_e am_e →
+      ∃ pc σ am, (p ⊩ Cfg.run pc₀ σ₀ am₀ ⟶* Cfg.run pc σ am) ∧
+        (p ⊩ Cfg.run pc σ am ⟶ Cfg.errorBounds σ am) ∧ σ = σ_e from
+    h _ _ hsteps pc₀ σ₀ am₀ rfl σ_e am_e rfl
+  intro c c' hsteps
+  induction hsteps with
+  | refl => intro pc₀ σ₀ am₀ hc σ_e am_e hc'; rw [hc] at hc'; exact absurd hc' Cfg.noConfusion
+  | step hstep rest ih =>
+    intro pc₀ σ₀ am₀ hc σ_e am_e hc'; subst hc
+    cases hstep with
+    | halt h => cases rest with
+      | refl => exact absurd hc' Cfg.noConfusion
+      | step s _ => exact absurd s Step.no_step_from_halt
+    | binop_divByZero h hy hz hs =>
+      cases rest with
+      | refl => exact absurd hc' Cfg.noConfusion
+      | step s _ => exact absurd s Step.no_step_from_errorDiv
     | binop_typeError h _ | arrLoad_typeError h _ | arrStore_typeError h _
     | fbinop_typeError h _ | intToFloat_typeError h _ | floatToInt_typeError h _
     | floatUnary_typeError h _ | fternop_typeError h _ => cases rest with
@@ -889,22 +999,49 @@ private theorem steps_to_error_decompose {p : Prog} {pc₀ : Nat} {σ₀ σ_e : 
     | arrLoad_boundsError h hidx hob =>
       cases rest with
       | refl => cases hc'; exact ⟨pc₀, σ₀, am₀, Steps.refl, Step.arrLoad_boundsError h hidx hob, rfl⟩
-      | step s _ => exact absurd s Step.no_step_from_error
+      | step s _ => exact absurd s Step.no_step_from_errorBounds
     | arrStore_boundsError h hidx hv hob =>
       cases rest with
       | refl => cases hc'; exact ⟨pc₀, σ₀, am₀, Steps.refl, Step.arrStore_boundsError h hidx hv hob, rfl⟩
-      | step s _ => exact absurd s Step.no_step_from_error
+      | step s _ => exact absurd s Step.no_step_from_errorBounds
 
-theorem error_preservation (cert : PCertificate) (hvalid : PCertificateValid cert)
+theorem errorDiv_preservation (cert : PCertificate) (hvalid : PCertificateValid cert)
     (σ₀ : Store) (hts₀ : TypedStore cert.tyCtx σ₀) {σ_e : Store} {am₀ am_e : ArrayMem}
-    (hreach : cert.trans ⊩ Cfg.run 0 σ₀ am₀ ⟶* Cfg.error σ_e am_e) :
-    ∃ σ_o am_o', cert.orig ⊩ Cfg.run 0 σ₀ am₀ ⟶* Cfg.error σ_o am_o' := by
-  obtain ⟨pc_t, σ_t, am_t, hrun, herr, rfl⟩ := steps_to_error_decompose hreach
+    (hreach : cert.trans ⊩ Cfg.run 0 σ₀ am₀ ⟶* Cfg.errorDiv σ_e am_e) :
+    ∃ σ_o am_o', cert.orig ⊩ Cfg.run 0 σ₀ am₀ ⟶* Cfg.errorDiv σ_o am_o' := by
+  obtain ⟨pc_t, σ_t, am_t, hrun, herr, rfl⟩ := steps_to_errorDiv_decompose hreach
   obtain ⟨pc_o, σ_o, a2, horig_prefix, hpc_eq, hrel, _, hinv_t, hinv_o, hts_o⟩ := simulation_trace hvalid hts₀ hrun
   have hpc := steps_run_in_bounds hvalid.step_closed hvalid.step_closed.1 hrun
   rw [← hpc_eq] at horig_prefix
-  obtain ⟨σ_o', am_o', horig_err⟩ := hvalid.error_pres pc_t σ_t σ_o am_t a2 hpc hrel hinv_t (hpc_eq ▸ hinv_o) hts_o herr
+  obtain ⟨σ_o', am_o', horig_err⟩ :=
+    (hvalid.error_pres pc_t σ_t σ_o am_t a2 hpc hrel hinv_t (hpc_eq ▸ hinv_o) hts_o).1 herr
   exact ⟨σ_o', am_o', Steps.trans horig_prefix horig_err⟩
+
+theorem errorBounds_preservation (cert : PCertificate) (hvalid : PCertificateValid cert)
+    (σ₀ : Store) (hts₀ : TypedStore cert.tyCtx σ₀) {σ_e : Store} {am₀ am_e : ArrayMem}
+    (hreach : cert.trans ⊩ Cfg.run 0 σ₀ am₀ ⟶* Cfg.errorBounds σ_e am_e) :
+    ∃ σ_o am_o', cert.orig ⊩ Cfg.run 0 σ₀ am₀ ⟶* Cfg.errorBounds σ_o am_o' := by
+  obtain ⟨pc_t, σ_t, am_t, hrun, herr, rfl⟩ := steps_to_errorBounds_decompose hreach
+  obtain ⟨pc_o, σ_o, a2, horig_prefix, hpc_eq, hrel, _, hinv_t, hinv_o, hts_o⟩ := simulation_trace hvalid hts₀ hrun
+  have hpc := steps_run_in_bounds hvalid.step_closed hvalid.step_closed.1 hrun
+  rw [← hpc_eq] at horig_prefix
+  obtain ⟨σ_o', am_o', horig_err⟩ :=
+    (hvalid.error_pres pc_t σ_t σ_o am_t a2 hpc hrel hinv_t (hpc_eq ▸ hinv_o) hts_o).2 herr
+  exact ⟨σ_o', am_o', Steps.trans horig_prefix horig_err⟩
+
+/-- Cause-agnostic wrapper: an error reached in trans (either kind) is
+    reached in orig with the same cause. -/
+theorem error_preservation (cert : PCertificate) (hvalid : PCertificateValid cert)
+    (σ₀ : Store) (hts₀ : TypedStore cert.tyCtx σ₀) {σ_e : Store} {am₀ am_e : ArrayMem}
+    (hreach : (cert.trans ⊩ Cfg.run 0 σ₀ am₀ ⟶* Cfg.errorDiv σ_e am_e) ∨
+              (cert.trans ⊩ Cfg.run 0 σ₀ am₀ ⟶* Cfg.errorBounds σ_e am_e)) :
+    ∃ σ_o am_o', (cert.orig ⊩ Cfg.run 0 σ₀ am₀ ⟶* Cfg.errorDiv σ_o am_o') ∨
+                 (cert.orig ⊩ Cfg.run 0 σ₀ am₀ ⟶* Cfg.errorBounds σ_o am_o') := by
+  rcases hreach with hd | hb
+  · obtain ⟨σ_o, am_o', hs⟩ := errorDiv_preservation cert hvalid σ₀ hts₀ hd
+    exact ⟨σ_o, am_o', .inl hs⟩
+  · obtain ⟨σ_o, am_o', hs⟩ := errorBounds_preservation cert hvalid σ₀ hts₀ hb
+    exact ⟨σ_o, am_o', .inr hs⟩
 
 -- ============================================================
 -- § Divergence preservation
@@ -926,7 +1063,9 @@ theorem credible_compilation_soundness (cert : PCertificate) (hvalid : PCertific
     match b with
     | .halts σ_t => ∃ σ_o am_o am_f, haltsWithResult cert.orig 0 σ₀ σ_o am_o am_f ∧
         ∀ v ∈ cert.observable, σ_t v = σ_o v
-    | .errors _ => ∃ σ_o am_o am_o', cert.orig ⊩ Cfg.run 0 σ₀ am_o ⟶* Cfg.error σ_o am_o'
+    | .errors _ => ∃ σ_o am_o am_o',
+        (cert.orig ⊩ Cfg.run 0 σ₀ am_o ⟶* Cfg.errorDiv σ_o am_o') ∨
+        (cert.orig ⊩ Cfg.run 0 σ₀ am_o ⟶* Cfg.errorBounds σ_o am_o')
     | .typeErrors _ => False
     | .diverges => ∃ f, IsInfiniteExec cert.orig f ∧ f 0 = Cfg.run 0 σ₀ ArrayMem.init := by
   cases b with
@@ -951,7 +1090,9 @@ theorem credible_compilation_total (cert : PCertificate) (hvalid : PCertificateV
       match b with
       | .halts σ_t => ∃ σ_o am_o am_f, haltsWithResult cert.orig 0 σ₀ σ_o am_o am_f ∧
           ∀ v ∈ cert.observable, σ_t v = σ_o v
-      | .errors _ => ∃ σ_o am_o am_o', cert.orig ⊩ Cfg.run 0 σ₀ am_o ⟶* Cfg.error σ_o am_o'
+      | .errors _ => ∃ σ_o am_o am_o',
+          (cert.orig ⊩ Cfg.run 0 σ₀ am_o ⟶* Cfg.errorDiv σ_o am_o') ∨
+          (cert.orig ⊩ Cfg.run 0 σ₀ am_o ⟶* Cfg.errorBounds σ_o am_o')
       | .typeErrors _ => False
       | .diverges => ∃ f, IsInfiniteExec cert.orig f ∧ f 0 = Cfg.run 0 σ₀ ArrayMem.init := by
   obtain ⟨b, hb⟩ := has_behavior cert.trans σ₀ hvalid.step_closed
@@ -980,9 +1121,10 @@ theorem credible_compilation_total (cert : PCertificate) (hvalid : PCertificateV
 
 def observeProp (cert : PCertificate) (c : Cfg) : Observation :=
   match c with
-  | .halt σ _  => Observation.halt (cert.observable.map fun v => (v, σ v))
-  | .error _ _ => Observation.error
-  | .typeError _ _ => Observation.typeError
+  | .halt σ _        => Observation.halt (cert.observable.map fun v => (v, σ v))
+  | .errorDiv _ _    => Observation.error
+  | .errorBounds _ _ => Observation.error
+  | .typeError _ _   => Observation.typeError
   | .run pc σ _ =>
     match cert.trans[pc]? with
     | some .halt => Observation.halt (cert.observable.map fun v => (v, σ v))

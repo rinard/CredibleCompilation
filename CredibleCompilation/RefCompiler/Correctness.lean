@@ -2154,24 +2154,25 @@ theorem Steps.stuck_det {p : Prog} {c c₁ c₂ : Cfg}
   | inl h => exact (Steps.stuck_terminal h hs₁).symm
   | inr h => exact Steps.stuck_terminal h hs₂
 
-/-- An error configuration and a halt from the same start are contradictory. -/
+/-- A (cause-agnostic) runtime-error configuration and a halt from the same
+    start are contradictory. -/
 theorem error_run_no_halt {p : Prog} {pc : Nat} {σ_start σ_err σ_halt : Store}
-    {am₀ am₂ am₃ am₅ : ArrayMem}
+    {am₀ am₂ am₅ : ArrayMem} {c_err : Cfg}
     (h_run : p ⊩ Cfg.run 0 σ_start am₀ ⟶* Cfg.run pc σ_err am₂)
-    (h_error : Step p (Cfg.run pc σ_err am₂) (Cfg.error σ_err am₃))
+    (h_error : Step p (Cfg.run pc σ_err am₂) c_err) (h_isErr : c_err.isError)
     (h_halt : haltsWithResult p 0 σ_start σ_halt am₀ am₅) : False := by
-  have herr_reach : p ⊩ Cfg.run 0 σ_start am₀ ⟶* Cfg.error σ_err am₃ :=
+  have herr_reach : p ⊩ Cfg.run 0 σ_start am₀ ⟶* c_err :=
     Steps.trans h_run (Steps.step h_error Steps.refl)
-  have err_terminal : ∀ d, ¬ Step p (Cfg.error σ_err am₃) d := fun _ h => Step.no_step_from_error h
+  have err_terminal : ∀ d, ¬ Step p c_err d := fun _ h => Step.no_step_from_isError h_isErr h
   have halt_terminal : ∀ d, ¬ Step p (Cfg.halt σ_halt am₅) d := fun _ h => Step.no_step_from_halt h
-  have := Steps.stuck_det herr_reach h_halt err_terminal halt_terminal
-  exact Cfg.noConfusion this
+  have heq := Steps.stuck_det herr_reach h_halt err_terminal halt_terminal
+  cases c_err <;> simp [Cfg.isError] at h_isErr <;> exact Cfg.noConfusion heq
 
-/-- A binop instruction with an unsafe operation produces an error transition. -/
+/-- A binop instruction with an unsafe operation produces a div-error transition. -/
 theorem unsafe_binop_errors {p : Prog} {pc : Nat} {σ : Store}
     {x : Var} {op : BinOp} {y z : Var} {a b : BitVec 64}
     (hinstr : p[pc]? = some (.binop x op y z))
     (hy : σ y = .int a) (hz : σ z = .int b)
     (hunsafe : ¬ op.safe a b) :
-    Step p (Cfg.run pc σ _xam) (Cfg.error σ _xam) :=
-  Step.error hinstr hy hz hunsafe
+    Step p (Cfg.run pc σ _xam) (Cfg.errorDiv σ _xam) :=
+  Step.binop_divByZero hinstr hy hz hunsafe

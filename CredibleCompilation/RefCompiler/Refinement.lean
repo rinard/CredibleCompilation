@@ -67,11 +67,11 @@ private theorem interp_none_iff (s : Stmt) (fuel : Nat) (σ : Store) (am : Array
   constructor
   · intro h ⟨r, hr⟩; simp [h] at hr
   · intro h; by_contra hc; push_neg at hc; exact h (Option.ne_none_iff_exists'.mp hc)
-/-- No steps from error: error is a terminal configuration. -/
-private theorem RefStepsN.no_step_error {p : Prog} {n : Nat} {σ : Store} {c : Cfg}
-    (h : RefStepsN p (n + 1) (Cfg.error σ _xam) c) : False := by
+/-- No steps from any error: error (div/bounds) is a terminal configuration. -/
+private theorem RefStepsN.no_step_error {p : Prog} {n : Nat} {c d : Cfg}
+    (hErr : c.isError) (h : RefStepsN p (n + 1) c d) : False := by
   cases h with
-  | step s _ => exact Step.no_step_from_error s
+  | step s _ => exact Step.no_step_from_isError hErr s
 /-- No steps from typeError: typeError is a terminal configuration. -/
 private theorem RefStepsN.no_step_typeError {p : Prog} {n : Nat} {σ : Store} {c : Cfg}
     (h : RefStepsN p (n + 1) (Cfg.typeError σ _xam) c) : False := by
@@ -81,13 +81,13 @@ private theorem RefStepsN.no_step_typeError {p : Prog} {n : Nat} {σ : Store} {c
 theorem no_error_of_unbounded {p : Prog} {pc : Nat} {σ : Store}
     (hunbounded : ∀ N, ∃ n, n ≥ N ∧ ∃ pc' σ',
       RefStepsN p n (Cfg.run pc σ _xam) (Cfg.run pc' σ' _xam)) :
-    ∀ σ' am_e, ¬ (p ⊩ Cfg.run pc σ _xam ⟶* Cfg.error σ' am_e) := by
-  intro σ' am_e herr
+    ∀ c_err, c_err.isError → ¬ (p ⊩ Cfg.run pc σ _xam ⟶* c_err) := by
+  intro c_err hErr herr
   obtain ⟨n, hn⟩ := herr.to_RefStepsN
   obtain ⟨m, hm, pc', σ'', hrun⟩ := hunbounded (n + 1)
   have hsuffix := RefStepsN.det_prefix hn hrun (by omega)
   have hmn : m - n = (m - n - 1) + 1 := by omega
-  exact RefStepsN.no_step_error (hmn ▸ hsuffix)
+  exact RefStepsN.no_step_error hErr (hmn ▸ hsuffix)
 /-- Extract `StepsN` from an `IsInfiniteExec`: the first `n` steps of an
     infinite execution give a deterministic `n`-step path. -/
 private theorem inf_exec_to_StepsN {p : Prog} {f : Nat → Cfg}
@@ -151,17 +151,18 @@ theorem whileToTAC_error (prog : Program) (fuel : Nat)
   have htypedv := Program.typeCheck_typedVars prog htc prog.initStore ArrayMem.init hts fuel
   have hcode := whileToTAC_body_codeAt prog
   have hinit := Program.compileToTAC_initExec prog (Program.typeCheck_noDups prog htc)
-  obtain ⟨pc_s, σ_s, am_s, hfrag, herror, _⟩ :=
+  obtain ⟨pc_s, σ_s, am_s, c_err, hfrag, herror, hisErr, _⟩ :=
     compileStmt_unsafe prog.body fuel prog.initStore ArrayMem.init prog.decls.length 0
       prog.compileToTAC prog.initStore htmpfree hftmpfree (Program.typeCheck_noGoto prog htcs) hunsafe htypedv (fun _ _ _ => rfl)
       (labels := labels) hcode
-  exact error_run_no_halt (FragExec.trans' hinit hfrag) herror hhalt
+  exact error_run_no_halt (FragExec.trans' hinit hfrag) herror hisErr hhalt
 /-- **Forward error reachability** for `prog.compileToTAC`: if `¬safe`, the
-    compiled program reaches an error state. -/
+    compiled program reaches some runtime-error state (div or bounds). -/
 theorem whileToTAC_reaches_error (prog : Program) (fuel : Nat)
     (htcs : prog.typeCheckStrict = true)
     (hunsafe : ¬ prog.body.safe fuel prog.initStore ArrayMem.init prog.arrayDecls) :
-    ∃ σ_e am_e, prog.compileToTAC ⊩ Cfg.run 0 prog.initStore ArrayMem.init ⟶* Cfg.error σ_e am_e := by
+    ∃ c_err, c_err.isError ∧
+      (prog.compileToTAC ⊩ Cfg.run 0 prog.initStore ArrayMem.init ⟶* c_err) := by
   have htc := Program.typeCheckStrict_typeCheck prog htcs
   let labels := collectLabels prog.body prog.decls.length
   have htmpfree := Program.typeCheck_tmpFree prog htc
@@ -170,11 +171,11 @@ theorem whileToTAC_reaches_error (prog : Program) (fuel : Nat)
   have htypedv := Program.typeCheck_typedVars prog htc prog.initStore ArrayMem.init hts fuel
   have hcode := whileToTAC_body_codeAt prog
   have hinit := Program.compileToTAC_initExec prog (Program.typeCheck_noDups prog htc)
-  obtain ⟨pc_s, σ_s, am_s, hfrag, herror, _⟩ :=
+  obtain ⟨pc_s, σ_s, am_s, c_err, hfrag, herror, hisErr, _⟩ :=
     compileStmt_unsafe prog.body fuel prog.initStore ArrayMem.init prog.decls.length 0
       prog.compileToTAC prog.initStore htmpfree hftmpfree (Program.typeCheck_noGoto prog htcs) hunsafe htypedv (fun _ _ _ => rfl)
       (labels := labels) hcode
-  exact ⟨σ_s, am_s, Steps.trans (FragExec.trans' hinit hfrag)
+  exact ⟨c_err, hisErr, Steps.trans (FragExec.trans' hinit hfrag)
     (Steps.step herror Steps.refl)⟩
 /-- **Forward no-halt for safe divergence** in `prog.compileToTAC`: if the source
     diverges safely, the compiled program doesn't halt. -/
@@ -223,7 +224,9 @@ private theorem whileToTAC_no_halt_diverge_unsafe (prog : Program)
 def program_behavior_init (p : Prog) (σ₀ : Store) (b : Behavior) : Prop :=
   match b with
   | .halts σ'      => ∃ am', haltsWithResult p 0 σ₀ σ' ArrayMem.init am'
-  | .errors σ'     => ∃ am', p ⊩ Cfg.run 0 σ₀ ArrayMem.init ⟶* Cfg.error σ' am'
+  | .errors σ'     => ∃ am',
+      (p ⊩ Cfg.run 0 σ₀ ArrayMem.init ⟶* Cfg.errorDiv σ' am') ∨
+      (p ⊩ Cfg.run 0 σ₀ ArrayMem.init ⟶* Cfg.errorBounds σ' am')
   | .typeErrors σ' => ∃ am', p ⊩ Cfg.run 0 σ₀ ArrayMem.init ⟶* Cfg.typeError σ' am'
   | .diverges      => ∃ f : Nat → Cfg, IsInfiniteExec p f ∧ f 0 = Cfg.run 0 σ₀ ArrayMem.init
 
@@ -292,7 +295,13 @@ theorem whileToTAC_refinement (prog : Program) (htcs : prog.typeCheckStrict = tr
         exact absurd ⟨σ_tac, am_h, hhalt⟩ (whileToTAC_error prog fuel htcs hsafe)
   | errors σ_e =>
     simp only [program_behavior_init] at hbeh
-    obtain ⟨am_e, herr⟩ := hbeh
+    obtain ⟨am_e, herr_or⟩ := hbeh
+    -- Extract a cause-agnostic error reach with an `isError` witness.
+    have ⟨c_err, hisErr, herr⟩ : ∃ c, c.isError ∧
+        (prog.compileToTAC ⊩ Cfg.run 0 prog.initStore ArrayMem.init ⟶* c) := by
+      rcases herr_or with h | h
+      · exact ⟨_, by simp [Cfg.isError], h⟩
+      · exact ⟨_, by simp [Cfg.isError], h⟩
     by_contra hall
     push_neg at hall
     -- hall : ∀ fuel, prog.body.safe fuel prog.initStore ArrayMem.init prog.arrayDecls
@@ -320,7 +329,7 @@ theorem whileToTAC_refinement (prog : Program) (htcs : prog.typeCheckStrict = tr
       obtain ⟨m, hm, _pc', _σ'', _am'', hrun⟩ := hunbounded' (k_err + 1)
       have hsuffix := RefStepsN.det_prefix hk_err hrun (by omega)
       have hmk : m - k_err = (m - k_err - 1) + 1 := by omega
-      exact RefStepsN.no_step_error (hmk ▸ hsuffix)
+      exact RefStepsN.no_step_error hisErr (hmk ▸ hsuffix)
     · -- Source terminates at some fuel
       push_neg at hdiv
       obtain ⟨fuel, hfuel⟩ := hdiv
@@ -330,9 +339,10 @@ theorem whileToTAC_refinement (prog : Program) (htcs : prog.typeCheckStrict = tr
         whileToTAC_halt prog fuel σ' am' htcs hinterp (hall fuel)
       have halt_terminal : ∀ d, ¬ Step prog.compileToTAC (Cfg.halt σ_fwd am') d :=
         fun _ h => Step.no_step_from_halt h
-      have err_terminal : ∀ d, ¬ Step prog.compileToTAC (Cfg.error σ_e am_e) d :=
-        fun _ h => Step.no_step_from_error h
-      exact Cfg.noConfusion (Steps.stuck_det hhalt_fwd herr halt_terminal err_terminal)
+      have err_terminal : ∀ d, ¬ Step prog.compileToTAC c_err d :=
+        fun _ h => Step.no_step_from_isError hisErr h
+      have heq := Steps.stuck_det hhalt_fwd herr halt_terminal err_terminal
+      cases c_err <;> simp [Cfg.isError] at hisErr <;> exact Cfg.noConfusion heq
   | typeErrors σ_te =>
     simp only [program_behavior_init] at hbeh
     obtain ⟨am_te, hte⟩ := hbeh
@@ -365,12 +375,13 @@ theorem whileToTAC_refinement (prog : Program) (htcs : prog.typeCheckStrict = tr
       · -- not all safe → error reachable → typeError contradicts error
         push_neg at hsafe_all
         obtain ⟨fuel, hunsafe⟩ := hsafe_all
-        obtain ⟨σ_e, am_e, herr⟩ := whileToTAC_reaches_error prog fuel htcs hunsafe
-        have err_terminal : ∀ d, ¬ Step prog.compileToTAC (Cfg.error σ_e am_e) d :=
-          fun _ h => Step.no_step_from_error h
+        obtain ⟨c_err, hisErr, herr⟩ := whileToTAC_reaches_error prog fuel htcs hunsafe
+        have err_terminal : ∀ d, ¬ Step prog.compileToTAC c_err d :=
+          fun _ h => Step.no_step_from_isError hisErr h
         have te_terminal : ∀ d, ¬ Step prog.compileToTAC (Cfg.typeError σ_te am_te) d :=
           fun _ h => Step.no_step_from_typeError h
-        exact Cfg.noConfusion (Steps.stuck_det herr hte err_terminal te_terminal)
+        have heq := Steps.stuck_det herr hte err_terminal te_terminal
+        cases c_err <;> simp [Cfg.isError] at hisErr <;> exact Cfg.noConfusion heq
     · -- Source terminates at some fuel
       push_neg at hdiv
       obtain ⟨fuel, hfuel⟩ := hdiv
@@ -384,12 +395,13 @@ theorem whileToTAC_refinement (prog : Program) (htcs : prog.typeCheckStrict = tr
         have te_terminal : ∀ d, ¬ Step prog.compileToTAC (Cfg.typeError σ_te am_te) d :=
           fun _ h => Step.no_step_from_typeError h
         exact Cfg.noConfusion (Steps.stuck_det hhalt_fwd hte halt_terminal te_terminal)
-      · obtain ⟨σ_e, am_e, herr⟩ := whileToTAC_reaches_error prog fuel htcs hsafe
-        have err_terminal : ∀ d, ¬ Step prog.compileToTAC (Cfg.error σ_e am_e) d :=
-          fun _ h => Step.no_step_from_error h
+      · obtain ⟨c_err, hisErr, herr⟩ := whileToTAC_reaches_error prog fuel htcs hsafe
+        have err_terminal : ∀ d, ¬ Step prog.compileToTAC c_err d :=
+          fun _ h => Step.no_step_from_isError hisErr h
         have te_terminal : ∀ d, ¬ Step prog.compileToTAC (Cfg.typeError σ_te am_te) d :=
           fun _ h => Step.no_step_from_typeError h
-        exact Cfg.noConfusion (Steps.stuck_det herr hte err_terminal te_terminal)
+        have heq := Steps.stuck_det herr hte err_terminal te_terminal
+        cases c_err <;> simp [Cfg.isError] at hisErr <;> exact Cfg.noConfusion heq
   | diverges =>
     simp only [program_behavior_init] at hbeh
     obtain ⟨f, hinf, hf0⟩ := hbeh
@@ -412,11 +424,11 @@ theorem whileToTAC_refinement (prog : Program) (htcs : prog.typeCheckStrict = tr
       have hmk : (k + 1) - k = ((k + 1) - k - 1) + 1 := by omega
       exact RefStepsN.no_step_halt (hmk ▸ hsuffix)
     · -- not safe → forward error → contradicts infinite exec
-      obtain ⟨σ_e, am_e, herr⟩ := whileToTAC_reaches_error prog fuel htcs hsafe
+      obtain ⟨c_err, hisErr, herr⟩ := whileToTAC_reaches_error prog fuel htcs hsafe
       obtain ⟨k, hk⟩ := herr.to_RefStepsN
       have hstepsN := inf_exec_to_StepsN hinf (k + 1)
       rw [hf0] at hstepsN
       have hstepsR := StepsN_to_RefStepsN hstepsN
       have hsuffix := RefStepsN.det_prefix hk hstepsR (by omega)
       have hmk : (k + 1) - k = ((k + 1) - k - 1) + 1 := by omega
-      exact RefStepsN.no_step_error (hmk ▸ hsuffix)
+      exact RefStepsN.no_step_error hisErr (hmk ▸ hsuffix)
