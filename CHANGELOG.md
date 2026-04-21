@@ -4,6 +4,26 @@ Chronological record of what was built and why, to reconstruct the sequence of d
 
 ---
 
+## Phase 1: split source safety into unsafeDiv / unsafeBounds (2026-04-21)
+
+**Goal:** Dormant infrastructure for the backward-correctness theorem suite (plans/backward-jumping-octopus.md). Lets Phase 3+ ask *why* an unsafe source program fails — division vs. bounds — and maps each to a distinct ARM sentinel PC.
+
+**Added** (in [CompilerCorrectness.lean:734+](CredibleCompilation/CompilerCorrectness.lean) new § 4a′):
+- Predicates `SExpr.unsafeDiv`, `SExpr.unsafeBounds`, `SBool.unsafeDiv`, `SBool.unsafeBounds`, `Stmt.unsafeDiv`, `Stmt.unsafeBounds` — structural duals of the existing `.safe` predicates. First-error-wins semantics for short-circuit `and`/`or` and sequential `seq` / variadic `print`: whichever sub-expression evaluates first determines the error class.
+- List-lifts `SExpr.listUnsafeDiv`, `SExpr.listUnsafeBounds` for `Stmt.print`'s argument list.
+- Bridge theorems at each syntactic level (`SExpr`, `SBool`, `SExpr` list, `Stmt`):
+  - `safe_iff_not_unsafe` — `safe ↔ ¬unsafeDiv ∧ ¬unsafeBounds`
+  - `not_safe_iff_unsafeDiv_or_unsafeBounds` — `¬safe ↔ unsafeDiv ∨ unsafeBounds` (classical corollary)
+  - `unsafeDiv_unsafeBounds_disjoint` — `¬(unsafeDiv ∧ unsafeBounds)`
+
+**New imports:** `Mathlib.Tactic.Tauto`, `Mathlib.Tactic.Push` (for `tauto` and `push_neg`). Classical logic opened in a `section UnsafeSplit`.
+
+**Why it's dormant:** no existing theorem references these predicates yet. Phase 3 switches `Cfg.error` to `Cfg.errorDiv` / `Cfg.errorBounds` and threads the cause through the forward proofs; at that point these predicates become live.
+
+**Status:** 0 sorrys; full `lake build` green.
+
+---
+
 ## Drop auto-dump of observable variables on halt (2026-04-20)
 
 **Goal:** Separate I/O from semantic preservation so .w outputs match .c/.f directly.

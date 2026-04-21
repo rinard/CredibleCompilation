@@ -1,4 +1,6 @@
 import CredibleCompilation.WhileLang
+import Mathlib.Tactic.Tauto
+import Mathlib.Tactic.Push
 
 set_option linter.unusedSimpArgs false
 
@@ -730,6 +732,578 @@ theorem Stmt.interp_some_implies_safe (s : Stmt) (fuel : Nat)
     simp only [Stmt.safe]
     exact SExpr.isSafe_implies_safe e σ am decls hs
   | printString lit => intro _; simp only [Stmt.safe]
+
+-- ============================================================
+-- § 4a′. Unsafe classification: div vs bounds
+-- ============================================================
+
+/-! Dual predicates to `.safe`: classify *why* an unsafe expression/statement
+    fails, as either a division error (`unsafeDiv`) or an array-bounds error
+    (`unsafeBounds`). Ordering matches TAC's left-to-right evaluation: in
+    `and`/`or` short-circuits and `seq`, whichever sub-expression is
+    evaluated first wins the error classification. These predicates are
+    dormant infrastructure for the backward correctness theorems. -/
+
+def SExpr.unsafeDiv (σ : Store) (am : ArrayMem)
+    (decls : List (ArrayName × Nat × VarTy)) : SExpr → Prop
+  | .lit _ => False
+  | .var _ => False
+  | .bin .div a b =>
+      a.unsafeDiv σ am decls ∨
+      (a.safe σ am decls ∧ b.unsafeDiv σ am decls) ∨
+      (a.safe σ am decls ∧ b.safe σ am decls ∧ b.eval σ am = 0)
+  | .bin .mod a b =>
+      a.unsafeDiv σ am decls ∨
+      (a.safe σ am decls ∧ b.unsafeDiv σ am decls) ∨
+      (a.safe σ am decls ∧ b.safe σ am decls ∧ b.eval σ am = 0)
+  | .bin _ a b =>
+      a.unsafeDiv σ am decls ∨ (a.safe σ am decls ∧ b.unsafeDiv σ am decls)
+  | .arrRead _ idx => idx.unsafeDiv σ am decls
+  | .flit _ => False
+  | .fbin _ a b =>
+      a.unsafeDiv σ am decls ∨ (a.safe σ am decls ∧ b.unsafeDiv σ am decls)
+  | .intToFloat e => e.unsafeDiv σ am decls
+  | .floatToInt e => e.unsafeDiv σ am decls
+  | .floatUnary _ e => e.unsafeDiv σ am decls
+  | .farrRead _ idx => idx.unsafeDiv σ am decls
+
+def SExpr.unsafeBounds (σ : Store) (am : ArrayMem)
+    (decls : List (ArrayName × Nat × VarTy)) : SExpr → Prop
+  | .lit _ => False
+  | .var _ => False
+  | .bin _ a b =>
+      a.unsafeBounds σ am decls ∨ (a.safe σ am decls ∧ b.unsafeBounds σ am decls)
+  | .arrRead arr idx =>
+      idx.unsafeBounds σ am decls ∨
+      (idx.safe σ am decls ∧ ¬ (idx.eval σ am < arraySizeBv decls arr))
+  | .flit _ => False
+  | .fbin _ a b =>
+      a.unsafeBounds σ am decls ∨ (a.safe σ am decls ∧ b.unsafeBounds σ am decls)
+  | .intToFloat e => e.unsafeBounds σ am decls
+  | .floatToInt e => e.unsafeBounds σ am decls
+  | .floatUnary _ e => e.unsafeBounds σ am decls
+  | .farrRead arr idx =>
+      idx.unsafeBounds σ am decls ∨
+      (idx.safe σ am decls ∧ ¬ (idx.eval σ am < arraySizeBv decls arr))
+
+def SBool.unsafeDiv (σ : Store) (am : ArrayMem)
+    (decls : List (ArrayName × Nat × VarTy)) : SBool → Prop
+  | .lit _ => False
+  | .bvar _ => False
+  | .cmp _ a b =>
+      a.unsafeDiv σ am decls ∨ (a.safe σ am decls ∧ b.unsafeDiv σ am decls)
+  | .not e => e.unsafeDiv σ am decls
+  | .and a b =>
+      a.unsafeDiv σ am decls ∨
+      (a.safe σ am decls ∧ a.eval σ am = true ∧ b.unsafeDiv σ am decls)
+  | .or a b =>
+      a.unsafeDiv σ am decls ∨
+      (a.safe σ am decls ∧ a.eval σ am = false ∧ b.unsafeDiv σ am decls)
+  | .barrRead _ idx => idx.unsafeDiv σ am decls
+  | .fcmp _ a b =>
+      a.unsafeDiv σ am decls ∨ (a.safe σ am decls ∧ b.unsafeDiv σ am decls)
+
+def SBool.unsafeBounds (σ : Store) (am : ArrayMem)
+    (decls : List (ArrayName × Nat × VarTy)) : SBool → Prop
+  | .lit _ => False
+  | .bvar _ => False
+  | .cmp _ a b =>
+      a.unsafeBounds σ am decls ∨ (a.safe σ am decls ∧ b.unsafeBounds σ am decls)
+  | .not e => e.unsafeBounds σ am decls
+  | .and a b =>
+      a.unsafeBounds σ am decls ∨
+      (a.safe σ am decls ∧ a.eval σ am = true ∧ b.unsafeBounds σ am decls)
+  | .or a b =>
+      a.unsafeBounds σ am decls ∨
+      (a.safe σ am decls ∧ a.eval σ am = false ∧ b.unsafeBounds σ am decls)
+  | .barrRead arr idx =>
+      idx.unsafeBounds σ am decls ∨
+      (idx.safe σ am decls ∧ ¬ (idx.eval σ am < arraySizeBv decls arr))
+  | .fcmp _ a b =>
+      a.unsafeBounds σ am decls ∨ (a.safe σ am decls ∧ b.unsafeBounds σ am decls)
+
+/-- First-error-wins lifts of the `SExpr` unsafe predicates to `List SExpr`.
+    Used by the `Stmt.print` case (variadic print evaluates args left-to-right). -/
+def SExpr.listUnsafeDiv (σ : Store) (am : ArrayMem)
+    (decls : List (ArrayName × Nat × VarTy)) : List SExpr → Prop
+  | [] => False
+  | e :: rest =>
+      e.unsafeDiv σ am decls ∨
+      (e.safe σ am decls ∧ SExpr.listUnsafeDiv σ am decls rest)
+
+def SExpr.listUnsafeBounds (σ : Store) (am : ArrayMem)
+    (decls : List (ArrayName × Nat × VarTy)) : List SExpr → Prop
+  | [] => False
+  | e :: rest =>
+      e.unsafeBounds σ am decls ∨
+      (e.safe σ am decls ∧ SExpr.listUnsafeBounds σ am decls rest)
+
+def Stmt.unsafeDiv (fuel : Nat) (σ : Store) (am : ArrayMem)
+    (decls : List (ArrayName × Nat × VarTy)) : Stmt → Prop
+  | .skip => False
+  | .assign _ e => e.unsafeDiv σ am decls
+  | .bassign _ b => b.unsafeDiv σ am decls
+  | .arrWrite _ idx val =>
+      idx.unsafeDiv σ am decls ∨ (idx.safe σ am decls ∧ val.unsafeDiv σ am decls)
+  | .barrWrite _ idx bval =>
+      idx.unsafeDiv σ am decls ∨ (idx.safe σ am decls ∧ bval.unsafeDiv σ am decls)
+  | .seq s₁ s₂ =>
+      s₁.unsafeDiv fuel σ am decls ∨
+      (s₁.safe fuel σ am decls ∧
+        match s₁.interp fuel σ am decls with
+        | some (σ', am') => s₂.unsafeDiv fuel σ' am' decls
+        | none => False)
+  | .ite b s₁ s₂ =>
+      b.unsafeDiv σ am decls ∨
+      (b.safe σ am decls ∧
+        (if b.eval σ am then s₁.unsafeDiv fuel σ am decls
+         else s₂.unsafeDiv fuel σ am decls))
+  | .loop b body =>
+      match fuel with
+      | 0 => False
+      | fuel' + 1 =>
+        b.unsafeDiv σ am decls ∨
+        (b.safe σ am decls ∧ b.eval σ am = true ∧
+          (body.unsafeDiv fuel' σ am decls ∨
+            (body.safe fuel' σ am decls ∧
+              match body.interp fuel' σ am decls with
+              | some (σ', am') => (Stmt.loop b body).unsafeDiv fuel' σ' am' decls
+              | none => False)))
+  | .fassign _ e => e.unsafeDiv σ am decls
+  | .farrWrite _ idx val =>
+      idx.unsafeDiv σ am decls ∨ (idx.safe σ am decls ∧ val.unsafeDiv σ am decls)
+  | .label _ => False
+  | .goto _ => False
+  | .ifgoto b _ => b.unsafeDiv σ am decls
+  | .print _ args => SExpr.listUnsafeDiv σ am decls args
+  | .printInt e => e.unsafeDiv σ am decls
+  | .printBool b => b.unsafeDiv σ am decls
+  | .printFloat e => e.unsafeDiv σ am decls
+  | .printString _ => False
+
+def Stmt.unsafeBounds (fuel : Nat) (σ : Store) (am : ArrayMem)
+    (decls : List (ArrayName × Nat × VarTy)) : Stmt → Prop
+  | .skip => False
+  | .assign _ e => e.unsafeBounds σ am decls
+  | .bassign _ b => b.unsafeBounds σ am decls
+  | .arrWrite arr idx val =>
+      idx.unsafeBounds σ am decls ∨
+      (idx.safe σ am decls ∧ val.unsafeBounds σ am decls) ∨
+      (idx.safe σ am decls ∧ val.safe σ am decls ∧
+        ¬ (idx.eval σ am < arraySizeBv decls arr))
+  | .barrWrite arr idx bval =>
+      idx.unsafeBounds σ am decls ∨
+      (idx.safe σ am decls ∧ bval.unsafeBounds σ am decls) ∨
+      (idx.safe σ am decls ∧ bval.safe σ am decls ∧
+        ¬ (idx.eval σ am < arraySizeBv decls arr))
+  | .seq s₁ s₂ =>
+      s₁.unsafeBounds fuel σ am decls ∨
+      (s₁.safe fuel σ am decls ∧
+        match s₁.interp fuel σ am decls with
+        | some (σ', am') => s₂.unsafeBounds fuel σ' am' decls
+        | none => False)
+  | .ite b s₁ s₂ =>
+      b.unsafeBounds σ am decls ∨
+      (b.safe σ am decls ∧
+        (if b.eval σ am then s₁.unsafeBounds fuel σ am decls
+         else s₂.unsafeBounds fuel σ am decls))
+  | .loop b body =>
+      match fuel with
+      | 0 => False
+      | fuel' + 1 =>
+        b.unsafeBounds σ am decls ∨
+        (b.safe σ am decls ∧ b.eval σ am = true ∧
+          (body.unsafeBounds fuel' σ am decls ∨
+            (body.safe fuel' σ am decls ∧
+              match body.interp fuel' σ am decls with
+              | some (σ', am') => (Stmt.loop b body).unsafeBounds fuel' σ' am' decls
+              | none => False)))
+  | .fassign _ e => e.unsafeBounds σ am decls
+  | .farrWrite arr idx val =>
+      idx.unsafeBounds σ am decls ∨
+      (idx.safe σ am decls ∧ val.unsafeBounds σ am decls) ∨
+      (idx.safe σ am decls ∧ val.safe σ am decls ∧
+        ¬ (idx.eval σ am < arraySizeBv decls arr))
+  | .label _ => False
+  | .goto _ => False
+  | .ifgoto b _ => b.unsafeBounds σ am decls
+  | .print _ args => SExpr.listUnsafeBounds σ am decls args
+  | .printInt e => e.unsafeBounds σ am decls
+  | .printBool b => b.unsafeBounds σ am decls
+  | .printFloat e => e.unsafeBounds σ am decls
+  | .printString _ => False
+
+/-! ### Bridge lemmas: `safe` vs `unsafeDiv`/`unsafeBounds`
+
+Every well-formed subterm is in exactly one of three classes — `safe`,
+`unsafeDiv`, or `unsafeBounds`. The main lemmas package this into the
+two forms Phase 3+ will consume: the iff
+`¬ safe ↔ unsafeDiv ∨ unsafeBounds` and the disjointness
+`¬ (unsafeDiv ∧ unsafeBounds)`. -/
+
+section UnsafeSplit
+open Classical
+
+theorem SExpr.safe_iff_not_unsafe (e : SExpr) (σ : Store) (am : ArrayMem)
+    (decls : List (ArrayName × Nat × VarTy)) :
+    e.safe σ am decls ↔ ¬ e.unsafeDiv σ am decls ∧ ¬ e.unsafeBounds σ am decls := by
+  induction e with
+  | lit _ => simp [SExpr.safe, SExpr.unsafeDiv, SExpr.unsafeBounds]
+  | var _ => simp [SExpr.safe, SExpr.unsafeDiv, SExpr.unsafeBounds]
+  | bin op a b iha ihb =>
+    cases op <;>
+      (simp only [SExpr.safe, SExpr.unsafeDiv, SExpr.unsafeBounds, ne_eq]; tauto)
+  | arrRead arr idx ih =>
+    simp only [SExpr.safe, SExpr.unsafeDiv, SExpr.unsafeBounds]; tauto
+  | flit _ => simp [SExpr.safe, SExpr.unsafeDiv, SExpr.unsafeBounds]
+  | fbin op a b iha ihb =>
+    simp only [SExpr.safe, SExpr.unsafeDiv, SExpr.unsafeBounds]; tauto
+  | intToFloat e ih =>
+    simp only [SExpr.safe, SExpr.unsafeDiv, SExpr.unsafeBounds]; exact ih
+  | floatToInt e ih =>
+    simp only [SExpr.safe, SExpr.unsafeDiv, SExpr.unsafeBounds]; exact ih
+  | floatUnary op e ih =>
+    simp only [SExpr.safe, SExpr.unsafeDiv, SExpr.unsafeBounds]; exact ih
+  | farrRead arr idx ih =>
+    simp only [SExpr.safe, SExpr.unsafeDiv, SExpr.unsafeBounds]; tauto
+
+theorem SExpr.not_safe_iff_unsafeDiv_or_unsafeBounds (e : SExpr) (σ : Store)
+    (am : ArrayMem) (decls : List (ArrayName × Nat × VarTy)) :
+    ¬ e.safe σ am decls ↔ e.unsafeDiv σ am decls ∨ e.unsafeBounds σ am decls := by
+  rw [SExpr.safe_iff_not_unsafe]; push_neg; tauto
+
+theorem SExpr.unsafeDiv_unsafeBounds_disjoint (e : SExpr) (σ : Store)
+    (am : ArrayMem) (decls : List (ArrayName × Nat × VarTy)) :
+    ¬ (e.unsafeDiv σ am decls ∧ e.unsafeBounds σ am decls) := by
+  induction e with
+  | lit _ => simp [SExpr.unsafeDiv, SExpr.unsafeBounds]
+  | var _ => simp [SExpr.unsafeDiv, SExpr.unsafeBounds]
+  | bin op a b iha ihb =>
+    cases op <;>
+      (simp only [SExpr.unsafeDiv, SExpr.unsafeBounds,
+                  SExpr.safe_iff_not_unsafe a σ am decls,
+                  SExpr.safe_iff_not_unsafe b σ am decls,
+                  not_and, not_or, Decidable.not_not]
+       tauto)
+  | arrRead arr idx ih =>
+    simp only [SExpr.unsafeDiv, SExpr.unsafeBounds,
+               SExpr.safe_iff_not_unsafe idx σ am decls,
+               not_and, not_or, Decidable.not_not]
+    tauto
+  | flit _ => simp [SExpr.unsafeDiv, SExpr.unsafeBounds]
+  | fbin op a b iha ihb =>
+    simp only [SExpr.unsafeDiv, SExpr.unsafeBounds,
+               SExpr.safe_iff_not_unsafe a σ am decls,
+               SExpr.safe_iff_not_unsafe b σ am decls,
+               not_and, not_or, Decidable.not_not]
+    tauto
+  | intToFloat e ih => simp only [SExpr.unsafeDiv, SExpr.unsafeBounds]; exact ih
+  | floatToInt e ih => simp only [SExpr.unsafeDiv, SExpr.unsafeBounds]; exact ih
+  | floatUnary op e ih => simp only [SExpr.unsafeDiv, SExpr.unsafeBounds]; exact ih
+  | farrRead arr idx ih =>
+    simp only [SExpr.unsafeDiv, SExpr.unsafeBounds,
+               SExpr.safe_iff_not_unsafe idx σ am decls,
+               not_and, not_or, Decidable.not_not]
+    tauto
+
+theorem SBool.safe_iff_not_unsafe (sb : SBool) (σ : Store) (am : ArrayMem)
+    (decls : List (ArrayName × Nat × VarTy)) :
+    sb.safe σ am decls ↔ ¬ sb.unsafeDiv σ am decls ∧ ¬ sb.unsafeBounds σ am decls := by
+  induction sb with
+  | lit _ => simp [SBool.safe, SBool.unsafeDiv, SBool.unsafeBounds]
+  | bvar _ => simp [SBool.safe, SBool.unsafeDiv, SBool.unsafeBounds]
+  | cmp _ a b =>
+    simp only [SBool.safe, SBool.unsafeDiv, SBool.unsafeBounds,
+               SExpr.safe_iff_not_unsafe a σ am decls,
+               SExpr.safe_iff_not_unsafe b σ am decls,
+               not_or, not_and, Decidable.not_not]
+    tauto
+  | not e ih => simp only [SBool.safe, SBool.unsafeDiv, SBool.unsafeBounds]; exact ih
+  | and a b iha ihb =>
+    simp only [SBool.safe, SBool.unsafeDiv, SBool.unsafeBounds, iha, ihb,
+               not_or, not_and, Decidable.not_not]
+    tauto
+  | or a b iha ihb =>
+    simp only [SBool.safe, SBool.unsafeDiv, SBool.unsafeBounds, iha, ihb,
+               not_or, not_and, Decidable.not_not]
+    tauto
+  | barrRead arr idx =>
+    simp only [SBool.safe, SBool.unsafeDiv, SBool.unsafeBounds,
+               SExpr.safe_iff_not_unsafe idx σ am decls,
+               not_or, not_and, Decidable.not_not]
+    tauto
+  | fcmp _ a b =>
+    simp only [SBool.safe, SBool.unsafeDiv, SBool.unsafeBounds,
+               SExpr.safe_iff_not_unsafe a σ am decls,
+               SExpr.safe_iff_not_unsafe b σ am decls,
+               not_or, not_and, Decidable.not_not]
+    tauto
+
+theorem SBool.not_safe_iff_unsafeDiv_or_unsafeBounds (sb : SBool) (σ : Store)
+    (am : ArrayMem) (decls : List (ArrayName × Nat × VarTy)) :
+    ¬ sb.safe σ am decls ↔ sb.unsafeDiv σ am decls ∨ sb.unsafeBounds σ am decls := by
+  rw [SBool.safe_iff_not_unsafe]; push_neg; tauto
+
+theorem SBool.unsafeDiv_unsafeBounds_disjoint (sb : SBool) (σ : Store)
+    (am : ArrayMem) (decls : List (ArrayName × Nat × VarTy)) :
+    ¬ (sb.unsafeDiv σ am decls ∧ sb.unsafeBounds σ am decls) := by
+  induction sb with
+  | lit _ => simp [SBool.unsafeDiv, SBool.unsafeBounds]
+  | bvar _ => simp [SBool.unsafeDiv, SBool.unsafeBounds]
+  | cmp _ a b =>
+    simp only [SBool.unsafeDiv, SBool.unsafeBounds,
+               SExpr.safe_iff_not_unsafe a σ am decls,
+               SExpr.safe_iff_not_unsafe b σ am decls,
+               not_and, not_or, Decidable.not_not]
+    have ha := SExpr.unsafeDiv_unsafeBounds_disjoint a σ am decls
+    have hb := SExpr.unsafeDiv_unsafeBounds_disjoint b σ am decls
+    tauto
+  | not e ih => simp only [SBool.unsafeDiv, SBool.unsafeBounds]; exact ih
+  | and a b iha ihb =>
+    simp only [SBool.unsafeDiv, SBool.unsafeBounds,
+               SBool.safe_iff_not_unsafe a σ am decls,
+               not_and, not_or, Decidable.not_not]
+    tauto
+  | or a b iha ihb =>
+    simp only [SBool.unsafeDiv, SBool.unsafeBounds,
+               SBool.safe_iff_not_unsafe a σ am decls,
+               not_and, not_or, Decidable.not_not]
+    tauto
+  | barrRead arr idx =>
+    simp only [SBool.unsafeDiv, SBool.unsafeBounds,
+               SExpr.safe_iff_not_unsafe idx σ am decls,
+               not_and, not_or, Decidable.not_not]
+    have hidx := SExpr.unsafeDiv_unsafeBounds_disjoint idx σ am decls
+    tauto
+  | fcmp _ a b =>
+    simp only [SBool.unsafeDiv, SBool.unsafeBounds,
+               SExpr.safe_iff_not_unsafe a σ am decls,
+               SExpr.safe_iff_not_unsafe b σ am decls,
+               not_and, not_or, Decidable.not_not]
+    have ha := SExpr.unsafeDiv_unsafeBounds_disjoint a σ am decls
+    have hb := SExpr.unsafeDiv_unsafeBounds_disjoint b σ am decls
+    tauto
+
+theorem SExpr.listSafe_iff_not_unsafe (args : List SExpr) (σ : Store) (am : ArrayMem)
+    (decls : List (ArrayName × Nat × VarTy)) :
+    (∀ e ∈ args, e.safe σ am decls) ↔
+      ¬ SExpr.listUnsafeDiv σ am decls args ∧ ¬ SExpr.listUnsafeBounds σ am decls args := by
+  induction args with
+  | nil => simp [SExpr.listUnsafeDiv, SExpr.listUnsafeBounds]
+  | cons e rest ih =>
+    simp only [List.mem_cons, forall_eq_or_imp, SExpr.listUnsafeDiv, SExpr.listUnsafeBounds,
+               SExpr.safe_iff_not_unsafe e σ am decls, ih,
+               not_or, not_and, Decidable.not_not]
+    tauto
+
+theorem SExpr.listUnsafeDiv_listUnsafeBounds_disjoint (args : List SExpr) (σ : Store)
+    (am : ArrayMem) (decls : List (ArrayName × Nat × VarTy)) :
+    ¬ (SExpr.listUnsafeDiv σ am decls args ∧ SExpr.listUnsafeBounds σ am decls args) := by
+  induction args with
+  | nil => simp [SExpr.listUnsafeDiv, SExpr.listUnsafeBounds]
+  | cons e rest ih =>
+    simp only [SExpr.listUnsafeDiv, SExpr.listUnsafeBounds,
+               SExpr.safe_iff_not_unsafe e σ am decls,
+               not_and, not_or, Decidable.not_not]
+    have he := SExpr.unsafeDiv_unsafeBounds_disjoint e σ am decls
+    tauto
+
+theorem Stmt.safe_iff_not_unsafe (s : Stmt) (fuel : Nat) (σ : Store) (am : ArrayMem)
+    (decls : List (ArrayName × Nat × VarTy)) :
+    s.safe fuel σ am decls ↔
+      ¬ s.unsafeDiv fuel σ am decls ∧ ¬ s.unsafeBounds fuel σ am decls := by
+  induction s generalizing fuel σ am with
+  | skip => simp [Stmt.safe, Stmt.unsafeDiv, Stmt.unsafeBounds]
+  | assign x e =>
+    simp only [Stmt.safe, Stmt.unsafeDiv, Stmt.unsafeBounds]
+    exact SExpr.safe_iff_not_unsafe e σ am decls
+  | bassign x b =>
+    simp only [Stmt.safe, Stmt.unsafeDiv, Stmt.unsafeBounds]
+    exact SBool.safe_iff_not_unsafe b σ am decls
+  | arrWrite arr idx val =>
+    simp only [Stmt.safe, Stmt.unsafeDiv, Stmt.unsafeBounds,
+               SExpr.safe_iff_not_unsafe idx σ am decls,
+               SExpr.safe_iff_not_unsafe val σ am decls,
+               not_or, not_and, Decidable.not_not]
+    tauto
+  | barrWrite arr idx bval =>
+    simp only [Stmt.safe, Stmt.unsafeDiv, Stmt.unsafeBounds,
+               SExpr.safe_iff_not_unsafe idx σ am decls,
+               SBool.safe_iff_not_unsafe bval σ am decls,
+               not_or, not_and, Decidable.not_not]
+    tauto
+  | seq s₁ s₂ ih1 ih2 =>
+    simp only [Stmt.safe, Stmt.unsafeDiv, Stmt.unsafeBounds, ih1,
+               not_or, not_and, Decidable.not_not]
+    cases h : s₁.interp fuel σ am decls with
+    | none => simp [h]
+    | some p =>
+      obtain ⟨σ', am'⟩ := p
+      simp only [h, ih2]
+      tauto
+  | ite b s1 s2 ih1 ih2 =>
+    simp only [Stmt.safe, Stmt.unsafeDiv, Stmt.unsafeBounds,
+               SBool.safe_iff_not_unsafe b σ am decls, ih1, ih2,
+               not_or, not_and, Decidable.not_not]
+    by_cases hb : b.eval σ am
+    · simp [hb] <;> tauto
+    · simp [hb] <;> tauto
+  | loop b body ihbody =>
+    induction fuel generalizing σ am with
+    | zero => simp [Stmt.safe, Stmt.unsafeDiv, Stmt.unsafeBounds]
+    | succ fuel' ih_fuel =>
+      simp only [Stmt.safe, Stmt.unsafeDiv, Stmt.unsafeBounds,
+                 SBool.safe_iff_not_unsafe b σ am decls,
+                 not_or, not_and, Decidable.not_not]
+      by_cases hbe : b.eval σ am
+      · simp only [hbe, if_true, ihbody fuel' σ am]
+        cases h : body.interp fuel' σ am decls with
+        | none => simp [h] <;> tauto
+        | some p =>
+          obtain ⟨σ', am'⟩ := p
+          simp only [h, ih_fuel σ' am']
+          tauto
+      · simp [hbe]
+  | fassign x e =>
+    simp only [Stmt.safe, Stmt.unsafeDiv, Stmt.unsafeBounds]
+    exact SExpr.safe_iff_not_unsafe e σ am decls
+  | farrWrite arr idx val =>
+    simp only [Stmt.safe, Stmt.unsafeDiv, Stmt.unsafeBounds,
+               SExpr.safe_iff_not_unsafe idx σ am decls,
+               SExpr.safe_iff_not_unsafe val σ am decls,
+               not_or, not_and, Decidable.not_not]
+    tauto
+  | label _ => simp [Stmt.safe, Stmt.unsafeDiv, Stmt.unsafeBounds]
+  | goto _ => simp [Stmt.safe, Stmt.unsafeDiv, Stmt.unsafeBounds]
+  | ifgoto b _ =>
+    simp only [Stmt.safe, Stmt.unsafeDiv, Stmt.unsafeBounds]
+    exact SBool.safe_iff_not_unsafe b σ am decls
+  | print _ args =>
+    simp only [Stmt.safe, Stmt.unsafeDiv, Stmt.unsafeBounds]
+    exact SExpr.listSafe_iff_not_unsafe args σ am decls
+  | printInt e =>
+    simp only [Stmt.safe, Stmt.unsafeDiv, Stmt.unsafeBounds]
+    exact SExpr.safe_iff_not_unsafe e σ am decls
+  | printBool b =>
+    simp only [Stmt.safe, Stmt.unsafeDiv, Stmt.unsafeBounds]
+    exact SBool.safe_iff_not_unsafe b σ am decls
+  | printFloat e =>
+    simp only [Stmt.safe, Stmt.unsafeDiv, Stmt.unsafeBounds]
+    exact SExpr.safe_iff_not_unsafe e σ am decls
+  | printString _ => simp [Stmt.safe, Stmt.unsafeDiv, Stmt.unsafeBounds]
+
+/-- Phase 1 target lemma: `¬ safe ↔ unsafeDiv ∨ unsafeBounds`. -/
+theorem Stmt.not_safe_iff_unsafeDiv_or_unsafeBounds (s : Stmt) (fuel : Nat) (σ : Store)
+    (am : ArrayMem) (decls : List (ArrayName × Nat × VarTy)) :
+    ¬ s.safe fuel σ am decls ↔
+      s.unsafeDiv fuel σ am decls ∨ s.unsafeBounds fuel σ am decls := by
+  rw [Stmt.safe_iff_not_unsafe]; push_neg; tauto
+
+/-- Phase 1 target lemma: `unsafeDiv` and `unsafeBounds` are disjoint. -/
+theorem Stmt.unsafeDiv_unsafeBounds_disjoint (s : Stmt) (fuel : Nat) (σ : Store)
+    (am : ArrayMem) (decls : List (ArrayName × Nat × VarTy)) :
+    ¬ (s.unsafeDiv fuel σ am decls ∧ s.unsafeBounds fuel σ am decls) := by
+  induction s generalizing fuel σ am with
+  | skip => simp [Stmt.unsafeDiv, Stmt.unsafeBounds]
+  | assign x e =>
+    simp only [Stmt.unsafeDiv, Stmt.unsafeBounds]
+    exact SExpr.unsafeDiv_unsafeBounds_disjoint e σ am decls
+  | bassign x b =>
+    simp only [Stmt.unsafeDiv, Stmt.unsafeBounds]
+    exact SBool.unsafeDiv_unsafeBounds_disjoint b σ am decls
+  | arrWrite arr idx val =>
+    simp only [Stmt.unsafeDiv, Stmt.unsafeBounds,
+               SExpr.safe_iff_not_unsafe idx σ am decls,
+               SExpr.safe_iff_not_unsafe val σ am decls,
+               not_and, not_or, Decidable.not_not]
+    have hidx := SExpr.unsafeDiv_unsafeBounds_disjoint idx σ am decls
+    have hval := SExpr.unsafeDiv_unsafeBounds_disjoint val σ am decls
+    tauto
+  | barrWrite arr idx bval =>
+    simp only [Stmt.unsafeDiv, Stmt.unsafeBounds,
+               SExpr.safe_iff_not_unsafe idx σ am decls,
+               SBool.safe_iff_not_unsafe bval σ am decls,
+               not_and, not_or, Decidable.not_not]
+    have hidx := SExpr.unsafeDiv_unsafeBounds_disjoint idx σ am decls
+    have hval := SBool.unsafeDiv_unsafeBounds_disjoint bval σ am decls
+    tauto
+  | seq s1 s2 ih1 ih2 =>
+    simp only [Stmt.unsafeDiv, Stmt.unsafeBounds,
+               Stmt.safe_iff_not_unsafe s1 fuel σ am decls,
+               not_and, not_or, Decidable.not_not]
+    cases h : s1.interp fuel σ am decls with
+    | none => simp [h]; have := ih1 (fuel := fuel) (σ := σ) (am := am); tauto
+    | some p =>
+      obtain ⟨σ', am'⟩ := p
+      simp only [h]
+      have h1 := ih1 (fuel := fuel) (σ := σ) (am := am)
+      have h2 := ih2 (fuel := fuel) (σ := σ') (am := am')
+      tauto
+  | ite b s1 s2 ih1 ih2 =>
+    simp only [Stmt.unsafeDiv, Stmt.unsafeBounds,
+               SBool.safe_iff_not_unsafe b σ am decls,
+               not_and, not_or, Decidable.not_not]
+    have hb := SBool.unsafeDiv_unsafeBounds_disjoint b σ am decls
+    by_cases hbe : b.eval σ am
+    · simp only [hbe, if_true]
+      have := ih1 (fuel := fuel) (σ := σ) (am := am)
+      tauto
+    · simp only [hbe, if_false]
+      have := ih2 (fuel := fuel) (σ := σ) (am := am)
+      tauto
+  | loop b body ihbody =>
+    induction fuel generalizing σ am with
+    | zero => simp [Stmt.unsafeDiv, Stmt.unsafeBounds]
+    | succ fuel' ih_fuel =>
+      simp only [Stmt.unsafeDiv, Stmt.unsafeBounds,
+                 SBool.safe_iff_not_unsafe b σ am decls,
+                 not_and, not_or, Decidable.not_not]
+      have hb := SBool.unsafeDiv_unsafeBounds_disjoint b σ am decls
+      by_cases hbe : b.eval σ am
+      · simp only [hbe]
+        have hbody_disj := ihbody (fuel := fuel') (σ := σ) (am := am)
+        have hbody_iff :=
+          Stmt.safe_iff_not_unsafe body fuel' σ am decls
+        simp only [hbody_iff, not_and, Decidable.not_not]
+        cases h : body.interp fuel' σ am decls with
+        | none => simp [h] <;> tauto
+        | some p =>
+          obtain ⟨σ', am'⟩ := p
+          simp only [h]
+          have := ih_fuel σ' am'
+          tauto
+      · simp [hbe] <;> tauto
+  | fassign x e =>
+    simp only [Stmt.unsafeDiv, Stmt.unsafeBounds]
+    exact SExpr.unsafeDiv_unsafeBounds_disjoint e σ am decls
+  | farrWrite arr idx val =>
+    simp only [Stmt.unsafeDiv, Stmt.unsafeBounds,
+               SExpr.safe_iff_not_unsafe idx σ am decls,
+               SExpr.safe_iff_not_unsafe val σ am decls,
+               not_and, not_or, Decidable.not_not]
+    have hidx := SExpr.unsafeDiv_unsafeBounds_disjoint idx σ am decls
+    have hval := SExpr.unsafeDiv_unsafeBounds_disjoint val σ am decls
+    tauto
+  | label _ => simp [Stmt.unsafeDiv, Stmt.unsafeBounds]
+  | goto _ => simp [Stmt.unsafeDiv, Stmt.unsafeBounds]
+  | ifgoto b _ =>
+    simp only [Stmt.unsafeDiv, Stmt.unsafeBounds]
+    exact SBool.unsafeDiv_unsafeBounds_disjoint b σ am decls
+  | print _ args =>
+    simp only [Stmt.unsafeDiv, Stmt.unsafeBounds]
+    exact SExpr.listUnsafeDiv_listUnsafeBounds_disjoint args σ am decls
+  | printInt e =>
+    simp only [Stmt.unsafeDiv, Stmt.unsafeBounds]
+    exact SExpr.unsafeDiv_unsafeBounds_disjoint e σ am decls
+  | printBool b =>
+    simp only [Stmt.unsafeDiv, Stmt.unsafeBounds]
+    exact SBool.unsafeDiv_unsafeBounds_disjoint b σ am decls
+  | printFloat e =>
+    simp only [Stmt.unsafeDiv, Stmt.unsafeBounds]
+    exact SExpr.unsafeDiv_unsafeBounds_disjoint e σ am decls
+  | printString _ => simp [Stmt.unsafeDiv, Stmt.unsafeBounds]
+
+end UnsafeSplit
 
 -- ============================================================
 -- § 4b. Integer typing (all arithmetic-position variables have int values)
