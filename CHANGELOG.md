@@ -4,6 +4,39 @@ Chronological record of what was built and why, to reconstruct the sequence of d
 
 ---
 
+## BoundsOptCert Phase 3: Checker soundness (2026-04-21)
+
+**Goal:** Close the checker–concretization loop. Phase 3 of plans/certified-interval-pangolin.md. After this phase, `intervalMap inv` is a provably-`preserved` `PInvariantMap` whenever `checkLocalPreservation` accepts — ready for Phase 4's wiring into `GenAsmSpec`.
+
+**Main theorem** ([BoundsOptCert.lean](CredibleCompilation/BoundsOptCert.lean)):
+```
+theorem checkLocalPreservation_sound (p : Prog) (inv : Array (Option IMap))
+    (hChk : checkLocalPreservation p inv = true) :
+    (intervalMap inv).preserved p
+```
+
+**Decomposition into three stages:**
+
+1. **Bridge lemmas** — `Int.toNat_mono_of_nonneg`, `BitVec64.toNat_add_small` / `toNat_sub_small` (both ~3-line omega proofs), plus a `BitVec.toInt_eq_toNat_cond`-based bridge for `toInt`/`toNat` agreement under `intervalCap = 2³¹`. Structural lemmas on `imRemove` / `imSet` / `imLookup` (membership extraction via `List.mem_filter` and `List.find?_some`) pinned down where each IMap operation is needed.
+2. **`refines_sound`** — the decisive step. If `m_strong` pointwise refines `m_weak` (via the `refinesSingle` check) and every valid-interval entry of `m_strong` concretizes soundly under `σ`, then so does `m_weak`. Range inclusion transports from `m_strong` to `m_weak` via `Int.toNat_mono` on the nonneg sides.
+3. **`certSuccessor_sound`** — per-`Step`-constructor case analysis (the `@binop`/`@const` patterns needed to name the implicit `BinOp`/`Value` arguments in Lean 4). Three soundness templates do the bulk of the work:
+   - `imRemove_sound` for every transfer that only touches `x` (handles 11 Step constructors: `boolop`, `arrLoad`, `fbinop`, `intToFloat`, `floatToInt`, `floatUnary`, `fternop`, `const .bool/.float`, `binop div/mod/bit/shift/mul`).
+   - `identity_sound` for transfers that don't touch the store (handles `goto`, `iftrue`, `iffall`, `arrStore`, all five `print*` constructors).
+   - Dedicated soundness lemmas for the three int-producing-with-claim cases: `constInt_sound` (`.const x (.int n)`), `copy_sound` (`.copy x y`), `add_sound` (`.binop x .add y z`), `sub_sound` (`.binop x .sub y z`).
+
+**Main theorem structure:** case-splits on `inv[pc]?` vs `inv[pc']?`. The `inv.size = p.size` precondition (checked by Phase 2) forces `inv[pc]? = none ↔ pc ≥ p.size`, so the Step hypothesis's `p[pc]? = some instr` contradicts the `none` case via `Prog.getElem?_eq_some_iff`. The `some none` case makes `intervalMap` `False`, so preservation is vacuous. The `some (some m)` case specializes the per-pc checker obligation to the specific `pc'` successor, then invokes `refines_sound ∘ certSuccessor_sound`.
+
+**Scope cuts shipped (for follow-up):**
+- `.ifgoto be l` uses `certSuccessor m instr pc' = m` (no refinement). `refineCond` is defined in the file as a total `def` ready for a future phase; its soundness lemma (per-pattern, with signed-unsigned bridges from `BitVec.slt`/`sle`) is not proved here. Direct impact: `while (i < size) { arr[i] ... }` won't yet elide bounds checks on `arr[i]` — the refinement that says "in the false branch, `i < size`" isn't yet threaded. Unblocks Phases 4–6 wiring without additional effort there.
+- `.binop x .mul y z` also drops the destination. The `mulCap = 2¹⁶` gated claim in Phase 2's `certSuccessor` is preserved but unused; a future phase can add `mul_sound` and re-enable it by flipping the `.mul` arm in `certSuccessor`.
+- `.binop x .add y z` and `.sub` require **both** operand intervals be `validInterval`. Phase 2's `certSuccessor` was tightened to gate on this (it drops the destination otherwise), mirroring the soundness proof's preconditions.
+
+**Bridge-lemma detail that caught us:** `validInterval r = true` doesn't force `validInterval (imLookup m v)` when `r` is derived from a min/max with `imLookup` — refinement patterns can narrow without re-validating the fallback. Addressed by `imLookup_mem_of_lo_nn`, which needs only `0 ≤ (imLookup m v).lo` to rule out the `irTop` fallback (since `irTop.lo = iBot < 0`). Weaker premise than `validInterval`, enough for `refineCond`'s eventual soundness proof.
+
+**Status:** 0 sorrys; full `lake build` green. Files touched: 1 (`BoundsOptCert.lean`); CHANGELOG. Phase 3 delivers the complete certificate-checker-soundness theorem for the cases covered by `certSuccessor`; ifgoto-refinement and mul-elision are queued for a follow-up without blocking Phases 4–6.
+
+---
+
 ## BoundsOptCert Phase 2: Local preservation checker (2026-04-21)
 
 **Goal:** Decidable `Bool`-valued checker that validates BoundsOpt's untrusted `Array (Option IMap)` output on a per-PC local-preservation basis. Phase 2 of plans/certified-interval-pangolin.md. No proof obligations in this phase — soundness ships in Phase 3.
