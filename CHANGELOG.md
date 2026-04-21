@@ -4,6 +4,25 @@ Chronological record of what was built and why, to reconstruct the sequence of d
 
 ---
 
+## BoundsOptCert Phase 2: Local preservation checker (2026-04-21)
+
+**Goal:** Decidable `Bool`-valued checker that validates BoundsOpt's untrusted `Array (Option IMap)` output on a per-PC local-preservation basis. Phase 2 of plans/certified-interval-pangolin.md. No proof obligations in this phase — soundness ships in Phase 3.
+
+**Shipped** ([BoundsOptCert.lean](CredibleCompilation/BoundsOptCert.lean)):
+- `imRemove : IMap → Var → IMap` — filter a var out. Many transfer cases drop a destination without making a claim.
+- `refineCond : IMap → BoolExpr → Bool → IMap` — total, structurally-recursive re-implementation of BoundsOpt's `partial def refineCondition`. Needed because Phase 3 case-splits on it; a `partial def` can't be unfolded in proofs. Covers the same syntactic patterns: `.not` flips `isTrue` and recurses on the strictly-smaller `inner`; `.cmp .lt/.le (.var _) (.lit _ | .var _)` refine symmetrically; every other boolean shape falls through unchanged.
+- `certSuccessor : IMap → TAC → Nat → IMap` — certified transfer function mirroring `transferInterval` for the cases where we can prove soundness, and dropping the destination (via `imRemove`) for cases where we can't (`boolop`, `arrLoad`, float-producing ops, `binop` div/mod/bitwise, out-of-range `mul`). The `.mul` case gates on both inputs fitting `[0, 2¹⁶)` (`mulCap = 65536`); otherwise drops. `.ifgoto be l` dispatches on whether `succPC = l` and feeds the flipped `isTrue` flag into `refineCond`.
+- `refinesSingle / refines` — pointwise refinement check. `m_weak` is refined by `m_strong` iff every `(v, r') ∈ m_weak` has a corresponding `(v, r) ∈ m_strong` with `validInterval` on both and `r ⊆ r'`. Absent entries fail — the checker won't accept a successor claim that isn't backed by the transfer's output.
+- `checkLocalPreservation : Prog → Array (Option IMap) → Bool` — the decidable entry point. Requires `inv.size = p.size` (so `none` always means OOB, used in Phase 3 to rule out the `pc ≥ p.size` Step case by contradiction). For each `pc < p.size` with `inv[pc]? = some (some m)`, for each successor `pc' ∈ instr.successors pc`, checks that `refines (certSuccessor m instr pc') m'` when `inv[pc']? = some (some m')`; successors with no claim or out-of-bounds impose no obligation. PCs with no claim at source are skipped.
+
+**Design notes:**
+- `certSuccessor` diverges from BoundsOpt's `successorIMap` intentionally. BoundsOpt optimizes for claim strength (feeds through `irTop`-shaped intervals that would pass `satisfies` vacuously); we optimize for proof shape, dropping the destination wherever a sound claim isn't cheap to state. This means BoundsOpt might produce stronger post-states than `certSuccessor`; that just means the `refines` check will sometimes reject valid BoundsOpt output, not the other way around. Safe direction.
+- The `.mul` cap is set to `2¹⁶`. Could be generalized to `a.hi * b.hi < 2⁶³` with more work; per the plan's risk analysis this is probably fine for benchmark coverage.
+
+**Status:** 0 sorrys; full `lake build` green. Files touched: 1 (`BoundsOptCert.lean`).
+
+---
+
 ## BoundsOptCert Phase 1: Interval-invariant wrapper (2026-04-21)
 
 **Goal:** First chunk of the certificate-based BoundsOpt re-enable plan (plans/certified-interval-pangolin.md). BoundsOpt stays untrusted; this phase sets up the concretization that lifts its output into `PInvariantMap` shape so `inv_preserved_steps` can consume it downstream. No wiring into codegen yet — Phases 4–6 do that.
