@@ -4,6 +4,27 @@ Chronological record of what was built and why, to reconstruct the sequence of d
 
 ---
 
+## Self-copy nop emission (Phase 5 prerequisite) (2026-04-21)
+
+**Goal:** Guarantee that every live TAC step produces ≥1 ARM step. Needed for Phase 5's divergence argument (plans/backward-jumping-octopus.md): if some live TAC step could produce 0 ARM instructions, an infinite TAC trace wouldn't yield an infinite ARM trace.
+
+**Problem:** The `r == tmp` optimization inside `vStoreVarFP` elides the fmov when the destination freg equals the source freg. Under `layout.isInjective`, this only fires for `.copy x x` where `layout x = some (.freg _)`. Without PeepholeOpt, such self-copies survive into codegen and produce `verifiedGenInstr ... = some []` — a 0-instruction output for a live TAC step.
+
+**Fix:** [ArmSemantics.lean](CredibleCompilation/ArmSemantics.lean) — `verifiedGenInstr .copy dst src` now checks `dst == src` at the top. On self-copy it emits `[.movR .x0 .x0]` (a scratch-register write, semantically a no-op since `.x0` is excluded from the layout by `regConventionSafe`). Non-self-copy falls through to the existing ireg/freg/stack case split unchanged.
+
+**Proof plumbing:**
+- [ArmCorrectness.lean](CredibleCompilation/ArmCorrectness.lean): `verifiedGenInstr_correct`'s `.copy` arm wraps the existing logic in `by_cases hxy : x = y`. Self-copy branch: one `ArmStep.movR .x0 .x0`; `ExtStateRel` preserved because `.x0` is scratch (discharged per VarLoc case). The three existing subcases (FP, non-freg→freg, non-freg→non-freg) get `if_neg hxy` added to their `simp` so the new leading `if dst == src` reduces to the else branch.
+- [CodeGen.lean](CredibleCompilation/CodeGen.lean): `generateAsm_total`'s `.copy` case wraps in `by_cases hxy`; self-copy branch provides `[.movR .x0 .x0]` as witness; non-self-copy branch unchanged modulo a `hxy_false`-driven `simp only` to reduce the new if.
+
+**Notes:**
+- PeepholeOpt already removes self-copies ([PeepholeOpt.lean:34](CredibleCompilation/PeepholeOpt.lean#L34)), so in a standard pipeline the emitted nop is never actually generated. Zero practical overhead.
+- Phase 5 can now prove `instrLength ≥ 1` for every live TAC instruction unconditionally (no hypothesis burden on downstream).
+- Probes confirmed the other `.refl` arms in step_simulation are either terminal configs (halt, typeError — unreachable in infinite traces) or intermediate sub-lemmas (vLoadVar no-ops inside save/restore machinery that composes with non-refl steps). The self-copy case was the only genuine blocker.
+
+**Status:** 0 sorrys; full `lake build` green. Files touched: 3. Net: +58 / −16.
+
+---
+
 ## BoundsOptCert Phase 6: un-wire isBoundsSafe (2026-04-21)
 
 **Goal:** Phase 6 of plans/certified-interval-pangolin.md — un-wire `isBoundsSafe`'s hard `false` so the verified codegen produces real elision decisions driven by the Phase 3 checker. Discharges the Phase-5 oracle from the validated `buildVerifiedInvMap` invariant threaded step-by-step through `tacToArm_refinement`. Re-enables the `boundsSafe = true` path end-to-end.
