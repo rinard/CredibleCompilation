@@ -1753,6 +1753,179 @@ theorem verifiedGenBoolExpr_length_pos (layout : VarLayout) (be : BoolExpr)
     omega
   | bexpr e => simp [BoolExpr.hasSimpleOps] at hSimple
 
+/-- Under `RegConventionSafe` + layout completeness + `layout v` not in a float
+    register, `vLoadVar layout v .x0` emits ≥ 1 instruction. The `.ireg .x0`
+    sub-case is ruled out by `RegConventionSafe.not_x0`; `.freg _` and `none`
+    are ruled out by the caller's hypotheses. Used by the `.copy` arm of
+    `verifiedGenInstr_output_pos` (Phase 5b) to rule out the `vLoadVar` part
+    of `vLoadVar src .x0 ++ vStoreVar dst .x0` emitting `[]`. -/
+private theorem vLoadVar_length_pos_of_not_freg (layout : VarLayout) (v : Var)
+    (hRC : RegConventionSafe layout)
+    (hMapped : layout v ≠ none)
+    (hNotFreg : ∀ r, layout v ≠ some (.freg r)) :
+    1 ≤ (vLoadVar layout v .x0).length := by
+  unfold vLoadVar
+  cases hLv : layout v with
+  | none => exact absurd hLv hMapped
+  | some loc =>
+    cases loc with
+    | stack off => simp
+    | freg r => exact absurd hLv (hNotFreg r)
+    | ireg r =>
+      have hNeX0 : r ≠ .x0 := fun h => (hRC.not_x0 v) (h ▸ hLv)
+      have hBool : (r == ArmReg.x0) = false := by
+        rcases r <;> simp_all <;> rfl
+      simp [hBool]
+
+/-- `verifiedGenInstr` for `.copy dst src` emits ≥ 1 ARM instruction when it
+    returns `some`. The hardest constructor: all four subcases of the
+    non-self-copy branch (freg-src + stack/freg-dst; non-freg-src + freg-dst;
+    non-freg-src + non-freg-dst) need the full hypothesis bundle to rule out
+    `vStoreVarFP`/`vLoadVar`/`vStoreVar` emitting `[]`. -/
+private theorem verifiedGenInstr_copy_output_pos
+    (Γ : TyCtx) (layout : VarLayout) (pcMap : Nat → Nat)
+    (dst src : Var)
+    (haltS divS boundsS : Nat) (arrayDecls : List (ArrayName × Nat × VarTy))
+    (safe : Bool)
+    {instrs : List ArmInstr}
+    (hGen : verifiedGenInstr layout pcMap (.copy dst src)
+      haltS divS boundsS arrayDecls safe = some instrs)
+    (hRC : RegConventionSafe layout)
+    (hInj : VarLayoutInjective layout)
+    (hWTL : WellTypedLayout Γ layout)
+    (hWTI : WellTypedInstr Γ arrayDecls (.copy dst src))
+    (hMapped : ∀ v, v ∈ (TAC.copy dst src).vars → layout v ≠ none) :
+    1 ≤ instrs.length := by
+  have hRCb : layout.regConventionSafe = true := by
+    cases hbool : layout.regConventionSafe
+    · simp [verifiedGenInstr, hbool] at hGen
+    · rfl
+  have hIIb : layout.isInjective = true := by
+    cases hbool : layout.isInjective
+    · simp [verifiedGenInstr, hRCb, hbool] at hGen
+    · rfl
+  have hVars_dst : dst ∈ TAC.vars (.copy dst src) := by simp [TAC.vars]
+  have hVars_src : src ∈ TAC.vars (.copy dst src) := by simp [TAC.vars]
+  have hMdst : layout dst ≠ none := hMapped dst hVars_dst
+  have hMsrc : layout src ≠ none := hMapped src hVars_src
+  have hTyEq : Γ dst = Γ src := match hWTI with | .copy h => h
+  by_cases hEq : dst = src
+  · -- Self-copy: `[.movR .x0 .x0]`
+    subst hEq
+    have hOutput : instrs = [.movR .x0 .x0] := by
+      simp [verifiedGenInstr, hRCb, hIIb] at hGen; exact hGen.symm
+    rw [hOutput]; simp
+  · have hEqFalse : (dst == src) = false := by simp [hEq]
+    by_cases hSrcFreg : ∃ r, layout src = some (.freg r)
+    · -- Freg src: output = vStoreVarFP dst r
+      obtain ⟨r, hLsrc⟩ := hSrcFreg
+      -- Invert WellTypedLayout to derive Γ src = .float from freg placement.
+      have hSrcFloat : Γ src = .float := by
+        cases hTy : Γ src with
+        | float => rfl
+        | int  => exact absurd hLsrc (hWTL.1 src r (by rw [hTy]; decide))
+        | bool => exact absurd hLsrc (hWTL.1 src r (by rw [hTy]; decide))
+      have hDstFloat : Γ dst = .float := hTyEq.trans hSrcFloat
+      have hDstNotIreg : ∀ r', layout dst ≠ some (.ireg r') :=
+        hWTL.float_not_ireg hDstFloat
+      have hOutput : instrs = vStoreVarFP layout dst r := by
+        simp [verifiedGenInstr, hRCb, hIIb, hLsrc, hEqFalse] at hGen
+        exact hGen.symm
+      rw [hOutput]
+      unfold vStoreVarFP
+      cases hLdst : layout dst with
+      | none => exact absurd hLdst hMdst
+      | some loc =>
+        cases loc with
+        | ireg r' => exact absurd hLdst (hDstNotIreg r')
+        | stack off => simp
+        | freg r' =>
+          -- Injectivity: if layout src = .freg r = layout dst, then dst = src.
+          have hNeR : r' ≠ r := by
+            intro hRR; subst hRR
+            exact hEq (hInj dst src _ hLdst hLsrc)
+          have hBool : (r' == r) = false := by
+            rcases r', r <;> simp_all <;> rfl
+          simp [hBool]
+    · -- Non-freg src
+      have hNotFregSrc : ∀ r, layout src ≠ some (.freg r) := fun r h =>
+        hSrcFreg ⟨r, h⟩
+      have hLenLoadSrc :=
+        vLoadVar_length_pos_of_not_freg layout src hRC hMsrc hNotFregSrc
+      by_cases hDstFreg : ∃ r, layout dst = some (.freg r)
+      · -- Non-freg src + freg dst: output = vLoadVar src .x0 ++ [.fmovToFP rf .x0]
+        obtain ⟨rf, hLdst⟩ := hDstFreg
+        have hOutput : instrs = vLoadVar layout src .x0 ++ [.fmovToFP rf .x0] := by
+          cases hLsrc : layout src with
+          | none =>
+            simp [verifiedGenInstr, hRCb, hIIb, hLsrc, hLdst, hEqFalse] at hGen
+            exact hGen.symm
+          | some loc =>
+            cases loc with
+            | freg r => exact absurd hLsrc (hNotFregSrc r)
+            | stack _ =>
+              simp [verifiedGenInstr, hRCb, hIIb, hLsrc, hLdst, hEqFalse] at hGen
+              exact hGen.symm
+            | ireg _ =>
+              simp [verifiedGenInstr, hRCb, hIIb, hLsrc, hLdst, hEqFalse] at hGen
+              exact hGen.symm
+        rw [hOutput]
+        simp only [List.length_append, List.length_cons, List.length_nil]
+        omega
+      · -- Non-freg src + non-freg dst: output = vLoadVar src .x0 ++ vStoreVar dst .x0
+        have hNotFregDst : ∀ r, layout dst ≠ some (.freg r) := fun r h =>
+          hDstFreg ⟨r, h⟩
+        have hOutput : instrs = vLoadVar layout src .x0 ++ vStoreVar layout dst .x0 := by
+          cases hLsrc : layout src with
+          | none =>
+            cases hLdst : layout dst with
+            | none =>
+              simp [verifiedGenInstr, hRCb, hIIb, hLsrc, hLdst, hEqFalse] at hGen
+              exact hGen.symm
+            | some locDst =>
+              cases locDst with
+              | freg r => exact absurd hLdst (hNotFregDst r)
+              | stack _ =>
+                simp [verifiedGenInstr, hRCb, hIIb, hLsrc, hLdst, hEqFalse] at hGen
+                exact hGen.symm
+              | ireg _ =>
+                simp [verifiedGenInstr, hRCb, hIIb, hLsrc, hLdst, hEqFalse] at hGen
+                exact hGen.symm
+          | some locSrc =>
+            cases locSrc with
+            | freg r => exact absurd hLsrc (hNotFregSrc r)
+            | stack _ =>
+              cases hLdst : layout dst with
+              | none =>
+                simp [verifiedGenInstr, hRCb, hIIb, hLsrc, hLdst, hEqFalse] at hGen
+                exact hGen.symm
+              | some locDst =>
+                cases locDst with
+                | freg r => exact absurd hLdst (hNotFregDst r)
+                | stack _ =>
+                  simp [verifiedGenInstr, hRCb, hIIb, hLsrc, hLdst, hEqFalse] at hGen
+                  exact hGen.symm
+                | ireg _ =>
+                  simp [verifiedGenInstr, hRCb, hIIb, hLsrc, hLdst, hEqFalse] at hGen
+                  exact hGen.symm
+            | ireg _ =>
+              cases hLdst : layout dst with
+              | none =>
+                simp [verifiedGenInstr, hRCb, hIIb, hLsrc, hLdst, hEqFalse] at hGen
+                exact hGen.symm
+              | some locDst =>
+                cases locDst with
+                | freg r => exact absurd hLdst (hNotFregDst r)
+                | stack _ =>
+                  simp [verifiedGenInstr, hRCb, hIIb, hLsrc, hLdst, hEqFalse] at hGen
+                  exact hGen.symm
+                | ireg _ =>
+                  simp [verifiedGenInstr, hRCb, hIIb, hLsrc, hLdst, hEqFalse] at hGen
+                  exact hGen.symm
+        rw [hOutput]
+        simp only [List.length_append]
+        omega
+
 -- ────────────────────────────────────────────────────────────
 -- § 8e. verifiedGenInstr output length is pcMap-independent
 -- ────────────────────────────────────────────────────────────
