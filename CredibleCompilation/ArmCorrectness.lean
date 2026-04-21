@@ -2360,12 +2360,39 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
     rename_i x y
     have heq : instr = .copy x y := Option.some.inj (hInstr.symm.trans hinstr)
     rw [heq] at hSome
+    -- Self-copy `.copy x x` takes a dedicated nop branch in verifiedGenInstr.
+    by_cases hxy : x = y
+    · -- Self-copy: instrs = [.movR .x0 .x0]. One ARM step; σ is unchanged.
+      subst hxy
+      have hInstrs : instrs = [.movR .x0 .x0] := by
+        simp [verifiedGenInstr, hRC, hII] at hSome; exact hSome.symm
+      rw [hInstrs] at hCodeInstr hPcNext
+      have hMov := hCodeInstr.head; rw [← hPcRel] at hMov
+      refine ⟨(s.setReg .x0 (s.regs .x0)).nextPC,
+        .single (.movR .x0 .x0 hMov), ⟨?_, ?_, ?_⟩⟩
+      · -- ExtStateRel: writing scratch .x0 doesn't touch any layout var
+        -- (regConventionSafe excludes .x0). σ[x ↦ σ x] = σ.
+        intro w loc hw
+        have : (σ[x ↦ σ x]) w = σ w := by
+          simp only [Store.update]; split <;> simp_all
+        rw [this]
+        match loc with
+        | .stack off => simpa [ArmState.nextPC, ArmState.setReg] using hStateRel w (.stack off) hw
+        | .ireg r =>
+          have hne : r ≠ .x0 := fun h => absurd (h ▸ hw) (hRegConv.not_x0 w)
+          simpa [ArmState.nextPC, ArmState.setReg, hne] using hStateRel w (.ireg r) hw
+        | .freg r => simpa [ArmState.nextPC, ArmState.setReg] using hStateRel w (.freg r) hw
+      · have := hPcNext _ _ rfl; simp at this
+        simp only [ArmState.nextPC, ArmState.setReg]; rw [hPcRel, ← this]; rfl
+      · simp [ArmState.nextPC, ArmState.setReg, hArrayMem]
+    -- Non-self-copy: fall through to the original case split.
+    have hxy_false : (x == y) = false := by simp [hxy]
     -- Case split on whether source is in freg
     by_cases hYFreg : ∃ r, layout y = some (.freg r)
     · -- FP copy path: src y is in freg r, code = vStoreVarFP layout x r
       obtain ⟨r, hLY⟩ := hYFreg
       have hInstrs : instrs = vStoreVarFP layout x r := by
-        simp [verifiedGenInstr, hRC, hII, hLY] at hSome; exact hSome.symm
+        simp [verifiedGenInstr, hRC, hII, hLY, if_neg hxy] at hSome; exact hSome.symm
       rw [hInstrs] at hCodeInstr hPcNext
       have hYVal : s.fregs r = (σ y).encode := hStateRel.read_freg hLY
       -- Derive that x is float-typed (hence not in ireg)
@@ -2447,7 +2474,7 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
           match hLY : layout y with
           | some (.freg r) => exact absurd hLY (hNotFregY r)
           | some (.stack _) | some (.ireg _) | none =>
-            have := hSome; simp [verifiedGenInstr, hRC, hII, hLY, hLX] at this
+            have := hSome; simp [verifiedGenInstr, hRC, hII, hLY, hLX, if_neg hxy] at this
             exact this.symm
         rw [hInstrs] at hCodeInstr hPcNext
         have hCodeL := hCodeInstr.append_left
@@ -2480,7 +2507,7 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
             match hLX' : layout x with
             | some (.freg r) => exact absurd hLX' (hNotFregX r)
             | some (.stack _) | some (.ireg _) | none =>
-              have := hSome; simp [verifiedGenInstr, hRC, hII, hLY, hLX'] at this
+              have := hSome; simp [verifiedGenInstr, hRC, hII, hLY, hLX', if_neg hxy] at this
               exact this.symm
         rw [hInstrs] at hCodeInstr hPcNext
         have hCodeL := hCodeInstr.append_left

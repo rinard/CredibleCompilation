@@ -2187,12 +2187,19 @@ private theorem verifiedGenInstr_total
   case halt => unfold verifiedGenInstr; simp [hRC, hII]
   case copy hty =>
     rename_i dst src
-    unfold verifiedGenInstr; simp only [hRC, hII, Bool.not_true, Bool.false_or]
-    clear hSimple hty hComplete hNotPrint
-    cases List.lookup src layout.entries <;> cases List.lookup dst layout.entries <;> dsimp
-    all_goals (first | exact ⟨_, rfl⟩ | skip)
-    all_goals split <;> (first | exact ⟨_, rfl⟩ | skip)
-    all_goals split <;> exact ⟨_, rfl⟩
+    by_cases hxy : dst = src
+    · -- Self-copy: verifiedGenInstr emits `[.movR .x0 .x0]`.
+      refine ⟨[.movR .x0 .x0], ?_⟩
+      subst hxy
+      unfold verifiedGenInstr; simp [hRC, hII]
+    · have hxy_false : (dst == src) = false := by simp [hxy]
+      unfold verifiedGenInstr
+      simp only [hRC, hII, Bool.not_true, Bool.false_or, hxy_false, if_false]
+      clear hSimple hty hComplete hNotPrint
+      cases List.lookup src layout.entries <;> cases List.lookup dst layout.entries <;> dsimp
+      all_goals (first | exact ⟨_, rfl⟩ | skip)
+      all_goals split <;> (first | exact ⟨_, rfl⟩ | skip)
+      all_goals split <;> exact ⟨_, rfl⟩
   case const hty =>
     rename_i x v
     have hx := hComplete x (List.mem_cons.mpr (Or.inl rfl))

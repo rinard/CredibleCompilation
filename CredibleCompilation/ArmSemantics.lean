@@ -1462,13 +1462,21 @@ def verifiedGenInstr (layout : VarLayout) (pcMap : Nat → Nat) (instr : TAC)
       some (formalLoadImm64 .x0 f ++ [.fmovToFP dst_reg .x0] ++ vStoreVarFP layout v dst_reg)
     | _ => none
   | .copy dst src =>
-    -- Check if source is in a float register; if so, use FP path
-    match layout src with
-    | some (.freg r) => some (vStoreVarFP layout dst r)
-    | _ =>
-      match layout dst with
-      | some (.freg r) => some (vLoadVar layout src .x0 ++ [.fmovToFP r .x0])
-      | _ => some (vLoadVar layout src .x0 ++ vStoreVar layout dst .x0)
+    -- Self-copy `.copy x x` is a source-level no-op. `vStoreVarFP` would
+    -- elide its fmov when dst and src share a freg, producing 0 ARM
+    -- instructions — which breaks the "live TAC step ⇒ ≥1 ARM step"
+    -- property Phase 5's divergence argument needs. Emit a scratch-register
+    -- nop (`mov .x0 .x0`; `.x0` is excluded from the layout by
+    -- `regConventionSafe`, so it's `ExtStateRel`-insensitive) instead.
+    if dst == src then some [.movR .x0 .x0]
+    else
+      -- Check if source is in a float register; if so, use FP path
+      match layout src with
+      | some (.freg r) => some (vStoreVarFP layout dst r)
+      | _ =>
+        match layout dst with
+        | some (.freg r) => some (vLoadVar layout src .x0 ++ [.fmovToFP r .x0])
+        | _ => some (vLoadVar layout src .x0 ++ vStoreVar layout dst .x0)
   | .binop dst op lv rv =>
     match layout lv, layout rv, layout dst with
     | some (.freg _), _, _ => none
