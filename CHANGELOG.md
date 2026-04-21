@@ -4,6 +4,33 @@ Chronological record of what was built and why, to reconstruct the sequence of d
 
 ---
 
+## BoundsOptCert Phase 3 completion: full-fidelity checker soundness (2026-04-21)
+
+**Goal:** Close out Phase 3 of plans/certified-interval-pangolin.md by lifting the two scope cuts (`certSuccessor`'s `.ifgoto` returning `m`, `.mul` dropping destination unconditionally). The checker now refines through comparison guards and accepts bounded multiplication.
+
+**Shipped** ([BoundsOptCert.lean](CredibleCompilation/BoundsOptCert.lean)):
+
+- **7 new refineCond leaves** — `refineCond_{lt,le}_{lit,var}_{true,false}_sound` (with `refineCond_lt_lit_true_sound` from the prep commit as the 8th). `.var bnd` variants use the `biv.lo + 1 = biv.hi` singleton condition to force `σ bnd`'s `toNat` equal to `biv.lo.toNat`, then apply the appropriate signed-unsigned bridge.
+- **`refineCond_sound`** — structural induction on `BoolExpr`. `.not inner` flips `isTrue` (via `congrArg Bool.not` + direction manipulation) and recurses on `inner`; `.cmp` dispatches by `cases op / e1 / e2` with the 8 leaves at the supported shapes (all others fall through to `m`). Handled the `.cmp` catchall via nested `cases` rather than a single catchall `_, _, _` match — Lean's reducer won't unfold `refineCond` on abstract constructors, so concrete destructuring is required.
+- **`BitVec64.toNat_mul_small`** — `(a * b).toNat = a.toNat * b.toNat` when both `< 2¹⁶`. `Nat.mul_le_mul` + `decide` on the constant upper bound gives the no-wrap proof.
+- **`mul_sound`** + **`validIntervalMul`** — `.binop x .mul y z` soundness gated on both operand intervals having `hi ≤ mulCap = 2¹⁶`. Output range `⟨iy.lo * iz.lo, (iy.hi - 1) * (iz.hi - 1) + 1⟩`. Uses `Int.toNat_mul` for the nonneg-product transport and `Nat.mul_le_mul` for the range bound.
+- **`certSuccessor` rewired** — now takes `pc` alongside `succPC` (needed to distinguish iftrue-branch from iffall-branch when they coincide). `.ifgoto be l` calls `refineCond m be true` iff `succPC = l ∧ succPC ≠ pc + 1` (unambiguous true-branch), `refineCond m be false` iff the symmetric condition, otherwise `m` (the ambiguous `l = pc + 1` case where both `Step.iftrue` and `Step.iffall` target `pc + 1`). `.mul` uses the new `mul_sound` under `validIntervalMul` gating.
+- **`certSuccessor_sound`** `iftrue`/`iffall`/`.mul` arms updated to dispatch via `refineCond_sound` / `mul_sound`. `checkLocalPreservation` and `checkLocalPreservation_sound` updated to pass `pc` to `certSuccessor`.
+
+**Structural surprises:**
+
+- **`.var bnd` singleton step**: straightforward — combine `validIntervalLoose biv` (gives `biv.lo ≥ 0`) + `biv.lo + 1 = biv.hi` to force `bv'.toNat = biv.lo.toNat` via `omega` (from `biv.lo.toNat ≤ bv'.toNat < biv.hi.toNat = biv.lo.toNat + 1`).
+- **`l = pc + 1` ambiguity on `.ifgoto`**: When the true-branch target equals the fallthrough, `Step.iftrue` and `Step.iffall` both target `pc + 1`. Without `pc` in `certSuccessor`'s signature, we couldn't tell which refinement to apply. Added `pc` as an explicit parameter and return `m` (no refinement) in the ambiguous case.
+- **`cases op / e1 / e2` with catchall**: tactic-level `match op, e1, e2 with | ... | _, _, _ => simp [refineCond]` doesn't work — Lean's reducer won't unfold `refineCond` on abstract constructors even when the match's wildcard case is "everything not matched by earlier patterns." Instead, use nested `cases` with `with | foo => ... | _ => ...`, which destructures constructors concretely so `simp only [refineCond]` can reduce.
+- **`cases hIT : isTrue` ordering**: Bool's constructor declaration order is `false, true`, so the first goal after `cases isTrue` has `isTrue = false`, not `= true`. Led to several application-type-mismatch errors on an earlier draft where I assumed the opposite order. Fix: name cases explicitly (`case false => ... case true => ...`).
+- **`if isTrue then A else B` where `isTrue : Bool`**: Lean's elaboration turns this into `if isTrue = true then A else B` (Prop-valued `if` via `Decidable`). After destructuring `isTrue`, need `simp only [Bool.false_eq_true, if_false]` or `simp only [if_true]` to reduce the `if true = true then ...` / `if false = true then ...` form.
+
+**Effort vs plan (3–4h estimate):** ~2.5 hours actual. Leaves were mechanical clones of the prototype; `mul_sound` mirrored `add_sound`. Time went into the `cases op / e1 / e2` exploration (Lean's matcher didn't cooperate with a single-level catchall) and the `l = pc + 1` corner-case design for the `.ifgoto` arm.
+
+**Status:** 0 sorrys; full `lake build` green. Files touched: 1 (`BoundsOptCert.lean`); CHANGELOG.
+
+---
+
 ## BoundsOptCert Phase 3 prep: refineCond soundness groundwork (2026-04-21)
 
 **Goal:** De-risk the full-fidelity Phase 3 follow-up (refineCond + mul) by landing the helper lemmas and validating the leaf-proof shape end-to-end. Nothing in this commit is consumed by `checkLocalPreservation_sound` — it all sits downstream, ready for the next session to plug in.
