@@ -465,15 +465,17 @@ private def buildTacPcOf (lengths : Array Nat) : Nat → Option Nat :=
     ((cumLen, i) :: acc, cumLen + (lengths.getD i 0))
   fun armPC => (pairs.1.find? fun p => p.1 == armPC).map Prod.snd
 
-/-- Compute whether a bounds check can be elided for a given instruction at `pc`. -/
-private def isBoundsSafe (arrayDecls : List (ArrayName × Nat × VarTy))
-    (intervals : Array (Option BoundsOpt.IMap)) (pc : Nat) (instr : TAC) : Bool :=
-  match instr with
-  | .arrLoad _ arr idx _ | .arrStore arr idx _ _ =>
-    match intervals.getD pc none with
-    | some m => (BoundsOpt.imLookup m idx).inBounds (arraySize arrayDecls arr)
-    | none => false
-  | _ => false
+/-- Compute whether a bounds check can be elided for a given instruction at `pc`.
+    Phase 4: temporarily wired to `false` unconditionally because
+    `verifiedGenInstr_correct`'s `arrLoad_boundsError` / `arrStore_boundsError`
+    arms must step the ARM trace to `boundsS`, which requires the emitted
+    `cmpImm`/`bCond .hs boundsS` instructions to be present.  Re-enabling the
+    elision requires wiring `BoundsOpt.analyzeIntervals` soundness into
+    verifiedGenInstr_correct so we can refute the boundsError step when
+    `boundsSafe = true`. -/
+private def isBoundsSafe (_arrayDecls : List (ArrayName × Nat × VarTy))
+    (_intervals : Array (Option BoundsOpt.IMap)) (_pc : Nat) (_instr : TAC) : Bool :=
+  false
 
 -- ============================================================
 -- § 3. Well-formedness checks (discharge proof hypotheses at runtime)
@@ -856,14 +858,16 @@ structure GenAsmSpec (tyCtx : TyCtx) (p : Prog) (r : VerifiedAsmResult) : Prop w
   injective : VarLayoutInjective r.layout
   /-- bodyPerPC has one entry per TAC instruction. -/
   bodySize : r.bodyPerPC.size = p.size
-  /-- Each non-print, non-lib-call bodyPerPC entry was produced by verifiedGenInstr.
-      Print PCs use unverified codegen; lib-call PCs are wrapped (see callSiteSaveRestore). -/
+  /-- Each non-print, non-lib-call bodyPerPC entry was produced by verifiedGenInstr
+      with `boundsSafe = false` (Phase 4: BoundsOpt elision disabled so that the
+      arrLoad/arrStore bounds-error arms can step to `boundsS` through the
+      emitted `cmpImm`/`bCond .hs` pair). Print PCs use unverified codegen;
+      lib-call PCs are wrapped (see callSiteSaveRestore). -/
   instrGen : ∀ pc, (hpc : pc < p.size) →
     isLibCallTAC p[pc] = false →
     (∀ fmt vs, p[pc] ≠ .print fmt vs) →
-    ∃ safe : Bool,
       verifiedGenInstr r.layout r.pcMap p[pc]
-        r.haltS r.divS r.boundsS p.arrayDecls safe =
+        r.haltS r.divS r.boundsS p.arrayDecls false =
       some (r.bodyPerPC[pc]'(bodySize ▸ hpc))
   /-- pcMap is the prefix sum of bodyPerPC lengths. -/
   pcMapLengths : ∃ lengths : Array Nat,
@@ -3524,7 +3528,12 @@ theorem verifiedGenerateAsm_spec {tyCtx : TyCtx} {p : Prog} {r : VerifiedAsmResu
               · rename_i armInstrs hGenInstr
                 have : isLibCallTAC p.code[pc] = false := hNotLib
                 rw [this] at hStep; simp at hStep
-                exact ⟨_, (Array.push_inj hStep) ▸ hGenInstr⟩
+                -- `isBoundsSafe` is hard-wired to `false`; normalize the safe flag.
+                show verifiedGenInstr _ _ _ _ _ _ _ false = some _
+                have hbs : isBoundsSafe p.arrayDecls (BoundsOpt.analyzeIntervals p) pc
+                    p.code[pc] = false := rfl
+                rw [hbs] at hGenInstr
+                exact (Array.push_inj hStep) ▸ hGenInstr
           case pcMapLengths =>
             refine ⟨_, ?_, rfl, ?_⟩
             · simp [List.length_map, List.length_range, hBSz]
@@ -3894,11 +3903,12 @@ private theorem step_simulation {tyCtx : TyCtx} {p : Prog} {r : VerifiedAsmResul
     (spec : GenAsmSpec tyCtx p r)
     {pc : Nat} {σ : Store} {am : ArrayMem} {cfg' : Cfg} {s : ArmState}
     (hStep : p ⊩ Cfg.run pc σ am ⟶ cfg')
-    (hRel : ExtSimRel r.layout r.pcMap (.run pc σ am) s)
+    (hRel : ExtSimRel r.layout r.pcMap r.divS r.boundsS (.run pc σ am) s)
     (hPC : pc < p.size)
     (hTS : TypedStore tyCtx σ) :
     ∃ s', ArmSteps r.bodyFlat s s' ∧
-          ExtSimRel r.layout r.pcMap cfg' s' := by
+          ExtSimRel r.layout r.pcMap r.divS r.boundsS cfg' s' ∧
+          (∀ σ' am', cfg' = .halt σ' am' → s'.pc = r.haltFinal) := by
   -- Case split: lib-call, print, or normal instruction
   by_cases hLib : isLibCallTAC p[pc] = true
   · -- Lib-call case: save/restore around computation (excludes destination)
@@ -5352,7 +5362,9 @@ private theorem step_simulation {tyCtx : TyCtx} {p : Prog} {r : VerifiedAsmResul
     -- Prove ExtSimRel for the final state
     obtain ⟨hFresh, hNodup, hCoversIreg, hCoversFreg, hUniqIreg, hUniqFreg⟩ :=
       spec.callerSaveSpec
-    refine ⟨s_final, hAllSteps, ?_, ?_, ?_⟩
+    refine ⟨s_final, hAllSteps, ⟨?_, ?_, ?_⟩, ?haltCond⟩
+    case haltCond =>
+      intro σ' am' hEq; exact Cfg.noConfusion hEq
     · -- ExtStateRel via callerSave_composition_excluding
       -- entries ⊆ genCallerSaveAll (callerSaveEntries filters genCallerSaveAll)
       have hEntriesSub : entries.Sublist (genCallerSaveAll r.layout r.varMap) := by
@@ -5463,7 +5475,9 @@ private theorem step_simulation {tyCtx : TyCtx} {p : Prog} {r : VerifiedAsmResul
       have hAllSteps : ArmSteps r.bodyFlat s s_final :=
         hStepSaves.trans ((ArmSteps.single hStepPrint1).trans hStepRestores)
       -- Prove ExtSimRel for the final state
-      refine ⟨s_final, hAllSteps, ?_, ?_, ?_⟩
+      refine ⟨s_final, hAllSteps, ⟨?_, ?_, ?_⟩, ?haltCond⟩
+      case haltCond =>
+        intro σ' am' hEq; exact Cfg.noConfusion hEq
       · -- ExtStateRel: callerSave_composition on the logical state, then
         -- transfer to s_final via pc-independence.
         -- First, get the logical result
@@ -5510,8 +5524,9 @@ private theorem step_simulation {tyCtx : TyCtx} {p : Prog} {r : VerifiedAsmResul
         intro fmt vs h; exact hPrint ⟨fmt, vs, h⟩
       have hNotLib : isLibCallTAC p[pc] = false := by
         cases h : isLibCallTAC p[pc] <;> simp_all
-      -- Get instrs from instrGen
-      obtain ⟨safe, hSome⟩ := spec.instrGen pc hPC hNotLib hNotPrint
+      -- Get instrs from instrGen (safe = false after Phase 4 BoundsOpt-elision stand-down).
+      have hSome := spec.instrGen pc hPC hNotLib hNotPrint
+      let safe : Bool := false
       -- Get pcMap = buildPcMap lengths with element-wise equality
       obtain ⟨lengths, hLSz, hPcMap, hLenEq⟩ := spec.pcMapLengths
       have hpcB : pc < r.bodyPerPC.size := spec.bodySize ▸ hPC
@@ -5591,9 +5606,19 @@ private theorem step_simulation {tyCtx : TyCtx} {p : Prog} {r : VerifiedAsmResul
             spec.varMapInjOnOffsets
             spec.layoutStackComesFromVarMap
             hCodeSave
-        refine ⟨s_fin, (ArmSteps.single hStep1).trans hSteps, hRel_fin, ?_⟩
-        show s_fin.arrayMem = am
-        rw [hAM_fin, hAM1]
+        refine ⟨s_fin, (ArmSteps.single hStep1).trans hSteps, ⟨hRel_fin, ?_⟩, ?haltCond⟩
+        · show s_fin.arrayMem = am
+          rw [hAM_fin, hAM1]
+        case haltCond =>
+          intro σ' am' _hEq
+          -- s_fin.pc = s1.pc + (genHaltSave ...).length = r.haltS + haltSaveBlock.size = r.haltFinal
+          have hSaveLen : (genHaltSave p.observable r.layout r.varMap).length =
+              r.haltSaveBlock.toList.length := by
+            rw [spec.haltSaveBlock_eq]
+          rw [hPC_fin, show s1.pc = r.haltS from rfl, hSaveLen]
+          rw [show r.haltSaveBlock.toList.length = r.haltSaveBlock.size from by
+              rw [Array.length_toList]]
+          exact spec.haltFinal_eq.symm
       · -- hNCSL/hNCSLBin: vacuously true (not a lib-call)
         have hNCSL : ∀ x op y, p[pc] = .floatUnary x op y →
             op.isNative = false → NoCallerSavedLayout r.layout := by
@@ -5619,12 +5644,23 @@ private theorem step_simulation {tyCtx : TyCtx} {p : Prog} {r : VerifiedAsmResul
             NoCallerSavedLayout r.layout := by
           intro lit heq
           simp [isLibCallTAC, heq] at hNotLib
-        exact ext_backward_simulation p r.bodyFlat r.layout r.pcMap
-          r.haltS r.divS r.boundsS p.arrayDecls safe
+        obtain ⟨s', hArmSteps, hRelOut⟩ := ext_backward_simulation p r.bodyFlat r.layout r.pcMap
+          r.haltS r.divS r.boundsS p.arrayDecls safe rfl
           hStep hRel hPC tyCtx spec.wellTypedProg hTS spec.wellTypedLayout
           p[pc] (Prog.getElem?_eq_getElem hPC)
           (r.bodyPerPC[pc]'hpcB) hSome hCodeAt hPcNext
           (spec.layoutComplete pc hPC) rfl hNCSL hNCSLBin hNCSLPrintInt hNCSLPrintBool hNCSLPrintFloat hNCSLPrintStr
+        refine ⟨s', hArmSteps, hRelOut, ?haltCond⟩
+        case haltCond =>
+          intro σ' am' hEq
+          subst hEq
+          -- cfg' = .halt forces p[pc] = .halt via Step inversion, but hHalt says otherwise.
+          cases hStep with
+          | halt hinstr =>
+            have : p[pc] = .halt := by
+              have hGet := Prog.getElem?_eq_getElem hPC
+              rw [hGet] at hinstr; exact Option.some.inj hinstr
+            exact absurd this hHalt
 
 -- ──────────────────────────────────────────────────────────────
 -- Multi-step simulation (main theorem)
@@ -5718,40 +5754,44 @@ theorem tacToArm_refinement {tyCtx : TyCtx} {p : Prog} {r : VerifiedAsmResult}
     (hGen : verifiedGenerateAsm tyCtx p = .ok r)
     {pc : Nat} {σ : Store} {am : ArrayMem}
     (s : ArmState)
-    (hRel : ExtSimRel r.layout r.pcMap (.run pc σ am) s)
+    (hRel : ExtSimRel r.layout r.pcMap r.divS r.boundsS (.run pc σ am) s)
     (hTS : TypedStore tyCtx σ)
     (cfg' : Cfg) (hSteps : p ⊩ Cfg.run pc σ am ⟶* cfg') :
     ∃ s', ArmSteps r.bodyFlat s s' ∧
-          ExtSimRel r.layout r.pcMap cfg' s' := by
+          ExtSimRel r.layout r.pcMap r.divS r.boundsS cfg' s' ∧
+          (∀ σ' am', cfg' = .halt σ' am' → s'.pc = r.haltFinal) := by
   have spec := verifiedGenerateAsm_spec hGen
   -- Generalize the start config for induction (pattern from type_preservation_steps)
   suffices ∀ c c_end, Steps p c c_end →
       ∀ pc σ am s,
         c = Cfg.run pc σ am →
-        ExtSimRel r.layout r.pcMap (.run pc σ am) s →
+        ExtSimRel r.layout r.pcMap r.divS r.boundsS (.run pc σ am) s →
         TypedStore tyCtx σ →
         ∃ s', ArmSteps r.bodyFlat s s' ∧
-              ExtSimRel r.layout r.pcMap c_end s' from
+              ExtSimRel r.layout r.pcMap r.divS r.boundsS c_end s' ∧
+              (∀ σ' am', c_end = .halt σ' am' → s'.pc = r.haltFinal) from
     this _ _ hSteps pc σ am s rfl hRel hTS
   intro c c_end hSteps
   induction hSteps with
   | refl =>
-    intro pc σ am s hc hRel _; subst hc; exact ⟨s, .refl, hRel⟩
+    intro pc σ am s hc hRel _; subst hc
+    refine ⟨s, .refl, hRel, ?_⟩
+    intro σ' am' hEq; exact Cfg.noConfusion hEq
   | step hStep rest ih =>
     intro pc σ am s hc hRel hTS_cur; subst hc
     have hPC := Step.pc_lt_of_step hStep
-    obtain ⟨s_mid, hArm1, hRel_mid⟩ :=
+    obtain ⟨s_mid, hArm1, hRel_mid, _hHaltMid⟩ :=
       step_simulation spec hStep hRel hPC hTS_cur
     -- Classify the one-step successor
     rcases step_run_or_terminal spec.wellTypedProg hTS_cur hPC hStep with
       ⟨pc', σ', am', hEq, hTS'⟩ | hTerminal
     · -- Successor is .run: subst and apply IH
       subst hEq
-      obtain ⟨s', hArm2, hRel'⟩ := ih _ _ _ s_mid rfl hRel_mid hTS'
-      exact ⟨s', hArm1.trans hArm2, hRel'⟩
+      obtain ⟨s', hArm2, hRel', hHalt'⟩ := ih _ _ _ s_mid rfl hRel_mid hTS'
+      exact ⟨s', hArm1.trans hArm2, hRel', hHalt'⟩
     · -- Successor is terminal: rest must be refl
       cases rest with
-      | refl => exact ⟨s_mid, hArm1, hRel_mid⟩
+      | refl => exact ⟨s_mid, hArm1, hRel_mid, _hHaltMid⟩
       | step h _ => exact absurd h (hTerminal _)
 
 /-- Corollary: initial ExtSimRel establishment.
@@ -5759,6 +5799,7 @@ theorem tacToArm_refinement {tyCtx : TyCtx} {p : Prog} {r : VerifiedAsmResult}
     the ARM state's registers/stack/fregs are all zero at PC = pcMap 0,
     then `ExtSimRel` holds at the initial configuration. -/
 theorem initial_extSimRel (layout : VarLayout) (pcMap : Nat → Nat)
+    (divS boundsS : Nat)
     (σ₀ : Store) (am₀ : ArrayMem) (s₀ : ArmState)
     (hEncode : ∀ v, (σ₀ v).encode = 0)
     (hPC : s₀.pc = pcMap 0)
@@ -5766,7 +5807,7 @@ theorem initial_extSimRel (layout : VarLayout) (pcMap : Nat → Nat)
     (hFregs : ∀ r, s₀.fregs r = 0)
     (hStack : ∀ off, s₀.stack off = 0)
     (hAM : s₀.arrayMem = am₀) :
-    ExtSimRel layout pcMap (.run 0 σ₀ am₀) s₀ := by
+    ExtSimRel layout pcMap divS boundsS (.run 0 σ₀ am₀) s₀ := by
   refine ⟨?_, ?_, ?_⟩
   · intro v loc hLoc
     rw [hEncode]
@@ -5802,9 +5843,10 @@ theorem tacToArm_correctness {tyCtx : TyCtx} {p : Prog} {r : VerifiedAsmResult}
     ∃ s', ArmSteps r.bodyFlat
       { regs := fun _ => 0, fregs := fun _ => 0, stack := fun _ => 0,
         pc := r.pcMap 0, flags := ⟨0, 0⟩ } s' ∧
-      ExtSimRel r.layout r.pcMap cfg' s' :=
+      ExtSimRel r.layout r.pcMap r.divS r.boundsS cfg' s' ∧
+      (∀ σ' am', cfg' = .halt σ' am' → s'.pc = r.haltFinal) :=
   tacToArm_refinement hGen _
-    (initial_extSimRel r.layout r.pcMap (Store.typedInit tyCtx) (fun _ _ => 0)
+    (initial_extSimRel r.layout r.pcMap r.divS r.boundsS (Store.typedInit tyCtx) (fun _ _ => 0)
       { regs := fun _ => 0, fregs := fun _ => 0, stack := fun _ => 0,
         pc := r.pcMap 0, flags := ⟨0, 0⟩ }
       (typedInit_encode tyCtx) rfl (fun _ => rfl) (fun _ => rfl) (fun _ => rfl) rfl)

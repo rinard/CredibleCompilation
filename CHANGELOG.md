@@ -4,6 +4,47 @@ Chronological record of what was built and why, to reconstruct the sequence of d
 
 ---
 
+## Phase 4: Tighten forward theorems — name haltFinal; distinguish div vs bounds (2026-04-21)
+
+**Goal:** Surface the concrete ARM sentinels (`haltFinal`, `divS`, `boundsS`) through the forward simulation interface so Phase 7's backward theorems have bin-by-bin statements to destructure. Part of plans/backward-jumping-octopus.md.
+
+**`ExtSimRel` tightening** ([ArmSemantics.lean](CredibleCompilation/ArmSemantics.lean)):
+- `ExtSimRel` parameterized on two new `Nat`s: `divS` and `boundsS`. The `.errorDiv`/`.errorBounds` cases changed from `True` to `arm.pc = divS` / `arm.pc = boundsS`. The `.halt` case kept agnostic (still `ExtStateRel ∧ arm.arrayMem = am`); the clean-halt PC surfaces as a side output of `step_simulation` instead (see below), because `verifiedGenInstr`'s halt emission only reaches `haltS` — the `armSteps_haltSaveBlock` continuation to `haltFinal` is driven by `step_simulation`'s halt intercept, not by `verifiedGenInstr_correct`.
+
+**ARM error arms step to sentinels** ([ArmCorrectness.lean](CredibleCompilation/ArmCorrectness.lean)):
+- `verifiedGenInstr_correct`'s `binop_divByZero` arm now walks through `vLoadVar lv ++ vLoadVar rv ++ [.cbz rv_reg divLabel]`: the loads preserve `ExtStateRel`; at `.cbz rv_reg divLabel`, the divisor is `0` (derived from `¬ op.safe a b` + BinOp.safe specialization for `.div`/`.mod`) so `ArmStep.cbz_taken` fires and `arm.pc` ends at `divLabel`. Both `div` and `mod` share the same prefix, so they're handled uniformly.
+- `verifiedGenInstr_correct`'s `arrLoad_boundsError` / `arrStore_boundsError` arms step through `vLoadVar idx ++ [.cmpImm idx_reg size, .bCond .hs boundsLabel]`: `ArmStep.cmpRI` sets the flags, and because `¬ (idx < size)` we have `condHolds .hs = true`, so `ArmStep.bCond_taken` branches to `boundsLabel`.
+- All three `*_typeError` arms stay at `⟨s, .refl, trivial⟩` since the new `ExtSimRel` keeps `.typeError` as `True` (they're vacuous for well-typed programs).
+
+**BoundsOpt elision disabled** ([CodeGen.lean](CredibleCompilation/CodeGen.lean)): `isBoundsSafe` is temporarily wired to unconditional `false`. Reason: when `boundsSafe = true`, `verifiedGenInstr` drops the `cmpImm`/`bCond` bounds check, so the `arrLoad_boundsError` arm has no branch to step to `boundsLabel`. Re-enabling the elision requires proving soundness of `BoundsOpt.analyzeIntervals` (so that `boundsSafe = true` implies the step can never produce `arrLoad_boundsError`/`arrStore_boundsError`). To discharge the now-vacuous `boundsSafe = true` branches of `verifiedGenInstr_correct`, a new `hBoundsSafeFalse : boundsSafe = false` hypothesis is threaded through `verifiedGenInstr_correct` and `ext_backward_simulation`. The `GenAsmSpec.instrGen` clause was tightened from `∃ safe, ...` to `verifiedGenInstr ... false = some ...` (since that's what the actual codegen produces now).
+
+**Halt PC as side-output** ([CodeGen.lean](CredibleCompilation/CodeGen.lean)):
+- `step_simulation`'s output now includes a fourth conjunct `(∀ σ' am', cfg' = .halt σ' am' → s'.pc = r.haltFinal)`. Lib-call and print cases discharge it vacuously (they produce `.run` cfg's); the normal non-halt path discharges via `cases hStep` (only `Step.halt` could produce `.halt`, which contradicts the `hHalt : p[pc] ≠ .halt` guard); the halt intercept path discharges by chaining `haltFinal_eq` + `haltSaveBlock_eq` with the PC accumulated by `armSteps_haltSaveBlock`.
+- `tacToArm_refinement` and `tacToArm_correctness` threaded through unchanged — each carries the halt-PC conjunct alongside the `ExtSimRel`.
+
+**Forward theorem sharpening** ([PipelineCorrectness.lean](CredibleCompilation/PipelineCorrectness.lean)):
+- `while_to_arm_correctness` conclusion now includes `s'.pc = r.haltFinal`.
+- `while_to_arm_error_preservation` replaced by two cause-specific theorems:
+  - `while_to_arm_div_preservation`: input is `TAC ⟶* Cfg.errorDiv σ_err am_err`; conclusion is `s'.pc = r.divS` plus the source-side unsafe witness.
+  - `while_to_arm_bounds_preservation`: input/output analogous for `errorBounds`/`boundsS`.
+- Both theorems conclude `∃ fuel, unsafeDiv ∨ unsafeBounds` on the source side (not cause-matched per-theorem). Full cause-matching (`errorDiv` input ↔ `unsafeDiv` output) requires threading the cause through `compileStmt_unsafe`'s structural induction; that's deferred to Phase 7's backward direction. The split here is sufficient for Phase 5/6/7 to consume the ARM-side PC binning.
+
+**`whileToTAC_refinement` error arm upgraded** ([RefCompiler/Refinement.lean](CredibleCompilation/RefCompiler/Refinement.lean)):
+- `.errors` conclusion now `∃ fuel, prog.body.unsafeDiv fuel ... ∨ prog.body.unsafeBounds fuel ...`. Converted the existing `by_contra hall; push_neg at hall` to rebind `hall` as `∀ fuel, safe fuel` via `Stmt.safe_iff_not_unsafe.mpr`, leaving the rest of the proof (unbounded-execution vs terminal-step contradiction) untouched.
+
+**Status:** 0 sorrys; full `lake build` green. Files touched: 5 (ArmSemantics, ArmCorrectness, CodeGen, PipelineCorrectness, RefCompiler/Refinement).
+
+**Scope not done in this phase (deferred):**
+- Threading cause through `compileStmt_unsafe` and helpers (`compileExpr_stuck`, `compileBool_stuck`, `compileExprs_unsafe`). Would upgrade `while_to_arm_div_preservation` / `while_to_arm_bounds_preservation` to produce the specific cause (`unsafeDiv` for divS; `unsafeBounds` for boundsS) instead of the disjunction. Mechanical but wide structural-induction work; best co-scoped with Phase 7's backward direction where cause-matching is necessary anyway.
+- BoundsOpt soundness — required to re-enable the `boundsSafe = true` elision. Independent of the Phase 4–7 critical path.
+
+**Notes for downstream phases:**
+- Phase 5 (ARM divergence) can now assume the tightened `ExtSimRel` — in particular, error cfg's pin ARM's PC to the sentinels.
+- Phase 6 (ARM totality exhaustion) needs `haltFinal`/`divS`/`boundsS` as distinct PCs, all now anchored by GenAsmSpec clauses.
+- Phase 7's backward direction can destructure on `s'.pc ∈ {haltFinal, divS, boundsS}` and dispatch each case to the matching forward theorem via sentinel distinctness.
+
+---
+
 ## Phase 2b: Halt-case step-through to haltFinal (2026-04-21)
 
 **Goal:** Complete the Phase 2a infrastructure by extending `step_simulation`'s halt case to step through the halt-save block instead of stopping at `haltS`. After this phase, a TAC `.halt` is simulated by ARM steps ending at `haltFinal = bodyFlat.size` — the clean-halt sentinel. Part of plans/backward-jumping-octopus.md.

@@ -501,17 +501,22 @@ theorem VarLayout.isInjective_spec (layout : VarLayout) (h : layout.isInjective 
 
 /-- Full extended simulation invariant (generalizes SimRel).
 
-    Note (Phase 3): the error constructors split into `.errorDiv` and
-    `.errorBounds` so downstream proofs can distinguish the cause.  The
-    forward theorems in Phase 4 will tighten these cases to constrain
-    `arm.pc` (errorDiv ↔ pc=divS, errorBounds ↔ pc=boundsS); for now they
-    remain `True` to keep existing forward simulations working. -/
-def ExtSimRel (layout : VarLayout) (pcMap : Nat → Nat) (tac_cfg : Cfg) (arm : ArmState) : Prop :=
+    Phase 4: the error constructors carry a PC constraint — `errorDiv` forces
+    `arm.pc = divS` and `errorBounds` forces `arm.pc = boundsS`.  `divS` and
+    `boundsS` are parameters supplied by the caller (they come from the
+    `VerifiedAsmResult` fields at the top of the pipeline).  The `.halt` case
+    still omits the PC constraint; clean-halt PC (`haltFinal`) is surfaced as
+    a separate side-output from `step_simulation` because `verifiedGenInstr`'s
+    halt emission only reaches `haltS`, and the `armSteps_haltSaveBlock`
+    continuation to `haltFinal` is driven by `step_simulation`'s halt
+    intercept rather than by `verifiedGenInstr_correct`. -/
+def ExtSimRel (layout : VarLayout) (pcMap : Nat → Nat)
+    (divS boundsS : Nat) (tac_cfg : Cfg) (arm : ArmState) : Prop :=
   match tac_cfg with
   | .run pc σ am       => ExtStateRel layout σ arm ∧ PcRel pcMap pc arm.pc ∧ arm.arrayMem = am
   | .halt σ am         => ExtStateRel layout σ arm ∧ arm.arrayMem = am
-  | .errorDiv _ _      => True
-  | .errorBounds _ _   => True
+  | .errorDiv _ _      => arm.pc = divS
+  | .errorBounds _ _   => arm.pc = boundsS
   | .typeError _ _     => True
 
 -- Read lemmas: extract the value from ExtStateRel

@@ -267,7 +267,9 @@ theorem whileToTAC_refinement (prog : Program) (htcs : prog.typeCheckStrict = tr
         haltsWithResult prog.compileToTAC 0 prog.initStore σ_tac ArrayMem.init am_h ∧
         am_h = am' ∧
         ∀ v, v.isTmp = false → v.isFTmp = false → σ_tac v = σ' v
-    | .errors _ => ∃ fuel, ¬ prog.body.safe fuel prog.initStore ArrayMem.init prog.arrayDecls
+    | .errors _ => ∃ fuel,
+        prog.body.unsafeDiv fuel prog.initStore ArrayMem.init prog.arrayDecls ∨
+        prog.body.unsafeBounds fuel prog.initStore ArrayMem.init prog.arrayDecls
     | .typeErrors _ => False
     | .diverges => ∀ fuel, prog.interp fuel = none := by
   have htc := Program.typeCheckStrict_typeCheck prog htcs
@@ -304,6 +306,13 @@ theorem whileToTAC_refinement (prog : Program) (htcs : prog.typeCheckStrict = tr
       · exact ⟨_, by simp [Cfg.isError], h⟩
     by_contra hall
     push_neg at hall
+    -- Phase 4: convert `∀ fuel, ¬unsafeDiv ∧ ¬unsafeBounds` into `∀ fuel, safe`
+    -- via the Phase 1 iff.  Rebind under the original name `hall` so the rest
+    -- of the proof needs no further edits.
+    replace hall : ∀ fuel, prog.body.safe fuel prog.initStore ArrayMem.init prog.arrayDecls := by
+      intro fuel
+      exact (Stmt.safe_iff_not_unsafe prog.body fuel prog.initStore ArrayMem.init
+        prog.arrayDecls).mpr (hall fuel)
     -- hall : ∀ fuel, prog.body.safe fuel prog.initStore ArrayMem.init prog.arrayDecls
     by_cases hdiv : ∀ fuel, prog.body.interp fuel prog.initStore ArrayMem.init prog.arrayDecls = none
     · -- Source diverges safely → unbounded execution → error contradicts unbounded

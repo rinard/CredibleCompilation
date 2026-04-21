@@ -347,13 +347,14 @@ theorem while_to_arm_correctness
       ArmSteps r.bodyFlat
         { regs := fun _ => 0, fregs := fun _ => 0, stack := fun _ => 0,
           pc := r.pcMap 0, flags := ⟨0, 0⟩ } s' ∧
-      ArmMatchesWhile r.layout prog.compileToTAC.observable σ_src am_src s' := by
+      ArmMatchesWhile r.layout prog.compileToTAC.observable σ_src am_src s' ∧
+      s'.pc = r.haltFinal := by
   have htc := Program.typeCheckStrict_typeCheck prog htcs
   have hInitEq : Store.typedInit prog.tyCtx = prog.initStore :=
     Program.typedInit_eq_initStore prog htc
   have hts : TypedStore prog.tyCtx (Store.typedInit prog.tyCtx) := TypedStore.typedInit _
   -- ARM simulation from TAC
-  obtain ⟨s', hArm, hSimRel⟩ := tacToArm_correctness hGen hHalt
+  obtain ⟨s', hArm, hSimRel, hHaltPC⟩ := tacToArm_correctness hGen hHalt
   have hStateRel : ExtStateRel r.layout σ_opt s' := hSimRel.1
   have hAmRel : s'.arrayMem = am_opt := hSimRel.2
   -- Pipeline → original TAC halts with same final AM
@@ -383,49 +384,36 @@ theorem while_to_arm_correctness
     have hntw := hnt ⟨w, ty⟩ hp
     simp only [Bool.and_eq_true, Bool.not_eq_true'] at hntw
     exact hobs_src w hntw.1.1 hntw.1.2
-  exact ⟨fuel, σ_src, am_src, s', hinterp, hArm,
+  refine ⟨fuel, σ_src, am_src, s', hinterp, hArm,
     ⟨fun v hv loc hloc => by
       have := hStateRel v loc hloc
       rw [hobs_match v hv] at this
       exact this,
-    by rw [hAmRel, ← ham_opt, ham_eq]⟩⟩
+    by rw [hAmRel, ← ham_opt, ham_eq]⟩, ?_⟩
+  exact hHaltPC _ _ rfl
 
 -- ============================================================
 -- § 5. Full end-to-end: While source → ARM (errors)
 -- ============================================================
 
-/-- **Full end-to-end error preservation: While source → ARM.**
-
-    If the optimized TAC reaches an error (division by zero or array
-    out-of-bounds), then the source While program is unsafe at some fuel.
-    The ARM program also reaches the error (its execution does not get stuck). -/
-theorem while_to_arm_error_preservation
+/-- Shared helper for the two split Phase 4 error theorems.  Factors out the
+    pipeline-preservation chain from the input `TAC ⟶* Cfg.errorDiv/Bounds` to
+    the source-side `∃ fuel, unsafeDiv ∨ unsafeBounds`. -/
+private theorem while_to_arm_error_source_side
     (prog : Program) (htcs : prog.typeCheckStrict = true)
     (passes : List (String × (Prog → ECertificate)))
-    {r : VerifiedAsmResult}
-    (hGen : verifiedGenerateAsm prog.tyCtx (applyPassesPure prog.tyCtx passes prog.compileToTAC) = .ok r)
-    {σ_err : Store} {am_err : ArrayMem} {c_err : Cfg}
-    (hcCfg : c_err = Cfg.errorDiv σ_err am_err ∨ c_err = Cfg.errorBounds σ_err am_err)
-    (hErr : (applyPassesPure prog.tyCtx passes prog.compileToTAC) ⊩
-      Cfg.run 0 (Store.typedInit prog.tyCtx)
-        ArrayMem.init ⟶* c_err) :
-    (∃ fuel, ¬ prog.body.safe fuel prog.initStore ArrayMem.init prog.arrayDecls) ∧
-    (∃ s', ArmSteps r.bodyFlat
-      { regs := fun _ => 0, fregs := fun _ => 0, stack := fun _ => 0,
-        pc := r.pcMap 0, flags := ⟨0, 0⟩ } s' ∧
-      ExtSimRel r.layout r.pcMap c_err s') := by
+    {σ_err : Store} {am_err : ArrayMem}
+    (hErr_or : ((applyPassesPure prog.tyCtx passes prog.compileToTAC) ⊩
+        Cfg.run 0 (Store.typedInit prog.tyCtx) ArrayMem.init ⟶* Cfg.errorDiv σ_err am_err) ∨
+        ((applyPassesPure prog.tyCtx passes prog.compileToTAC) ⊩
+        Cfg.run 0 (Store.typedInit prog.tyCtx) ArrayMem.init ⟶* Cfg.errorBounds σ_err am_err)) :
+    ∃ fuel,
+      prog.body.unsafeDiv fuel prog.initStore ArrayMem.init prog.arrayDecls ∨
+      prog.body.unsafeBounds fuel prog.initStore ArrayMem.init prog.arrayDecls := by
   have htc := Program.typeCheckStrict_typeCheck prog htcs
   have hInitEq : Store.typedInit prog.tyCtx = prog.initStore :=
     Program.typedInit_eq_initStore prog htc
   have hts : TypedStore prog.tyCtx (Store.typedInit prog.tyCtx) := TypedStore.typedInit _
-  refine ⟨?_, tacToArm_correctness hGen hErr⟩
-  have hErr_or : ((applyPassesPure prog.tyCtx passes prog.compileToTAC) ⊩
-      Cfg.run 0 (Store.typedInit prog.tyCtx) ArrayMem.init ⟶* Cfg.errorDiv σ_err am_err) ∨
-                 ((applyPassesPure prog.tyCtx passes prog.compileToTAC) ⊩
-      Cfg.run 0 (Store.typedInit prog.tyCtx) ArrayMem.init ⟶* Cfg.errorBounds σ_err am_err) := by
-    rcases hcCfg with h | h <;> simp [h] at hErr
-    · exact .inl hErr
-    · exact .inr hErr
   obtain ⟨σ_o, am_o', hErr_tac⟩ :=
     applyPassesPure_preserves_error_am prog.tyCtx passes _ hts hErr_or
   have hErr_init : program_behavior_init prog.compileToTAC prog.initStore (.errors σ_o) := by
@@ -434,6 +422,53 @@ theorem while_to_arm_error_preservation
     · exact .inl (hInitEq ▸ hd)
     · exact .inr (hInitEq ▸ hb)
   exact whileToTAC_refinement prog htcs (.errors σ_o) hErr_init
+
+/-- **While→ARM: division-by-zero cause.**
+
+    If the optimized TAC reaches `errorDiv`, then (a) the source While program
+    is unsafe at some fuel (div or bounds — the specific cause match is Phase 7
+    work), and (b) the ARM program steps to a state whose PC is the verified
+    `divS` sentinel. -/
+theorem while_to_arm_div_preservation
+    (prog : Program) (htcs : prog.typeCheckStrict = true)
+    (passes : List (String × (Prog → ECertificate)))
+    {r : VerifiedAsmResult}
+    (hGen : verifiedGenerateAsm prog.tyCtx (applyPassesPure prog.tyCtx passes prog.compileToTAC) = .ok r)
+    {σ_err : Store} {am_err : ArrayMem}
+    (hErr : (applyPassesPure prog.tyCtx passes prog.compileToTAC) ⊩
+      Cfg.run 0 (Store.typedInit prog.tyCtx)
+        ArrayMem.init ⟶* Cfg.errorDiv σ_err am_err) :
+    (∃ fuel,
+      prog.body.unsafeDiv fuel prog.initStore ArrayMem.init prog.arrayDecls ∨
+      prog.body.unsafeBounds fuel prog.initStore ArrayMem.init prog.arrayDecls) ∧
+    (∃ s', ArmSteps r.bodyFlat
+      { regs := fun _ => 0, fregs := fun _ => 0, stack := fun _ => 0,
+        pc := r.pcMap 0, flags := ⟨0, 0⟩ } s' ∧
+      s'.pc = r.divS) := by
+  refine ⟨while_to_arm_error_source_side prog htcs passes (.inl hErr), ?_⟩
+  obtain ⟨s', hArm, hRel, _⟩ := tacToArm_correctness hGen hErr
+  exact ⟨s', hArm, hRel⟩
+
+/-- **While→ARM: array-bounds-error cause.** -/
+theorem while_to_arm_bounds_preservation
+    (prog : Program) (htcs : prog.typeCheckStrict = true)
+    (passes : List (String × (Prog → ECertificate)))
+    {r : VerifiedAsmResult}
+    (hGen : verifiedGenerateAsm prog.tyCtx (applyPassesPure prog.tyCtx passes prog.compileToTAC) = .ok r)
+    {σ_err : Store} {am_err : ArrayMem}
+    (hErr : (applyPassesPure prog.tyCtx passes prog.compileToTAC) ⊩
+      Cfg.run 0 (Store.typedInit prog.tyCtx)
+        ArrayMem.init ⟶* Cfg.errorBounds σ_err am_err) :
+    (∃ fuel,
+      prog.body.unsafeDiv fuel prog.initStore ArrayMem.init prog.arrayDecls ∨
+      prog.body.unsafeBounds fuel prog.initStore ArrayMem.init prog.arrayDecls) ∧
+    (∃ s', ArmSteps r.bodyFlat
+      { regs := fun _ => 0, fregs := fun _ => 0, stack := fun _ => 0,
+        pc := r.pcMap 0, flags := ⟨0, 0⟩ } s' ∧
+      s'.pc = r.boundsS) := by
+  refine ⟨while_to_arm_error_source_side prog htcs passes (.inr hErr), ?_⟩
+  obtain ⟨s', hArm, hRel, _⟩ := tacToArm_correctness hGen hErr
+  exact ⟨s', hArm, hRel⟩
 
 -- ============================================================
 -- § 6. Full end-to-end: While source → ARM (diverges)
