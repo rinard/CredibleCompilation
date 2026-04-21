@@ -201,8 +201,39 @@ The `.copy` pattern at [`verifiedGenInstr_copy_output_pos`](CredibleCompilation/
 
 1. **`split at hGen <;> try (exfalso; exact Option.noConfusion hGen)` doesn't discharge `none = some _` branches** — `Option.noConfusion` requires the some/some-motive version of noConfusion; for none/some it needs a different form. **Use `simp at hGen`, `cases hGen`, or explicit `case isTrue | isFalse` bullets instead.**
 2. **`match h : e with` inside `by` blocks confuses the outer `cases instr with` parser** — the term-level match is seen as part of the outer cases' case body, breaking alternative provision. **Use tactic-level `cases h : e with` exclusively.**
-3. **`simp only [..., hRCb, hIIb]` without `Bool.not_true`/`Bool.false_or`/`if_false` only partially reduces the outer guard** — the resulting `if false then none else ...` doesn't fully reduce, so `split at hGen` splits the `if` (giving `isFalse` with `h✝ : ¬false = true`) instead of the inner match. **Either use full `simp [verifiedGenInstr, hRCb, hIIb]` or include all reduction lemmas.**
+3. **`simp only [..., hRCb, hIIb]` does NOT fully reduce the outer `if !regConv || !inj` guard** — the resulting state has `(!true || !true) = true` in spurious `split`-generated branches. **Confirmed in P1 by running `.binop` — the fix is to use full `simp [...]` (no `only`) which evaluates the boolean expression and the if. `simp only` would need `Bool.not_true, Bool.false_or` (or `Bool.or_self`) AND `if_false`/`ite_false` explicitly, which is fragile.**
+
+### P1 validation results (commit `7d77343`)
+
+**`.binop` compiled cleanly on first attempt** after applying the `simp only → simp` fix. Confirms the `.copy` blueprint scales from 2-way layout matches to 3-way.
+
+**LOC reality check — major upward revision**:
+- `.binop` landed at **312 LOC** vs. optimistic ~40 estimate.
+- Root cause: Lean 4's `cases` tactic does not support pattern alternatives across constructors (e.g., `| some (.ireg _) | some (.stack _) | none =>` is not valid cases syntax). The 27-way explicit enumeration for a 3-way layout match is unavoidable in the per-case standalone approach.
+- Revised per-tier-case estimates:
+  - Three-nest: 300 LOC each × 3 cases = ~900 LOC. (`.boolop` and `.ifgoto` have structurally similar complexity to `.binop`; each will have its own ~27-case explosion.)
+  - Two-nest: ~80 LOC each × 7 cases = ~560 LOC.
+  - Single-nest: ~25 LOC each × 6 cases = ~150 LOC.
+  - Simple: ~8 LOC each × 3 cases = ~24 LOC.
+  - Vacuous: ~2 LOC.
+  - Main dispatcher: ~50 LOC.
+  - **Subtotal for `verifiedGenInstr_output_pos`: ~1700 LOC.**
+- Plus `bodyPerPCLengthPos` (30) + step_simulation refactor (150) + tacToArm_refinement adaptation (30) + divergence theorem (30) = **~1940 LOC total**, nearly 3× the post-first-session estimate and ~6× the original plan estimate.
+
+### Macro opportunity (unexplored)
+
+The 27-case pattern for 3-way layouts and 9-case for 2-way layouts is highly repetitive. A custom tactic macro along the lines of:
+
+```lean
+macro "cases_layout_nonfreg" l:ident " with | ... => " body:tacticSeq : tactic => ...
+```
+
+could collapse each standalone theorem by 70-80%. Specifically, a macro that does "case on layout v, discharge freg by `absurd`, apply body to each non-freg sub-case" would reduce `.binop` from 312 LOC to ~50 LOC. **Not attempted because the macro-tuning risk was considered similar to per-case work at the original estimate.** With the revised estimate of ~1700 LOC for per-case standalones, the macro refactor now has a clear positive ROI — recommend trying it before continuing with `.boolop` / `.ifgoto`.
+
+Alternative: the three-nest tier only has 3 cases (`.binop`, `.boolop`, `.ifgoto`); at 300 LOC each that's ~900 LOC upfront. If that's acceptable, the macro can wait until the two-nest tier where it pays off more (7 cases × similar structure).
 
 ### What surprised me this session
 
 The `.copy` case — expected to be the hardest — landed cleanly on first attempt once the `cases h : layout v with` pattern was locked in. The surprise was that the *simpler* cases needed *more* manual structure than anticipated (the nested-conditional proof terms confused `split at hGen`'s default behavior more than `.copy`'s injectivity-driven chain of cases did). This justifies the most-to-least-risk ordering: the structurally hardest cases have the cleanest blueprint; the structurally simpler cases need the same careful hand-unfolding.
+
+**The further surprise from P1**: the LOC-per-case is much larger than anticipated due to Lean 4's pattern syntax limitations. The "clean" blueprint is *mechanically* reproducible but *syntactically* verbose. This changes the cost-benefit of the macro approach dramatically.
