@@ -4,6 +4,46 @@ Chronological record of what was built and why, to reconstruct the sequence of d
 
 ---
 
+## Phase 2b: Halt-case step-through to haltFinal (2026-04-21)
+
+**Goal:** Complete the Phase 2a infrastructure by extending `step_simulation`'s halt case to step through the halt-save block instead of stopping at `haltS`. After this phase, a TAC `.halt` is simulated by ARM steps ending at `haltFinal = bodyFlat.size` — the clean-halt sentinel. Part of plans/backward-jumping-octopus.md.
+
+**Core lemma** ([CodeGen.lean](CredibleCompilation/CodeGen.lean)):
+- New `armSteps_haltSaveBlock`: from any `ExtStateRel`-compatible state with `CodeAt prog s.pc (genHaltSave observable layout varMap)`, ARM reaches `s'` with `s'.pc = s.pc + (genHaltSave ...).length`, `s'.arrayMem` preserved, and `ExtStateRel` preserved. Proved by induction on `observable`, case-splitting on each `genHaltSaveOne`: writes to `stack[off]` use `ExtStateRel.setStack_fresh` with the freshness argument derived from the two new `GenAsmSpec` invariants.
+
+**GenAsmSpec additions** ([CodeGen.lean](CredibleCompilation/CodeGen.lean)): two new spec clauses, both discharged:
+- `varMapInjOnOffsets : ∀ v w off, lookupVar r.varMap v = some off → lookupVar r.varMap w = some off → v = w`. Follows from `buildVarMap_offsets_nodup` + the new helpers `mem_keys_of_lookupVar_some` / `mem_of_lookupVar_some` + the existing `lookupVar_buildVarMap_injOn`.
+- `layoutStackComesFromVarMap : ∀ v off, r.layout v = some (.stack off) → lookupVar r.varMap v = some off`. Discharged by unfolding `buildVarLayout`'s filterMap and observing that the stack branch's offset is exactly `lookupVar varMap v`.
+
+**Freshness argument** (made explicit for future reference):
+If the save block writes `stack[off]` because `layout v = .ireg _/.freg _` and `lookupVar varMap v = some off`, then for any `w` with `layout w = some (.stack off)`:
+- `layoutStackComesFromVarMap` gives `lookupVar varMap w = some off`.
+- `varMapInjOnOffsets` then forces `v = w`.
+- But `layout v = .ireg _/.freg _` and `layout w = .stack off` — contradiction (layout is a function).
+Hence `ExtStateRel.setStack_fresh` applies and each individual save preserves `ExtStateRel`.
+
+**`step_simulation` halt intercept** ([CodeGen.lean](CredibleCompilation/CodeGen.lean)):
+- Added `by_cases hHalt : p[pc] = .halt` in the normal-case branch (before delegating to `ext_backward_simulation`).
+- Halt branch manually steps: first `.b r.haltS` (extracted from `verifiedGenInstr .halt = [.b r.haltS]` via `ArmStep.branch`), then applies `armSteps_haltSaveBlock` to reach `s'.pc = r.haltS + (genHaltSave ...).length = r.haltFinal` (using `haltS_eq` and `haltSaveBlock_eq` to build the relevant `CodeAt` on `bodyFlat`'s halt-save suffix).
+- Non-halt branch unchanged (still delegates to `ext_backward_simulation`).
+
+**Helper lemmas** ([CodeGen.lean](CredibleCompilation/CodeGen.lean)):
+- `mem_keys_of_lookupVar_some {l : List (Var × Nat)}`: `lookupVar l v = some off → v ∈ l.map Prod.fst`.
+- `mem_of_lookupVar_some {vars : List Var}`: `lookupVar (buildVarMap vars) v = some off → v ∈ vars` (combines the above with `buildVarMap_map_fst`).
+
+**`ExtSimRel` halt-case tightening**: NOT done in this phase — deferred to Phase 4. Rationale: tightening to `arm.pc = haltFinal` would require every downstream consumer of `ExtSimRel (.halt ...)` (all of `verifiedGenInstr_correct`'s halt arm, `tacToArm_refinement`, every call site producing `⟨_, .refl, trivial⟩` for halt) to carry/produce the PC constraint. That work belongs with Phase 4's wider forward-theorem sharpening; Phase 2b here limits its scope to "ARM actually reaches `haltFinal`" — Phase 4 will then expose that PC in the interface.
+
+**Downstream churn**: None. `step_simulation`'s signature is unchanged — the halt case just steps *further* than before, and the resulting `ExtSimRel` still holds (halt case depends only on `ExtStateRel σ s'` and `s'.arrayMem = am`, both preserved by `armSteps_haltSaveBlock`).
+
+**Status:** 0 sorrys; full `lake build` green. Files touched: 1 (CodeGen.lean). ~250 LOC added.
+
+**Notes for Phase 4 and beyond:**
+- `armSteps_haltSaveBlock` is a reusable building block: Phase 6 (ARM totality) needs it for the halt-save branch of its per-PC successor argument.
+- The two new GenAsmSpec clauses `varMapInjOnOffsets` / `layoutStackComesFromVarMap` are available to downstream proofs that need to reason about halt-save freshness or varMap/layout coherence.
+- The halt step-through produces ARM state at `haltFinal` but this is not yet exposed in `ExtSimRel`. Phase 4's `while_to_arm_correctness` sharpening (`s'.pc = r.haltFinal` conjunct) is where that constraint surfaces.
+
+---
+
 ## Phase 2a: Halt-save block lives inside bodyFlat; haltFinal becomes a real PC (2026-04-21)
 
 **Goal:** Restructure the ARM output layout so the halt-save instructions (which spill observable register-allocated values back to their output stack slots) live inside the verified `bodyFlat` region instead of being an unverified tail. Downstream theorems in Phase 4/6/7 need `haltFinal` to name a concrete PC reachable from a `.halt` TAC. Part of plans/backward-jumping-octopus.md.

@@ -928,6 +928,18 @@ structure GenAsmSpec (tyCtx : TyCtx) (p : Prog) (r : VerifiedAsmResult) : Prop w
     (∃ ir off, r.layout v = some (.ireg ir) ∧ lookupVar r.varMap v = some off) ∨
     (∃ fr off, r.layout v = some (.freg fr) ∧ lookupVar r.varMap v = some off) ∨
     (∃ off, r.layout v = some (.stack off))
+  /-- `varMap` offsets are injective: two variables sharing a stack slot are equal.
+      Follows from `buildVarMap_offsets_nodup`. -/
+  varMapInjOnOffsets : ∀ v w off,
+    lookupVar r.varMap v = some off → lookupVar r.varMap w = some off → v = w
+  /-- Stack-allocated layout offsets come from `varMap` (the ireg/freg/stack
+      branches of `buildVarLayout`'s filterMap use `lookupVar varMap` as the
+      stack fallback). Needed for the halt-save freshness argument: a write
+      to `stack[varMap v]` (v ireg/freg) cannot clobber a stack-resident w's
+      slot, because otherwise `varMap v = varMap w` would force `v = w`
+      via `varMapInjOnOffsets`, contradicting the ireg/stack split. -/
+  layoutStackComesFromVarMap : ∀ v off,
+    r.layout v = some (.stack off) → lookupVar r.varMap v = some off
 
 -- checkWellTypedLayout_wellTyped: imported from CodeGenLayout.lean
 
@@ -1704,6 +1716,25 @@ private theorem buildVarMap_lookup_of_mem {p : Prog} {v : Var}
     lookupVar (buildVarMap (collectVars p)) v ≠ none := by
   obtain ⟨off, hoff⟩ := lookupVar_of_mem_collectVars hv
   rw [hoff]; simp
+
+/-- A successful `lookupVar` tells us the variable appears in the first components
+    of the list. Used by the varMap injectivity spec clause. -/
+private theorem mem_keys_of_lookupVar_some {l : List (Var × Nat)} {v : Var} {off : Nat}
+    (h : lookupVar l v = some off) : v ∈ l.map Prod.fst := by
+  unfold lookupVar at h
+  cases hf : l.find? (fun p => p.1 == v) with
+  | none => rw [hf] at h; simp at h
+  | some p =>
+    have hm := List.find?_some hf
+    simp at hm
+    have hmem := List.mem_of_find?_eq_some hf
+    exact List.mem_map.mpr ⟨p, hmem, hm⟩
+
+/-- `lookupVar (buildVarMap vars) v = some off` implies `v ∈ vars`. -/
+private theorem mem_of_lookupVar_some {vars : List Var} {v : Var} {off : Nat}
+    (h : lookupVar (buildVarMap vars) v = some off) : v ∈ vars := by
+  have := mem_keys_of_lookupVar_some h
+  rwa [buildVarMap_map_fst] at this
 
 /-- Every variable in `TAC.vars instr` for any instruction in `p.code` is in `collectVars p`. -/
 -- Helper: the collectVars step function adds all vars of the instruction
@@ -3470,7 +3501,8 @@ theorem verifiedGenerateAsm_spec {tyCtx : TyCtx} {p : Prog} {r : VerifiedAsmResu
             ?instrGen, ?pcMapLengths, ?layoutComplete, ?callSiteSaveRestore,
             ?printSaveRestore, ?callerSaveSpec,
             ?haltS_eq, ?haltFinal_eq, ?divS_eq, ?boundsS_eq,
-            ?haltSaveBlock_eq, ?haltSaveComplete⟩
+            ?haltSaveBlock_eq, ?haltSaveComplete,
+            ?varMapInjOnOffsets, ?layoutStackComesFromVarMap⟩
           case instrGen =>
             intro pc hpc hNotLib hNotPrint
             have hpcB : pc < bodyPerPC.size := by rw [hBSz]; simp [Prog.size_eq] at hpc; exact hpc
@@ -3623,6 +3655,231 @@ theorem verifiedGenerateAsm_spec {tyCtx : TyCtx} {p : Prog} {r : VerifiedAsmResu
                 exact Or.inr (Or.inl ⟨r, off, rfl, hoff⟩)
               | stack off =>
                 exact Or.inr (Or.inr ⟨off, rfl⟩)
+          case varMapInjOnOffsets =>
+            -- Injectivity on offsets: two vars with the same lookup value are
+            -- equal, because (buildVarMap vars).map Prod.snd is Nodup.
+            intro v w off hv hw
+            have hNodup := collectVars_nodup p
+            have hvMem := mem_of_lookupVar_some hv
+            have hwMem := mem_of_lookupVar_some hw
+            exact lookupVar_buildVarMap_injOn hNodup hvMem hwMem (by rw [hv, hw])
+          case layoutStackComesFromVarMap =>
+            -- `buildVarLayout` falls through to `lookupVar varMap v` for the
+            -- stack case; so `layout v = .stack off` forces `lookupVar = some off`.
+            intro v off hLayout
+            -- Unfold: r.layout = buildVarLayout ... and r.varMap = buildVarMap ...
+            show lookupVar (buildVarMap (collectVars p)) v = some off
+            unfold buildVarLayout at hLayout
+            simp only at hLayout
+            -- hLayout : List.lookup v (filterMap ... entries) = some (.stack off)
+            have hmem := lookup_mem hLayout
+            rw [List.mem_filterMap] at hmem
+            obtain ⟨v', _, hfeq⟩ := hmem
+            -- hfeq : (match varToArmReg v' with ...) = some (v, .stack off)
+            -- The result is .stack off only if both varToArmReg/varToArmFReg are
+            -- none and lookupVar succeeds.
+            cases h1 : varToArmReg v' with
+            | some r => rw [h1] at hfeq; simp at hfeq
+            | none =>
+              rw [h1] at hfeq
+              cases h2 : varToArmFReg v' with
+              | some r => rw [h2] at hfeq; simp at hfeq
+              | none =>
+                rw [h2] at hfeq
+                cases h3 : lookupVar (buildVarMap (collectVars p)) v' with
+                | none => rw [h3] at hfeq; simp at hfeq
+                | some off' =>
+                  rw [h3] at hfeq
+                  simp at hfeq
+                  obtain ⟨hvEq, hoffEq⟩ := hfeq
+                  subst hvEq; subst hoffEq
+                  exact h3
+
+/-- Stepping through the halt-save block `genHaltSave observable layout varMap`
+    from an `ExtStateRel`-compatible state produces a new state `s'` that:
+    (1) advances the PC by the block's length,
+    (2) preserves `arrayMem`,
+    (3) preserves `ExtStateRel` (the block only touches fresh stack slots).
+
+    The freshness argument: each save writes `stack[lookupVar varMap v]` for an
+    ireg/freg-resident observable `v`. If some stack-resident `w` were to share
+    that slot (`layout w = some (.stack off)`), then by `layoutStackComesFromVarMap`
+    `lookupVar varMap w = some off = lookupVar varMap v`, so `v = w` by
+    `varMapInjOnOffsets` — contradicting the ireg/freg vs. stack split on `v`. -/
+private theorem armSteps_haltSaveBlock
+    {prog : ArmProg} {layout : VarLayout}
+    {varMap : List (Var × Nat)} {observable : List Var}
+    {σ : Store} (s : ArmState)
+    (hRel : ExtStateRel layout σ s)
+    (hInj : ∀ v w off,
+      lookupVar varMap v = some off → lookupVar varMap w = some off → v = w)
+    (hStackVM : ∀ v off, layout v = some (.stack off) → lookupVar varMap v = some off)
+    (hCode : CodeAt prog s.pc (genHaltSave observable layout varMap)) :
+    ∃ s', ArmSteps prog s s' ∧
+      s'.pc = s.pc + (genHaltSave observable layout varMap).length ∧
+      s'.arrayMem = s.arrayMem ∧
+      ExtStateRel layout σ s' := by
+  induction observable generalizing s with
+  | nil =>
+    refine ⟨s, .refl, ?_, rfl, hRel⟩
+    simp [genHaltSave]
+  | cons v rest ih =>
+    -- genHaltSave (v :: rest) = genHaltSaveOne v layout varMap ++ genHaltSave rest ...
+    have hFlat : genHaltSave (v :: rest) layout varMap =
+        genHaltSaveOne v layout varMap ++ genHaltSave rest layout varMap := by
+      simp [genHaltSave]
+    rw [hFlat] at hCode
+    have hCode1 : CodeAt prog s.pc (genHaltSaveOne v layout varMap) :=
+      hCode.append_left (l2 := genHaltSave rest layout varMap)
+    have hCodeRest : CodeAt prog (s.pc + (genHaltSaveOne v layout varMap).length)
+        (genHaltSave rest layout varMap) :=
+      hCode.append_right (l1 := genHaltSaveOne v layout varMap)
+    -- Handle genHaltSaveOne by cases
+    -- Common: freshness lemma. If we write stack[off] where lookupVar varMap v = some off
+    -- and layout v is ireg/freg, then for any w with layout w = some (.stack off'),
+    -- we have off' ≠ off.
+    have hFresh_of :
+        ∀ {off : Nat} {loc : VarLoc},
+          layout v = some loc →
+          (∀ ir, loc ≠ .ireg ir → ∀ fr, loc ≠ .freg fr → False) →
+          lookupVar varMap v = some off →
+          ∀ w, layout w ≠ some (.stack off) := by
+      intro off loc _ _ hLu w hContra
+      -- hContra : layout w = some (.stack off)
+      have hLuW : lookupVar varMap w = some off := hStackVM w off hContra
+      have hEq := hInj v w off hLu hLuW
+      subst hEq
+      -- Now layout v = some (.stack off) (from hContra), but we had layout v = some loc
+      -- (ireg/freg). Contradiction.
+      rename_i hLoc hClassify
+      rw [hContra] at hLoc
+      -- hLoc : some (.stack off) = some loc
+      have : loc = .stack off := by cases hLoc; rfl
+      subst this
+      exact hClassify .x0 (by intro h; cases h) .d0 (by intro h; cases h)
+    -- Case-split on genHaltSaveOne
+    unfold genHaltSaveOne at hCode1
+    rcases hlv : layout v with _ | ⟨off_stk | ir | fr⟩
+    · -- layout v = none: genHaltSaveOne = []
+      rw [hlv] at hCode1
+      simp only at hCode1
+      -- restore state: s unchanged
+      have hRestCode : CodeAt prog s.pc (genHaltSave rest layout varMap) := by
+        have : (genHaltSaveOne v layout varMap).length = 0 := by
+          simp [genHaltSaveOne, hlv]
+        rw [this, Nat.add_zero] at hCodeRest
+        exact hCodeRest
+      obtain ⟨s', hSteps, hPC', hAM', hRel'⟩ := ih s hRel hRestCode
+      refine ⟨s', hSteps, ?_, hAM', hRel'⟩
+      rw [hPC']; simp [genHaltSaveOne, genHaltSave, hlv]
+    · -- .stack off_stk: genHaltSaveOne = []
+      rw [hlv] at hCode1
+      simp only at hCode1
+      have hRestCode : CodeAt prog s.pc (genHaltSave rest layout varMap) := by
+        have : (genHaltSaveOne v layout varMap).length = 0 := by
+          simp [genHaltSaveOne, hlv]
+        rw [this, Nat.add_zero] at hCodeRest
+        exact hCodeRest
+      obtain ⟨s', hSteps, hPC', hAM', hRel'⟩ := ih s hRel hRestCode
+      refine ⟨s', hSteps, ?_, hAM', hRel'⟩
+      rw [hPC']; simp [genHaltSaveOne, genHaltSave, hlv]
+    · -- .ireg ir
+      rw [hlv] at hCode1
+      simp only at hCode1
+      rcases hLu : lookupVar varMap v with _ | off
+      · -- lookupVar = none: genHaltSaveOne = []
+        rw [hLu] at hCode1
+        simp only at hCode1
+        have hRestCode : CodeAt prog s.pc (genHaltSave rest layout varMap) := by
+          have : (genHaltSaveOne v layout varMap).length = 0 := by
+            simp [genHaltSaveOne, hlv, hLu]
+          rw [this, Nat.add_zero] at hCodeRest
+          exact hCodeRest
+        obtain ⟨s', hSteps, hPC', hAM', hRel'⟩ := ih s hRel hRestCode
+        refine ⟨s', hSteps, ?_, hAM', hRel'⟩
+        rw [hPC']; simp [genHaltSaveOne, genHaltSave, hlv, hLu]
+      · -- .str ir off, then recurse
+        rw [hLu] at hCode1
+        simp only at hCode1
+        -- hCode1 : CodeAt prog s.pc [.str ir off]
+        have hInstr : prog[s.pc]? = some (.str ir off) := hCode1.head
+        let s1 := (s.setStack off (s.regs ir)).nextPC
+        have hStep : ArmStep prog s s1 := ArmStep.str ir off hInstr
+        -- Freshness: no layout entry maps to .stack off
+        have hFresh : ∀ w, layout w ≠ some (.stack off) := by
+          intro w hContra
+          have hLuW : lookupVar varMap w = some off := hStackVM w off hContra
+          have hEq := hInj v w off hLu hLuW
+          subst hEq
+          rw [hlv] at hContra
+          cases hContra
+        have hRel1 : ExtStateRel layout σ s1 := by
+          show ExtStateRel layout σ (s.setStack off (s.regs ir)).nextPC
+          rw [show (s.setStack off (s.regs ir)).nextPC =
+              { s.setStack off (s.regs ir) with pc := s.pc + 1 } from by
+            simp [ArmState.nextPC, ArmState.setStack]]
+          exact (ExtStateRel.setStack_fresh hRel hFresh).withPC _
+        have hPC1 : s1.pc = s.pc + 1 := by simp [s1]
+        have hAM1 : s1.arrayMem = s.arrayMem := by simp [s1]
+        -- Recurse
+        have hRestCode' : CodeAt prog s1.pc (genHaltSave rest layout varMap) := by
+          rw [hPC1]
+          have : (genHaltSaveOne v layout varMap).length = 1 := by
+            simp [genHaltSaveOne, hlv, hLu]
+          rw [this] at hCodeRest
+          exact hCodeRest
+        obtain ⟨s', hSteps', hPC', hAM', hRel'⟩ := ih s1 hRel1 hRestCode'
+        refine ⟨s', (ArmSteps.single hStep).trans hSteps', ?_, ?_, hRel'⟩
+        · rw [hPC', hPC1]
+          simp [genHaltSaveOne, genHaltSave, hlv, hLu]; omega
+        · rw [hAM', hAM1]
+    · -- .freg fr
+      rw [hlv] at hCode1
+      simp only at hCode1
+      rcases hLu : lookupVar varMap v with _ | off
+      · -- lookupVar = none
+        rw [hLu] at hCode1
+        simp only at hCode1
+        have hRestCode : CodeAt prog s.pc (genHaltSave rest layout varMap) := by
+          have : (genHaltSaveOne v layout varMap).length = 0 := by
+            simp [genHaltSaveOne, hlv, hLu]
+          rw [this, Nat.add_zero] at hCodeRest
+          exact hCodeRest
+        obtain ⟨s', hSteps, hPC', hAM', hRel'⟩ := ih s hRel hRestCode
+        refine ⟨s', hSteps, ?_, hAM', hRel'⟩
+        rw [hPC']; simp [genHaltSaveOne, genHaltSave, hlv, hLu]
+      · -- .fstr fr off, then recurse
+        rw [hLu] at hCode1
+        simp only at hCode1
+        have hInstr : prog[s.pc]? = some (.fstr fr off) := hCode1.head
+        let s1 := (s.setStack off (s.fregs fr)).nextPC
+        have hStep : ArmStep prog s s1 := ArmStep.fstr fr off hInstr
+        have hFresh : ∀ w, layout w ≠ some (.stack off) := by
+          intro w hContra
+          have hLuW : lookupVar varMap w = some off := hStackVM w off hContra
+          have hEq := hInj v w off hLu hLuW
+          subst hEq
+          rw [hlv] at hContra
+          cases hContra
+        have hRel1 : ExtStateRel layout σ s1 := by
+          show ExtStateRel layout σ (s.setStack off (s.fregs fr)).nextPC
+          rw [show (s.setStack off (s.fregs fr)).nextPC =
+              { s.setStack off (s.fregs fr) with pc := s.pc + 1 } from by
+            simp [ArmState.nextPC, ArmState.setStack]]
+          exact (ExtStateRel.setStack_fresh hRel hFresh).withPC _
+        have hPC1 : s1.pc = s.pc + 1 := by simp [s1]
+        have hAM1 : s1.arrayMem = s.arrayMem := by simp [s1]
+        have hRestCode' : CodeAt prog s1.pc (genHaltSave rest layout varMap) := by
+          rw [hPC1]
+          have : (genHaltSaveOne v layout varMap).length = 1 := by
+            simp [genHaltSaveOne, hlv, hLu]
+          rw [this] at hCodeRest
+          exact hCodeRest
+        obtain ⟨s', hSteps', hPC', hAM', hRel'⟩ := ih s1 hRel1 hRestCode'
+        refine ⟨s', (ArmSteps.single hStep).trans hSteps', ?_, ?_, hRel'⟩
+        · rw [hPC', hPC1]
+          simp [genHaltSaveOne, genHaltSave, hlv, hLu]; omega
+        · rw [hAM', hAM1]
 
 -- ──────────────────────────────────────────────────────────────
 -- Per-step simulation (wraps ext_backward_simulation)
@@ -5267,37 +5524,107 @@ private theorem step_simulation {tyCtx : TyCtx} {p : Prog} {r : VerifiedAsmResul
         intro _ _ _
         rw [hPcMap, buildPcMap_succ lengths pc (by rw [hLSz]; exact hpcB)]
         congr 1; exact hLenEq pc (by rw [hLSz]; exact hpcB) hpcB
-      -- hNCSL/hNCSLBin: vacuously true (not a lib-call)
-      have hNCSL : ∀ x op y, p[pc] = .floatUnary x op y →
-          op.isNative = false → NoCallerSavedLayout r.layout := by
-        intro x op y heq hNN
-        simp [isLibCallTAC, heq, hNN] at hNotLib
-      have hNCSLBin : ∀ x y z, p[pc] = .fbinop x .fpow y z →
-          NoCallerSavedLayout r.layout := by
-        intro x y z heq
-        simp [isLibCallTAC, heq] at hNotLib
-      have hNCSLPrintInt : ∀ v, p[pc] = .printInt v →
-          NoCallerSavedLayout r.layout := by
-        intro v heq
-        simp [isLibCallTAC, heq] at hNotLib
-      have hNCSLPrintBool : ∀ v, p[pc] = .printBool v →
-          NoCallerSavedLayout r.layout := by
-        intro v heq
-        simp [isLibCallTAC, heq] at hNotLib
-      have hNCSLPrintFloat : ∀ v, p[pc] = .printFloat v →
-          NoCallerSavedLayout r.layout := by
-        intro v heq
-        simp [isLibCallTAC, heq] at hNotLib
-      have hNCSLPrintStr : ∀ lit, p[pc] = .printString lit →
-          NoCallerSavedLayout r.layout := by
-        intro lit heq
-        simp [isLibCallTAC, heq] at hNotLib
-      exact ext_backward_simulation p r.bodyFlat r.layout r.pcMap
-        r.haltS r.divS r.boundsS p.arrayDecls safe
-        hStep hRel hPC tyCtx spec.wellTypedProg hTS spec.wellTypedLayout
-        p[pc] (Prog.getElem?_eq_getElem hPC)
-        (r.bodyPerPC[pc]'hpcB) hSome hCodeAt hPcNext
-        (spec.layoutComplete pc hPC) rfl hNCSL hNCSLBin hNCSLPrintInt hNCSLPrintBool hNCSLPrintFloat hNCSLPrintStr
+      -- Halt intercept: after `.b haltS`, step through the haltSaveBlock.
+      -- The normal ext_backward_simulation would stop at haltS; we continue to
+      -- haltFinal so downstream phases can name that PC directly.
+      by_cases hHalt : p[pc] = .halt
+      · -- Extract ExtSimRel components
+        obtain ⟨hStateRel, hPcRel, hArrayMem⟩ := hRel
+        have hSPC : s.pc = r.pcMap pc := hPcRel
+        -- Step.halt forces cfg' = .halt σ am
+        have hCfg : cfg' = .halt σ am := by
+          have hInstr : p[pc]? = some .halt :=
+            Prog.getElem?_eq_getElem hPC ▸ congrArg some hHalt
+          cases hStep <;> simp_all
+        subst hCfg
+        -- verifiedGenInstr for .halt returns [.b r.haltS]
+        have hRC : r.layout.regConventionSafe = true := by
+          cases h : r.layout.regConventionSafe
+          · rw [hHalt] at hSome; simp [verifiedGenInstr, h] at hSome
+          · rfl
+        have hII : r.layout.isInjective = true := by
+          cases h : r.layout.isInjective
+          · rw [hHalt] at hSome; simp [verifiedGenInstr, hRC, h] at hSome
+          · rfl
+        have hInstrs : r.bodyPerPC[pc]'hpcB = [.b r.haltS] := by
+          rw [hHalt] at hSome
+          simp only [verifiedGenInstr, hRC, hII, Bool.not_true, Bool.false_or] at hSome
+          exact (Option.some.inj hSome).symm
+        rw [hInstrs] at hCodeAt
+        -- Branch to r.haltS
+        have hBranch : r.bodyFlat[s.pc]? = some (.b r.haltS) := by
+          rw [hSPC]; exact hCodeAt.head
+        let s1 : ArmState := { s with pc := r.haltS }
+        have hStep1 : ArmStep r.bodyFlat s s1 :=
+          ArmStep.branch r.haltS hBranch
+        have hRel1 : ExtStateRel r.layout σ s1 := hStateRel.withPC _
+        have hAM1 : s1.arrayMem = am := hArrayMem
+        -- CodeAt for the halt-save block inside bodyFlat:
+        -- bodyFlat = (bodyPerPC flat) ++ haltSaveBlock, starting at haltS.
+        have hCodeSave : CodeAt r.bodyFlat s1.pc
+            (genHaltSave p.observable r.layout r.varMap) := by
+          show CodeAt r.bodyFlat r.haltS _
+          -- r.haltS = (bodyPerPC flat).length (by spec), so a suffix lives at haltS.
+          rw [spec.haltS_eq, show r.bodyFlat =
+            ((r.bodyPerPC.toList.flatMap id) ++ r.haltSaveBlock.toList).toArray from rfl]
+          intro i hi
+          -- bodyFlat[flat.length + i] = haltSaveBlock[i] (when i < haltSaveBlock.size).
+          have hLen : i < r.haltSaveBlock.toList.length := by
+            have : r.haltSaveBlock.toList.length =
+                (genHaltSave p.observable r.layout r.varMap).length := by
+              rw [spec.haltSaveBlock_eq]
+            rw [this]; exact hi
+          rw [List.getElem?_toArray,
+              List.getElem?_append_right (Nat.le_add_right _ _),
+              Nat.add_sub_cancel_left]
+          rw [List.getElem?_eq_getElem hLen]
+          congr 1
+          have hhb := spec.haltSaveBlock_eq
+          rw [show r.haltSaveBlock.toList[i] =
+              (genHaltSave p.observable r.layout r.varMap)[i]'(hhb ▸ hLen)
+            from by congr 1]
+        -- Step through haltSaveBlock
+        obtain ⟨s_fin, hSteps, hPC_fin, hAM_fin, hRel_fin⟩ :=
+          armSteps_haltSaveBlock (layout := r.layout) (varMap := r.varMap)
+            (observable := p.observable) (σ := σ) (prog := r.bodyFlat)
+            s1 hRel1
+            spec.varMapInjOnOffsets
+            spec.layoutStackComesFromVarMap
+            hCodeSave
+        refine ⟨s_fin, (ArmSteps.single hStep1).trans hSteps, hRel_fin, ?_⟩
+        show s_fin.arrayMem = am
+        rw [hAM_fin, hAM1]
+      · -- hNCSL/hNCSLBin: vacuously true (not a lib-call)
+        have hNCSL : ∀ x op y, p[pc] = .floatUnary x op y →
+            op.isNative = false → NoCallerSavedLayout r.layout := by
+          intro x op y heq hNN
+          simp [isLibCallTAC, heq, hNN] at hNotLib
+        have hNCSLBin : ∀ x y z, p[pc] = .fbinop x .fpow y z →
+            NoCallerSavedLayout r.layout := by
+          intro x y z heq
+          simp [isLibCallTAC, heq] at hNotLib
+        have hNCSLPrintInt : ∀ v, p[pc] = .printInt v →
+            NoCallerSavedLayout r.layout := by
+          intro v heq
+          simp [isLibCallTAC, heq] at hNotLib
+        have hNCSLPrintBool : ∀ v, p[pc] = .printBool v →
+            NoCallerSavedLayout r.layout := by
+          intro v heq
+          simp [isLibCallTAC, heq] at hNotLib
+        have hNCSLPrintFloat : ∀ v, p[pc] = .printFloat v →
+            NoCallerSavedLayout r.layout := by
+          intro v heq
+          simp [isLibCallTAC, heq] at hNotLib
+        have hNCSLPrintStr : ∀ lit, p[pc] = .printString lit →
+            NoCallerSavedLayout r.layout := by
+          intro lit heq
+          simp [isLibCallTAC, heq] at hNotLib
+        exact ext_backward_simulation p r.bodyFlat r.layout r.pcMap
+          r.haltS r.divS r.boundsS p.arrayDecls safe
+          hStep hRel hPC tyCtx spec.wellTypedProg hTS spec.wellTypedLayout
+          p[pc] (Prog.getElem?_eq_getElem hPC)
+          (r.bodyPerPC[pc]'hpcB) hSome hCodeAt hPcNext
+          (spec.layoutComplete pc hPC) rfl hNCSL hNCSLBin hNCSLPrintInt hNCSLPrintBool hNCSLPrintFloat hNCSLPrintStr
 
 -- ──────────────────────────────────────────────────────────────
 -- Multi-step simulation (main theorem)
