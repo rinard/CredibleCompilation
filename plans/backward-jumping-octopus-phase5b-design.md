@@ -160,14 +160,49 @@ If this path stalls, Phase 6/7's backward theorems can locally build "source div
 - `verifiedGenBoolExpr_length_pos` (`3c4532e`)
 - `vLoadVar_length_pos_of_not_freg` + `verifiedGenInstr_copy_output_pos` (`496894a`) — the `.copy` blueprint is the reference pattern for the remaining cases.
 
-**Next concrete step**: port the `.copy` blueprint to the 18 other constructors as per-case standalone theorems. Recommended order (least-to-most-risk, same as `.copy`-first justification):
-1. Simple cases to build confidence: `.goto`, `.halt`, `.printString`, `.printInt/Bool/Float`.
-2. Single-nesting: `.const .int/.bool/.float`.
-3. Two-nesting: `.intToFloat`, `.floatToInt`, `.floatUnary`, `.fbinop`, `.fternop`, `.arrLoad`, `.arrStore`.
-4. Three-nesting: `.binop`, `.boolop`, `.ifgoto`. These have the same complexity shape as `.copy` and the same hypothesis bundle, so the pattern transfers directly.
+**Next concrete step**: port the `.copy` blueprint to the 18 other constructors as per-case standalone theorems.
 
-Commit granularity: batch by complexity tier (4 commits for the 18 cases), each validated by `lake build CredibleCompilation.ArmSemantics` before committing.
+### Recommended order: most-to-least risk (blocker-first)
 
-After all 19 cases land: combine into the main dispatcher `verifiedGenInstr_output_pos` (~50 LOC case-on-instr + per-case delegation). Then proceed with `bodyPerPCLengthPos`, step_simulation refactor, divergence theorem as originally scoped.
+Rationale: this session already validated the `.copy` blueprint on the hardest structural shape. The remaining blockers (if any) live in the three-nest constructors whose structure doesn't yet have a verified template. Landing those next surfaces any technique issues immediately; if they succeed, the two-nest and simple cases follow the same pattern with strictly less work.
 
-**What surprised me this session**: the `.copy` case — expected to be the hardest — landed cleanly on first attempt once the `cases h : layout v with` pattern was locked in. The surprise was that the *simpler* cases needed *more* manual structure than anticipated (the nested-conditional proof terms confused `split at hGen`'s default behavior more than `.copy`'s injectivity-driven chain of cases did).
+1. **Three-nesting (hardest; blocker-first)**: `.binop`, `.boolop`, `.ifgoto`.
+   - `.binop` — 3-arm match on `layout lv/rv/dst` + inner `if op ∈ {.div, .mod}`. Same shape as `.copy` (3 layout dimensions × 1 inner switch). Start here.
+   - `.boolop` — outer `!be.hasSimpleOps` guard + `notFreg` check on `layout dst`. Inner bool has structure but the `verifiedGenBoolExpr ++ vStoreVar` tail uses `verifiedGenBoolExpr_length_pos` from `3c4532e`.
+   - `.ifgoto` — outer `!be.hasSimpleOps` + 3-arm match on `be` (`.not (.cmp ...)`, `.not (.fcmp ...)`, fallback). Fallback uses `verifiedGenBoolExpr ++ [.cbnz ...]`.
+2. **Two-nesting**: `.fbinop`, `.fternop`, `.intToFloat`, `.floatToInt`, `.floatUnary`, `.arrLoad`, `.arrStore`. These are structurally simpler than the three-nest tier — pattern transfers directly.
+3. **Single-nesting**: `.const .int`, `.const .bool`, `.const .float`, `.printInt`, `.printBool`, `.printFloat`. Uses `formalLoadImm64_length_pos` (a new trivial helper) or direct fixed-instruction sub-lists.
+4. **Simple (fixed output)**: `.goto`, `.halt`, `.printString`. Each ~5 LOC.
+5. **Vacuous**: `.print` — `verifiedGenInstr .print _ _` returns `none` unconditionally, so the `= some instrs` hypothesis closes the goal via `simp`.
+
+**Why this ordering beats least-to-most-risk**: if a three-nest case turns out to need a fundamentally different tactic (e.g., the `cases h : layout v with` + simp pattern doesn't scale to 3-way layout matches), we discover that immediately rather than after landing 15 simpler cases on a blueprint that won't finish the job. Also, having three-nest done first provides the template for the less-nested tiers.
+
+### Commit strategy
+
+Batch by tier, validated by `lake build CredibleCompilation.ArmSemantics` before committing:
+- Commit A: `.binop`, `.boolop`, `.ifgoto` (three-nest, ~120 LOC). **Highest-risk commit — if this lands, the rest is a slog not a gamble.**
+- Commit B: 7 two-nest constructors (~175 LOC).
+- Commit C: 6 single-nest + 3 simple + 1 vacuous cases (~100 LOC).
+- Commit D: main dispatcher `verifiedGenInstr_output_pos` (case-on-instr + per-case delegation, ~50 LOC).
+- Commit E: `bodyPerPCLengthPos` spec field + discharge (~30 LOC).
+- Commit F: `step_simulation` refactor (~150 LOC).
+- Commit G: `tacToArm_refinement` adaptation + divergence theorem (~60 LOC).
+
+### Blueprint reference
+
+The `.copy` pattern at [`verifiedGenInstr_copy_output_pos`](CredibleCompilation/ArmSemantics.lean) (commit `496894a`, ~170 LOC) is the reference. Key patterns:
+- Extract `hRCb` / `hIIb` from hGen via `cases hbool : layout.regConventionSafe` — the `if !regConv || !inj` guard is how simp discovers these.
+- `by_cases hSrcFreg : ∃ r, layout src = some (.freg r)` splits into freg / non-freg branches.
+- `cases hL : layout v with | none | some loc => cases loc with | freg | ireg | stack => ...` — tactic-level `cases h : e with`, never term-level `match h : e with` (the latter confuses outer `cases instr with` parsing).
+- Type-inversion for the freg subcase: `cases hTy : Γ src with | float => rfl | int | bool => exact absurd hLsrc (hWTL.1 src r (by rw [hTy]; decide))`.
+- Injectivity for the freg-freg collision: `hNeR : r' ≠ r := fun hRR => hEq (hInj dst src _ hLdst hLsrc)`.
+
+### Known pitfalls (from this session's failures)
+
+1. **`split at hGen <;> try (exfalso; exact Option.noConfusion hGen)` doesn't discharge `none = some _` branches** — `Option.noConfusion` requires the some/some-motive version of noConfusion; for none/some it needs a different form. **Use `simp at hGen`, `cases hGen`, or explicit `case isTrue | isFalse` bullets instead.**
+2. **`match h : e with` inside `by` blocks confuses the outer `cases instr with` parser** — the term-level match is seen as part of the outer cases' case body, breaking alternative provision. **Use tactic-level `cases h : e with` exclusively.**
+3. **`simp only [..., hRCb, hIIb]` without `Bool.not_true`/`Bool.false_or`/`if_false` only partially reduces the outer guard** — the resulting `if false then none else ...` doesn't fully reduce, so `split at hGen` splits the `if` (giving `isFalse` with `h✝ : ¬false = true`) instead of the inner match. **Either use full `simp [verifiedGenInstr, hRCb, hIIb]` or include all reduction lemmas.**
+
+### What surprised me this session
+
+The `.copy` case — expected to be the hardest — landed cleanly on first attempt once the `cases h : layout v with` pattern was locked in. The surprise was that the *simpler* cases needed *more* manual structure than anticipated (the nested-conditional proof terms confused `split at hGen`'s default behavior more than `.copy`'s injectivity-driven chain of cases did). This justifies the most-to-least-risk ordering: the structurally hardest cases have the cleanest blueprint; the structurally simpler cases need the same careful hand-unfolding.
