@@ -1926,6 +1926,318 @@ private theorem verifiedGenInstr_copy_output_pos
         simp only [List.length_append]
         omega
 
+/-- `verifiedGenInstr` for `.binop dst op lv rv` emits ≥ 1 ARM instruction when
+    it returns `some`. Three-nest: outer 3-way match on `layout lv/rv/dst` for
+    freg exclusion + inner `if op ∈ {.div, .mod}` for div-by-zero guard.
+    In every non-none output, `opInstr` contributes ≥ 1 instruction (even for
+    non-mod ops which have 1-instruction opInstr). -/
+private theorem verifiedGenInstr_binop_output_pos
+    (Γ : TyCtx) (layout : VarLayout) (pcMap : Nat → Nat)
+    (dst : Var) (op : BinOp) (lv rv : Var)
+    (haltS divS boundsS : Nat) (arrayDecls : List (ArrayName × Nat × VarTy))
+    (safe : Bool)
+    {instrs : List ArmInstr}
+    (hGen : verifiedGenInstr layout pcMap (.binop dst op lv rv)
+      haltS divS boundsS arrayDecls safe = some instrs)
+    (hRC : RegConventionSafe layout)
+    (hInj : VarLayoutInjective layout)
+    (hWTL : WellTypedLayout Γ layout)
+    (hWTI : WellTypedInstr Γ arrayDecls (.binop dst op lv rv))
+    (hMapped : ∀ v, v ∈ (TAC.binop dst op lv rv).vars → layout v ≠ none) :
+    1 ≤ instrs.length := by
+  have hRCb : layout.regConventionSafe = true := by
+    cases hbool : layout.regConventionSafe
+    · simp [verifiedGenInstr, hbool] at hGen
+    · rfl
+  have hIIb : layout.isInjective = true := by
+    cases hbool : layout.isInjective
+    · simp [verifiedGenInstr, hRCb, hbool] at hGen
+    · rfl
+  -- Rule out freg in each of lv, rv, dst. Each by_cases discharges one case.
+  by_cases hLvFreg : ∃ r, layout lv = some (.freg r)
+  · obtain ⟨r, hLlv⟩ := hLvFreg
+    simp [verifiedGenInstr, hRCb, hIIb, hLlv] at hGen
+  by_cases hRvFreg : ∃ r, layout rv = some (.freg r)
+  · obtain ⟨r, hLrv⟩ := hRvFreg
+    have hNotFregLv : ∀ r, layout lv ≠ some (.freg r) := fun r h => hLvFreg ⟨r, h⟩
+    cases hLlv : layout lv with
+    | none => simp [verifiedGenInstr, hRCb, hIIb, hLlv, hLrv] at hGen
+    | some loc =>
+      cases loc with
+      | freg r' => exact absurd hLlv (hNotFregLv r')
+      | ireg _ => simp [verifiedGenInstr, hRCb, hIIb, hLlv, hLrv] at hGen
+      | stack _ => simp [verifiedGenInstr, hRCb, hIIb, hLlv, hLrv] at hGen
+  by_cases hDstFreg : ∃ r, layout dst = some (.freg r)
+  · obtain ⟨r, hLdst⟩ := hDstFreg
+    have hNotFregLv : ∀ r, layout lv ≠ some (.freg r) := fun r h => hLvFreg ⟨r, h⟩
+    have hNotFregRv : ∀ r, layout rv ≠ some (.freg r) := fun r h => hRvFreg ⟨r, h⟩
+    -- Need to evaluate match to select dst freg → none arm. This requires
+    -- knowing layout lv and layout rv specifically, so case on both.
+    cases hLlv : layout lv with
+    | none =>
+      cases hLrv : layout rv with
+      | none => simp [verifiedGenInstr, hRCb, hIIb, hLlv, hLrv, hLdst] at hGen
+      | some locR =>
+        cases locR with
+        | freg r' => exact absurd hLrv (hNotFregRv r')
+        | ireg _ => simp [verifiedGenInstr, hRCb, hIIb, hLlv, hLrv, hLdst] at hGen
+        | stack _ => simp [verifiedGenInstr, hRCb, hIIb, hLlv, hLrv, hLdst] at hGen
+    | some locL =>
+      cases locL with
+      | freg r' => exact absurd hLlv (hNotFregLv r')
+      | ireg _ =>
+        cases hLrv : layout rv with
+        | none => simp [verifiedGenInstr, hRCb, hIIb, hLlv, hLrv, hLdst] at hGen
+        | some locR =>
+          cases locR with
+          | freg r' => exact absurd hLrv (hNotFregRv r')
+          | ireg _ => simp [verifiedGenInstr, hRCb, hIIb, hLlv, hLrv, hLdst] at hGen
+          | stack _ => simp [verifiedGenInstr, hRCb, hIIb, hLlv, hLrv, hLdst] at hGen
+      | stack _ =>
+        cases hLrv : layout rv with
+        | none => simp [verifiedGenInstr, hRCb, hIIb, hLlv, hLrv, hLdst] at hGen
+        | some locR =>
+          cases locR with
+          | freg r' => exact absurd hLrv (hNotFregRv r')
+          | ireg _ => simp [verifiedGenInstr, hRCb, hIIb, hLlv, hLrv, hLdst] at hGen
+          | stack _ => simp [verifiedGenInstr, hRCb, hIIb, hLlv, hLrv, hLdst] at hGen
+  -- All three non-freg: default arm. Case on each layout to evaluate the match,
+  -- then split on `if op ∈ {.div, .mod}`.
+  have hNotFregLv : ∀ r, layout lv ≠ some (.freg r) := fun r h => hLvFreg ⟨r, h⟩
+  have hNotFregRv : ∀ r, layout rv ≠ some (.freg r) := fun r h => hRvFreg ⟨r, h⟩
+  have hNotFregDst : ∀ r, layout dst ≠ some (.freg r) := fun r h => hDstFreg ⟨r, h⟩
+  -- Inner handler: once hLlv, hLrv, hLdst are concrete (all non-freg), we reach
+  -- the default arm's `if op ∈ ... then some ... else some ...` equality.
+  -- Split on the if, extract via Option.some.inj, cases op, omega.
+  -- To avoid replicating this 27 times, introduce it as a local tactic macro
+  -- via `show` + `have` — but Lean 4 doesn't easily support that. Just inline.
+  cases hLlv : layout lv with
+  | none =>
+    cases hLrv : layout rv with
+    | none =>
+      cases hLdst : layout dst with
+      | none =>
+        simp [verifiedGenInstr, hRCb, hIIb, hLlv, hLrv, hLdst] at hGen
+        split at hGen <;>
+          (obtain rfl := (Option.some.inj hGen).symm
+           cases op <;>
+             (simp only [List.length_append, List.length_cons, List.length_nil]; omega))
+      | some locD =>
+        cases locD with
+        | freg r' => exact absurd hLdst (hNotFregDst r')
+        | ireg _ =>
+          simp [verifiedGenInstr, hRCb, hIIb, hLlv, hLrv, hLdst] at hGen
+          split at hGen <;>
+            (obtain rfl := (Option.some.inj hGen).symm
+             cases op <;>
+               (simp only [List.length_append, List.length_cons, List.length_nil]; omega))
+        | stack _ =>
+          simp [verifiedGenInstr, hRCb, hIIb, hLlv, hLrv, hLdst] at hGen
+          split at hGen <;>
+            (obtain rfl := (Option.some.inj hGen).symm
+             cases op <;>
+               (simp only [List.length_append, List.length_cons, List.length_nil]; omega))
+    | some locR =>
+      cases locR with
+      | freg r' => exact absurd hLrv (hNotFregRv r')
+      | ireg _ =>
+        cases hLdst : layout dst with
+        | none =>
+          simp [verifiedGenInstr, hRCb, hIIb, hLlv, hLrv, hLdst] at hGen
+          split at hGen <;>
+            (obtain rfl := (Option.some.inj hGen).symm
+             cases op <;>
+               (simp only [List.length_append, List.length_cons, List.length_nil]; omega))
+        | some locD =>
+          cases locD with
+          | freg r' => exact absurd hLdst (hNotFregDst r')
+          | ireg _ =>
+            simp [verifiedGenInstr, hRCb, hIIb, hLlv, hLrv, hLdst] at hGen
+            split at hGen <;>
+              (obtain rfl := (Option.some.inj hGen).symm
+               cases op <;>
+                 (simp only [List.length_append, List.length_cons, List.length_nil]; omega))
+          | stack _ =>
+            simp [verifiedGenInstr, hRCb, hIIb, hLlv, hLrv, hLdst] at hGen
+            split at hGen <;>
+              (obtain rfl := (Option.some.inj hGen).symm
+               cases op <;>
+                 (simp only [List.length_append, List.length_cons, List.length_nil]; omega))
+      | stack _ =>
+        cases hLdst : layout dst with
+        | none =>
+          simp [verifiedGenInstr, hRCb, hIIb, hLlv, hLrv, hLdst] at hGen
+          split at hGen <;>
+            (obtain rfl := (Option.some.inj hGen).symm
+             cases op <;>
+               (simp only [List.length_append, List.length_cons, List.length_nil]; omega))
+        | some locD =>
+          cases locD with
+          | freg r' => exact absurd hLdst (hNotFregDst r')
+          | ireg _ =>
+            simp [verifiedGenInstr, hRCb, hIIb, hLlv, hLrv, hLdst] at hGen
+            split at hGen <;>
+              (obtain rfl := (Option.some.inj hGen).symm
+               cases op <;>
+                 (simp only [List.length_append, List.length_cons, List.length_nil]; omega))
+          | stack _ =>
+            simp [verifiedGenInstr, hRCb, hIIb, hLlv, hLrv, hLdst] at hGen
+            split at hGen <;>
+              (obtain rfl := (Option.some.inj hGen).symm
+               cases op <;>
+                 (simp only [List.length_append, List.length_cons, List.length_nil]; omega))
+  | some locL =>
+    cases locL with
+    | freg r' => exact absurd hLlv (hNotFregLv r')
+    | ireg _ =>
+      cases hLrv : layout rv with
+      | none =>
+        cases hLdst : layout dst with
+        | none =>
+          simp [verifiedGenInstr, hRCb, hIIb, hLlv, hLrv, hLdst] at hGen
+          split at hGen <;>
+            (obtain rfl := (Option.some.inj hGen).symm
+             cases op <;>
+               (simp only [List.length_append, List.length_cons, List.length_nil]; omega))
+        | some locD =>
+          cases locD with
+          | freg r' => exact absurd hLdst (hNotFregDst r')
+          | ireg _ =>
+            simp [verifiedGenInstr, hRCb, hIIb, hLlv, hLrv, hLdst] at hGen
+            split at hGen <;>
+              (obtain rfl := (Option.some.inj hGen).symm
+               cases op <;>
+                 (simp only [List.length_append, List.length_cons, List.length_nil]; omega))
+          | stack _ =>
+            simp [verifiedGenInstr, hRCb, hIIb, hLlv, hLrv, hLdst] at hGen
+            split at hGen <;>
+              (obtain rfl := (Option.some.inj hGen).symm
+               cases op <;>
+                 (simp only [List.length_append, List.length_cons, List.length_nil]; omega))
+      | some locR =>
+        cases locR with
+        | freg r' => exact absurd hLrv (hNotFregRv r')
+        | ireg _ =>
+          cases hLdst : layout dst with
+          | none =>
+            simp [verifiedGenInstr, hRCb, hIIb, hLlv, hLrv, hLdst] at hGen
+            split at hGen <;>
+              (obtain rfl := (Option.some.inj hGen).symm
+               cases op <;>
+                 (simp only [List.length_append, List.length_cons, List.length_nil]; omega))
+          | some locD =>
+            cases locD with
+            | freg r' => exact absurd hLdst (hNotFregDst r')
+            | ireg _ =>
+              simp [verifiedGenInstr, hRCb, hIIb, hLlv, hLrv, hLdst] at hGen
+              split at hGen <;>
+                (obtain rfl := (Option.some.inj hGen).symm
+                 cases op <;>
+                   (simp only [List.length_append, List.length_cons, List.length_nil]; omega))
+            | stack _ =>
+              simp [verifiedGenInstr, hRCb, hIIb, hLlv, hLrv, hLdst] at hGen
+              split at hGen <;>
+                (obtain rfl := (Option.some.inj hGen).symm
+                 cases op <;>
+                   (simp only [List.length_append, List.length_cons, List.length_nil]; omega))
+        | stack _ =>
+          cases hLdst : layout dst with
+          | none =>
+            simp [verifiedGenInstr, hRCb, hIIb, hLlv, hLrv, hLdst] at hGen
+            split at hGen <;>
+              (obtain rfl := (Option.some.inj hGen).symm
+               cases op <;>
+                 (simp only [List.length_append, List.length_cons, List.length_nil]; omega))
+          | some locD =>
+            cases locD with
+            | freg r' => exact absurd hLdst (hNotFregDst r')
+            | ireg _ =>
+              simp [verifiedGenInstr, hRCb, hIIb, hLlv, hLrv, hLdst] at hGen
+              split at hGen <;>
+                (obtain rfl := (Option.some.inj hGen).symm
+                 cases op <;>
+                   (simp only [List.length_append, List.length_cons, List.length_nil]; omega))
+            | stack _ =>
+              simp [verifiedGenInstr, hRCb, hIIb, hLlv, hLrv, hLdst] at hGen
+              split at hGen <;>
+                (obtain rfl := (Option.some.inj hGen).symm
+                 cases op <;>
+                   (simp only [List.length_append, List.length_cons, List.length_nil]; omega))
+    | stack _ =>
+      cases hLrv : layout rv with
+      | none =>
+        cases hLdst : layout dst with
+        | none =>
+          simp [verifiedGenInstr, hRCb, hIIb, hLlv, hLrv, hLdst] at hGen
+          split at hGen <;>
+            (obtain rfl := (Option.some.inj hGen).symm
+             cases op <;>
+               (simp only [List.length_append, List.length_cons, List.length_nil]; omega))
+        | some locD =>
+          cases locD with
+          | freg r' => exact absurd hLdst (hNotFregDst r')
+          | ireg _ =>
+            simp [verifiedGenInstr, hRCb, hIIb, hLlv, hLrv, hLdst] at hGen
+            split at hGen <;>
+              (obtain rfl := (Option.some.inj hGen).symm
+               cases op <;>
+                 (simp only [List.length_append, List.length_cons, List.length_nil]; omega))
+          | stack _ =>
+            simp [verifiedGenInstr, hRCb, hIIb, hLlv, hLrv, hLdst] at hGen
+            split at hGen <;>
+              (obtain rfl := (Option.some.inj hGen).symm
+               cases op <;>
+                 (simp only [List.length_append, List.length_cons, List.length_nil]; omega))
+      | some locR =>
+        cases locR with
+        | freg r' => exact absurd hLrv (hNotFregRv r')
+        | ireg _ =>
+          cases hLdst : layout dst with
+          | none =>
+            simp [verifiedGenInstr, hRCb, hIIb, hLlv, hLrv, hLdst] at hGen
+            split at hGen <;>
+              (obtain rfl := (Option.some.inj hGen).symm
+               cases op <;>
+                 (simp only [List.length_append, List.length_cons, List.length_nil]; omega))
+          | some locD =>
+            cases locD with
+            | freg r' => exact absurd hLdst (hNotFregDst r')
+            | ireg _ =>
+              simp [verifiedGenInstr, hRCb, hIIb, hLlv, hLrv, hLdst] at hGen
+              split at hGen <;>
+                (obtain rfl := (Option.some.inj hGen).symm
+                 cases op <;>
+                   (simp only [List.length_append, List.length_cons, List.length_nil]; omega))
+            | stack _ =>
+              simp [verifiedGenInstr, hRCb, hIIb, hLlv, hLrv, hLdst] at hGen
+              split at hGen <;>
+                (obtain rfl := (Option.some.inj hGen).symm
+                 cases op <;>
+                   (simp only [List.length_append, List.length_cons, List.length_nil]; omega))
+        | stack _ =>
+          cases hLdst : layout dst with
+          | none =>
+            simp [verifiedGenInstr, hRCb, hIIb, hLlv, hLrv, hLdst] at hGen
+            split at hGen <;>
+              (obtain rfl := (Option.some.inj hGen).symm
+               cases op <;>
+                 (simp only [List.length_append, List.length_cons, List.length_nil]; omega))
+          | some locD =>
+            cases locD with
+            | freg r' => exact absurd hLdst (hNotFregDst r')
+            | ireg _ =>
+              simp [verifiedGenInstr, hRCb, hIIb, hLlv, hLrv, hLdst] at hGen
+              split at hGen <;>
+                (obtain rfl := (Option.some.inj hGen).symm
+                 cases op <;>
+                   (simp only [List.length_append, List.length_cons, List.length_nil]; omega))
+            | stack _ =>
+              simp [verifiedGenInstr, hRCb, hIIb, hLlv, hLrv, hLdst] at hGen
+              split at hGen <;>
+                (obtain rfl := (Option.some.inj hGen).symm
+                 cases op <;>
+                   (simp only [List.length_append, List.length_cons, List.length_nil]; omega))
+
 -- ────────────────────────────────────────────────────────────
 -- § 8e. verifiedGenInstr output length is pcMap-independent
 -- ────────────────────────────────────────────────────────────
