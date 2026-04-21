@@ -34,11 +34,44 @@ namespace BoundsOpt
     of two such values still fits in 63 bits (so no wrap-around). -/
 def intervalCap : Int := 2147483648  -- 2^31
 
-/-- Well-formed interval: `0 ≤ lo ≤ hi ≤ 2³¹`. Required by every transfer
-    soundness lemma; the checker filters out any unverified BoundsOpt claim
-    that doesn't meet this bar. -/
+/-- Well-formed interval: `0 ≤ lo ≤ hi ≤ 2³¹`. Strong well-formedness; only
+    needed by tight BitVec helpers we retain for reuse. The primary validity
+    predicate for the loose checker is `validIntervalLoose` (below). -/
 def validInterval (r : IRange) : Bool :=
   decide (0 ≤ r.lo) && decide (r.lo ≤ r.hi) && decide (r.hi ≤ intervalCap)
+
+/-- Loose upper cap (`2⁶²`) for intermediate interval `hi` fields. Any value
+    under this cap is representable as an unsigned `BitVec 64` value with
+    top bit 0, so signed and unsigned comparisons agree. BoundsOpt's
+    empirical outputs stay ~5·10¹² (≈2⁴³), well under this bound. -/
+def looseCap : Int := 4611686018427387904  -- 2^62
+
+/-- `looseCap`-gated well-formedness: `0 ≤ lo ≤ hi ≤ 2⁶²`. Strictly weaker
+    than `validInterval` (which caps at `2³¹`); the primary validity predicate
+    for the Phase 6 loose checker. Under this cap, `hi < 2⁶³` so the signed-
+    unsigned bridge applies; sums of two loose-valid values stay under `2⁶³`
+    (no wrap). Rejects `irTop`-shaped claims whose `lo = -10¹²` is negative. -/
+def validIntervalLoose (r : IRange) : Bool :=
+  decide (0 ≤ r.lo) && decide (r.lo ≤ r.hi) && decide (r.hi ≤ looseCap)
+
+theorem validInterval_iff (r : IRange) :
+    validInterval r = true ↔ 0 ≤ r.lo ∧ r.lo ≤ r.hi ∧ r.hi ≤ intervalCap := by
+  simp [validInterval, Bool.and_eq_true, decide_eq_true_eq, and_assoc]
+
+theorem validIntervalLoose_iff (r : IRange) :
+    validIntervalLoose r = true ↔ 0 ≤ r.lo ∧ r.lo ≤ r.hi ∧ r.hi ≤ looseCap := by
+  simp [validIntervalLoose, Bool.and_eq_true, decide_eq_true_eq, and_assoc]
+
+theorem intervalCap_pos : (0 : Int) < intervalCap := by decide
+
+/-- `validInterval r ⇒ validIntervalLoose r`: the tight cap is stricter. -/
+theorem validInterval_imp_loose {r : IRange} (h : validInterval r = true) :
+    validIntervalLoose r = true := by
+  obtain ⟨h1, h2, h3⟩ := (validInterval_iff _).mp h
+  rw [validIntervalLoose_iff]
+  refine ⟨h1, h2, ?_⟩
+  have : intervalCap ≤ looseCap := by decide
+  omega
 
 -- ============================================================
 -- § 2. Concretization
@@ -51,12 +84,17 @@ def validInterval (r : IRange) : Bool :=
 def IntervalInv.satisfies (r : IRange) (bv : BitVec 64) : Prop :=
   0 ≤ r.lo ∧ r.lo.toNat ≤ bv.toNat ∧ bv.toNat < r.hi.toNat
 
-/-- A store satisfies an `IMap` iff every explicit `(v, r)` entry holds:
-    `σ v = .int bv` with `bv ∈ r`. Entries are only positive claims — an
-    absent variable imposes no obligation. Array memory is ignored; this
-    domain tracks integer variables only. -/
+/-- A store satisfies an `IMap` iff every explicit `(v, r)` entry whose range
+    passes `validIntervalLoose` holds: `σ v = .int bv` with `bv ∈ r`. Entries
+    whose range fails `validIntervalLoose` (e.g. `irTop`-shaped claims on
+    float-valued or untracked vars, `lo < 0`) are skipped — their
+    concretization `IntervalInv.satisfies r bv` would require `0 ≤ r.lo`, so
+    no bv can satisfy them and asserting existence would make the whole
+    `satisfies` vacuously false. Array memory is ignored; this domain tracks
+    integer variables only. -/
 def IMap.satisfies (m : IMap) (σ : Store) : Prop :=
-  ∀ v r, (v, r) ∈ m → ∃ bv, σ v = .int bv ∧ IntervalInv.satisfies r bv
+  ∀ v r, (v, r) ∈ m → validIntervalLoose r = true →
+    ∃ bv, σ v = .int bv ∧ IntervalInv.satisfies r bv
 
 -- ============================================================
 -- § 3. Lifting to PInvariantMap
@@ -80,40 +118,8 @@ def intervalMap (inv : Array (Option IMap)) : PInvariantMap :=
     | none          => True
 
 -- ============================================================
--- § 4. Small lemmas we'll need downstream
+-- § 4. Small lemmas (historical placement — defs moved to § 1).
 -- ============================================================
-
-theorem validInterval_iff (r : IRange) :
-    validInterval r = true ↔ 0 ≤ r.lo ∧ r.lo ≤ r.hi ∧ r.hi ≤ intervalCap := by
-  simp [validInterval, Bool.and_eq_true, decide_eq_true_eq, and_assoc]
-
-theorem intervalCap_pos : (0 : Int) < intervalCap := by decide
-
-/-- Loose upper cap (`2⁶²`) for intermediate interval `hi` fields. Any value
-    under this cap is representable as an unsigned `BitVec 64` value with
-    top bit 0, so signed and unsigned comparisons agree. BoundsOpt's
-    empirical outputs stay ~5·10¹² (≈2⁴³), well under this bound. -/
-def looseCap : Int := 4611686018427387904  -- 2^62
-
-/-- `looseCap`-gated well-formedness: `0 ≤ lo ≤ hi ≤ 2⁶²`. Strictly weaker
-    than `validInterval` (which caps at `2³¹`); used as a precondition in the
-    refineCond soundness proofs to rule out the `irTop` fallback and force
-    `hi < 2⁶³` for the signed-unsigned bridge. -/
-def validIntervalLoose (r : IRange) : Bool :=
-  decide (0 ≤ r.lo) && decide (r.lo ≤ r.hi) && decide (r.hi ≤ looseCap)
-
-theorem validIntervalLoose_iff (r : IRange) :
-    validIntervalLoose r = true ↔ 0 ≤ r.lo ∧ r.lo ≤ r.hi ∧ r.hi ≤ looseCap := by
-  simp [validIntervalLoose, Bool.and_eq_true, decide_eq_true_eq, and_assoc]
-
-/-- `validInterval r ⇒ validIntervalLoose r`: the tight cap is stricter. -/
-theorem validInterval_imp_loose {r : IRange} (h : validInterval r = true) :
-    validIntervalLoose r = true := by
-  obtain ⟨h1, h2, h3⟩ := (validInterval_iff _).mp h
-  rw [validIntervalLoose_iff]
-  refine ⟨h1, h2, ?_⟩
-  have : intervalCap ≤ looseCap := by decide
-  omega
 
 -- ============================================================
 -- § 5. Certified transfer function (Phase 2)
@@ -198,12 +204,12 @@ def certSuccessor (m : IMap) (instr : TAC) (pc succPC : Nat) : IMap :=
       imSet (imRemove m x) x iy
   | .binop x .add y z =>
       let iy := imLookup m y; let iz := imLookup m z
-      if validInterval iy && validInterval iz then
+      if validIntervalLoose iy && validIntervalLoose iz then
         imSet (imRemove m x) x ⟨iy.lo + iz.lo, iy.hi + iz.hi - 1⟩
       else imRemove m x
   | .binop x .sub y z =>
       let iy := imLookup m y; let iz := imLookup m z
-      if validInterval iy && validInterval iz then
+      if validIntervalLoose iy && validIntervalLoose iz then
         imSet (imRemove m x) x ⟨iy.lo - iz.hi + 1, iy.hi - iz.lo⟩
       else imRemove m x
   | .binop x .mul y z =>
@@ -240,16 +246,21 @@ def certSuccessor (m : IMap) (instr : TAC) (pc succPC : Nat) : IMap :=
 -- § 6. Refinement
 -- ============================================================
 
-/-- A single claim `(v, r')` is *refined* by `m_strong` if `m_strong` has an
-    explicit, well-formed entry for `v` whose interval sits inside `r'`.
-    Absent entries fail — the checker will not accept a successor claim that
-    isn't backed by the transfer's output. -/
+/-- A single claim `(v, r')` is *refined* by `m_strong` if either:
+    * `r'` fails `validIntervalLoose` (skip-invalid-weak: such entries are
+      vacuously satisfied since `IMap.satisfies` skips them); OR
+    * `m_strong` has an explicit, `validIntervalLoose`-valid entry for `v`
+      whose interval sits inside `r'`.
+    Absent entries fail (when `r'` is valid) — the checker will not accept
+    a successor claim that isn't backed by the transfer's output. -/
 def refinesSingle (m_strong : IMap) (v : Var) (r' : IRange) : Bool :=
-  match m_strong.find? (fun p => p.1 == v) with
-  | some (_, r) =>
-      validInterval r && validInterval r' &&
-        decide (r'.lo ≤ r.lo) && decide (r.hi ≤ r'.hi)
-  | none => false
+  if !validIntervalLoose r' then true
+  else
+    match m_strong.find? (fun p => p.1 == v) with
+    | some (_, r) =>
+        validIntervalLoose r &&
+          decide (r'.lo ≤ r.lo) && decide (r.hi ≤ r'.hi)
+    | none => false
 
 /-- `m_strong` refines `m_weak` pointwise: every entry in `m_weak` has a
     stronger, well-formed counterpart in `m_strong`. -/
@@ -361,23 +372,45 @@ theorem imLookup_mem_of_valid {m : IMap} {v : Var}
       rw [hIrTopInvalid] at h
       exact Bool.noConfusion h
 
+/-- Loose companion: `validIntervalLoose (imLookup m v) = true → (v, imLookup m v) ∈ m`.
+    Same structure; `irTop.lo = -10¹² < 0` fails `validIntervalLoose` so the
+    fall-through case is ruled out. -/
+theorem imLookup_mem_of_valid_loose {m : IMap} {v : Var}
+    (h : validIntervalLoose (imLookup m v) = true) :
+    (v, imLookup m v) ∈ m := by
+  have hIrTopInvalid : validIntervalLoose irTop = false := by decide
+  unfold imLookup at h ⊢
+  split at h
+  · next q hFind =>
+      have ⟨hq1, hqm⟩ := find?_pair_spec hFind
+      obtain ⟨v', r⟩ := q
+      simp only at hq1; subst hq1
+      exact hqm
+  · next hFind =>
+      exfalso
+      rw [hIrTopInvalid] at h
+      exact Bool.noConfusion h
+
 -- ============================================================
 -- § 10. Refinement soundness
 -- ============================================================
 
-/-- If `m_strong` refines `m_weak` pointwise and every valid-interval entry in
-    `m_strong` is concretized by `σ`, then so is `m_weak`. The decisive step
+/-- If `m_strong` refines `m_weak` pointwise and every loose-valid entry in
+    `m_strong` is concretized by `σ`, then so is `m_weak` (whose invalid
+    entries are skipped per the `satisfies` definition). The decisive step
     in `checkLocalPreservation_sound`: refinement transports transfer
     soundness to the oracle's claims. -/
 theorem refines_sound {m_strong m_weak : IMap} {σ : Store}
     (hRefines : refines m_strong m_weak = true)
-    (hStrong : ∀ v r, (v, r) ∈ m_strong → validInterval r = true →
+    (hStrong : ∀ v r, (v, r) ∈ m_strong → validIntervalLoose r = true →
                ∃ bv, σ v = .int bv ∧ IntervalInv.satisfies r bv) :
     IMap.satisfies m_weak σ := by
-  intro v r' hVR
+  intro v r' hVR hValidWeak
   simp only [refines, List.all_eq_true] at hRefines
   have hSingle := hRefines (v, r') hVR
   simp only [refinesSingle] at hSingle
+  -- The weak side passes `validIntervalLoose`, so the skip branch is false.
+  rw [if_neg (by simp [hValidWeak])] at hSingle
   -- Drive the `match` in `refinesSingle` by cases on `find?`.
   cases hFind : m_strong.find? (fun p => p.1 == v) with
   | none =>
@@ -386,12 +419,11 @@ theorem refines_sound {m_strong m_weak : IMap} {σ : Store}
       obtain ⟨v', r_strong⟩ := q
       rw [hFind] at hSingle
       simp only [Bool.and_eq_true, decide_eq_true_eq] at hSingle
-      obtain ⟨⟨⟨hValidStrong, hValidWeak⟩, hLo⟩, hHi⟩ := hSingle
+      obtain ⟨⟨hValidStrong, hLo⟩, hHi⟩ := hSingle
       have ⟨hveq, hmem⟩ := find?_pair_spec hFind
       simp only at hveq
-      -- hveq : v' = v; eliminate v' (replace with v) by subst hveq.symm-like flip
       subst hveq
-      have hValidWeakUnfold := (validInterval_iff _).mp hValidWeak
+      have hValidWeakUnfold := (validIntervalLoose_iff _).mp hValidWeak
       have ⟨bv, hσv, hSat⟩ := hStrong v' r_strong hmem hValidStrong
       obtain ⟨hLoStrong, hLoNat, hHiNat⟩ := hSat
       refine ⟨bv, hσv, hValidWeakUnfold.1, ?_, ?_⟩
@@ -412,11 +444,11 @@ theorem refines_sound {m_strong m_weak : IMap} {σ : Store}
 theorem imRemove_sound {m : IMap} {x : Var} {σ σ' : Store}
     (hM : IMap.satisfies m σ)
     (hAgree : ∀ y, y ≠ x → σ' y = σ y) :
-    ∀ v r, (v, r) ∈ imRemove m x → validInterval r = true →
+    ∀ v r, (v, r) ∈ imRemove m x → validIntervalLoose r = true →
     ∃ bv, σ' v = .int bv ∧ IntervalInv.satisfies r bv := by
-  intro v r hMem _
+  intro v r hMem hValid
   have ⟨hNe, hMemM⟩ := mem_imRemove hMem
-  have ⟨bv, hσv, hSat⟩ := hM v r hMemM
+  have ⟨bv, hσv, hSat⟩ := hM v r hMemM hValid
   exact ⟨bv, by rw [hAgree v hNe]; exact hσv, hSat⟩
 
 /-- Soundness template when the transfer preserves `m` and the store stays
@@ -424,9 +456,9 @@ theorem imRemove_sound {m : IMap} {x : Var} {σ σ' : Store}
     don't change `σ`). -/
 theorem identity_sound {m : IMap} {σ : Store}
     (hM : IMap.satisfies m σ) :
-    ∀ v r, (v, r) ∈ m → validInterval r = true →
+    ∀ v r, (v, r) ∈ m → validIntervalLoose r = true →
     ∃ bv, σ v = .int bv ∧ IntervalInv.satisfies r bv :=
-  fun v r hMem _ => hM v r hMem
+  fun v r hMem hValid => hM v r hMem hValid
 
 -- ============================================================
 -- § 12. Store-update soundness for the three int-producing transfers
@@ -454,54 +486,73 @@ theorem constInt_satisfies (n : BitVec 64)
       omega
     rw [this]; omega
 
-/-- `.const x (.int n)` soundness: after `σ[x ↦ .int n]`, every valid entry
-    in `imSet (imRemove m x) x ⟨n.toInt, n.toInt+1⟩` holds. -/
+/-- Loose variant of `constInt_satisfies`: `(0 ≤ n.toInt) → IntervalInv.satisfies
+    ⟨n.toInt, n.toInt+1⟩ n`. Unlike the tight version we don't need an upper
+    cap — a single bitvec value trivially fits inside `[n, n+1)`. -/
+theorem constInt_satisfies_loose (n : BitVec 64)
+    (hlo : 0 ≤ n.toInt) :
+    IntervalInv.satisfies ⟨n.toInt, n.toInt + 1⟩ n := by
+  have hnat : n.toNat < 2 ^ 64 := n.isLt
+  have heq : n.toInt = (n.toNat : Int) := by
+    simp only [BitVec.toInt_eq_toNat_cond] at hlo ⊢
+    split at hlo <;> omega
+  refine ⟨hlo, ?_, ?_⟩
+  · show n.toInt.toNat ≤ n.toNat
+    rw [heq]; simp
+  · show n.toNat < (n.toInt + 1).toNat
+    rw [heq]
+    have : ((n.toNat : Int) + 1).toNat = n.toNat + 1 := by
+      have h : (0 : Int) ≤ (n.toNat : Int) + 1 := by omega
+      omega
+    rw [this]; omega
+
+/-- `.const x (.int n)` soundness: after `σ[x ↦ .int n]`, every loose-valid
+    entry in `imSet (imRemove m x) x ⟨n.toInt, n.toInt+1⟩` holds. -/
 theorem constInt_sound {m : IMap} {x : Var} {n : BitVec 64} {σ : Store}
     (hM : IMap.satisfies m σ) :
     ∀ v r, (v, r) ∈ imSet (imRemove m x) x ⟨n.toInt, n.toInt + 1⟩ →
-    validInterval r = true →
+    validIntervalLoose r = true →
     ∃ bv, (σ[x ↦ .int n]) v = .int bv ∧ IntervalInv.satisfies r bv := by
   intro v r hMem hValid
   rcases (mem_imSet.mp hMem) with ⟨rfl, rfl⟩ | ⟨hNe, hMemIR⟩
   · refine ⟨n, by simp [Store.update], ?_⟩
-    obtain ⟨hlo, _, hhi⟩ := (validInterval_iff _).mp hValid
-    simp only at hlo hhi
-    exact constInt_satisfies n hlo hhi
+    obtain ⟨hlo, _, _⟩ := (validIntervalLoose_iff _).mp hValid
+    simp only at hlo
+    exact constInt_satisfies_loose n hlo
   · have ⟨hNeIR, hMemM⟩ := mem_imRemove hMemIR
-    have ⟨bv, hσv, hSat⟩ := hM v r hMemM
+    have ⟨bv, hσv, hSat⟩ := hM v r hMemM hValid
     exact ⟨bv, by simp [Store.update, hNeIR, hσv], hSat⟩
 
 /-- `.copy x y` soundness. After `σ[x ↦ σ y]`, the transferred entry
-    `(x, imLookup m y)` concretizes iff the lookup was well-formed — which is
-    guaranteed by `validInterval`. -/
+    `(x, imLookup m y)` concretizes iff the lookup was loose-valid. -/
 theorem copy_sound {m : IMap} {x y : Var} {σ : Store}
     (hM : IMap.satisfies m σ) :
     ∀ v r, (v, r) ∈ imSet (imRemove m x) x (imLookup m y) →
-    validInterval r = true →
+    validIntervalLoose r = true →
     ∃ bv, (σ[x ↦ σ y]) v = .int bv ∧ IntervalInv.satisfies r bv := by
   intro v r hMem hValid
   rcases (mem_imSet.mp hMem) with ⟨rfl, rfl⟩ | ⟨hNe, hMemIR⟩
   · -- x entry: r = imLookup m y; use m.satisfies on (y, imLookup m y)
-    have hMemY := imLookup_mem_of_valid hValid
-    have ⟨bv, hσy, hSat⟩ := hM y (imLookup m y) hMemY
+    have hMemY := imLookup_mem_of_valid_loose hValid
+    have ⟨bv, hσy, hSat⟩ := hM y (imLookup m y) hMemY hValid
     exact ⟨bv, by simp [Store.update, hσy], hSat⟩
   · have ⟨hNeIR, hMemM⟩ := mem_imRemove hMemIR
-    have ⟨bv, hσv, hSat⟩ := hM v r hMemM
+    have ⟨bv, hσv, hSat⟩ := hM v r hMemM hValid
     exact ⟨bv, by simp [Store.update, hNeIR, hσv], hSat⟩
 
-/-- Bridge: if both operands `a, b` sit in `[0, 2³¹)` as unsigned bitvecs,
-    then `(a + b).toNat = a.toNat + b.toNat` with no overflow, and the sum
-    stays under `2³²`. Core arithmetic fact for the `.add` transfer. -/
+/-- Bridge: if both operands `a, b` sit in `[0, 2⁶²)` as unsigned bitvecs,
+    then `(a + b).toNat = a.toNat + b.toNat` with no overflow — the sum stays
+    under `2⁶³ < 2⁶⁴`. Loose version, matches the Phase 6 cap. -/
 theorem BitVec64.toNat_add_small {a b : BitVec 64}
-    (ha : a.toNat < 2 ^ 31) (hb : b.toNat < 2 ^ 31) :
+    (ha : a.toNat < 2 ^ 62) (hb : b.toNat < 2 ^ 62) :
     (a + b).toNat = a.toNat + b.toNat := by
   have : a.toNat + b.toNat < 2 ^ 64 := by omega
   simp [BitVec.toNat_add, Nat.mod_eq_of_lt this]
 
 /-- Companion: `(a - b).toNat = a.toNat - b.toNat` whenever `b ≤ a`
-    (unsigned), both within `[0, 2³¹)`. -/
+    (unsigned), both within `[0, 2⁶²)`. -/
 theorem BitVec64.toNat_sub_small {a b : BitVec 64}
-    (ha : a.toNat < 2 ^ 31) (hb : b.toNat < 2 ^ 31) (hle : b.toNat ≤ a.toNat) :
+    (ha : a.toNat < 2 ^ 62) (hb : b.toNat < 2 ^ 62) (hle : b.toNat ≤ a.toNat) :
     (a - b).toNat = a.toNat - b.toNat := by
   have hBV : b.toNat ≤ a.toNat := hle
   rw [BitVec.toNat_sub]
@@ -510,46 +561,47 @@ theorem BitVec64.toNat_sub_small {a b : BitVec 64}
   have : a.toNat - b.toNat < 2 ^ 64 := by omega
   omega
 
-/-- `.binop x .add y z` soundness. Both input intervals must be `validInterval`
-    so each operand fits `[0, 2³¹)` — no overflow on `a + b`. -/
+/-- `.binop x .add y z` soundness. Both input intervals must be
+    `validIntervalLoose` so each operand fits `[0, 2⁶²)` — no overflow on
+    `a + b`. -/
 theorem add_sound {m : IMap} {x y z : Var} {σ : Store}
     (hM : IMap.satisfies m σ)
-    (hValY : validInterval (imLookup m y) = true)
-    (hValZ : validInterval (imLookup m z) = true)
+    (hValY : validIntervalLoose (imLookup m y) = true)
+    (hValZ : validIntervalLoose (imLookup m z) = true)
     {a b : BitVec 64} (hσy : σ y = .int a) (hσz : σ z = .int b) :
     ∀ v r, (v, r) ∈
       imSet (imRemove m x) x
         ⟨(imLookup m y).lo + (imLookup m z).lo,
          (imLookup m y).hi + (imLookup m z).hi - 1⟩ →
-    validInterval r = true →
+    validIntervalLoose r = true →
     ∃ bv, (σ[x ↦ .int (a + b)]) v = .int bv ∧ IntervalInv.satisfies r bv := by
   intro v r hMem hValid
   rcases (mem_imSet.mp hMem) with ⟨rfl, rfl⟩ | ⟨hNe, hMemIR⟩
   · -- x entry: sum interval
     refine ⟨a + b, by simp [Store.update], ?_⟩
     -- Extract: σ y = .int a with a.toNat ∈ iy; σ z = .int b with b.toNat ∈ iz.
-    have hMemY := imLookup_mem_of_valid hValY
-    have hMemZ := imLookup_mem_of_valid hValZ
-    have ⟨a', hσy', hSatY⟩ := hM y (imLookup m y) hMemY
-    have ⟨b', hσz', hSatZ⟩ := hM z (imLookup m z) hMemZ
+    have hMemY := imLookup_mem_of_valid_loose hValY
+    have hMemZ := imLookup_mem_of_valid_loose hValZ
+    have ⟨a', hσy', hSatY⟩ := hM y (imLookup m y) hMemY hValY
+    have ⟨b', hσz', hSatZ⟩ := hM z (imLookup m z) hMemZ hValZ
     have ha : a = a' := Value.int.inj (hσy.symm.trans hσy')
     have hb : b = b' := Value.int.inj (hσz.symm.trans hσz')
     subst ha; subst hb
-    obtain ⟨hyLo, hyLoHi, hyHi⟩ := (validInterval_iff _).mp hValY
-    obtain ⟨hzLo, hzLoHi, hzHi⟩ := (validInterval_iff _).mp hValZ
-    obtain ⟨hrLo, _, _⟩ := (validInterval_iff _).mp hValid
+    obtain ⟨hyLo, hyLoHi, hyHi⟩ := (validIntervalLoose_iff _).mp hValY
+    obtain ⟨hzLo, hzLoHi, hzHi⟩ := (validIntervalLoose_iff _).mp hValZ
+    obtain ⟨hrLo, _, _⟩ := (validIntervalLoose_iff _).mp hValid
     obtain ⟨_, hSatYLoNat, hSatYHiNat⟩ := hSatY
     obtain ⟨_, hSatZLoNat, hSatZHiNat⟩ := hSatZ
-    -- Each operand's toNat < 2^31 via iy.hi ≤ 2^31 and bv.toNat < iy.hi.toNat.
-    have hyHiNat : (imLookup m y).hi.toNat ≤ intervalCap.toNat :=
+    -- Each operand's toNat < 2^62 via iy.hi ≤ 2^62 and bv.toNat < iy.hi.toNat.
+    have hyHiNat : (imLookup m y).hi.toNat ≤ looseCap.toNat :=
       Int.toNat_mono_of_nonneg hyHi
-    have hzHiNat : (imLookup m z).hi.toNat ≤ intervalCap.toNat :=
+    have hzHiNat : (imLookup m z).hi.toNat ≤ looseCap.toNat :=
       Int.toNat_mono_of_nonneg hzHi
-    have hCapNat : intervalCap.toNat = 2 ^ 31 := by decide
-    have hy31 : a.toNat < 2 ^ 31 := by omega
-    have hz31 : b.toNat < 2 ^ 31 := by omega
+    have hCapNat : looseCap.toNat = 2 ^ 62 := by decide
+    have hy62 : a.toNat < 2 ^ 62 := by omega
+    have hz62 : b.toNat < 2 ^ 62 := by omega
     have hSum : (a + b).toNat = a.toNat + b.toNat :=
-      BitVec64.toNat_add_small hy31 hz31
+      BitVec64.toNat_add_small hy62 hz62
     -- The target lo / hi as nonneg Ints, so `toNat` unfolds via omega.
     have hYhiNn : (0 : Int) ≤ (imLookup m y).hi := by omega
     have hZhiNn : (0 : Int) ≤ (imLookup m z).hi := by omega
@@ -567,46 +619,46 @@ theorem add_sound {m : IMap} {x y z : Var} {σ : Store}
       -- Both `hi` are nonneg ints, sum - 1 ≥ 0, so toNat is plain.
       omega
   · have ⟨hNeIR, hMemM⟩ := mem_imRemove hMemIR
-    have ⟨bv, hσv, hSat⟩ := hM v r hMemM
+    have ⟨bv, hσv, hSat⟩ := hM v r hMemM hValid
     exact ⟨bv, by simp [Store.update, hNeIR, hσv], hSat⟩
 
-/-- `.binop x .sub y z` soundness. Same `validInterval` gating as `add`. The
-    `validInterval` of the output range forces `b.toNat ≤ a.toNat` (no wrap)
-    via `iz.hi ≤ iy.lo + 1`. -/
+/-- `.binop x .sub y z` soundness. Same `validIntervalLoose` gating as `add`.
+    The `validIntervalLoose` of the output range forces `b.toNat ≤ a.toNat`
+    (no wrap) via `iz.hi ≤ iy.lo + 1`. -/
 theorem sub_sound {m : IMap} {x y z : Var} {σ : Store}
     (hM : IMap.satisfies m σ)
-    (hValY : validInterval (imLookup m y) = true)
-    (hValZ : validInterval (imLookup m z) = true)
+    (hValY : validIntervalLoose (imLookup m y) = true)
+    (hValZ : validIntervalLoose (imLookup m z) = true)
     {a b : BitVec 64} (hσy : σ y = .int a) (hσz : σ z = .int b) :
     ∀ v r, (v, r) ∈
       imSet (imRemove m x) x
         ⟨(imLookup m y).lo - (imLookup m z).hi + 1,
          (imLookup m y).hi - (imLookup m z).lo⟩ →
-    validInterval r = true →
+    validIntervalLoose r = true →
     ∃ bv, (σ[x ↦ .int (a - b)]) v = .int bv ∧ IntervalInv.satisfies r bv := by
   intro v r hMem hValid
   rcases (mem_imSet.mp hMem) with ⟨rfl, rfl⟩ | ⟨hNe, hMemIR⟩
   · refine ⟨a - b, by simp [Store.update], ?_⟩
-    have hMemY := imLookup_mem_of_valid hValY
-    have hMemZ := imLookup_mem_of_valid hValZ
-    have ⟨a', hσy', hSatY⟩ := hM y (imLookup m y) hMemY
-    have ⟨b', hσz', hSatZ⟩ := hM z (imLookup m z) hMemZ
+    have hMemY := imLookup_mem_of_valid_loose hValY
+    have hMemZ := imLookup_mem_of_valid_loose hValZ
+    have ⟨a', hσy', hSatY⟩ := hM y (imLookup m y) hMemY hValY
+    have ⟨b', hσz', hSatZ⟩ := hM z (imLookup m z) hMemZ hValZ
     have ha : a = a' := Value.int.inj (hσy.symm.trans hσy')
     have hb : b = b' := Value.int.inj (hσz.symm.trans hσz')
     subst ha; subst hb
-    obtain ⟨hyLo, hyLoHi, hyHi⟩ := (validInterval_iff _).mp hValY
-    obtain ⟨hzLo, hzLoHi, hzHi⟩ := (validInterval_iff _).mp hValZ
-    obtain ⟨hrLo, hrLoHi, hrHi⟩ := (validInterval_iff _).mp hValid
+    obtain ⟨hyLo, hyLoHi, hyHi⟩ := (validIntervalLoose_iff _).mp hValY
+    obtain ⟨hzLo, hzLoHi, hzHi⟩ := (validIntervalLoose_iff _).mp hValZ
+    obtain ⟨hrLo, hrLoHi, hrHi⟩ := (validIntervalLoose_iff _).mp hValid
     obtain ⟨_, hSatYLoNat, hSatYHiNat⟩ := hSatY
     obtain ⟨_, hSatZLoNat, hSatZHiNat⟩ := hSatZ
-    have hCapNat : intervalCap.toNat = 2 ^ 31 := by decide
-    have hyHiNat : (imLookup m y).hi.toNat ≤ intervalCap.toNat :=
+    have hCapNat : looseCap.toNat = 2 ^ 62 := by decide
+    have hyHiNat : (imLookup m y).hi.toNat ≤ looseCap.toNat :=
       Int.toNat_mono_of_nonneg hyHi
-    have hzHiNat : (imLookup m z).hi.toNat ≤ intervalCap.toNat :=
+    have hzHiNat : (imLookup m z).hi.toNat ≤ looseCap.toNat :=
       Int.toNat_mono_of_nonneg hzHi
-    have hy31 : a.toNat < 2 ^ 31 := by omega
-    have hz31 : b.toNat < 2 ^ 31 := by omega
-    -- b.toNat ≤ a.toNat via iz.hi ≤ iy.lo + 1 (from validInterval new).
+    have hy62 : a.toNat < 2 ^ 62 := by omega
+    have hz62 : b.toNat < 2 ^ 62 := by omega
+    -- b.toNat ≤ a.toNat via iz.hi ≤ iy.lo + 1 (from validIntervalLoose new).
     simp only at hrLo hrHi
     -- hrLo : 0 ≤ iy.lo - iz.hi + 1, so iz.hi ≤ iy.lo + 1
     have hzHi_le_yLo : (imLookup m z).hi.toNat ≤ (imLookup m y).lo.toNat + 1 := by
@@ -618,7 +670,7 @@ theorem sub_sound {m : IMap} {x y z : Var} {σ : Store}
       omega
     have hbLeA : b.toNat ≤ a.toNat := by omega
     have hSub : (a - b).toNat = a.toNat - b.toNat :=
-      BitVec64.toNat_sub_small hy31 hz31 hbLeA
+      BitVec64.toNat_sub_small hy62 hz62 hbLeA
     refine ⟨hrLo, ?_, ?_⟩
     · show ((imLookup m y).lo - (imLookup m z).hi + 1).toNat ≤ (a - b).toNat
       rw [hSub]
@@ -628,7 +680,7 @@ theorem sub_sound {m : IMap} {x y z : Var} {σ : Store}
       rw [hSub]
       omega
   · have ⟨hNeIR, hMemM⟩ := mem_imRemove hMemIR
-    have ⟨bv, hσv, hSat⟩ := hM v r hMemM
+    have ⟨bv, hσv, hSat⟩ := hM v r hMemM hValid
     exact ⟨bv, by simp [Store.update, hNeIR, hσv], hSat⟩
 
 -- ============================================================
@@ -738,16 +790,16 @@ theorem refineCond_lt_lit_true_sound
     (hEval : (BoolExpr.cmp CmpOp.lt (Expr.var x) (Expr.lit n)).eval σ am = true) :
     ∀ v r, (v, r) ∈
       imSet m x ⟨(imLookup m x).lo, min (imLookup m x).hi n.toInt⟩ →
-    validInterval r = true →
+    validIntervalLoose r = true →
     ∃ bv, σ v = .int bv ∧ IntervalInv.satisfies r bv := by
   intro v r hMem hValid
   rcases (mem_imSet.mp hMem) with ⟨rfl, rfl⟩ | ⟨hNe, hMemM⟩
-  · obtain ⟨hNewLoNn, hNewLoHi, _⟩ := (validInterval_iff _).mp hValid
+  · obtain ⟨hNewLoNn, hNewLoHi, _⟩ := (validIntervalLoose_iff _).mp hValid
     simp only at hNewLoNn hNewLoHi
     obtain ⟨hIvLoNn, _, hIvHiLooseCap⟩ :=
       (validIntervalLoose_iff _).mp hIvLoose
     have hMemV : (v, imLookup m v) ∈ m := imLookup_mem_of_lo_nn hIvLoNn
-    have ⟨bv, hσv, hSat⟩ := hM v (imLookup m v) hMemV
+    have ⟨bv, hσv, hSat⟩ := hM v (imLookup m v) hMemV hIvLoose
     obtain ⟨_, hIvLoNat, hIvHiNat⟩ := hSat
     have hIvHiNat' : (imLookup m v).hi.toNat ≤ looseCap.toNat :=
       Int.toNat_mono_of_nonneg hIvHiLooseCap
@@ -780,7 +832,7 @@ theorem refineCond_lt_lit_true_sound
       split
       · exact hIvHiNat
       · rw [hNIntEqToNat]; exact hBvLtN
-  · exact hM v r hMemM
+  · exact hM v r hMemM hValid
 
 /-- False branch of `.cmp .lt (.var x) (.lit n)`. -/
 theorem refineCond_lt_lit_false_sound
@@ -791,16 +843,16 @@ theorem refineCond_lt_lit_false_sound
     (hEval : (BoolExpr.cmp CmpOp.lt (Expr.var x) (Expr.lit n)).eval σ am = false) :
     ∀ v r, (v, r) ∈
       imSet m x ⟨max (imLookup m x).lo n.toInt, (imLookup m x).hi⟩ →
-    validInterval r = true →
+    validIntervalLoose r = true →
     ∃ bv, σ v = .int bv ∧ IntervalInv.satisfies r bv := by
   intro v r hMem hValid
   rcases (mem_imSet.mp hMem) with ⟨rfl, rfl⟩ | ⟨hNe, hMemM⟩
-  · obtain ⟨hNewLoNn, hNewLoHi, hNewHi⟩ := (validInterval_iff _).mp hValid
+  · obtain ⟨hNewLoNn, hNewLoHi, hNewHi⟩ := (validIntervalLoose_iff _).mp hValid
     simp only at hNewLoNn hNewLoHi hNewHi
     obtain ⟨hIvLoNn, hIvLoHi, hIvHiLooseCap⟩ :=
       (validIntervalLoose_iff _).mp hIvLoose
     have hMemV : (v, imLookup m v) ∈ m := imLookup_mem_of_lo_nn hIvLoNn
-    have ⟨bv, hσv, hSat⟩ := hM v (imLookup m v) hMemV
+    have ⟨bv, hσv, hSat⟩ := hM v (imLookup m v) hMemV hIvLoose
     obtain ⟨_, hIvLoNat, hIvHiNat⟩ := hSat
     have hIvHiNat' : (imLookup m v).hi.toNat ≤ looseCap.toNat :=
       Int.toNat_mono_of_nonneg hIvHiLooseCap
@@ -827,7 +879,7 @@ theorem refineCond_lt_lit_false_sound
     split
     · rw [hNIntEqToNat]; exact hBridge
     · exact hIvLoNat
-  · exact hM v r hMemM
+  · exact hM v r hMemM hValid
 
 /-- True branch of `.cmp .lt (.var x) (.var bnd)`. Singleton-biv interval
     forces `σ bnd`'s toNat to equal `biv.lo.toNat`, so the slt bridge
@@ -841,11 +893,11 @@ theorem refineCond_lt_var_true_sound
     (hEval : (BoolExpr.cmp CmpOp.lt (Expr.var x) (Expr.var bnd)).eval σ am = true) :
     ∀ v r, (v, r) ∈
       imSet m x ⟨(imLookup m x).lo, min (imLookup m x).hi (imLookup m bnd).lo⟩ →
-    validInterval r = true →
+    validIntervalLoose r = true →
     ∃ bv, σ v = .int bv ∧ IntervalInv.satisfies r bv := by
   intro v r hMem hValid
   rcases (mem_imSet.mp hMem) with ⟨rfl, rfl⟩ | ⟨hNe, hMemM⟩
-  · obtain ⟨hNewLoNn, _, _⟩ := (validInterval_iff _).mp hValid
+  · obtain ⟨hNewLoNn, _, _⟩ := (validIntervalLoose_iff _).mp hValid
     simp only at hNewLoNn
     obtain ⟨hIvLoNn, _, hIvHiLooseCap⟩ :=
       (validIntervalLoose_iff _).mp hIvLoose
@@ -853,13 +905,13 @@ theorem refineCond_lt_var_true_sound
       (validIntervalLoose_iff _).mp hBivLoose
     have hLooseNat : looseCap.toNat = 2 ^ 62 := by decide
     have hMemV : (v, imLookup m v) ∈ m := imLookup_mem_of_lo_nn hIvLoNn
-    have ⟨bv, hσv, hSat⟩ := hM v (imLookup m v) hMemV
+    have ⟨bv, hσv, hSat⟩ := hM v (imLookup m v) hMemV hIvLoose
     obtain ⟨_, hIvLoNat, hIvHiNat⟩ := hSat
     have hIvHiNat' : (imLookup m v).hi.toNat ≤ looseCap.toNat :=
       Int.toNat_mono_of_nonneg hIvHiLooseCap
     have hBv63 : bv.toNat < 2 ^ 63 := by omega
     have hMemBnd : (bnd, imLookup m bnd) ∈ m := imLookup_mem_of_lo_nn hBivLoNn
-    have ⟨bv', hσbnd, hSatB⟩ := hM bnd (imLookup m bnd) hMemBnd
+    have ⟨bv', hσbnd, hSatB⟩ := hM bnd (imLookup m bnd) hMemBnd hBivLoose
     obtain ⟨_, hBivLoNat, hBivHiNat⟩ := hSatB
     have hBivHiNat' : (imLookup m bnd).hi.toNat ≤ looseCap.toNat :=
       Int.toNat_mono_of_nonneg hBivHiLooseCap
@@ -880,7 +932,7 @@ theorem refineCond_lt_var_true_sound
     show bv.toNat < (min (imLookup m v).hi (imLookup m bnd).lo).toNat
     rw [Int.min_def]
     split <;> omega
-  · exact hM v r hMemM
+  · exact hM v r hMemM hValid
 
 /-- False branch of `.cmp .lt (.var x) (.var bnd)`. -/
 theorem refineCond_lt_var_false_sound
@@ -892,11 +944,11 @@ theorem refineCond_lt_var_false_sound
     (hEval : (BoolExpr.cmp CmpOp.lt (Expr.var x) (Expr.var bnd)).eval σ am = false) :
     ∀ v r, (v, r) ∈
       imSet m x ⟨max (imLookup m x).lo (imLookup m bnd).lo, (imLookup m x).hi⟩ →
-    validInterval r = true →
+    validIntervalLoose r = true →
     ∃ bv, σ v = .int bv ∧ IntervalInv.satisfies r bv := by
   intro v r hMem hValid
   rcases (mem_imSet.mp hMem) with ⟨rfl, rfl⟩ | ⟨hNe, hMemM⟩
-  · obtain ⟨hNewLoNn, hNewLoHi, hNewHi⟩ := (validInterval_iff _).mp hValid
+  · obtain ⟨hNewLoNn, hNewLoHi, hNewHi⟩ := (validIntervalLoose_iff _).mp hValid
     simp only at hNewLoNn hNewLoHi hNewHi
     obtain ⟨hIvLoNn, _, hIvHiLooseCap⟩ :=
       (validIntervalLoose_iff _).mp hIvLoose
@@ -904,13 +956,13 @@ theorem refineCond_lt_var_false_sound
       (validIntervalLoose_iff _).mp hBivLoose
     have hLooseNat : looseCap.toNat = 2 ^ 62 := by decide
     have hMemV : (v, imLookup m v) ∈ m := imLookup_mem_of_lo_nn hIvLoNn
-    have ⟨bv, hσv, hSat⟩ := hM v (imLookup m v) hMemV
+    have ⟨bv, hσv, hSat⟩ := hM v (imLookup m v) hMemV hIvLoose
     obtain ⟨_, hIvLoNat, hIvHiNat⟩ := hSat
     have hIvHiNat' : (imLookup m v).hi.toNat ≤ looseCap.toNat :=
       Int.toNat_mono_of_nonneg hIvHiLooseCap
     have hBv63 : bv.toNat < 2 ^ 63 := by omega
     have hMemBnd : (bnd, imLookup m bnd) ∈ m := imLookup_mem_of_lo_nn hBivLoNn
-    have ⟨bv', hσbnd, hSatB⟩ := hM bnd (imLookup m bnd) hMemBnd
+    have ⟨bv', hσbnd, hSatB⟩ := hM bnd (imLookup m bnd) hMemBnd hBivLoose
     obtain ⟨_, hBivLoNat, hBivHiNat⟩ := hSatB
     have hBivHiNat' : (imLookup m bnd).hi.toNat ≤ looseCap.toNat :=
       Int.toNat_mono_of_nonneg hBivHiLooseCap
@@ -931,7 +983,7 @@ theorem refineCond_lt_var_false_sound
     show (max (imLookup m v).lo (imLookup m bnd).lo).toNat ≤ bv.toNat
     rw [Int.max_def]
     split <;> omega
-  · exact hM v r hMemM
+  · exact hM v r hMemM hValid
 
 /-- True branch of `.cmp .le (.var x) (.lit n)`. -/
 theorem refineCond_le_lit_true_sound
@@ -942,16 +994,16 @@ theorem refineCond_le_lit_true_sound
     (hEval : (BoolExpr.cmp CmpOp.le (Expr.var x) (Expr.lit n)).eval σ am = true) :
     ∀ v r, (v, r) ∈
       imSet m x ⟨(imLookup m x).lo, min (imLookup m x).hi (n.toInt + 1)⟩ →
-    validInterval r = true →
+    validIntervalLoose r = true →
     ∃ bv, σ v = .int bv ∧ IntervalInv.satisfies r bv := by
   intro v r hMem hValid
   rcases (mem_imSet.mp hMem) with ⟨rfl, rfl⟩ | ⟨hNe, hMemM⟩
-  · obtain ⟨hNewLoNn, _, _⟩ := (validInterval_iff _).mp hValid
+  · obtain ⟨hNewLoNn, _, _⟩ := (validIntervalLoose_iff _).mp hValid
     simp only at hNewLoNn
     obtain ⟨hIvLoNn, _, hIvHiLooseCap⟩ :=
       (validIntervalLoose_iff _).mp hIvLoose
     have hMemV : (v, imLookup m v) ∈ m := imLookup_mem_of_lo_nn hIvLoNn
-    have ⟨bv, hσv, hSat⟩ := hM v (imLookup m v) hMemV
+    have ⟨bv, hσv, hSat⟩ := hM v (imLookup m v) hMemV hIvLoose
     obtain ⟨_, hIvLoNat, hIvHiNat⟩ := hSat
     have hIvHiNat' : (imLookup m v).hi.toNat ≤ looseCap.toNat :=
       Int.toNat_mono_of_nonneg hIvHiLooseCap
@@ -976,7 +1028,7 @@ theorem refineCond_le_lit_true_sound
     show bv.toNat < (min (imLookup m v).hi (n.toInt + 1)).toNat
     rw [Int.min_def]
     split <;> omega
-  · exact hM v r hMemM
+  · exact hM v r hMemM hValid
 
 /-- False branch of `.cmp .le (.var x) (.lit n)`. -/
 theorem refineCond_le_lit_false_sound
@@ -987,16 +1039,16 @@ theorem refineCond_le_lit_false_sound
     (hEval : (BoolExpr.cmp CmpOp.le (Expr.var x) (Expr.lit n)).eval σ am = false) :
     ∀ v r, (v, r) ∈
       imSet m x ⟨max (imLookup m x).lo (n.toInt + 1), (imLookup m x).hi⟩ →
-    validInterval r = true →
+    validIntervalLoose r = true →
     ∃ bv, σ v = .int bv ∧ IntervalInv.satisfies r bv := by
   intro v r hMem hValid
   rcases (mem_imSet.mp hMem) with ⟨rfl, rfl⟩ | ⟨hNe, hMemM⟩
-  · obtain ⟨hNewLoNn, hNewLoHi, hNewHi⟩ := (validInterval_iff _).mp hValid
+  · obtain ⟨hNewLoNn, hNewLoHi, hNewHi⟩ := (validIntervalLoose_iff _).mp hValid
     simp only at hNewLoNn hNewLoHi hNewHi
     obtain ⟨hIvLoNn, _, hIvHiLooseCap⟩ :=
       (validIntervalLoose_iff _).mp hIvLoose
     have hMemV : (v, imLookup m v) ∈ m := imLookup_mem_of_lo_nn hIvLoNn
-    have ⟨bv, hσv, hSat⟩ := hM v (imLookup m v) hMemV
+    have ⟨bv, hσv, hSat⟩ := hM v (imLookup m v) hMemV hIvLoose
     obtain ⟨_, hIvLoNat, hIvHiNat⟩ := hSat
     have hIvHiNat' : (imLookup m v).hi.toNat ≤ looseCap.toNat :=
       Int.toNat_mono_of_nonneg hIvHiLooseCap
@@ -1021,7 +1073,7 @@ theorem refineCond_le_lit_false_sound
     show (max (imLookup m v).lo (n.toInt + 1)).toNat ≤ bv.toNat
     rw [Int.max_def]
     split <;> omega
-  · exact hM v r hMemM
+  · exact hM v r hMemM hValid
 
 /-- True branch of `.cmp .le (.var x) (.var bnd)`. -/
 theorem refineCond_le_var_true_sound
@@ -1033,11 +1085,11 @@ theorem refineCond_le_var_true_sound
     (hEval : (BoolExpr.cmp CmpOp.le (Expr.var x) (Expr.var bnd)).eval σ am = true) :
     ∀ v r, (v, r) ∈
       imSet m x ⟨(imLookup m x).lo, min (imLookup m x).hi ((imLookup m bnd).lo + 1)⟩ →
-    validInterval r = true →
+    validIntervalLoose r = true →
     ∃ bv, σ v = .int bv ∧ IntervalInv.satisfies r bv := by
   intro v r hMem hValid
   rcases (mem_imSet.mp hMem) with ⟨rfl, rfl⟩ | ⟨hNe, hMemM⟩
-  · obtain ⟨hNewLoNn, _, _⟩ := (validInterval_iff _).mp hValid
+  · obtain ⟨hNewLoNn, _, _⟩ := (validIntervalLoose_iff _).mp hValid
     simp only at hNewLoNn
     obtain ⟨hIvLoNn, _, hIvHiLooseCap⟩ :=
       (validIntervalLoose_iff _).mp hIvLoose
@@ -1045,13 +1097,13 @@ theorem refineCond_le_var_true_sound
       (validIntervalLoose_iff _).mp hBivLoose
     have hLooseNat : looseCap.toNat = 2 ^ 62 := by decide
     have hMemV : (v, imLookup m v) ∈ m := imLookup_mem_of_lo_nn hIvLoNn
-    have ⟨bv, hσv, hSat⟩ := hM v (imLookup m v) hMemV
+    have ⟨bv, hσv, hSat⟩ := hM v (imLookup m v) hMemV hIvLoose
     obtain ⟨_, hIvLoNat, hIvHiNat⟩ := hSat
     have hIvHiNat' : (imLookup m v).hi.toNat ≤ looseCap.toNat :=
       Int.toNat_mono_of_nonneg hIvHiLooseCap
     have hBv63 : bv.toNat < 2 ^ 63 := by omega
     have hMemBnd : (bnd, imLookup m bnd) ∈ m := imLookup_mem_of_lo_nn hBivLoNn
-    have ⟨bv', hσbnd, hSatB⟩ := hM bnd (imLookup m bnd) hMemBnd
+    have ⟨bv', hσbnd, hSatB⟩ := hM bnd (imLookup m bnd) hMemBnd hBivLoose
     obtain ⟨_, hBivLoNat, hBivHiNat⟩ := hSatB
     have hBivHiNat' : (imLookup m bnd).hi.toNat ≤ looseCap.toNat :=
       Int.toNat_mono_of_nonneg hBivHiLooseCap
@@ -1072,7 +1124,7 @@ theorem refineCond_le_var_true_sound
     show bv.toNat < (min (imLookup m v).hi ((imLookup m bnd).lo + 1)).toNat
     rw [Int.min_def]
     split <;> omega
-  · exact hM v r hMemM
+  · exact hM v r hMemM hValid
 
 /-- False branch of `.cmp .le (.var x) (.var bnd)`. -/
 theorem refineCond_le_var_false_sound
@@ -1084,11 +1136,11 @@ theorem refineCond_le_var_false_sound
     (hEval : (BoolExpr.cmp CmpOp.le (Expr.var x) (Expr.var bnd)).eval σ am = false) :
     ∀ v r, (v, r) ∈
       imSet m x ⟨max (imLookup m x).lo ((imLookup m bnd).lo + 1), (imLookup m x).hi⟩ →
-    validInterval r = true →
+    validIntervalLoose r = true →
     ∃ bv, σ v = .int bv ∧ IntervalInv.satisfies r bv := by
   intro v r hMem hValid
   rcases (mem_imSet.mp hMem) with ⟨rfl, rfl⟩ | ⟨hNe, hMemM⟩
-  · obtain ⟨hNewLoNn, hNewLoHi, hNewHi⟩ := (validInterval_iff _).mp hValid
+  · obtain ⟨hNewLoNn, hNewLoHi, hNewHi⟩ := (validIntervalLoose_iff _).mp hValid
     simp only at hNewLoNn hNewLoHi hNewHi
     obtain ⟨hIvLoNn, _, hIvHiLooseCap⟩ :=
       (validIntervalLoose_iff _).mp hIvLoose
@@ -1096,13 +1148,13 @@ theorem refineCond_le_var_false_sound
       (validIntervalLoose_iff _).mp hBivLoose
     have hLooseNat : looseCap.toNat = 2 ^ 62 := by decide
     have hMemV : (v, imLookup m v) ∈ m := imLookup_mem_of_lo_nn hIvLoNn
-    have ⟨bv, hσv, hSat⟩ := hM v (imLookup m v) hMemV
+    have ⟨bv, hσv, hSat⟩ := hM v (imLookup m v) hMemV hIvLoose
     obtain ⟨_, hIvLoNat, hIvHiNat⟩ := hSat
     have hIvHiNat' : (imLookup m v).hi.toNat ≤ looseCap.toNat :=
       Int.toNat_mono_of_nonneg hIvHiLooseCap
     have hBv63 : bv.toNat < 2 ^ 63 := by omega
     have hMemBnd : (bnd, imLookup m bnd) ∈ m := imLookup_mem_of_lo_nn hBivLoNn
-    have ⟨bv', hσbnd, hSatB⟩ := hM bnd (imLookup m bnd) hMemBnd
+    have ⟨bv', hσbnd, hSatB⟩ := hM bnd (imLookup m bnd) hMemBnd hBivLoose
     obtain ⟨_, hBivLoNat, hBivHiNat⟩ := hSatB
     have hBivHiNat' : (imLookup m bnd).hi.toNat ≤ looseCap.toNat :=
       Int.toNat_mono_of_nonneg hBivHiLooseCap
@@ -1123,7 +1175,7 @@ theorem refineCond_le_var_false_sound
     show (max (imLookup m v).lo ((imLookup m bnd).lo + 1)).toNat ≤ bv.toNat
     rw [Int.max_def]
     split <;> omega
-  · exact hM v r hMemM
+  · exact hM v r hMemM hValid
 
 -- ============================================================
 -- § 13c. refineCond soundness induction wrapper
@@ -1137,25 +1189,25 @@ theorem refineCond_sound {m : IMap} {σ : Store} {am : ArrayMem}
     (be : BoolExpr) (isTrue : Bool)
     (hM : IMap.satisfies m σ)
     (hEval : be.eval σ am = isTrue) :
-    ∀ v r, (v, r) ∈ refineCond m be isTrue → validInterval r = true →
+    ∀ v r, (v, r) ∈ refineCond m be isTrue → validIntervalLoose r = true →
     ∃ bv, σ v = .int bv ∧ IntervalInv.satisfies r bv := by
   induction be generalizing isTrue with
   | lit _ =>
-      intro v r hMem _
+      intro v r hMem hValid
       simp only [refineCond] at hMem
-      exact hM v r hMem
+      exact hM v r hMem hValid
   | bvar _ =>
-      intro v r hMem _
+      intro v r hMem hValid
       simp only [refineCond] at hMem
-      exact hM v r hMem
+      exact hM v r hMem hValid
   | fcmp _ _ _ =>
-      intro v r hMem _
+      intro v r hMem hValid
       simp only [refineCond] at hMem
-      exact hM v r hMem
+      exact hM v r hMem hValid
   | bexpr _ =>
-      intro v r hMem _
+      intro v r hMem hValid
       simp only [refineCond] at hMem
-      exact hM v r hMem
+      exact hM v r hMem hValid
   | not inner ih =>
       intro v r hMem hValid
       have hInner : inner.eval σ am = !isTrue := by
@@ -1170,8 +1222,8 @@ theorem refineCond_sound {m : IMap} {σ : Store} {am : ArrayMem}
       -- Dispatch by op; only `.lt`/`.le` with `(.var x)` on the left need the
       -- refineCond leaves. All other patterns fall through to `m`.
       cases op with
-      | eq => simp only [refineCond] at hMem; exact hM v r hMem
-      | ne => simp only [refineCond] at hMem; exact hM v r hMem
+      | eq => simp only [refineCond] at hMem; exact hM v r hMem hValid
+      | ne => simp only [refineCond] at hMem; exact hM v r hMem hValid
       | lt =>
           cases e1 with
           | var x =>
@@ -1190,7 +1242,7 @@ theorem refineCond_sound {m : IMap} {σ : Store} {am : ArrayMem}
                     case true =>
                         simp only [if_true] at hMem
                         exact refineCond_lt_lit_true_sound hM hIvLoose hEval v r hMem hValid
-                  · exact hM v r hMem
+                  · exact hM v r hMem hValid
               | var bnd =>
                   simp only [refineCond] at hMem
                   split at hMem
@@ -1206,9 +1258,9 @@ theorem refineCond_sound {m : IMap} {σ : Store} {am : ArrayMem}
                         simp only [if_true] at hMem
                         exact refineCond_lt_var_true_sound hM hIvLoose hBivLoose hSingleton hEval
                           v r hMem hValid
-                  · exact hM v r hMem
-              | _ => simp only [refineCond] at hMem; exact hM v r hMem
-          | _ => simp only [refineCond] at hMem; exact hM v r hMem
+                  · exact hM v r hMem hValid
+              | _ => simp only [refineCond] at hMem; exact hM v r hMem hValid
+          | _ => simp only [refineCond] at hMem; exact hM v r hMem hValid
       | le =>
           cases e1 with
           | var x =>
@@ -1228,7 +1280,7 @@ theorem refineCond_sound {m : IMap} {σ : Store} {am : ArrayMem}
                         simp only [if_true] at hMem
                         exact refineCond_le_lit_true_sound hM hIvLoose hNonneg hEval
                           v r hMem hValid
-                  · exact hM v r hMem
+                  · exact hM v r hMem hValid
               | var bnd =>
                   simp only [refineCond] at hMem
                   split at hMem
@@ -1244,9 +1296,9 @@ theorem refineCond_sound {m : IMap} {σ : Store} {am : ArrayMem}
                         simp only [if_true] at hMem
                         exact refineCond_le_var_true_sound hM hIvLoose hBivLoose hSingleton hEval
                           v r hMem hValid
-                  · exact hM v r hMem
-              | _ => simp only [refineCond] at hMem; exact hM v r hMem
-          | _ => simp only [refineCond] at hMem; exact hM v r hMem
+                  · exact hM v r hMem hValid
+              | _ => simp only [refineCond] at hMem; exact hM v r hMem hValid
+          | _ => simp only [refineCond] at hMem; exact hM v r hMem hValid
 
 -- ============================================================
 -- § 13d. BitVec multiplication bridge + mul_sound
@@ -1275,7 +1327,7 @@ theorem mul_sound {m : IMap} {x y z : Var} {σ : Store}
       imSet (imRemove m x) x
         ⟨(imLookup m y).lo * (imLookup m z).lo,
          ((imLookup m y).hi - 1) * ((imLookup m z).hi - 1) + 1⟩ →
-    validInterval r = true →
+    validIntervalLoose r = true →
     ∃ bv, (σ[x ↦ .int (a * b)]) v = .int bv ∧ IntervalInv.satisfies r bv := by
   intro v r hMem hValid
   rcases (mem_imSet.mp hMem) with ⟨rfl, rfl⟩ | ⟨hNe, hMemIR⟩
@@ -1284,8 +1336,18 @@ theorem mul_sound {m : IMap} {x y z : Var} {σ : Store}
     obtain ⟨hZLo, hZLoHi, hZHi⟩ := (validIntervalMul_iff _).mp hValZ
     have hMemY : (y, imLookup m y) ∈ m := imLookup_mem_of_lo_nn hYLo
     have hMemZ : (z, imLookup m z) ∈ m := imLookup_mem_of_lo_nn hZLo
-    have ⟨a', hσy', hSatY⟩ := hM y (imLookup m y) hMemY
-    have ⟨b', hσz', hSatZ⟩ := hM z (imLookup m z) hMemZ
+    -- `validIntervalMul` implies `validIntervalLoose` (mulCap = 2^16 ≤ 2^62),
+    -- so we can pull the hM witness. Build the loose validity inline.
+    have hValY_loose : validIntervalLoose (imLookup m y) = true := by
+      rw [validIntervalLoose_iff]; refine ⟨hYLo, hYLoHi, ?_⟩
+      have : mulCap ≤ looseCap := by decide
+      omega
+    have hValZ_loose : validIntervalLoose (imLookup m z) = true := by
+      rw [validIntervalLoose_iff]; refine ⟨hZLo, hZLoHi, ?_⟩
+      have : mulCap ≤ looseCap := by decide
+      omega
+    have ⟨a', hσy', hSatY⟩ := hM y (imLookup m y) hMemY hValY_loose
+    have ⟨b', hσz', hSatZ⟩ := hM z (imLookup m z) hMemZ hValZ_loose
     have haeq : a = a' := Value.int.inj (hσy.symm.trans hσy')
     have hbeq : b = b' := Value.int.inj (hσz.symm.trans hσz')
     subst haeq; subst hbeq
@@ -1300,7 +1362,7 @@ theorem mul_sound {m : IMap} {x y z : Var} {σ : Store}
     have hb16 : b.toNat < 2 ^ 16 := by omega
     have hMul : (a * b).toNat = a.toNat * b.toNat :=
       BitVec64.toNat_mul_small ha16 hb16
-    obtain ⟨hrLo, hrLoHi, hrHi⟩ := (validInterval_iff _).mp hValid
+    obtain ⟨hrLo, hrLoHi, hrHi⟩ := (validIntervalLoose_iff _).mp hValid
     simp only at hrLo hrLoHi hrHi
     have hLoProd : ((imLookup m y).lo * (imLookup m z).lo).toNat
                    = (imLookup m y).lo.toNat * (imLookup m z).lo.toNat :=
@@ -1332,7 +1394,7 @@ theorem mul_sound {m : IMap} {x y z : Var} {σ : Store}
         Nat.mul_le_mul ha_bound hb_bound
       omega
   · have ⟨hNeIR, hMemM⟩ := mem_imRemove hMemIR
-    have ⟨bv, hσv, hSat⟩ := hM v r hMemM
+    have ⟨bv, hσv, hSat⟩ := hM v r hMemM hValid
     exact ⟨bv, by simp [Store.update, hNeIR, hσv], hSat⟩
 
 -- ============================================================
@@ -1348,7 +1410,7 @@ theorem certSuccessor_sound {p : Prog} {pc pc' : Nat} {σ σ' : Store}
     (hStep : p ⊩ Cfg.run pc σ am ⟶ Cfg.run pc' σ' am')
     (hM : IMap.satisfies m σ) :
     ∀ v r, (v, r) ∈ certSuccessor m instr pc pc' →
-    validInterval r = true →
+    validIntervalLoose r = true →
     ∃ bv, σ' v = .int bv ∧ IntervalInv.satisfies r bv := by
   -- Common lemma: `imRemove_sound` with the agree-except-at-x predicate
   -- tailored to `σ[x ↦ _]`.

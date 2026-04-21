@@ -4,6 +4,58 @@ Chronological record of what was built and why, to reconstruct the sequence of d
 
 ---
 
+## BoundsOptCert Phase 6: un-wire isBoundsSafe (2026-04-21)
+
+**Goal:** Phase 6 of plans/certified-interval-pangolin.md — un-wire `isBoundsSafe`'s hard `false` so the verified codegen produces real elision decisions driven by the Phase 3 checker. Discharges the Phase-5 oracle from the validated `buildVerifiedInvMap` invariant threaded step-by-step through `tacToArm_refinement`. Re-enables the `boundsSafe = true` path end-to-end.
+
+**Shipped** ([BoundsOptCert.lean](CredibleCompilation/BoundsOptCert.lean), [CodeGen.lean](CredibleCompilation/CodeGen.lean)):
+
+- **Loose checker** ([BoundsOptCert.lean:62](CredibleCompilation/BoundsOptCert.lean#L62), [:195](CredibleCompilation/BoundsOptCert.lean#L195), [:253](CredibleCompilation/BoundsOptCert.lean#L253)):
+  - `IMap.satisfies` gated on `validIntervalLoose`: entries whose range fails loose validity are skipped (vacuously satisfied since `IntervalInv.satisfies r bv` requires `0 ≤ r.lo` and fails otherwise). Rules out `irTop`-shaped claims for float vars automatically.
+  - `refinesSingle` now returns `true` when the weak entry fails `validIntervalLoose` (skip-invalid-weak), else gates on `validIntervalLoose` of the strong side.
+  - `certSuccessor` add/sub arms gate on `validIntervalLoose` (2⁶²) instead of `validInterval` (2³¹). Loop counters widened to iTop = 10¹² fit loose; mul stays at `validIntervalMul` (2¹⁶) since the product needs a tighter per-operand bound.
+- **Loose transfer-soundness lemmas** ([:467](CredibleCompilation/BoundsOptCert.lean#L467), [:551](CredibleCompilation/BoundsOptCert.lean#L551), [:564](CredibleCompilation/BoundsOptCert.lean#L564), [:627](CredibleCompilation/BoundsOptCert.lean#L627)):
+  - `BitVec64.toNat_add_small` / `_sub_small` generalized from 2³¹ ceiling to 2⁶² (sum stays < 2⁶³ < 2⁶⁴, no wrap).
+  - `add_sound`, `sub_sound`, `constInt_sound`, `copy_sound`, `mul_sound`, `refineCond*_sound` (8 leaves + wrapper), `certSuccessor_sound`, `refines_sound`, `imRemove_sound`, `identity_sound`: all target gate changed from `validInterval r = true` to `validIntervalLoose r = true`. `IMap.satisfies` hypotheses updated to pass the loose validity through (extra argument at each `hM v r hMem` call site).
+  - `imLookup_mem_of_valid_loose` added alongside the tight `imLookup_mem_of_valid`; `irTop.lo = -10¹² < 0` rules out the fall-through for loose just like for tight.
+  - `validIntervalLoose` definitions moved to § 1 so they precede `IMap.satisfies` in § 2 (the concretization predicate now references loose gating).
+- **`isBoundsSafe` un-wired** ([CodeGen.lean:486](CredibleCompilation/CodeGen.lean#L486)):
+  - Signature gains a `checkerOk : Bool` prefix arg. Returns `true` only when (a) `checkerOk`, (b) `instr` is `.arrLoad`/`.arrStore`, (c) `intervals[pc]` has a `validIntervalLoose` entry for `idx` whose `hi ≤ arraySize arr`, AND (d) `arraySize arr < 2⁶²` (required so `arraySizeBv = BitVec.ofNat 64 arraySize` doesn't wrap and `bv < arraySizeBv` agrees with the Nat comparison).
+  - `verifiedBoundsSafe p pc` composes: runs `checkLocalPreservation + checkInvAtStart` to compute `checkerOk` once, then delegates. `verifiedBoundsSafe_rfl` (the old `= false` shortcut) is gone.
+  - `bodyGenStep`, `bodyGenStep_push`, `bodyGenStep_none`, `bodyGenStep_length`, `bodyGenStep_preserves_some` all take `checkerOk : Bool` as a new parameter. `verifiedGenerateAsm` computes it once and threads to both the length-pass and the body-pass so they agree on the `safe` value.
+- **Invariant threading through `tacToArm_refinement`** ([CodeGen.lean:5904](CredibleCompilation/CodeGen.lean#L5904)):
+  - `step_simulation` takes `hInv : buildVerifiedInvMap p pc σ am` as a new hypothesis; used to build the real oracle at the `arrLoad`/`arrStore` arms.
+  - `tacToArm_refinement` takes `hInv` at the entry pc and preserves it step-by-step via `spec.invPreserved` at each TAC transition (matches the `TypedStore` threading pattern).
+  - `tacToArm_correctness` discharges the initial `hInv` via `spec.invAtStart` at pc=0.
+- **Oracle-discharge helper** ([CodeGen.lean:4029](CredibleCompilation/CodeGen.lean#L4029)):
+  - New `verifiedBoundsSafe_sound` theorem: `verifiedBoundsSafe p pc = true + buildVerifiedInvMap p pc σ am → (arrLoad-bound ∧ arrStore-bound at pc)`. Unpacks the safe flag into `checkerOk` + per-pc interval claim; unpacks the invariant (under checker-accepting) into `IMap.satisfies`; combines to extract `idxVal.toNat < arraySize`, then transports to `idxVal < arraySizeBv` via the `arraySize < 2⁶² < 2⁶⁴` bound.
+- **`step_simulation` oracle construction** ([CodeGen.lean:5797](CredibleCompilation/CodeGen.lean#L5797)):
+  - The trivial `intro hBS; exact absurd hBS (by decide)` from Phase 5 is gone. Replaced with `fun hBS => verifiedBoundsSafe_sound hPC hBS hInv` — a real derivation from the threaded invariant.
+  - `let safe : Bool := verifiedBoundsSafe p pc` (was `false` in Phase 5); matches the per-instr form that `instrGen` now provides.
+
+**Structural surprises:**
+
+- **Widening and the `refines` direction.** The analyzer widens loop-header ranges to `iTop = 10¹²`; downstream transfers (e.g. `i+1` at the back edge) can produce `hi = iTop + 1 = 10¹² + 1`, strictly wider than the analyzer's widened claim. Under the tight `refines` (`strong ⊆ weak`), this would fail. Under `validIntervalLoose` + skip-invalid-weak, both the `10¹²` and `10¹²+1` values pass loose; the refinement check itself uses `strong.hi ≤ weak.hi` but in Probe D's empirical test on simpleLoopProg / firstDiffProg, this doesn't actually fail because the analyzer's widening produces coherent fixed points where strong ⊆ weak holds at the relevant PCs. No additional clamping needed inside `certSuccessor`.
+- **`arraySize` bound required.** `BitVec.ofNat 64 arraySize` wraps when `arraySize ≥ 2⁶⁴`, so `idxVal.toNat < arraySize` doesn't lift to `idxVal < arraySizeBv` without an upper bound on `arraySize`. Strengthened `isBoundsSafe` to additionally require `arraySize arr < 2⁶²` per-pc; this matches the `validIntervalLoose` cap on `hi` and keeps the proof clean. Empirical arrays fit well within this.
+- **`let`-binding in hypothesis elimination.** `let safe := verifiedBoundsSafe p pc` followed by `cases hBS : safe` doesn't destructure cleanly because `safe` is a `let`-bound name; the `Bool.and_eq_true` simp still works on the original form, so I avoided `cases` on `safe` and used direct `simp only [verifiedBoundsSafe, isBoundsSafe, Bool.and_eq_true]` to unpack.
+- **`Array.getD` vs `getElem?.getD` in call-site proofs.** `bodyGenStep` uses `code.getD pc .halt = Array.getD` but the spec's instrGen form uses `p.code.getD pc .halt`. These are defeq but surface forms differ; a local `have hbs : verifiedBoundsSafe p pc = isBoundsSafe ... := by simp only [verifiedBoundsSafe]; congr 1; simp [Array.getD, hpcCode]` bridges them without a heartbeat timeout (the naive "show … = some _" with the full unfolded form timed out at 200k heartbeats).
+
+**Empirical verification (probe, not Phase 7 benchmark):**
+
+```
+#eval verifiedBoundsSafe simpleLoopProg 3   -- true
+```
+
+where `simpleLoopProg` is a `for i = 0..64 { t := arr[i]; i := i + 1 }` loop with `arr : int[64]` — the pc=3 arrLoad is elided. Phase 7 will extend to livermore kernels and count elided pairs.
+
+**Effort vs plan (1.5 day estimate):** ~3 hours actual. Faster because the plan's "refinesSingleLoose + skip-invalid-weak" design was precise enough to just translate into edits, and Phase 5's invariant-preservation plumbing (in `GenAsmSpec.invPreserved` / `invAtStart`) was already in place. The invariant-threading through `tacToArm_refinement` was the novel load-bearing bit — about 15 LOC once the helper `verifiedBoundsSafe_sound` extracted the messy destructuring into its own 70-LOC proof.
+
+**Status:** 0 sorrys; full `lake build` green; probe confirms elision fires on a simple loop. Files touched: 3 (`BoundsOptCert.lean`, `CodeGen.lean`, `CHANGELOG.md`). `ArmCorrectness.lean` not touched — Phase 5's oracle shape was already sufficient.
+
+**Next:** Phase 7 (~0.5 day) — benchmark elision on livermore kernels; count eliminated `cmpImm + bCond .hs` pairs.
+
+---
+
 ## BoundsOptCert Phase 5: oracle hypothesis in verifiedGenInstr_correct (2026-04-21)
 
 **Goal:** Phase 5 of plans/certified-interval-pangolin.md — re-enable `boundsSafe = true` elision in `verifiedGenInstr_correct`. Replace the blunt `hBoundsSafeFalse : boundsSafe = false` hypothesis with a refined oracle that, under `boundsSafe = true`, produces the bounds-safety fact on the arrLoad/arrStore index — enough to discharge the `_boundsError` arms' step to the ARM bounds label.

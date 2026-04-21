@@ -466,40 +466,7 @@ private def buildTacPcOf (lengths : Array Nat) : Nat → Option Nat :=
     ((cumLen, i) :: acc, cumLen + (lengths.getD i 0))
   fun armPC => (pairs.1.find? fun p => p.1 == armPC).map Prod.snd
 
-/-- Compute whether a bounds check can be elided for a given instruction at `pc`.
-    Phase 4: temporarily wired to `false` unconditionally because
-    `verifiedGenInstr_correct`'s `arrLoad_boundsError` / `arrStore_boundsError`
-    arms must step the ARM trace to `boundsS`, which requires the emitted
-    `cmpImm`/`bCond .hs boundsS` instructions to be present.  Re-enabling the
-    elision requires wiring `BoundsOpt.analyzeIntervals` soundness into
-    verifiedGenInstr_correct so we can refute the boundsError step when
-    `boundsSafe = true`. -/
-private def isBoundsSafe (_arrayDecls : List (ArrayName × Nat × VarTy))
-    (_intervals : Array (Option BoundsOpt.IMap)) (_pc : Nat) (_instr : TAC) : Bool :=
-  false
-
-/-- Phase 4 wrapper: the per-PC bounds-check elision flag that the verified
-    code generator actually consumes. Computed directly from the program's
-    array decls and the (untrusted) `BoundsOpt.analyzeIntervals` output via
-    `isBoundsSafe`. Currently `isBoundsSafe` is hard-wired `false`, so this
-    always returns `false`; Phase 6 of plans/certified-interval-pangolin.md
-    will un-wire the hard `false` once Phase 5 has discharged the elision
-    correctness proof via the oracle hypothesis threaded through
-    `verifiedGenInstr_correct`. The indirection matters because `GenAsmSpec`'s
-    `boundsSafe` field points at this function by name; downstream proofs use
-    `verifiedBoundsSafe_rfl` to reduce it to the concrete Bool value. -/
-def verifiedBoundsSafe (p : Prog) (pc : Nat) : Bool :=
-  isBoundsSafe p.arrayDecls (BoundsOpt.analyzeIntervals p) pc (p.code.getD pc .halt)
-
-/-- Phase 4: until `isBoundsSafe` is un-wired in Phase 6, `verifiedBoundsSafe`
-    is `false` unconditionally. Callers rely on this to normalize the
-    `boundsSafe` argument threaded through `verifiedGenInstr` back to `false`,
-    which lets the Phase 5 `hBoundsSafeOracle` in `ext_backward_simulation`
-    discharge trivially (the oracle's `boundsSafe = true` branch is vacuous). -/
-theorem verifiedBoundsSafe_rfl (p : Prog) (pc : Nat) :
-    verifiedBoundsSafe p pc = false := rfl
-
-/-- Phase 4 helper: Boolean check that the analyzer's entry-PC claim is
+/-- Phase 6 helper: Boolean check that the analyzer's entry-PC claim is
     trivially satisfiable. Combined with `checkLocalPreservation`, this
     forces `intervalMap inv 0 σ am` to hold for every `σ, am` — the exact
     shape required for `GenAsmSpec.invAtStart`. Satisfied when either
@@ -511,6 +478,43 @@ private def checkInvAtStart (inv : Array (Option BoundsOpt.IMap)) : Bool :=
   | some (some []) => true
   | none           => true
   | _              => false
+
+/-- Phase 6: real per-PC bounds-check elision decision. Returns `true` only
+    when all three conditions hold:
+    1. `checkerOk` — the verified checker accepted the intervals globally.
+    2. `instr` is an `.arrLoad` / `.arrStore`.
+    3. `intervals[pc]` contains a `validIntervalLoose` entry for the index
+       whose `hi` ≤ the array's declared size.
+    The caller must compute `checkerOk := checkLocalPreservation p intervals &&
+    checkInvAtStart intervals` once per program and thread it in. Under Phase 5,
+    `hBoundsSafeOracle` at the `arrLoad`/`arrStore` arm needs access to
+    `buildVerifiedInvMap p pc σ am`; when `isBoundsSafe` returns true here,
+    the invariant is the conjunction of `checkerOk` (→ `intervalMap inv`
+    is preserved) and the per-pc interval lookup being in-bounds. -/
+private def isBoundsSafe (checkerOk : Bool) (arrayDecls : List (ArrayName × Nat × VarTy))
+    (intervals : Array (Option BoundsOpt.IMap)) (pc : Nat) (instr : TAC) : Bool :=
+  checkerOk &&
+  match instr with
+  | .arrLoad _ arr idx _ | .arrStore arr idx _ _ =>
+      match intervals[pc]? with
+      | some (some m) =>
+          let r := BoundsOpt.imLookup m idx
+          BoundsOpt.validIntervalLoose r && r.inBounds (arraySize arrayDecls arr) &&
+            -- Bound arraySize so BitVec/Nat comparison agrees (arraySizeBv doesn't wrap).
+            decide (arraySize arrayDecls arr < 2 ^ 62)
+      | _ => false
+  | _ => false
+
+/-- Phase 6 wrapper: the per-PC bounds-check elision flag that the verified
+    code generator actually consumes. Computes the intervals, runs the checker
+    + entry-PC satisfaction gate, and then delegates to `isBoundsSafe` for the
+    per-pc interval lookup. When the checker rejects, returns `false` so the
+    generated ARM retains the explicit bounds check and the oracle hypothesis
+    discharges vacuously. -/
+def verifiedBoundsSafe (p : Prog) (pc : Nat) : Bool :=
+  let intervals := BoundsOpt.analyzeIntervals p
+  let checkerOk := BoundsOpt.checkLocalPreservation p intervals && checkInvAtStart intervals
+  isBoundsSafe checkerOk p.arrayDecls intervals pc (p.code.getD pc .halt)
 
 private theorem checkInvAtStart_sound {inv : Array (Option BoundsOpt.IMap)}
     (h : checkInvAtStart inv = true) (σ : Store) (am : ArrayMem) :
@@ -802,6 +806,7 @@ private def genPrintCallLines (tyCtx : TyCtx) (layout : VarLayout)
     Returns `none` if verifiedGenInstr fails; propagates `none` from previous steps. -/
 private def bodyGenStep (code : Array TAC) (layout : VarLayout) (pcMap : Nat → Nat)
     (_liveOut : Array (List Var)) (varMap : List (Var × Nat))
+    (checkerOk : Bool)
     (intervals : Array (Option BoundsOpt.IMap))
     (arrayDecls : List (ArrayName × Nat × VarTy))
     (haltS divS boundsS : Nat) (tyCtx : TyCtx)
@@ -811,7 +816,7 @@ private def bodyGenStep (code : Array TAC) (layout : VarLayout) (pcMap : Nat →
   | none => none
   | some arr =>
     let instr := code.getD pc .halt
-    let safe := isBoundsSafe arrayDecls intervals pc instr
+    let safe := isBoundsSafe checkerOk arrayDecls intervals pc instr
     let isPrint := match instr with | .print _ _ => true | _ => false
     if isPrint then
       let (fmt, vs) := match instr with | .print f v => (f, v) | _ => ("", [])
@@ -860,6 +865,7 @@ def verifiedGenerateAsm (tyCtx : TyCtx) (p : Prog) : Except String VerifiedAsmRe
     | some err => .error s!"branch target check failed: {err}"
     | none =>
     let intervals := BoundsOpt.analyzeIntervals p
+    let checkerOk := BoundsOpt.checkLocalPreservation p intervals && checkInvAtStart intervals
     -- Liveness analysis for call-site save/restore
     let liveOut := DAEOpt.analyzeLiveness p
     -- Pass 1: compute instruction lengths (pcMap- and label-independent).
@@ -867,7 +873,7 @@ def verifiedGenerateAsm (tyCtx : TyCtx) (p : Prog) : Except String VerifiedAsmRe
     -- verifiedGenInstr_length_params_ind bridges to the real labels used below.
     let lengths := (List.range p.code.size).map fun pc =>
       let instr := p.code.getD pc .halt
-      let safe := isBoundsSafe p.arrayDecls intervals pc instr
+      let safe := isBoundsSafe checkerOk p.arrayDecls intervals pc instr
       instrLength layout p.arrayDecls safe instr varMap
     let lengthsArr := lengths.toArray
     -- Build real pcMap and reverse map
@@ -888,7 +894,7 @@ def verifiedGenerateAsm (tyCtx : TyCtx) (p : Prog) : Except String VerifiedAsmRe
     -- Pass 2: generate instructions with real pcMap and real labels.
     -- For library call sites, wrap with save/restore of live caller-saved registers.
     let bodyResult := (List.range p.code.size).foldl
-        (bodyGenStep p.code layout pcMap liveOut varMap intervals p.arrayDecls haltS divS boundsS tyCtx)
+        (bodyGenStep p.code layout pcMap liveOut varMap checkerOk intervals p.arrayDecls haltS divS boundsS tyCtx)
         (some (Array.mkEmpty p.code.size))
     match bodyResult with
     | none => .error "verifiedGenInstr failed (layout or type mismatch)"
@@ -1218,20 +1224,22 @@ private theorem foldl_push_content
 
 @[simp] theorem bodyGenStep_none (code : Array TAC) (layout : VarLayout)
     (pcMap : Nat → Nat) (liveOut : Array (List Var))
-    (varMap : List (Var × Nat)) (intervals : Array (Option BoundsOpt.IMap))
+    (varMap : List (Var × Nat)) (checkerOk : Bool)
+    (intervals : Array (Option BoundsOpt.IMap))
     (arrayDecls : List (ArrayName × Nat × VarTy))
     (haltS divS boundsS : Nat) (tyCtx : TyCtx) (pc : Nat) :
-    bodyGenStep code layout pcMap liveOut varMap intervals arrayDecls
+    bodyGenStep code layout pcMap liveOut varMap checkerOk intervals arrayDecls
       haltS divS boundsS tyCtx none pc = none := rfl
 
 theorem bodyGenStep_push (code : Array TAC) (layout : VarLayout)
     (pcMap : Nat → Nat) (liveOut : Array (List Var))
-    (varMap : List (Var × Nat)) (intervals : Array (Option BoundsOpt.IMap))
+    (varMap : List (Var × Nat)) (checkerOk : Bool)
+    (intervals : Array (Option BoundsOpt.IMap))
     (arrayDecls : List (ArrayName × Nat × VarTy))
     (haltS divS boundsS : Nat) (tyCtx : TyCtx) (arr : Array (List ArmInstr)) (pc : Nat) :
-    bodyGenStep code layout pcMap liveOut varMap intervals arrayDecls
+    bodyGenStep code layout pcMap liveOut varMap checkerOk intervals arrayDecls
       haltS divS boundsS tyCtx (some arr) pc = none ∨
-    ∃ instrs, bodyGenStep code layout pcMap liveOut varMap intervals arrayDecls
+    ∃ instrs, bodyGenStep code layout pcMap liveOut varMap checkerOk intervals arrayDecls
       haltS divS boundsS tyCtx (some arr) pc = some (arr.push instrs) := by
   simp only [bodyGenStep]
   split <;> split <;> simp_all <;>
@@ -1460,16 +1468,17 @@ private theorem instrLength_eq_length {layout : VarLayout} {pcMap : Nat → Nat}
 /-- The list pushed by `bodyGenStep` has length equal to `instrLength`. -/
 private theorem bodyGenStep_length {code : Array TAC} {layout : VarLayout}
     {pcMap : Nat → Nat} {liveOut : Array (List Var)} {varMap : List (Var × Nat)}
+    {checkerOk : Bool}
     {intervals : Array (Option BoundsOpt.IMap)}
     {arrayDecls : List (ArrayName × Nat × VarTy)}
     {haltS divS boundsS : Nat} {tyCtx : TyCtx}
     {arr : Array (List ArmInstr)} {pc : Nat}
     {instrs : List ArmInstr}
-    (hStep : bodyGenStep code layout pcMap liveOut varMap intervals arrayDecls
+    (hStep : bodyGenStep code layout pcMap liveOut varMap checkerOk intervals arrayDecls
       haltS divS boundsS tyCtx (some arr) pc = some (arr.push instrs))
     (hpc : pc < code.size) :
     instrs.length = instrLength layout arrayDecls
-      (isBoundsSafe arrayDecls intervals pc (code.getD pc .halt))
+      (isBoundsSafe checkerOk arrayDecls intervals pc (code.getD pc .halt))
       (code.getD pc .halt) varMap := by
   -- Normalize getD to getElem in goal
   have hGetD : code.getD pc .halt = code[pc] := by simp [Array.getD, hpc]
@@ -2305,6 +2314,7 @@ private theorem verifiedGenInstr_total
 private theorem bodyGenStep_preserves_some
     {code : Array TAC} {layout : VarLayout} {pcMap : Nat → Nat}
     {liveOut : Array (List Var)} {varMap : List (Var × Nat)}
+    {checkerOk : Bool}
     {intervals : Array (Option BoundsOpt.IMap)}
     {arrayDecls : List (ArrayName × Nat × VarTy)}
     {haltS divS boundsS : Nat} {tyCtx : TyCtx}
@@ -2316,7 +2326,7 @@ private theorem bodyGenStep_preserves_some
     (hWTL : WellTypedLayout tyCtx layout)
     (hWTI : WellTypedInstr tyCtx arrayDecls code[pc])
     (hSimple : code[pc].hasSimpleOps = true) :
-    ∃ arr', bodyGenStep code layout pcMap liveOut varMap intervals arrayDecls
+    ∃ arr', bodyGenStep code layout pcMap liveOut varMap checkerOk intervals arrayDecls
       haltS divS boundsS tyCtx (some arr) pc = some arr' := by
   unfold bodyGenStep
   -- Normalize getD to getElem using hpc
@@ -3608,7 +3618,7 @@ theorem verifiedGenerateAsm_spec {tyCtx : TyCtx} {p : Prog} {r : VerifiedAsmResu
           have hBSz : bodyPerPC.size = p.code.size := by
             apply foldl_push_size _ _ heqFold
             · intro; rfl
-            · intro arr pc; exact bodyGenStep_push _ _ _ _ _ _ _ _ _ _ _ arr pc
+            · intro arr pc; exact bodyGenStep_push _ _ _ _ _ _ _ _ _ _ _ _ arr pc
           refine ⟨
             checkWellTypedProg_sound ‹_›,
             checkWellTypedLayout_wellTyped ‹_›,
@@ -3628,7 +3638,7 @@ theorem verifiedGenerateAsm_spec {tyCtx : TyCtx} {p : Prog} {r : VerifiedAsmResu
             have hContent := by
               apply foldl_push_content _ _ heqFold pc hpcB
               · intro; rfl
-              · intro arr pc; exact bodyGenStep_push _ _ _ _ _ _ _ _ _ _ _ arr pc
+              · intro arr pc; exact bodyGenStep_push _ _ _ _ _ _ _ _ _ _ _ _ arr pc
             obtain ⟨mid, _, hStep⟩ := hContent
             simp only [bodyGenStep, Array.getD, show pc < p.code.size from hpcCode,
               dite_true] at hStep
@@ -3642,13 +3652,17 @@ theorem verifiedGenerateAsm_spec {tyCtx : TyCtx} {p : Prog} {r : VerifiedAsmResu
               · rename_i armInstrs hGenInstr
                 have : isLibCallTAC p.code[pc] = false := hNotLib
                 rw [this] at hStep; simp at hStep
-                -- Phase 4: spec field uses `verifiedBoundsSafe p pc`, which unfolds
-                -- (via `isBoundsSafe` hard-`false`) to the same argument `bodyGenStep`
-                -- emitted with. Align forms so the `push_inj` transports cleanly.
-                show verifiedGenInstr _ _ _ _ _ _ _ (verifiedBoundsSafe p pc) = some _
+                -- Phase 6: `verifiedBoundsSafe p pc` unfolds (by `rfl`) to the
+                -- `isBoundsSafe checkerOk p.arrayDecls (analyzeIntervals p) pc p.code[pc]`
+                -- form that `bodyGenStep` emitted.
                 have hbs : verifiedBoundsSafe p pc =
-                    isBoundsSafe p.arrayDecls (BoundsOpt.analyzeIntervals p) pc
-                      p.code[pc] := rfl
+                    isBoundsSafe
+                      (BoundsOpt.checkLocalPreservation p (BoundsOpt.analyzeIntervals p) &&
+                        checkInvAtStart (BoundsOpt.analyzeIntervals p))
+                      p.arrayDecls (BoundsOpt.analyzeIntervals p) pc p.code[pc] := by
+                  simp only [verifiedBoundsSafe]
+                  congr 1
+                  simp [Array.getD, show pc < p.code.size from hpcCode]
                 rw [hbs]
                 exact (Array.push_inj hStep) ▸ hGenInstr
           case pcMapLengths =>
@@ -3659,7 +3673,7 @@ theorem verifiedGenerateAsm_spec {tyCtx : TyCtx} {p : Prog} {r : VerifiedAsmResu
               have hContent := by
                 apply foldl_push_content _ _ heqFold i hB
                 · intro; rfl
-                · intro arr pc; exact bodyGenStep_push _ _ _ _ _ _ _ _ _ _ _ arr pc
+                · intro arr pc; exact bodyGenStep_push _ _ _ _ _ _ _ _ _ _ _ _ arr pc
               obtain ⟨mid, _, hStep⟩ := hContent
               rw [bodyGenStep_length hStep hpcCode]
               simp [List.getElem_toArray, List.getElem_map]
@@ -3673,7 +3687,7 @@ theorem verifiedGenerateAsm_spec {tyCtx : TyCtx} {p : Prog} {r : VerifiedAsmResu
             have hContent := by
               apply foldl_push_content _ _ heqFold pc hpcB
               · intro; rfl
-              · intro arr pc; exact bodyGenStep_push _ _ _ _ _ _ _ _ _ _ _ arr pc
+              · intro arr pc; exact bodyGenStep_push _ _ _ _ _ _ _ _ _ _ _ _ arr pc
             obtain ⟨mid, _, hStep⟩ := hContent
             simp only [bodyGenStep, Array.getD, show pc < p.code.size from hpcCode,
               dite_true] at hStep
@@ -3689,6 +3703,17 @@ theorem verifiedGenerateAsm_spec {tyCtx : TyCtx} {p : Prog} {r : VerifiedAsmResu
                 simp only [ite_true] at hStep
                 have hEq := (Array.push_inj (Option.some.inj hStep)).symm
                 rw [← List.append_assoc] at hEq
+                -- Phase 6: rewrite hGenInstr's `isBoundsSafe ...` form into
+                -- `verifiedBoundsSafe p pc` to match the spec field's shape.
+                have hbs : verifiedBoundsSafe p pc =
+                    isBoundsSafe
+                      (BoundsOpt.checkLocalPreservation p (BoundsOpt.analyzeIntervals p) &&
+                        checkInvAtStart (BoundsOpt.analyzeIntervals p))
+                      p.arrayDecls (BoundsOpt.analyzeIntervals p) pc p.code[pc] := by
+                  simp only [verifiedBoundsSafe]
+                  congr 1
+                  simp [Array.getD, show pc < p.code.size from hpcCode]
+                rw [hbs]
                 exact ⟨armInstrs, hGenInstr, hEq⟩
           case printSaveRestore =>
             intro pc hpc ⟨fmt, vs, hPrint⟩
@@ -3697,7 +3722,7 @@ theorem verifiedGenerateAsm_spec {tyCtx : TyCtx} {p : Prog} {r : VerifiedAsmResu
             have hContent := by
               apply foldl_push_content _ _ heqFold pc hpcB
               · intro; rfl
-              · intro arr pc; exact bodyGenStep_push _ _ _ _ _ _ _ _ _ _ _ arr pc
+              · intro arr pc; exact bodyGenStep_push _ _ _ _ _ _ _ _ _ _ _ _ arr pc
             obtain ⟨mid, _, hStep⟩ := hContent
             simp only [bodyGenStep, Array.getD, show pc < p.code.size from hpcCode,
               dite_true] at hStep
@@ -3721,7 +3746,10 @@ theorem verifiedGenerateAsm_spec {tyCtx : TyCtx} {p : Prog} {r : VerifiedAsmResu
             generalize hlArrDef : ((List.range p.code.size).map fun pc =>
               instrLength (buildVarLayout (collectVars p) (buildVarMap (collectVars p)))
                 p.arrayDecls
-                (isBoundsSafe p.arrayDecls (BoundsOpt.analyzeIntervals p) pc
+                (isBoundsSafe
+                    (BoundsOpt.checkLocalPreservation p (BoundsOpt.analyzeIntervals p) &&
+                      checkInvAtStart (BoundsOpt.analyzeIntervals p))
+                    p.arrayDecls (BoundsOpt.analyzeIntervals p) pc
                   (p.code[pc]?.getD TAC.halt)) (p.code[pc]?.getD TAC.halt)
                 (buildVarMap (collectVars p))).toArray = lArr
             have hSize : lArr.size = bodyPerPC.size := by
@@ -3733,7 +3761,7 @@ theorem verifiedGenerateAsm_spec {tyCtx : TyCtx} {p : Prog} {r : VerifiedAsmResu
               have hContent := by
                 apply foldl_push_content _ _ heqFold i hB
                 · intro; rfl
-                · intro arr pc; exact bodyGenStep_push _ _ _ _ _ _ _ _ _ _ _ arr pc
+                · intro arr pc; exact bodyGenStep_push _ _ _ _ _ _ _ _ _ _ _ _ arr pc
               obtain ⟨mid, _, hStep⟩ := hContent
               rw [bodyGenStep_length hStep hpcCode]
               subst hlArrDef
@@ -4011,18 +4039,108 @@ private theorem armSteps_haltSaveBlock
 -- Per-step simulation (wraps ext_backward_simulation)
 -- ──────────────────────────────────────────────────────────────
 
+/-- Phase 6 oracle-discharge helper. If the validated per-pc flag
+    `verifiedBoundsSafe p pc` is `true` and the invariant `buildVerifiedInvMap
+    p pc σ am` holds, then for any `arrLoad`/`arrStore` at `pc` the index
+    value is in-bounds. The `verifiedGenInstr_correct`/`ext_backward_simulation`
+    `hBoundsSafeOracle` hypothesis is exactly this shape. -/
+private theorem verifiedBoundsSafe_sound {p : Prog} {pc : Nat} {σ : Store} {am : ArrayMem}
+    (hPC : pc < p.size)
+    (hBS : verifiedBoundsSafe p pc = true)
+    (hInv : buildVerifiedInvMap p pc σ am) :
+    (∀ dst arr idx ty, p[pc]? = some (.arrLoad dst arr idx ty) →
+      ∀ idxVal, σ idx = .int idxVal → idxVal < arraySizeBv p.arrayDecls arr) ∧
+    (∀ arr idx val ty, p[pc]? = some (.arrStore arr idx val ty) →
+      ∀ idxVal, σ idx = .int idxVal → idxVal < arraySizeBv p.arrayDecls arr) := by
+  -- Unfold the safe flag: `checkerOk && per-pc interval check`.
+  simp only [verifiedBoundsSafe, isBoundsSafe, Bool.and_eq_true] at hBS
+  obtain ⟨hCheckerOk, hMatch⟩ := hBS
+  -- Under checker accepting, `buildVerifiedInvMap` ≡ `intervalMap (analyzeIntervals p)`.
+  have hInvUnfold : BoundsOpt.intervalMap (BoundsOpt.analyzeIntervals p) pc σ am := by
+    have hcAnd :
+        (BoundsOpt.checkLocalPreservation p (BoundsOpt.analyzeIntervals p) &&
+          checkInvAtStart (BoundsOpt.analyzeIntervals p)) = true := by
+      rw [Bool.and_eq_true]; exact hCheckerOk
+    have h := hInv
+    simp only [buildVerifiedInvMap, hcAnd, if_true] at h
+    exact h
+  -- Normalize `p.code.getD pc .halt = p[pc]` via `hPC`.
+  have hPcCode : pc < p.code.size := by simpa [Prog.size] using hPC
+  have hCodeAtPc : p.code.getD pc .halt = p[pc] := by
+    simp [Array.getD, hPcCode]
+  rw [hCodeAtPc] at hMatch
+  -- Core: from (intervals[pc]? contains a loose-valid in-bounds entry for idx) +
+  -- (σ idx = .int idxVal) + (IMap.satisfies at pc), derive idxVal < arraySizeBv.
+  have core : ∀ arr idx,
+      (match (BoundsOpt.analyzeIntervals p)[pc]? with
+       | some (some m) =>
+          let r := BoundsOpt.imLookup m idx
+          BoundsOpt.validIntervalLoose r && r.inBounds (arraySize p.arrayDecls arr) &&
+            decide (arraySize p.arrayDecls arr < 2 ^ 62)
+       | _ => false) = true →
+      ∀ idxVal, σ idx = .int idxVal → idxVal < arraySizeBv p.arrayDecls arr := by
+    intro arr idx hL idxVal hidx
+    revert hL hInvUnfold
+    cases hE : (BoundsOpt.analyzeIntervals p)[pc]? with
+    | none => intros; simp_all
+    | some om =>
+      cases om with
+      | none => intros; simp_all
+      | some m =>
+        simp only [BoundsOpt.intervalMap, hE]
+        intro hSat hL
+        simp only [Bool.and_eq_true, decide_eq_true_eq] at hL
+        obtain ⟨⟨hValidLoose, hInBounds⟩, hSzLt⟩ := hL
+        have hMem := BoundsOpt.imLookup_mem_of_valid_loose hValidLoose
+        obtain ⟨bv, hσidx, hSatR⟩ := hSat idx _ hMem hValidLoose
+        have hEqVal : bv = idxVal := Value.int.inj (hσidx.symm.trans hidx)
+        subst hEqVal
+        obtain ⟨_, _, hLt⟩ := hSatR
+        simp only [BoundsOpt.IRange.inBounds, Bool.and_eq_true, decide_eq_true_eq] at hInBounds
+        obtain ⟨_, hHiLe⟩ := hInBounds
+        -- hi.toNat ≤ arraySize (as a Nat inequality).
+        have hHiNat : (BoundsOpt.imLookup m idx).hi.toNat ≤ arraySize p.arrayDecls arr := by
+          have : (BoundsOpt.imLookup m idx).hi ≤ (arraySize p.arrayDecls arr : Int) := hHiLe
+          omega
+        -- arraySize < 2^62 < 2^64, so arraySizeBv doesn't wrap.
+        have hSzBv : arraySize p.arrayDecls arr < 2 ^ 64 := by
+          have : (2 : Nat) ^ 62 < 2 ^ 64 := by decide
+          omega
+        have hLtArr : bv.toNat < arraySize p.arrayDecls arr := by omega
+        simp only [arraySizeBv, BitVec.lt_def, BitVec.toNat_ofNat,
+          Nat.mod_eq_of_lt hSzBv]
+        exact hLtArr
+  refine ⟨?_, ?_⟩
+  · intro dst arr idx ty hPcArr idxVal hidx
+    have : p[pc] = TAC.arrLoad dst arr idx ty := by
+      have := Prog.getElem?_eq_getElem hPC
+      rw [this] at hPcArr; exact Option.some.inj hPcArr
+    rw [this] at hMatch
+    exact core arr idx hMatch idxVal hidx
+  · intro arr idx val ty hPcArr idxVal hidx
+    have : p[pc] = TAC.arrStore arr idx val ty := by
+      have := Prog.getElem?_eq_getElem hPC
+      rw [this] at hPcArr; exact Option.some.inj hPcArr
+    rw [this] at hMatch
+    exact core arr idx hMatch idxVal hidx
+
 /-- One-step simulation: if we can take a TAC step from a running
     configuration, there exist ARM steps preserving `ExtSimRel`.
 
     This wraps `ext_backward_simulation` by discharging `CodeAt` and
-    `hPcNext` from the `GenAsmSpec` invariants. -/
+    `hPcNext` from the `GenAsmSpec` invariants.
+
+    **Phase 6:** takes `hInv : buildVerifiedInvMap p pc σ am` as an extra
+    hypothesis so the `hBoundsSafeOracle` at `arrLoad`/`arrStore` bounds-error
+    arms can be discharged from the validated interval claim. -/
 private theorem step_simulation {tyCtx : TyCtx} {p : Prog} {r : VerifiedAsmResult}
     (spec : GenAsmSpec tyCtx p r)
     {pc : Nat} {σ : Store} {am : ArrayMem} {cfg' : Cfg} {s : ArmState}
     (hStep : p ⊩ Cfg.run pc σ am ⟶ cfg')
     (hRel : ExtSimRel r.layout r.pcMap r.divS r.boundsS (.run pc σ am) s)
     (hPC : pc < p.size)
-    (hTS : TypedStore tyCtx σ) :
+    (hTS : TypedStore tyCtx σ)
+    (hInv : buildVerifiedInvMap p pc σ am) :
     ∃ s', ArmSteps r.bodyFlat s s' ∧
           ExtSimRel r.layout r.pcMap r.divS r.boundsS cfg' s' ∧
           (∀ σ' am', cfg' = .halt σ' am' → s'.pc = r.haltFinal) := by
@@ -5641,9 +5759,9 @@ private theorem step_simulation {tyCtx : TyCtx} {p : Prog} {r : VerifiedAsmResul
         intro fmt vs h; exact hPrint ⟨fmt, vs, h⟩
       have hNotLib : isLibCallTAC p[pc] = false := by
         cases h : isLibCallTAC p[pc] <;> simp_all
-      -- Get instrs from instrGen (safe = false after Phase 4 BoundsOpt-elision stand-down).
+      -- Phase 6: `safe` is now `verifiedBoundsSafe p pc` per `instrGen`.
       have hSome := spec.instrGen pc hPC hNotLib hNotPrint
-      let safe : Bool := false
+      let safe : Bool := verifiedBoundsSafe p pc
       -- Get pcMap = buildPcMap lengths with element-wise equality
       obtain ⟨lengths, hLSz, hPcMap, hLenEq⟩ := spec.pcMapLengths
       have hpcB : pc < r.bodyPerPC.size := spec.bodySize ▸ hPC
@@ -5761,17 +5879,14 @@ private theorem step_simulation {tyCtx : TyCtx} {p : Prog} {r : VerifiedAsmResul
             NoCallerSavedLayout r.layout := by
           intro lit heq
           simp [isLibCallTAC, heq] at hNotLib
-        -- Phase 5: the oracle hypothesis replaces the old `hBoundsSafeFalse = rfl`.
-        -- `safe` is still `false` (Phase 6 un-wiring not yet done), so the
-        -- oracle's `boundsSafe = true` branch is vacuous and discharges via
-        -- `Bool.noConfusion`. Phase 6 will turn this into a real derivation
-        -- from `spec.invPreserved` + `inv_preserved_steps`.
+        -- Phase 6: the oracle discharges from `buildVerifiedInvMap p pc σ am`
+        -- (= `hInv`) via the helper theorem `verifiedBoundsSafe_sound`.
         have hOracle : safe = true →
             (∀ dst arr idx ty, p[pc]? = some (.arrLoad dst arr idx ty) →
               ∀ idxVal, σ idx = .int idxVal → idxVal < arraySizeBv p.arrayDecls arr) ∧
             (∀ arr idx val ty, p[pc]? = some (.arrStore arr idx val ty) →
-              ∀ idxVal, σ idx = .int idxVal → idxVal < arraySizeBv p.arrayDecls arr) := by
-          intro hBS; exact absurd hBS (by decide)
+              ∀ idxVal, σ idx = .int idxVal → idxVal < arraySizeBv p.arrayDecls arr) :=
+          fun hBS => verifiedBoundsSafe_sound hPC hBS hInv
         obtain ⟨s', hArmSteps, hRelOut⟩ := ext_backward_simulation p r.bodyFlat r.layout r.pcMap
           r.haltS r.divS r.boundsS p.arrayDecls safe hOracle
           hStep hRel hPC tyCtx spec.wellTypedProg hTS spec.wellTypedLayout
@@ -5884,6 +5999,7 @@ theorem tacToArm_refinement {tyCtx : TyCtx} {p : Prog} {r : VerifiedAsmResult}
     (s : ArmState)
     (hRel : ExtSimRel r.layout r.pcMap r.divS r.boundsS (.run pc σ am) s)
     (hTS : TypedStore tyCtx σ)
+    (hInv : buildVerifiedInvMap p pc σ am)
     (cfg' : Cfg) (hSteps : p ⊩ Cfg.run pc σ am ⟶* cfg') :
     ∃ s', ArmSteps r.bodyFlat s s' ∧
           ExtSimRel r.layout r.pcMap r.divS r.boundsS cfg' s' ∧
@@ -5895,27 +6011,31 @@ theorem tacToArm_refinement {tyCtx : TyCtx} {p : Prog} {r : VerifiedAsmResult}
         c = Cfg.run pc σ am →
         ExtSimRel r.layout r.pcMap r.divS r.boundsS (.run pc σ am) s →
         TypedStore tyCtx σ →
+        buildVerifiedInvMap p pc σ am →
         ∃ s', ArmSteps r.bodyFlat s s' ∧
               ExtSimRel r.layout r.pcMap r.divS r.boundsS c_end s' ∧
               (∀ σ' am', c_end = .halt σ' am' → s'.pc = r.haltFinal) from
-    this _ _ hSteps pc σ am s rfl hRel hTS
+    this _ _ hSteps pc σ am s rfl hRel hTS hInv
   intro c c_end hSteps
   induction hSteps with
   | refl =>
-    intro pc σ am s hc hRel _; subst hc
+    intro pc σ am s hc hRel _ _; subst hc
     refine ⟨s, .refl, hRel, ?_⟩
     intro σ' am' hEq; exact Cfg.noConfusion hEq
   | step hStep rest ih =>
-    intro pc σ am s hc hRel hTS_cur; subst hc
+    intro pc σ am s hc hRel hTS_cur hInv_cur; subst hc
     have hPC := Step.pc_lt_of_step hStep
     obtain ⟨s_mid, hArm1, hRel_mid, _hHaltMid⟩ :=
-      step_simulation spec hStep hRel hPC hTS_cur
+      step_simulation spec hStep hRel hPC hTS_cur hInv_cur
     -- Classify the one-step successor
     rcases step_run_or_terminal spec.wellTypedProg hTS_cur hPC hStep with
       ⟨pc', σ', am', hEq, hTS'⟩ | hTerminal
-    · -- Successor is .run: subst and apply IH
+    · -- Successor is .run: subst and apply IH. Transport the invariant
+      -- via spec.invPreserved at the TAC step.
       subst hEq
-      obtain ⟨s', hArm2, hRel', hHalt'⟩ := ih _ _ _ s_mid rfl hRel_mid hTS'
+      have hInv' : buildVerifiedInvMap p pc' σ' am' :=
+        spec.invPreserved pc σ am hInv_cur pc' σ' am' hStep
+      obtain ⟨s', hArm2, hRel', hHalt'⟩ := ih _ _ _ s_mid rfl hRel_mid hTS' hInv'
       exact ⟨s', hArm1.trans hArm2, hRel', hHalt'⟩
     · -- Successor is terminal: rest must be refl
       cases rest with
@@ -5979,6 +6099,7 @@ theorem tacToArm_correctness {tyCtx : TyCtx} {p : Prog} {r : VerifiedAsmResult}
         pc := r.pcMap 0, flags := ⟨0, 0⟩ }
       (typedInit_encode tyCtx) rfl (fun _ => rfl) (fun _ => rfl) (fun _ => rfl) rfl)
     (TypedStore.typedInit tyCtx)
+    (buildVerifiedInvMap_atStart p (Store.typedInit tyCtx) (fun _ _ => 0))
     cfg' hSteps
 
 /-- Caller-saved integer register numbers (x3-x8, x9-x15). -/
