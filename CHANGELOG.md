@@ -4,6 +4,20 @@ Chronological record of what was built and why, to reconstruct the sequence of d
 
 ---
 
+## BoundsOptCert Phase 1: Interval-invariant wrapper (2026-04-21)
+
+**Goal:** First chunk of the certificate-based BoundsOpt re-enable plan (plans/certified-interval-pangolin.md). BoundsOpt stays untrusted; this phase sets up the concretization that lifts its output into `PInvariantMap` shape so `inv_preserved_steps` can consume it downstream. No wiring into codegen yet — Phases 4–6 do that.
+
+**Shipped** ([BoundsOptCert.lean](CredibleCompilation/BoundsOptCert.lean) — new file):
+- `IntervalInv.satisfies : IRange → BitVec 64 → Prop` — `0 ≤ r.lo ∧ r.lo.toNat ≤ bv.toNat ∧ bv.toNat < r.hi.toNat`. The `r.lo ≥ 0` clause makes `irTop`-shaped ranges vacuously false, so they fall out without special casing.
+- `IMap.satisfies : IMap → Store → Prop` — pointwise: every explicit `(v, r)` entry in the map demands `σ v = .int bv` with `bv ∈ r`. Array memory is ignored (this domain tracks ints only).
+- `intervalMap : Array (Option IMap) → PInvariantMap` — lifts BoundsOpt's `Array (Option IMap)` into `PropChecker`'s `PInvariantMap` shape. PCs with `none`, `some none`, or out-of-bounds give the trivial invariant `True` — they impose no obligation, so Phase 2's checker only needs to handle `some (some m)` predecessors.
+- `validInterval : IRange → Bool` — structural `0 ≤ lo ≤ hi ≤ 2³¹`. The `2³¹` cap is the overflow-safe bound: `a + b < 2³² < 2⁶³` for any `a, b < 2³¹`, so bitvec addition can't wrap. Every Phase 3 transfer-soundness lemma will gate on `validInterval`.
+
+**Status:** 0 sorrys; full `lake build` green. Files touched: 1 (new `BoundsOptCert.lean`).
+
+---
+
 ## Phase 4: Tighten forward theorems — name haltFinal; distinguish div vs bounds (2026-04-21)
 
 **Goal:** Surface the concrete ARM sentinels (`haltFinal`, `divS`, `boundsS`) through the forward simulation interface so Phase 7's backward theorems have bin-by-bin statements to destructure. Part of plans/backward-jumping-octopus.md.
