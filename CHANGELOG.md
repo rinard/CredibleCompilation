@@ -4,6 +4,51 @@ Chronological record of what was built and why, to reconstruct the sequence of d
 
 ---
 
+## BoundsOptCert Phase 4: GenAsmSpec wiring (2026-04-21)
+
+**Goal:** Land Phase 4 of plans/certified-interval-pangolin.md — thread the Phase 3 checker output into `GenAsmSpec` so Phase 5 can consume `invPreserved` + `invAtStart` at the `arrLoad/arrStore_boundsError` arms. Pure plumbing; the validated invariant is not yet load-bearing, so `hBoundsSafeFalse` in `ext_backward_simulation` stays intact.
+
+**Shipped** ([CodeGen.lean](CredibleCompilation/CodeGen.lean)):
+
+- **Helper functions** (new section after `isBoundsSafe` at [CodeGen.lean:476](CredibleCompilation/CodeGen.lean#L476)):
+  - `verifiedBoundsSafe p pc : Bool` — the per-PC bounds-check elision flag the spec refers to by name. Defined as `isBoundsSafe p.arrayDecls (BoundsOpt.analyzeIntervals p) pc (p.code.getD pc .halt)`; currently `false` via the hard-wired `isBoundsSafe`. Companion `verifiedBoundsSafe_rfl` closes the rewrite back to `false` for downstream consumers.
+  - `checkInvAtStart inv : Bool` — entry-PC triviality check: accepts `inv[0]? = some (some [])` (the initial claim `analyzeIntervals` emits before any join/widen) or `inv[0]? = none` (empty program). Soundness `checkInvAtStart_sound` closes `intervalMap inv 0 σ am` for any `σ, am` under either branch.
+  - `buildVerifiedInvMap p : PInvariantMap` — the validated invariant map. If `checkLocalPreservation p inv && checkInvAtStart inv`, lifts via `BoundsOpt.intervalMap`; otherwise falls back to `fun _ _ _ => True`. Companion `buildVerifiedInvMap_preserved` and `buildVerifiedInvMap_atStart` discharge `.preserved p` and `∀ σ am, _ 0 σ am` on both branches (via `checkLocalPreservation_sound` / `checkInvAtStart_sound` on the accepted path, trivially on the fallback).
+- **`GenAsmSpec` extensions** ([CodeGen.lean:859](CredibleCompilation/CodeGen.lean#L859)):
+  - `instrGen` sharpened — `false` → `verifiedBoundsSafe p pc`. Shape now matches the per-pc form the Phase 6 un-wiring will produce.
+  - `callSiteSaveRestore` sharpened — `isBoundsSafe p.arrayDecls (BoundsOpt.analyzeIntervals p) pc p[pc]` → `verifiedBoundsSafe p pc`. Unifies the safe-flag expression with `instrGen`; `verifiedBoundsSafe p pc` unfolds (by `rfl`) to the exact form `bodyGenStep` emits.
+  - **`invPreserved : (buildVerifiedInvMap p).preserved p`** — new field. Load-bearing for Phase 5 (fed to `inv_preserved_steps` at the arrLoad/arrStore arms).
+  - **`invAtStart : ∀ σ am, buildVerifiedInvMap p 0 σ am`** — new field. Initial-state hypothesis for the `inv_preserved_steps` base case.
+  - Both discharged in `verifiedGenerateAsm_spec` at [CodeGen.lean:3620](CredibleCompilation/CodeGen.lean#L3620) by directly applying the corresponding `buildVerifiedInvMap_*` theorems.
+- **Discharge updates**:
+  - `instrGen` case: the old `have hbs : isBoundsSafe ... = false := rfl; rw [hbs] at hGenInstr` pattern is reversed — now rewrite `verifiedBoundsSafe p pc` into the unfolded form inside the goal before `exact`.
+  - `callSiteSaveRestore` case: no tactic changes needed — `verifiedBoundsSafe p pc` unfolds by `rfl` to the existing `isBoundsSafe ...` form that `hGenInstr` already has, so the existing `⟨armInstrs, hGenInstr, hEq⟩` transports via defeq.
+
+**Design deviations from the plan:**
+
+- **`invMap` is not a `GenAsmSpec` field.** `GenAsmSpec` is `Prop`-valued, so data-typed fields (`PInvariantMap`, `Nat → Bool`) aren't allowed. Instead, consumers reference `buildVerifiedInvMap p` and `verifiedBoundsSafe p` by name and obtain the two preservation proofs (`invPreserved`, `invAtStart`) from the spec. Semantically identical to the plan's design; surface shape differs.
+- **`boundsSafe` is `verifiedBoundsSafe p : Nat → Bool`**, a top-level function rather than a spec field. Same reason (Prop-valued structure). Downstream Phase 5/6 can keep using `spec.instrGen` output; the safe-flag name is now stable.
+- **`boundsSafe pc` logic stays trivial (`false`) until Phase 6.** The plan envisioned populating `boundsSafe pc` via `inv[pc]?` + arr-index-var check in Phase 4. Deferred: that check is Phase 6's job once `isBoundsSafe` un-wires; Phase 4 just wires the field shape and leaves the contents trivial, as the plan's fallback branch already allows.
+
+**Structural surprises:**
+
+- **`Prop`-valued `GenAsmSpec`.** Adding `invMap : PInvariantMap` as a field failed with `failed to generate projection ... field must be a proof`. Routed around by pulling the map into a top-level `buildVerifiedInvMap` function; the spec exposes only the two preservation proofs.
+- **`unfold buildVerifiedInvMap; split` didn't fire** because the unfolded body has the shape `(have inv := ...; if _ then _ else _).preserved p` — the `.preserved` projection wraps the `if`, and `split` only fires on a visible `if/match` at the outer type. Restructured `buildVerifiedInvMap` with the `fun pc σ am =>` on the outside and the `if` directly in the body so `simp only [buildVerifiedInvMap]` exposes the conditional for `split`.
+- **`by_cases` on a `Bool`-valued condition** (the `&&` of two checker booleans) produces a `decide (… = true) = true` hypothesis via Lean's `Decidable` elaboration, which doesn't rewrite back into the original `if` term. Avoided by using the `fun ... => if then else` form + tactic `split`, which doesn't go through `decide`.
+- **`List.not_mem_nil ?m` computes to `False`** in this Lean/Mathlib version — applying it to `hmem : (v, r) ∈ []` fails the type mismatch `False vs ¬ (v, r) ∈ []`. Replaced with plain `cases hmem`, which closes the goal via the empty `List.Mem` pattern match.
+
+**Effort vs plan (0.5 day estimate):** ~1.5 hours actual. Time went into:
+- the `Prop`-valued-structure redesign (discovering the constraint, then routing around it), and
+- the `unfold; split` plumbing (three different `split`/`rw`/`show` attempts before settling on `simp only [buildVerifiedInvMap]; split`).
+
+The `verifiedGenerateAsm_spec` discharge itself was ~5 minutes — the refine just took two extra arguments (`buildVerifiedInvMap_preserved p, buildVerifiedInvMap_atStart p`), and the `instrGen` case needed one `rw` direction flipped.
+
+**Status:** 0 sorrys; full `lake build` green. Files touched: 2 (`CodeGen.lean`, `CHANGELOG.md`). No changes to `ArmCorrectness.lean` or `hBoundsSafeFalse` — those are Phase 5/6.
+
+**Next:** Phase 5 (~1 day) — replace `hBoundsSafeFalse` in `ext_backward_simulation` with `hBoundsSafeOracle`; discharge via `spec.invPreserved` + `inv_preserved_steps` + the reachability trace at the arrLoad/arrStore bounds-error arms.
+
+---
+
 ## BoundsOptCert Phase 3 completion: full-fidelity checker soundness (2026-04-21)
 
 **Goal:** Close out Phase 3 of plans/certified-interval-pangolin.md by lifting the two scope cuts (`certSuccessor`'s `.ifgoto` returning `m`, `.mul` dropping destination unconditionally). The checker now refines through comparison guards and accepts bounded multiplication.

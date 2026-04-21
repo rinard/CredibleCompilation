@@ -13,6 +13,7 @@ import CredibleCompilation.RegAllocOpt
 import CredibleCompilation.ExecChecker
 import CredibleCompilation.CodeGenLayout
 import CredibleCompilation.BoundsOpt
+import CredibleCompilation.BoundsOptCert
 import CredibleCompilation.ArmSemantics
 import CredibleCompilation.ArmCorrectness
 import CredibleCompilation.PropChecker
@@ -477,6 +478,99 @@ private def isBoundsSafe (_arrayDecls : List (ArrayName × Nat × VarTy))
     (_intervals : Array (Option BoundsOpt.IMap)) (_pc : Nat) (_instr : TAC) : Bool :=
   false
 
+/-- Phase 4 wrapper: the per-PC bounds-check elision flag that the verified
+    code generator actually consumes. Computed directly from the program's
+    array decls and the (untrusted) `BoundsOpt.analyzeIntervals` output via
+    `isBoundsSafe`. Currently `isBoundsSafe` is hard-wired `false`, so this
+    always returns `false`; Phase 6 of plans/certified-interval-pangolin.md
+    will un-wire the hard `false` once Phase 5 has discharged the elision
+    correctness proof via the oracle hypothesis threaded through
+    `verifiedGenInstr_correct`. The indirection matters because `GenAsmSpec`'s
+    `boundsSafe` field points at this function by name; downstream proofs use
+    `verifiedBoundsSafe_rfl` to reduce it to the concrete Bool value. -/
+def verifiedBoundsSafe (p : Prog) (pc : Nat) : Bool :=
+  isBoundsSafe p.arrayDecls (BoundsOpt.analyzeIntervals p) pc (p.code.getD pc .halt)
+
+/-- Phase 4: until `isBoundsSafe` is un-wired in Phase 6, `verifiedBoundsSafe`
+    is `false` unconditionally. Callers rely on this to normalize the
+    `boundsSafe` argument threaded through `verifiedGenInstr` back to `false`,
+    which keeps the `hBoundsSafeFalse` wiring in `ext_backward_simulation`
+    intact. -/
+theorem verifiedBoundsSafe_rfl (p : Prog) (pc : Nat) :
+    verifiedBoundsSafe p pc = false := rfl
+
+/-- Phase 4 helper: Boolean check that the analyzer's entry-PC claim is
+    trivially satisfiable. Combined with `checkLocalPreservation`, this
+    forces `intervalMap inv 0 σ am` to hold for every `σ, am` — the exact
+    shape required for `GenAsmSpec.invAtStart`. Satisfied when either
+    the analyzer claims an empty `IMap` at PC 0 (the initial state of
+    `analyzeIntervals` before any join/widen) or the program is empty so
+    PC 0 is out of range (`intervalMap` falls through to `True`). -/
+private def checkInvAtStart (inv : Array (Option BoundsOpt.IMap)) : Bool :=
+  match inv[0]? with
+  | some (some []) => true
+  | none           => true
+  | _              => false
+
+private theorem checkInvAtStart_sound {inv : Array (Option BoundsOpt.IMap)}
+    (h : checkInvAtStart inv = true) (σ : Store) (am : ArrayMem) :
+    BoundsOpt.intervalMap inv 0 σ am := by
+  simp only [BoundsOpt.intervalMap]
+  unfold checkInvAtStart at h
+  split at h
+  · -- inv[0]? = some (some [])
+    rename_i heq
+    rw [heq]
+    intros v r hmem
+    cases hmem
+  · -- inv[0]? = none
+    rename_i heq
+    rw [heq]
+    trivial
+  · -- otherwise: h : false = true, contradiction
+    exact absurd h (by decide)
+
+/-- Phase 4: the validated per-program invariant map. Pipeline:
+    1. Run `BoundsOpt.analyzeIntervals p` (untrusted oracle) to get intervals.
+    2. Run the verified `BoundsOpt.checkLocalPreservation` checker.
+    3. If the checker accepts AND the entry-PC claim is trivially satisfiable
+       (via `checkInvAtStart`), lift the intervals to a `PInvariantMap` via
+       `BoundsOpt.intervalMap`.
+    4. Otherwise fall back to the constant-`True` map.
+    Both branches satisfy `preserved p` and `∀ σ am, invMap 0 σ am`. -/
+private def buildVerifiedInvMap (p : Prog) : PInvariantMap :=
+  fun pc σ am =>
+    let inv := BoundsOpt.analyzeIntervals p
+    if BoundsOpt.checkLocalPreservation p inv && checkInvAtStart inv
+    then BoundsOpt.intervalMap inv pc σ am
+    else True
+
+private theorem buildVerifiedInvMap_preserved (p : Prog) :
+    (buildVerifiedInvMap p).preserved p := by
+  intro pc σ am hInv pc' σ' am' hStep
+  simp only [buildVerifiedInvMap] at hInv ⊢
+  split at hInv
+  · rename_i hChk
+    rw [Bool.and_eq_true] at hChk
+    split
+    · exact BoundsOpt.checkLocalPreservation_sound p _ hChk.1 pc σ am hInv pc' σ' am' hStep
+    · trivial
+  · split
+    · -- hChk-positive on pc', negative on (same) conditions: impossible
+      rename_i hNeg hPos
+      exact absurd hPos hNeg
+    · trivial
+
+private theorem buildVerifiedInvMap_atStart (p : Prog) :
+    ∀ σ am, buildVerifiedInvMap p 0 σ am := by
+  intro σ am
+  simp only [buildVerifiedInvMap]
+  split
+  · rename_i hChk
+    rw [Bool.and_eq_true] at hChk
+    exact checkInvAtStart_sound hChk.2 σ am
+  · trivial
+
 -- ============================================================
 -- § 3. Well-formedness checks (discharge proof hypotheses at runtime)
 -- ============================================================
@@ -859,15 +953,17 @@ structure GenAsmSpec (tyCtx : TyCtx) (p : Prog) (r : VerifiedAsmResult) : Prop w
   /-- bodyPerPC has one entry per TAC instruction. -/
   bodySize : r.bodyPerPC.size = p.size
   /-- Each non-print, non-lib-call bodyPerPC entry was produced by verifiedGenInstr
-      with `boundsSafe = false` (Phase 4: BoundsOpt elision disabled so that the
-      arrLoad/arrStore bounds-error arms can step to `boundsS` through the
-      emitted `cmpImm`/`bCond .hs` pair). Print PCs use unverified codegen;
-      lib-call PCs are wrapped (see callSiteSaveRestore). -/
+      with `boundsSafe = verifiedBoundsSafe p pc`. Under Phase 4 (pre-Phase-6),
+      `verifiedBoundsSafe` is hard-wired to `false` via `isBoundsSafe`, so the
+      `hBoundsSafeFalse` threading in `ext_backward_simulation` remains valid;
+      the shape of this field is already in place for Phase 6 un-wiring.
+      Print PCs use unverified codegen; lib-call PCs are wrapped (see
+      callSiteSaveRestore). -/
   instrGen : ∀ pc, (hpc : pc < p.size) →
     isLibCallTAC p[pc] = false →
     (∀ fmt vs, p[pc] ≠ .print fmt vs) →
       verifiedGenInstr r.layout r.pcMap p[pc]
-        r.haltS r.divS r.boundsS p.arrayDecls false =
+        r.haltS r.divS r.boundsS p.arrayDecls (verifiedBoundsSafe p pc) =
       some (r.bodyPerPC[pc]'(bodySize ▸ hpc))
   /-- pcMap is the prefix sum of bodyPerPC lengths. -/
   pcMapLengths : ∃ lengths : Array Nat,
@@ -884,7 +980,7 @@ structure GenAsmSpec (tyCtx : TyCtx) (p : Prog) (r : VerifiedAsmResult) : Prop w
     isLibCallTAC p[pc] = true →
     ∃ baseInstrs,
       verifiedGenInstr r.layout r.pcMap p[pc]
-        r.haltS r.divS r.boundsS p.arrayDecls (isBoundsSafe p.arrayDecls (BoundsOpt.analyzeIntervals p) pc p[pc]) =
+        r.haltS r.divS r.boundsS p.arrayDecls (verifiedBoundsSafe p pc) =
         some baseInstrs ∧
       r.bodyPerPC[pc]'(bodySize ▸ hpc) =
         entriesToSaves (callerSaveEntries r.layout r.varMap (DAEOpt.instrDef p[pc])) ++
@@ -944,6 +1040,23 @@ structure GenAsmSpec (tyCtx : TyCtx) (p : Prog) (r : VerifiedAsmResult) : Prop w
       via `varMapInjOnOffsets`, contradicting the ireg/stack split. -/
   layoutStackComesFromVarMap : ∀ v off,
     r.layout v = some (.stack off) → lookupVar r.varMap v = some off
+  /-- Phase 4 (plans/certified-interval-pangolin.md): the validated interval-
+      based invariant map on `p` is preserved under `p`'s small-step
+      semantics. `buildVerifiedInvMap p` runs `BoundsOpt.analyzeIntervals p`
+      (untrusted oracle) and validates its per-PC local-preservation claim
+      via `BoundsOpt.checkLocalPreservation`. If the checker rejects (or the
+      entry-PC claim isn't trivially satisfiable), the map falls back to the
+      constant `True` invariant. Either way, preservation holds. Load-bearing
+      for Phase 5, which lifts this via `inv_preserved_steps` to derive a
+      reachable-state invariant at the arrLoad/arrStore bounds-error arms. -/
+  invPreserved : (buildVerifiedInvMap p).preserved p
+  /-- The validated invariant holds trivially at the entry PC for every
+      initial store and array memory. On the checker-accepted path this is
+      `IMap.satisfies [] σ` (vacuous over an empty `IMap`) or a PC-0-out-of-
+      bounds fallthrough to `True`; on the fallback path the map is `True`
+      everywhere. Required so `inv_preserved_steps` can feed a base case at
+      pc=0 (Phase 5). -/
+  invAtStart : ∀ σ am, buildVerifiedInvMap p 0 σ am
 
 -- checkWellTypedLayout_wellTyped: imported from CodeGenLayout.lean
 
@@ -3506,7 +3619,8 @@ theorem verifiedGenerateAsm_spec {tyCtx : TyCtx} {p : Prog} {r : VerifiedAsmResu
             ?printSaveRestore, ?callerSaveSpec,
             ?haltS_eq, ?haltFinal_eq, ?divS_eq, ?boundsS_eq,
             ?haltSaveBlock_eq, ?haltSaveComplete,
-            ?varMapInjOnOffsets, ?layoutStackComesFromVarMap⟩
+            ?varMapInjOnOffsets, ?layoutStackComesFromVarMap,
+            buildVerifiedInvMap_preserved p, buildVerifiedInvMap_atStart p⟩
           case instrGen =>
             intro pc hpc hNotLib hNotPrint
             have hpcB : pc < bodyPerPC.size := by rw [hBSz]; simp [Prog.size_eq] at hpc; exact hpc
@@ -3528,11 +3642,14 @@ theorem verifiedGenerateAsm_spec {tyCtx : TyCtx} {p : Prog} {r : VerifiedAsmResu
               · rename_i armInstrs hGenInstr
                 have : isLibCallTAC p.code[pc] = false := hNotLib
                 rw [this] at hStep; simp at hStep
-                -- `isBoundsSafe` is hard-wired to `false`; normalize the safe flag.
-                show verifiedGenInstr _ _ _ _ _ _ _ false = some _
-                have hbs : isBoundsSafe p.arrayDecls (BoundsOpt.analyzeIntervals p) pc
-                    p.code[pc] = false := rfl
-                rw [hbs] at hGenInstr
+                -- Phase 4: spec field uses `verifiedBoundsSafe p pc`, which unfolds
+                -- (via `isBoundsSafe` hard-`false`) to the same argument `bodyGenStep`
+                -- emitted with. Align forms so the `push_inj` transports cleanly.
+                show verifiedGenInstr _ _ _ _ _ _ _ (verifiedBoundsSafe p pc) = some _
+                have hbs : verifiedBoundsSafe p pc =
+                    isBoundsSafe p.arrayDecls (BoundsOpt.analyzeIntervals p) pc
+                      p.code[pc] := rfl
+                rw [hbs]
                 exact (Array.push_inj hStep) ▸ hGenInstr
           case pcMapLengths =>
             refine ⟨_, ?_, rfl, ?_⟩
