@@ -4,6 +4,25 @@ Chronological record of what was built and why, to reconstruct the sequence of d
 
 ---
 
+## Phase 5a: ArmStepsN infrastructure + ArmDiverges predicate (2026-04-21)
+
+**Goal:** Phase 5a of plans/backward-jumping-octopus.md — define the counted multi-step ARM closure and the ARM divergence predicate that Phase 7's backward theorems will consume. Leaves Phase 5b (the forward theorem `while_to_arm_divergence_preservation`) for a follow-up.
+
+**Shipped** ([ArmSemantics.lean](CredibleCompilation/ArmSemantics.lean)):
+
+- **`ArmStepsN prog s s' n`** — counted multi-step closure of `ArmStep`, parallel to `StepsN` on the TAC side. `| 0 => s = s'`, `| n+1 => ∃ s'', ArmStep prog s s'' ∧ ArmStepsN prog s'' s' n`.
+- **Six utility lemmas**: `ArmStepsN_extend`, `ArmStepsN_split_last`, `ArmStepsN_trans`, `ArmStepsN_prefix`, `ArmSteps_to_ArmStepsN` (plus the `refl` case in the definition). Each is a mechanical induction mirroring the existing `StepsN_*` ported from PropChecker.lean. No `_det` — ARM is not deterministic (havoc at libcall/printcall sites), and the backward arguments don't need it.
+- **`ArmDiverges (prog) (s₀)`** — defined in **reachability form**: `∀ n, ∃ s, ArmStepsN prog s₀ s n`.
+
+**Scope decision: reachability form over exists-function form.** The plan originally targeted `∃ f : Nat → ArmState, f 0 = s₀ ∧ ∀ n, ArmStep prog (f n) (f (n+1))`, strictly stronger in general nondeterministic systems (König's lemma needs finite branching). But in ARM, PC is deterministic — `ArmStep`'s non-determinism at libcall/printcall affects only caller-saved register values, not PC — so the canonical PC sequence is unique and any length-`n` `ArmStepsN` witness has the canonical PC at step `n`. Both forms discharge Phase 7 equivalently: if source halts, ARM's canonical PC reaches `haltFinal` (stuck) at step `M`, and `ArmStepsN_split_last` on any alleged length-`(M+1)` reach forces a predecessor at `haltFinal` with no successor — contradiction. The reachability form is cheaper to prove forward (saves ~200 LOC of `verifiedGenInstr_output_pos` + DC-style construction) and equally usable backward.
+
+**Status**: 0 sorrys; full `lake build` green. Files touched: 1. Net: +64 / −0.
+
+**What's left of Phase 5**:
+- **Phase 5b (pending)**: `while_to_arm_divergence_preservation` producing `ArmDiverges r.bodyFlat init` from `IsInfiniteExec p f`. The proof requires chaining `tacToArm_correctness` through TAC-trace prefixes and showing cumulative ARM step count grows unboundedly — which needs `bodyPerPC[pc].length ≥ 1` for every live `pc`. This `verifiedGenInstr_output_pos` lemma requires case analysis on all ~19 TAC constructors under the full `GenAsmSpec` typing/layout invariants. Not on the critical path if Phase 7 can build the equivalent argument locally from `tacToArm_correctness` + PC-determinism — design decision deferred to Phase 7.
+
+---
+
 ## Self-copy nop emission (Phase 5 prerequisite) (2026-04-21)
 
 **Goal:** Guarantee that every live TAC step produces ≥1 ARM step. Needed for Phase 5's divergence argument (plans/backward-jumping-octopus.md): if some live TAC step could produce 0 ARM instructions, an infinite TAC trace wouldn't yield an infinite ARM trace.

@@ -294,6 +294,71 @@ theorem ArmSteps.trans {prog : ArmProg} {s s' s'' : ArmState}
   | refl => exact h2
   | step hs _ ih => exact .step hs (ih h2)
 
+/-- Counted multi-step closure of `ArmStep`. Parallels `StepsN` on the TAC side.
+    Used by the Phase 5 ARM divergence construction, which needs to chain
+    per-TAC-step `ArmSteps` chunks and extract individual `ArmStep`s. -/
+def ArmStepsN (prog : ArmProg) : ArmState → ArmState → Nat → Prop
+  | s, s', 0     => s = s'
+  | s, s', n + 1 => ∃ s'', ArmStep prog s s'' ∧ ArmStepsN prog s'' s' n
+
+theorem ArmStepsN_extend {prog : ArmProg} {s s' s'' : ArmState} {n : Nat}
+    (h1 : ArmStepsN prog s s' n) (h2 : ArmStep prog s' s'') :
+    ArmStepsN prog s s'' (n + 1) := by
+  induction n generalizing s with
+  | zero => change s = s' at h1; subst h1; exact ⟨s'', h2, rfl⟩
+  | succ n ih =>
+    obtain ⟨cm, hs, hr⟩ := h1; exact ⟨cm, hs, ih hr⟩
+
+theorem ArmStepsN_split_last {prog : ArmProg} {s s' : ArmState} {n : Nat}
+    (h : ArmStepsN prog s s' (n + 1)) :
+    ∃ s'', ArmStepsN prog s s'' n ∧ ArmStep prog s'' s' := by
+  induction n generalizing s with
+  | zero => obtain ⟨c'', hs, hr⟩ := h; exact ⟨s, rfl, hr ▸ hs⟩
+  | succ n ih =>
+    obtain ⟨c1, hs, hr⟩ := h
+    obtain ⟨c2, h2, hlast⟩ := ih hr
+    exact ⟨c2, ⟨c1, hs, h2⟩, hlast⟩
+
+theorem ArmStepsN_trans {prog : ArmProg} {s s' s'' : ArmState} {n m : Nat}
+    (h1 : ArmStepsN prog s s' n) (h2 : ArmStepsN prog s' s'' m) :
+    ArmStepsN prog s s'' (n + m) := by
+  induction n generalizing s with
+  | zero => change s = s' at h1; subst h1; rw [Nat.zero_add]; exact h2
+  | succ n ih =>
+    obtain ⟨cm, hs, hr⟩ := h1
+    rw [show n + 1 + m = (n + m) + 1 from by omega]
+    exact ⟨cm, hs, ih hr⟩
+
+theorem ArmSteps_to_ArmStepsN {prog : ArmProg} {s s' : ArmState}
+    (h : ArmSteps prog s s') : ∃ n, ArmStepsN prog s s' n := by
+  induction h with
+  | refl => exact ⟨0, rfl⟩
+  | step s _ ih => obtain ⟨n, hn⟩ := ih; exact ⟨n + 1, ⟨_, s, hn⟩⟩
+
+theorem ArmStepsN_prefix {prog : ArmProg} {s s' : ArmState} {n k : Nat}
+    (h : ArmStepsN prog s s' (n + k)) : ∃ s'', ArmStepsN prog s s'' n := by
+  induction k generalizing s' with
+  | zero => exact ⟨s', h⟩
+  | succ k ih =>
+    rw [show n + (k + 1) = (n + k) + 1 from by omega] at h
+    obtain ⟨cmid, hmid, _⟩ := ArmStepsN_split_last h; exact ih hmid
+
+/-- ARM divergence (reachability form): from `s₀`, some state is reachable
+    after every finite ARM step count. In general nondeterministic systems,
+    this is strictly weaker than an exists-function form
+    (`∃ f : Nat → ArmState, f 0 = s₀ ∧ ∀ n, ArmStep prog (f n) (f (n+1))`);
+    König's lemma needs finite branching. But ARM's PC trajectory is
+    deterministic — `ArmStep`'s non-determinism at libcall/printcall/havoc
+    sites affects caller-saved register values, not PC — so the canonical
+    PC sequence is unique. Any state witnessing `ArmStepsN init s n` has
+    the canonical PC at step `n`. This is what the Phase 7 backward
+    arguments need: if source halts, ARM's canonical PC reaches `haltFinal`
+    (stuck) at some step `M`, and `ArmStepsN_split_last` on any alleged
+    length-`(M+1)` reach forces a predecessor at `haltFinal` with no
+    `ArmStep` successor — contradiction. -/
+def ArmDiverges (prog : ArmProg) (s₀ : ArmState) : Prop :=
+  ∀ n, ∃ s, ArmStepsN prog s₀ s n
+
 -- ============================================================
 -- § 6. Value encoding
 -- ============================================================
