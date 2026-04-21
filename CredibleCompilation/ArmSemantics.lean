@@ -1723,6 +1723,94 @@ theorem verifiedGenInstr_length_pcMap_ind
     simp only [verifiedGenInstr] at h1 h2
     simp_all
 
+/-- Combined: the length of verifiedGenInstr output depends on neither `pcMap`
+    nor the `haltS`/`divS`/`boundsS` label values. Both are threaded through
+    as Nat immediates inside individual branch instructions. -/
+theorem verifiedGenInstr_length_params_ind
+    (layout : VarLayout) (instr : TAC)
+    (pcMap1 pcMap2 : Nat → Nat)
+    (haltS1 divS1 boundsS1 haltS2 divS2 boundsS2 : Nat)
+    (arrayDecls : List (ArrayName × Nat × VarTy)) (safe : Bool)
+    (l1 l2 : List ArmInstr)
+    (h1 : verifiedGenInstr layout pcMap1 instr haltS1 divS1 boundsS1 arrayDecls safe = some l1)
+    (h2 : verifiedGenInstr layout pcMap2 instr haltS2 divS2 boundsS2 arrayDecls safe = some l2) :
+    l1.length = l2.length := by
+  cases instr with
+  | const v val =>
+    simp only [verifiedGenInstr] at h1 h2
+    cases val <;> simp_all <;> split at h1 <;> simp_all <;> split at h2 <;> simp_all
+  | copy dst src =>
+    simp only [verifiedGenInstr] at h1 h2
+    split at h1 <;> simp_all <;> split at h2 <;> simp_all
+  | binop x op y z =>
+    simp only [verifiedGenInstr] at h1 h2
+    split at h1 <;> simp_all
+    split at h1 <;> split at h2 <;> simp_all
+    all_goals (
+      split at h1 <;> split at h2
+      all_goals (simp_all; try (cases h1; cases h2; simp [List.length_append, List.length_cons])))
+  | boolop x be =>
+    simp only [verifiedGenInstr] at h1 h2
+    split at h1 <;> simp_all <;> split at h2 <;> simp_all
+  | goto l =>
+    simp only [verifiedGenInstr] at h1 h2
+    split at h1 <;> split at h2 <;> simp_all
+    cases h1; cases h2; rfl
+  | ifgoto be l =>
+    simp only [verifiedGenInstr] at h1 h2
+    split at h1 <;> simp_all
+    all_goals try (split at h1 <;> simp_all)
+    all_goals (try obtain ⟨_, h1⟩ := h1)
+    all_goals (try obtain ⟨_, h2⟩ := h2)
+    all_goals (try (subst_vars; simp [List.length_append, List.length_cons]))
+  | halt =>
+    simp only [verifiedGenInstr] at h1 h2
+    split at h1 <;> split at h2 <;> simp_all
+    cases h1; cases h2; rfl
+  | arrLoad x arr idx ty =>
+    simp only [verifiedGenInstr] at h1 h2
+    split at h1 <;> simp_all
+    cases ty
+    all_goals (
+      simp_all <;>
+      (try (cases h1; cases h2; simp [List.length_append, List.length_cons]; try split <;> simp [List.length_append, List.length_cons])))
+  | arrStore arr idx val ty =>
+    simp only [verifiedGenInstr] at h1 h2
+    split at h1 <;> simp_all
+    cases ty
+    all_goals (
+      simp_all <;>
+      (try (cases h1; cases h2; simp [List.length_append, List.length_cons]; try split <;> simp [List.length_append, List.length_cons])))
+  | fbinop x fop y z =>
+    simp only [verifiedGenInstr] at h1 h2
+    split at h1 <;> simp_all <;> split at h2 <;> simp_all
+  | intToFloat x y =>
+    simp only [verifiedGenInstr] at h1 h2
+    split at h1 <;> simp_all <;> split at h2 <;> simp_all
+  | floatToInt x y =>
+    simp only [verifiedGenInstr] at h1 h2
+    split at h1 <;> simp_all <;> split at h2 <;> simp_all
+  | floatUnary x op y =>
+    simp only [verifiedGenInstr] at h1 h2
+    split at h1 <;> simp_all <;> split at h2 <;> simp_all
+  | fternop x op a b c =>
+    simp only [verifiedGenInstr] at h1 h2
+    split at h1 <;> simp_all <;> split at h2 <;> simp_all
+  | print fmt vs =>
+    simp [verifiedGenInstr] at h1
+  | printInt v =>
+    simp only [verifiedGenInstr] at h1 h2
+    split at h1 <;> simp_all <;> split at h2 <;> simp_all
+  | printBool v =>
+    simp only [verifiedGenInstr] at h1 h2
+    split at h1 <;> simp_all <;> split at h2 <;> simp_all
+  | printFloat v =>
+    simp only [verifiedGenInstr] at h1 h2
+    split at h1 <;> simp_all <;> split at h2 <;> simp_all
+  | printString lit =>
+    simp only [verifiedGenInstr] at h1 h2
+    simp_all
+
 -- ============================================================
 -- § 9. CodeAt and helper lemmas
 -- ============================================================
@@ -1883,6 +1971,21 @@ theorem ArmSteps.one_then {prog : ArmProg} {s s' s'' : ArmState}
 @[simp] theorem ArmFReg.d2_ne_d0 : (ArmFReg.d2 == ArmFReg.d0) = false := by native_decide
 @[simp] theorem ArmFReg.d2_ne_d1 : (ArmFReg.d2 == ArmFReg.d1) = false := by native_decide
 @[simp] theorem ArmFReg.beq_self (r : ArmFReg) : (r == r) = true := by cases r <;> native_decide
+
+-- Helper: CodeAt on a flat list lifts to CodeAt on that list appended with a suffix.
+theorem CodeAt.liftToSuffix {pre suf : List ArmInstr} {startPC : Nat}
+    {instrs : List ArmInstr}
+    (h : CodeAt pre.toArray startPC instrs) :
+    CodeAt (pre ++ suf).toArray startPC instrs := by
+  intro i hi
+  have hthis := h i hi
+  simp only [List.getElem?_toArray] at hthis ⊢
+  have hlt : startPC + i < pre.length := by
+    rcases Nat.lt_or_ge (startPC + i) pre.length with h | h
+    · exact h
+    · exfalso; rw [List.getElem?_eq_none h] at hthis; simp at hthis
+  rw [List.getElem?_append_left hlt]
+  exact hthis
 
 -- Helper: split CodeAt for appended lists
 theorem CodeAt.append_left {prog : ArmProg} {startPC : Nat} {l1 l2 : List ArmInstr}

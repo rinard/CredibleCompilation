@@ -4,6 +4,64 @@ Chronological record of what was built and why, to reconstruct the sequence of d
 
 ---
 
+## Phase 2a: Halt-save block lives inside bodyFlat; haltFinal becomes a real PC (2026-04-21)
+
+**Goal:** Restructure the ARM output layout so the halt-save instructions (which spill observable register-allocated values back to their output stack slots) live inside the verified `bodyFlat` region instead of being an unverified tail. Downstream theorems in Phase 4/6/7 need `haltFinal` to name a concrete PC reachable from a `.halt` TAC. Part of plans/backward-jumping-octopus.md.
+
+**Core layout change** ([CodeGen.lean](CredibleCompilation/CodeGen.lean)):
+- `VerifiedAsmResult.haltSaveInstrs` renamed to `haltSaveBlock` and semantically relocated: it is now concatenated into `bodyFlat` immediately after the per-PC regions, rather than being a separate unverified tail.
+- `VerifiedAsmResult.bodyFlat` redefined: `(bodyPerPC.toList.flatMap id ++ haltSaveBlock.toList).toArray`.
+- New field `haltFinal : Nat` = `bodyFlat.size`. New relationship: `haltS ≤ haltFinal` with `haltFinal - haltS = haltSaveBlock.size`.
+- Killed the `p.code.size * 1000` sentinel magic. Redefined:
+  - `haltS := pcMap p.code.size` (= sum of per-PC instruction lengths = start of halt-save block inside bodyFlat).
+  - `haltFinal := haltS + haltSaveBlock.size`.
+  - `divS := haltFinal + 1`, `boundsS := haltFinal + 2` (off-the-end of bodyFlat, hence stuck in ARM).
+
+**Label-independence of `instrLength`** ([ArmSemantics.lean](CredibleCompilation/ArmSemantics.lean), [CodeGen.lean](CredibleCompilation/CodeGen.lean)):
+- New `verifiedGenInstr_length_params_ind`: the length of `verifiedGenInstr` output depends on neither `pcMap` nor the `haltS`/`divS`/`boundsS` label values (they appear as immediates inside single `.b`/`.cbz`/`.bCond` instructions but do not affect instruction count).
+- `instrLength` refactored to not take `haltS`/`divS`/`boundsS` args; it internally calls `verifiedGenInstr layout (fun _ => 0) instr 0 0 0 ...`. The `_params_ind` lemma bridges to any real label set used downstream.
+- This lets Pass 1 compute lengths (and hence `pcMap`, `bodyInstrSize`) purely from layout/instruction structure, breaking the circular definition of `haltS := pcMap p.code.size`.
+
+**GenAsmSpec additions** ([CodeGen.lean](CredibleCompilation/CodeGen.lean)): six new spec clauses, all discharged:
+- `haltS_eq : r.haltS = (r.bodyPerPC.toList.flatMap id).length` (via `buildPcMap_eq_take_length` and `bodyGenStep_length`).
+- `haltFinal_eq : r.haltFinal = r.haltS + r.haltSaveBlock.size` (by construction).
+- `divS_eq : r.divS = r.haltFinal + 1`, `boundsS_eq : r.boundsS = r.haltFinal + 2` (rfl).
+- `haltSaveBlock_eq : r.haltSaveBlock.toList = genHaltSave p.observable r.layout r.varMap`.
+- `haltSaveComplete : ∀ v ∈ p.observable, (∃ ir off, layout = .ireg ir ∧ lookupVar varMap = off) ∨ (∃ fr off, layout = .freg fr ∧ lookupVar varMap = off) ∨ (∃ off, layout = .stack off)` — rules out `genHaltSaveOne`'s silent-drop cases. Discharged via `observable_subset_collectVars` + `buildVarLayout_complete` + `buildVarMap_lookup_of_mem`.
+
+**New helper lemmas** ([CodeGen.lean](CredibleCompilation/CodeGen.lean)):
+- `observable_subset_collectVars : ∀ v ∈ p.observable, v ∈ collectVars p`. Follows because `collectVars` ends with a foldl over `p.observable` that adds each observable (parallel to `buildVarLayout_complete`).
+- `buildVarMap_lookup_of_mem : ∀ v ∈ collectVars p, lookupVar (buildVarMap (collectVars p)) v ≠ none`. Alias around the existing `lookupVar_of_mem_collectVars`.
+- `CodeAt.liftToSuffix : CodeAt pre.toArray startPC instrs → CodeAt (pre ++ suf).toArray startPC instrs`. Lets per-PC `CodeAt` conclusions drawn from the old flat array survive the new bodyFlat's halt-save suffix.
+- `codeAt_of_bodyFlat' r ...` wrapper: per-PC block still embeds in `r.bodyFlat`, now that `r.bodyFlat` has the halt-save suffix.
+
+**`verifiedGenerateAsm` rewiring** ([CodeGen.lean:749+](CredibleCompilation/CodeGen.lean)):
+1. Pass 1 computes `lengths` using `instrLength` (label-free).
+2. `pcMap := buildPcMap lengths.toArray`; `bodyInstrSize := pcMap p.code.size`.
+3. `haltSaveBlock := genHaltSave p.observable layout varMap`.
+4. `haltS := bodyInstrSize`; `haltFinal := bodyInstrSize + haltSaveBlock.length`; `divS := haltFinal + 1`, `boundsS := haltFinal + 2`.
+5. Pass 2 calls `bodyGenStep ... haltS divS boundsS` — real labels propagate into branch immediates.
+6. Record construction fills in the new fields.
+
+**Downstream call sites updated:**
+- Pretty-printer ([CodeGen.lean:5500](CredibleCompilation/CodeGen.lean)) renamed `r.haltSaveInstrs` → `r.haltSaveBlock`.
+- `step_simulation`/`tacToArm_correctness` callers of `codeAt_of_bodyFlat` switched to `codeAt_of_bodyFlat'` (the suffix-lifted wrapper).
+- All existing `GenAsmSpec` consumers (ArmCorrectness, PipelineCorrectness, SoundnessBridge) unchanged — the new spec clauses are purely additive.
+
+**Pending for Phase 2b:**
+- `armSteps_haltSaveBlock` lemma (stepping through the save block from `haltS` to `haltFinal` preserves `ExtStateRel` and `arrayMem`, and writes observable values to their output stack slots).
+- Halt case of `step_simulation` updated to step through `haltSaveBlock` to `haltFinal` (currently still reaches `haltS` and stops).
+- ExtSimRel halt-case tightening (optional — `arm.pc = haltFinal`).
+
+**Notes for downstream phases:**
+- `ExtSimRel` halt case remains `ExtStateRel ∧ arm.arrayMem = am` (unchanged). Phase 2b can tighten to include `arm.pc = haltFinal`.
+- `r.haltS`, `r.divS`, `r.boundsS` are still fields (not defs) for minimal downstream disruption; their values are constrained by the new `GenAsmSpec` clauses.
+- The `* 1000` magic is gone. `haltS = pcMap p.code.size` is now a stable, meaningful PC anchored to bodyFlat layout.
+
+**Status:** 0 sorrys; full `lake build` green. Files touched: 2 (CodeGen.lean, ArmSemantics.lean). Downstream theorem consumers unchanged.
+
+---
+
 ## Phase 3: split Cfg.error into Cfg.errorDiv / Cfg.errorBounds (2026-04-21)
 
 **Goal:** TAC-level counterpart to Phase 1's source-level `unsafeDiv`/`unsafeBounds` split. Distinguishes div-by-zero errors from bounds errors in the TAC `Cfg` and `Step` types so Phase 4's forward theorems can name the specific PC (`divS` vs `boundsS`) and Phase 7's backward theorems can conclude a specific unsafe kind. Part of plans/backward-jumping-octopus.md.

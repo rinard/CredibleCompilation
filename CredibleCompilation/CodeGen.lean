@@ -430,17 +430,20 @@ private def removeDest (instr : TAC) (live : List Var) : List Var :=
 
 /-- Compute instruction length for a TAC instruction.
     `pcMap` does not affect instruction count (only branch target values).
+    Neither do `haltS`/`divS`/`boundsS` (they are just immediates inside
+    branch instructions). We use dummy values (`fun _ => 0` and `0`) when
+    invoking `verifiedGenInstr`; `verifiedGenInstr_length_pcMap_ind` and
+    `verifiedGenInstr_length_labels_ind` justify this.
     Save/restore uses `genCallerSaveAll` (all caller-saved regs, not just live). -/
 private def instrLength (layout : VarLayout) (arrayDecls : List (ArrayName × Nat × VarTy))
     (boundsSafe : Bool) (instr : TAC)
-    (haltS divS boundsS : Nat)
     (varMap : List (Var × Nat) := []) : Nat :=
   match instr with
   | .print _ _ =>
     -- saves + 1 printCall + restores
     1 + callSaveRestoreLen layout varMap
   | _ =>
-  let baseLen := match verifiedGenInstr layout (fun _ => 0) instr haltS divS boundsS arrayDecls boundsSafe with
+  let baseLen := match verifiedGenInstr layout (fun _ => 0) instr 0 0 0 arrayDecls boundsSafe with
     | some l => l.length
     | none => 0
   if isLibCallTAC instr then
@@ -571,15 +574,21 @@ private theorem checkCallerSaveSpec_sound {layout : VarLayout} {varMap : List (V
 
 /-- Result of the verified code generation core.
     Contains structured ArmInstr arrays that can be pretty-printed by the
-    unverified shell, and all metadata needed for label resolution. -/
+    unverified shell, and all metadata needed for label resolution.
+
+    Phase 2 layout: `bodyFlat = (bodyPerPC concatenated) ++ haltSaveBlock`.
+    `haltS` is the start of `haltSaveBlock` inside `bodyFlat`;
+    `haltFinal = bodyFlat.size`;
+    `divS = haltFinal + 1`, `boundsS = haltFinal + 2` (off-the-end, stuck). -/
 structure VerifiedAsmResult where
   /-- Variable zeroing instructions (register zeros + stack zeros). -/
   initInstrs : Array ArmInstr
   /-- Per-TAC-PC list of generated ARM instructions.
       Library call sites include save/restore of live caller-saved registers. -/
   bodyPerPC : Array (List ArmInstr)
-  /-- Instructions to save register-allocated observable values to stack. -/
-  haltSaveInstrs : Array ArmInstr
+  /-- Instructions to save register-allocated observable values to stack.
+      Lives at the END of `bodyFlat` (between `haltS` and `haltFinal`). -/
+  haltSaveBlock : Array ArmInstr
   /-- TAC PC → cumulative ARM instruction offset. -/
   pcMap : Nat → Nat
   /-- Variable layout (register/stack assignments). -/
@@ -588,9 +597,17 @@ structure VerifiedAsmResult where
   varMap : List (Var × Nat)
   /-- Number of init instructions (for label offset computation). -/
   initLen : Nat
-  /-- Sentinel values for special branch targets. -/
+  /-- Start of halt-save block. Stored here for convenience; equals
+      `(bodyPerPC.toList.flatMap id).length` (= `pcMap p.code.size`). -/
   haltS : Nat
+  /-- End of halt-save block = end of `bodyFlat`. Stored here; equals
+      `haltS + haltSaveBlock.size` (= `bodyFlat.size`). -/
+  haltFinal : Nat
+  /-- Division-by-zero sentinel: off-the-end of `bodyFlat`, hence stuck.
+      Stored here; equals `haltFinal + 1`. -/
   divS : Nat
+  /-- Array-bounds-violation sentinel: also off-the-end of `bodyFlat`, stuck.
+      Stored here; equals `haltFinal + 2`. -/
   boundsS : Nat
   /-- Reverse map: ARM offset → TAC PC. -/
   tacPcOf : Nat → Option Nat
@@ -749,23 +766,30 @@ def verifiedGenerateAsm (tyCtx : TyCtx) (p : Prog) : Except String VerifiedAsmRe
     let intervals := BoundsOpt.analyzeIntervals p
     -- Liveness analysis for call-site save/restore
     let liveOut := DAEOpt.analyzeLiveness p
-    -- Sentinel values for special labels
-    let haltS := p.code.size * 1000
-    let divS  := p.code.size * 1000 + 1
-    let boundsS := p.code.size * 1000 + 2
-    -- Pass 1: compute instruction lengths (pcMap-independent)
-    -- Includes save/restore overhead at library call sites.
+    -- Pass 1: compute instruction lengths (pcMap- and label-independent).
+    -- Internally instrLength uses dummy labels (`fun _ => 0` and `0 0 0`);
+    -- verifiedGenInstr_length_params_ind bridges to the real labels used below.
     let lengths := (List.range p.code.size).map fun pc =>
       let instr := p.code.getD pc .halt
       let safe := isBoundsSafe p.arrayDecls intervals pc instr
-      instrLength layout p.arrayDecls safe instr haltS divS boundsS varMap
+      instrLength layout p.arrayDecls safe instr varMap
     let lengthsArr := lengths.toArray
     -- Build real pcMap and reverse map
     let pcMap := buildPcMap lengthsArr
     let tacPcOf := buildTacPcOf lengthsArr
+    -- Halt-save block: spill register-allocated observable values to stack.
+    -- Lives at the end of bodyFlat (inside the verified region).
+    let haltSaveBlockList := genHaltSave p.observable layout varMap
+    -- Sentinel PCs: haltS = start of halt-save block, haltFinal = end of bodyFlat,
+    -- divS/boundsS are off-the-end (stuck in ARM).
+    let bodyInstrSize := pcMap p.code.size
+    let haltS := bodyInstrSize
+    let haltFinal := bodyInstrSize + haltSaveBlockList.length
+    let divS := haltFinal + 1
+    let boundsS := haltFinal + 2
     -- Generate init code
     let initInstrs := genInitCode vars layout
-    -- Pass 2: generate instructions with real pcMap
+    -- Pass 2: generate instructions with real pcMap and real labels.
     -- For library call sites, wrap with save/restore of live caller-saved registers.
     let bodyResult := (List.range p.code.size).foldl
         (bodyGenStep p.code layout pcMap liveOut varMap intervals p.arrayDecls haltS divS boundsS tyCtx)
@@ -773,8 +797,6 @@ def verifiedGenerateAsm (tyCtx : TyCtx) (p : Prog) : Except String VerifiedAsmRe
     match bodyResult with
     | none => .error "verifiedGenInstr failed (layout or type mismatch)"
     | some bodyPerPC =>
-    -- Generate halt-save instructions
-    let haltSaveInstrs := genHaltSave p.observable layout varMap
     -- Callee-saved register prologue/epilogue
     let (csIntRegs, csFloatRegs) := detectCalleeSavedLayout layout
     let calleeSaveOffset := (vars.length + 1) * 8  -- right after variable slots
@@ -782,12 +804,13 @@ def verifiedGenerateAsm (tyCtx : TyCtx) (p : Prog) : Except String VerifiedAsmRe
     .ok {
       initInstrs := initInstrs.toArray
       bodyPerPC := bodyPerPC
-      haltSaveInstrs := haltSaveInstrs.toArray
+      haltSaveBlock := haltSaveBlockList.toArray
       pcMap := pcMap
       layout := layout
       varMap := varMap
       initLen := initInstrs.length
       haltS := haltS
+      haltFinal := haltFinal
       divS := divS
       boundsS := boundsS
       tacPcOf := tacPcOf
@@ -814,9 +837,10 @@ execution `p ⊩ Cfg.run pc σ am ⟶* cfg'` starting from an ARM state satisfyi
 - 0 sorrys from `verifiedGenInstr_correct` (arrLoad bool case closed)
 -/
 
-/-- The flat ARM body: all per-PC instruction lists concatenated. -/
+/-- The flat ARM body: per-PC instruction lists concatenated, followed by the
+    halt-save block (written by a `.halt` TAC to spill observable values). -/
 def VerifiedAsmResult.bodyFlat (r : VerifiedAsmResult) : ArmProg :=
-  (r.bodyPerPC.toList.flatMap id).toArray
+  ((r.bodyPerPC.toList.flatMap id) ++ r.haltSaveBlock.toList).toArray
 
 /-- Properties extracted from a successful `verifiedGenerateAsm` call.
     These are the invariants that the main code-generation function establishes
@@ -884,6 +908,26 @@ structure GenAsmSpec (tyCtx : TyCtx) (p : Prog) (r : VerifiedAsmResult) : Prop w
       CallerSaveEntry.ireg ir off2 ∈ entries → off1 = off2) ∧
     (∀ fr off1 off2, CallerSaveEntry.freg fr off1 ∈ entries →
       CallerSaveEntry.freg fr off2 ∈ entries → off1 = off2)
+  /-- haltS equals the total length of per-PC instructions = pcMap p.size.
+      The halt-save block starts here in bodyFlat. -/
+  haltS_eq : r.haltS = (r.bodyPerPC.toList.flatMap id).length
+  /-- haltFinal = haltS + |haltSaveBlock| = bodyFlat.size.
+      Reaching this PC means the program halted cleanly. -/
+  haltFinal_eq : r.haltFinal = r.haltS + r.haltSaveBlock.size
+  /-- divS is one past haltFinal: off-the-end, stuck in ARM. -/
+  divS_eq : r.divS = r.haltFinal + 1
+  /-- boundsS is two past haltFinal: also off-the-end, stuck in ARM. -/
+  boundsS_eq : r.boundsS = r.haltFinal + 2
+  /-- The halt-save block equals `genHaltSave p.observable layout varMap`. -/
+  haltSaveBlock_eq : r.haltSaveBlock.toList = genHaltSave p.observable r.layout r.varMap
+  /-- Every observable has a layout assignment compatible with `genHaltSaveOne`:
+      register-allocated vars (ireg/freg) have a varMap stack slot for the
+      save target; stack-allocated vars trivially satisfy the contract.
+      This rules out the silent-drop cases of `genHaltSaveOne`. -/
+  haltSaveComplete : ∀ v ∈ p.observable,
+    (∃ ir off, r.layout v = some (.ireg ir) ∧ lookupVar r.varMap v = some off) ∨
+    (∃ fr off, r.layout v = some (.freg fr) ∧ lookupVar r.varMap v = some off) ∨
+    (∃ off, r.layout v = some (.stack off))
 
 -- checkWellTypedLayout_wellTyped: imported from CodeGenLayout.lean
 
@@ -1119,53 +1163,53 @@ private theorem instrLength_eq_length {layout : VarLayout} {pcMap : Nat → Nat}
     {safe : Bool} {instrs : List ArmInstr}
     {varMap : List (Var × Nat)}
     (h : verifiedGenInstr layout pcMap instr haltS divS boundsS arrayDecls safe = some instrs) :
-    instrLength layout arrayDecls safe instr haltS divS boundsS varMap =
+    instrLength layout arrayDecls safe instr varMap =
       (if isLibCallTAC instr then
         let entries := callerSaveEntries layout varMap (DAEOpt.instrDef instr)
         (entriesToSaves entries ++ instrs ++ entriesToRestores entries).length
       else instrs.length) := by
   -- Print case: verifiedGenInstr returns none, contradicting h
-  -- Non-print: instrLength uses dummy pcMap (fun _ => 0); equate lengths via pcMap-independence
-  -- Lib-call: also need callSaveRestoreLen = saves.length + restores.length (definitional)
+  -- Non-print: instrLength uses dummy pcMap (fun _ => 0) and dummy labels (0);
+  -- equate lengths via pcMap- AND labels-independence.
   cases instr with
   | print => simp [verifiedGenInstr] at h
   | printInt v =>
     simp only [instrLength, isLibCallTAC, callSaveRestoreLen, callerSaveEntries, DAEOpt.instrDef]
     generalize hd : verifiedGenInstr layout (fun _ => 0)
-      (.printInt v) haltS divS boundsS arrayDecls safe = dr
+      (.printInt v) 0 0 0 arrayDecls safe = dr
     cases dr with
     | none =>
       simp only [verifiedGenInstr] at h hd
       split at hd <;> simp_all <;> split at h <;> simp_all
     | some dl =>
-      have hLen := verifiedGenInstr_length_pcMap_ind layout (.printInt v) haltS divS boundsS
-          arrayDecls safe _ pcMap dl instrs hd h
+      have hLen := verifiedGenInstr_length_params_ind layout (.printInt v)
+        (fun _ => 0) pcMap 0 0 0 haltS divS boundsS arrayDecls safe dl instrs hd h
       simp only [hLen, List.length_append, entriesToSaves_length, entriesToRestores_length]
       simp [Nat.add_comm, Nat.add_left_comm]
   | printBool v =>
     simp only [instrLength, isLibCallTAC, callSaveRestoreLen, callerSaveEntries, DAEOpt.instrDef]
     generalize hd : verifiedGenInstr layout (fun _ => 0)
-      (.printBool v) haltS divS boundsS arrayDecls safe = dr
+      (.printBool v) 0 0 0 arrayDecls safe = dr
     cases dr with
     | none =>
       simp only [verifiedGenInstr] at h hd
       split at hd <;> simp_all <;> split at h <;> simp_all
     | some dl =>
-      have hLen := verifiedGenInstr_length_pcMap_ind layout (.printBool v) haltS divS boundsS
-          arrayDecls safe _ pcMap dl instrs hd h
+      have hLen := verifiedGenInstr_length_params_ind layout (.printBool v)
+        (fun _ => 0) pcMap 0 0 0 haltS divS boundsS arrayDecls safe dl instrs hd h
       simp only [hLen, List.length_append, entriesToSaves_length, entriesToRestores_length]
       simp [Nat.add_comm, Nat.add_left_comm]
   | printFloat v =>
     simp only [instrLength, isLibCallTAC, callSaveRestoreLen, callerSaveEntries, DAEOpt.instrDef]
     generalize hd : verifiedGenInstr layout (fun _ => 0)
-      (.printFloat v) haltS divS boundsS arrayDecls safe = dr
+      (.printFloat v) 0 0 0 arrayDecls safe = dr
     cases dr with
     | none =>
       simp only [verifiedGenInstr] at h hd
       split at hd <;> simp_all <;> split at h <;> simp_all
     | some dl =>
-      have hLen := verifiedGenInstr_length_pcMap_ind layout (.printFloat v) haltS divS boundsS
-          arrayDecls safe _ pcMap dl instrs hd h
+      have hLen := verifiedGenInstr_length_params_ind layout (.printFloat v)
+        (fun _ => 0) pcMap 0 0 0 haltS divS boundsS arrayDecls safe dl instrs hd h
       simp only [hLen, List.length_append, entriesToSaves_length, entriesToRestores_length]
       simp [Nat.add_comm, Nat.add_left_comm]
   | printString lit =>
@@ -1180,8 +1224,19 @@ private theorem instrLength_eq_length {layout : VarLayout} {pcMap : Nat → Nat}
     simp only [instrLength, isLibCallTAC, verifiedGenInstr] at *
     split at h <;> simp_all
   | binop x op y z =>
-    simp only [instrLength, isLibCallTAC, verifiedGenInstr] at *
-    split at h <;> simp_all
+    simp only [instrLength, isLibCallTAC]
+    generalize hd : verifiedGenInstr layout (fun _ => 0)
+      (.binop x op y z) 0 0 0 arrayDecls safe = dr
+    cases dr with
+    | none =>
+      -- Failure of verifiedGenInstr for .binop depends only on layout (freg checks).
+      simp only [verifiedGenInstr] at h hd
+      split at hd <;> simp_all <;> split at h <;> simp_all
+      split at hd <;> split at h <;> simp_all
+    | some dl =>
+      have hLen := verifiedGenInstr_length_params_ind layout (.binop x op y z)
+        (fun _ => 0) pcMap 0 0 0 haltS divS boundsS arrayDecls safe dl instrs hd h
+      simp [hLen]
   | boolop x be =>
     simp only [instrLength, isLibCallTAC, verifiedGenInstr] at *
     split at h <;> simp_all
@@ -1189,31 +1244,64 @@ private theorem instrLength_eq_length {layout : VarLayout} {pcMap : Nat → Nat}
     simp only [instrLength, isLibCallTAC, verifiedGenInstr] at *
     split at h <;> simp_all; subst_vars; simp
   | ifgoto be l =>
-    simp only [instrLength, isLibCallTAC, verifiedGenInstr] at *
-    split at h <;> simp_all
-    split at h <;> simp_all
-    all_goals (try obtain ⟨_, h⟩ := h)
-    all_goals (subst_vars; simp [List.length_append, List.length_cons])
-  | halt =>
-    simp only [instrLength, isLibCallTAC, verifiedGenInstr] at *
-    split at h <;> simp_all
-  | arrLoad x arr idx ty =>
-    simp only [instrLength, isLibCallTAC, verifiedGenInstr] at *
-    split at h <;> simp_all
-  | arrStore arr idx val ty =>
-    simp only [instrLength, isLibCallTAC, verifiedGenInstr] at *
-    split at h <;> simp_all
-  | fbinop x fop y z =>
-    simp only [instrLength, isLibCallTAC, callSaveRestoreLen, callerSaveEntries, DAEOpt.instrDef]
+    simp only [instrLength, isLibCallTAC]
     generalize hd : verifiedGenInstr layout (fun _ => 0)
-      (.fbinop x fop y z) haltS divS boundsS arrayDecls safe = dr
+      (.ifgoto be l) 0 0 0 arrayDecls safe = dr
     cases dr with
     | none =>
       simp only [verifiedGenInstr] at h hd
       split at hd <;> simp_all <;> split at h <;> simp_all
     | some dl =>
-      have hLen := verifiedGenInstr_length_pcMap_ind layout (.fbinop x fop y z) haltS divS boundsS
-          arrayDecls safe _ pcMap dl instrs hd h
+      have hLen := verifiedGenInstr_length_params_ind layout (.ifgoto be l)
+        (fun _ => 0) pcMap 0 0 0 haltS divS boundsS arrayDecls safe dl instrs hd h
+      simp [hLen]
+  | halt =>
+    simp only [instrLength, isLibCallTAC]
+    generalize hd : verifiedGenInstr layout (fun _ => 0)
+      (TAC.halt) 0 0 0 arrayDecls safe = dr
+    cases dr with
+    | none =>
+      simp only [verifiedGenInstr] at h hd
+      split at hd <;> simp_all <;> split at h <;> simp_all
+    | some dl =>
+      have hLen := verifiedGenInstr_length_params_ind layout TAC.halt
+        (fun _ => 0) pcMap 0 0 0 haltS divS boundsS arrayDecls safe dl instrs hd h
+      simp [hLen]
+  | arrLoad x arr idx ty =>
+    simp only [instrLength, isLibCallTAC]
+    generalize hd : verifiedGenInstr layout (fun _ => 0)
+      (.arrLoad x arr idx ty) 0 0 0 arrayDecls safe = dr
+    cases dr with
+    | none =>
+      simp only [verifiedGenInstr] at h hd
+      split at hd <;> simp_all <;> split at h <;> simp_all
+    | some dl =>
+      have hLen := verifiedGenInstr_length_params_ind layout (.arrLoad x arr idx ty)
+        (fun _ => 0) pcMap 0 0 0 haltS divS boundsS arrayDecls safe dl instrs hd h
+      simp [hLen]
+  | arrStore arr idx val ty =>
+    simp only [instrLength, isLibCallTAC]
+    generalize hd : verifiedGenInstr layout (fun _ => 0)
+      (.arrStore arr idx val ty) 0 0 0 arrayDecls safe = dr
+    cases dr with
+    | none =>
+      simp only [verifiedGenInstr] at h hd
+      split at hd <;> simp_all <;> split at h <;> simp_all
+    | some dl =>
+      have hLen := verifiedGenInstr_length_params_ind layout (.arrStore arr idx val ty)
+        (fun _ => 0) pcMap 0 0 0 haltS divS boundsS arrayDecls safe dl instrs hd h
+      simp [hLen]
+  | fbinop x fop y z =>
+    simp only [instrLength, isLibCallTAC, callSaveRestoreLen, callerSaveEntries, DAEOpt.instrDef]
+    generalize hd : verifiedGenInstr layout (fun _ => 0)
+      (.fbinop x fop y z) 0 0 0 arrayDecls safe = dr
+    cases dr with
+    | none =>
+      simp only [verifiedGenInstr] at h hd
+      split at hd <;> simp_all <;> split at h <;> simp_all
+    | some dl =>
+      have hLen := verifiedGenInstr_length_params_ind layout (.fbinop x fop y z)
+        (fun _ => 0) pcMap 0 0 0 haltS divS boundsS arrayDecls safe dl instrs hd h
       simp only [hLen, List.length_append, entriesToSaves_length, entriesToRestores_length]
       cases fop <;> simp_all [Nat.add_comm] <;> omega
   | intToFloat x y =>
@@ -1225,14 +1313,14 @@ private theorem instrLength_eq_length {layout : VarLayout} {pcMap : Nat → Nat}
   | floatUnary x op y =>
     simp only [instrLength, isLibCallTAC, callSaveRestoreLen, callerSaveEntries, DAEOpt.instrDef]
     generalize hd : verifiedGenInstr layout (fun _ => 0)
-      (.floatUnary x op y) haltS divS boundsS arrayDecls safe = dr
+      (.floatUnary x op y) 0 0 0 arrayDecls safe = dr
     cases dr with
     | none =>
       simp only [verifiedGenInstr] at h hd
       split at hd <;> simp_all <;> split at h <;> simp_all
     | some dl =>
-      have hLen := verifiedGenInstr_length_pcMap_ind layout (.floatUnary x op y) haltS divS boundsS
-          arrayDecls safe _ pcMap dl instrs hd h
+      have hLen := verifiedGenInstr_length_params_ind layout (.floatUnary x op y)
+        (fun _ => 0) pcMap 0 0 0 haltS divS boundsS arrayDecls safe dl instrs hd h
       simp only [hLen, List.length_append, entriesToSaves_length, entriesToRestores_length]
       cases op.isNative <;> simp_all [Nat.add_comm] <;> omega
   | fternop x op a b c =>
@@ -1253,7 +1341,7 @@ private theorem bodyGenStep_length {code : Array TAC} {layout : VarLayout}
     (hpc : pc < code.size) :
     instrs.length = instrLength layout arrayDecls
       (isBoundsSafe arrayDecls intervals pc (code.getD pc .halt))
-      (code.getD pc .halt) haltS divS boundsS varMap := by
+      (code.getD pc .halt) varMap := by
   -- Normalize getD to getElem in goal
   have hGetD : code.getD pc .halt = code[pc] := by simp [Array.getD, hpc]
   rw [hGetD]
@@ -1295,166 +1383,8 @@ private theorem bodyGenStep_length {code : Array TAC} {layout : VarLayout}
             cases h : isLibCallTAC code[pc] <;> simp_all
           simp [hNotLib', hInstrs]
 
-/-- A successful `verifiedGenerateAsm` call satisfies `GenAsmSpec`. -/
-theorem verifiedGenerateAsm_spec {tyCtx : TyCtx} {p : Prog} {r : VerifiedAsmResult}
-    (hGen : verifiedGenerateAsm tyCtx p = .ok r) : GenAsmSpec tyCtx p r := by
-  -- Unfold and clear error guards
-  simp only [verifiedGenerateAsm] at hGen
-  split at hGen <;> simp_all                     -- checkWellTypedProg
-  -- regConventionSafe
-  split at hGen <;> simp_all
-  rename_i hRC
-  -- isInjective
-  split at hGen <;> simp_all
-  rename_i hII
-  -- checkWellTypedLayout
-  split at hGen
-  · simp_all
-  · -- none case — continue
-    -- checkCallerSaveSpec
-    split at hGen
-    · simp_all
-    · -- !checkCallerSaveSpec = false, i.e. checkCallerSaveSpec = true
-      rename_i hWTL hCSS
-      replace hCSS : checkCallerSaveSpec
-          (buildVarLayout (collectVars p) (buildVarMap (collectVars p)))
-          (buildVarMap (collectVars p)) = true := by
-        revert hCSS; simp
-      -- checkBranchTargets
-      split at hGen
-      · simp_all
-      · -- none case — continue to bodyResult
-        split at hGen
-        · simp_all
-        · -- some bodyPerPC
-          -- Extract r = constructed record
-          simp only [Except.ok.injEq] at hGen; subst r
-          rename_i bodyPerPC heqFold
-          -- Foldl properties: Lean unifies F from heqFold
-          have hBSz : bodyPerPC.size = p.code.size := by
-            apply foldl_push_size _ _ heqFold
-            · intro; rfl
-            · intro arr pc; exact bodyGenStep_push _ _ _ _ _ _ _ _ _ _ _ arr pc
-          refine ⟨
-            checkWellTypedProg_sound ‹_›,
-            checkWellTypedLayout_wellTyped ‹_›,
-            VarLayout.regConventionSafe_spec _ hRC,
-            VarLayout.isInjective_spec _ hII,
-            by simp [Prog.size_eq]; exact hBSz,
-            ?instrGen, ?pcMapLengths, ?layoutComplete, ?callSiteSaveRestore,
-            ?printSaveRestore, ?callerSaveSpec⟩
-          case instrGen =>
-            intro pc hpc hNotLib hNotPrint
-            have hpcB : pc < bodyPerPC.size := by rw [hBSz]; simp [Prog.size_eq] at hpc; exact hpc
-            have hpcCode : pc < p.code.size := by simp [Prog.size_eq] at hpc; exact hpc
-            -- Get foldl content
-            have hContent := by
-              apply foldl_push_content _ _ heqFold pc hpcB
-              · intro; rfl
-              · intro arr pc; exact bodyGenStep_push _ _ _ _ _ _ _ _ _ _ _ arr pc
-            obtain ⟨mid, _, hStep⟩ := hContent
-            -- Unfold bodyGenStep; simplify getD to getElem
-            simp only [bodyGenStep, Array.getD, show pc < p.code.size from hpcCode,
-              dite_true] at hStep
-            -- Case split on isPrint match, then if isPrint
-            split at hStep <;> split at hStep
-            · -- print, isTrue: contradicts hNotPrint
-              simp_all
-            · -- print, isFalse: contradicts (isPrint was true)
-              simp_all
-            · -- non-print, isTrue: false=true, absurd
-              simp_all
-            · -- non-print, isFalse: the real case
-              simp at hStep
-              -- Split on verifiedGenInstr
-              split at hStep
-              · simp at hStep
-              · -- some armInstrs
-                rename_i armInstrs hGenInstr
-                -- isLibCallTAC is false (via hNotLib)
-                have : isLibCallTAC p.code[pc] = false := hNotLib
-                rw [this] at hStep; simp at hStep
-                exact ⟨_, (Array.push_inj hStep) ▸ hGenInstr⟩
-          case pcMapLengths =>
-            -- Witness: the inline lengthsArr from codegen; pcMap = buildPcMap _ is rfl
-            refine ⟨_, ?_, rfl, ?_⟩
-            · -- size: lengthsArr.size = bodyPerPC.size (both = p.code.size)
-              simp [List.length_map, List.length_range, hBSz]
-            · -- element equality: lengthsArr[i] = bodyPerPC[i].length
-              intro i hL hB
-              -- lengthsArr[i] = instrLength at pc i
-              -- bodyPerPC[i].length = instrLength at pc i (by bodyGenStep_length)
-              have hpcCode : i < p.code.size := by rw [← hBSz]; exact hB
-              have hContent := by
-                apply foldl_push_content _ _ heqFold i hB
-                · intro; rfl
-                · intro arr pc; exact bodyGenStep_push _ _ _ _ _ _ _ _ _ _ _ arr pc
-              obtain ⟨mid, _, hStep⟩ := hContent
-              rw [bodyGenStep_length hStep hpcCode]
-              -- Now: instrLength ... = instrLength ... (should be rfl or simp)
-              simp [List.getElem_toArray, List.getElem_map]
-          case layoutComplete =>
-            intro pc hpc v hv
-            exact checkWellTypedLayout_instrMapped ‹_› (by simp [Prog.size_eq] at hpc; exact hpc) hv
-          case callSiteSaveRestore =>
-            intro pc hpc hLib
-            have hpcB : pc < bodyPerPC.size := by rw [hBSz]; simp [Prog.size_eq] at hpc; exact hpc
-            have hpcCode : pc < p.code.size := by simp [Prog.size_eq] at hpc; exact hpc
-            have hContent := by
-              apply foldl_push_content _ _ heqFold pc hpcB
-              · intro; rfl
-              · intro arr pc; exact bodyGenStep_push _ _ _ _ _ _ _ _ _ _ _ arr pc
-            obtain ⟨mid, _, hStep⟩ := hContent
-            simp only [bodyGenStep, Array.getD, show pc < p.code.size from hpcCode,
-              dite_true] at hStep
-            -- Not a print (lib-call TACs are floatUnary/fpow, not print)
-            split at hStep <;> split at hStep
-            · -- print, isTrue: print is not a lib-call
-              simp_all [isLibCallTAC]
-            · simp_all  -- print, isFalse
-            · simp_all  -- non-print, isTrue
-            · -- non-print, isFalse: the real case
-              simp at hStep
-              split at hStep
-              · simp at hStep  -- verifiedGenInstr = none: contradiction
-              · rename_i armInstrs hGenInstr
-                -- isLibCallTAC is true
-                rw [show isLibCallTAC p.code[pc] = true from hLib] at hStep
-                simp only [ite_true] at hStep
-                have hEq := (Array.push_inj (Option.some.inj hStep)).symm
-                rw [← List.append_assoc] at hEq
-                exact ⟨armInstrs, hGenInstr, hEq⟩
-          case printSaveRestore =>
-            intro pc hpc ⟨fmt, vs, hPrint⟩
-            have hpcB : pc < bodyPerPC.size := by rw [hBSz]; simp [Prog.size_eq] at hpc; exact hpc
-            have hpcCode : pc < p.code.size := by simp [Prog.size_eq] at hpc; exact hpc
-            have hContent := by
-              apply foldl_push_content _ _ heqFold pc hpcB
-              · intro; rfl
-              · intro arr pc; exact bodyGenStep_push _ _ _ _ _ _ _ _ _ _ _ arr pc
-            obtain ⟨mid, _, hStep⟩ := hContent
-            simp only [bodyGenStep, Array.getD, show pc < p.code.size from hpcCode,
-              dite_true] at hStep
-            -- Print case: isPrint = true
-            split at hStep <;> split at hStep
-            · -- print, isTrue: extract entriesToSaves ++ [printCall] ++ entriesToRestores
-              have hEq := (Array.push_inj (Option.some.inj hStep)).symm
-              exact ⟨_, hEq⟩
-            · -- print, isFalse: contradiction
-              rename_i h; exact absurd rfl h
-            · -- non-print, isTrue: contradiction (p[pc] is .print)
-              rename_i heq h
-              have hPE : p[pc] = TAC.print fmt vs := hPrint
-              simp [Prog.getElem_eq] at hPE
-              simp_all
-            · -- non-print, isFalse
-              rename_i heq h
-              have hPE : p[pc] = TAC.print fmt vs := hPrint
-              simp [Prog.getElem_eq] at hPE
-              simp_all
-          case callerSaveSpec =>
-            exact checkCallerSaveSpec_sound hCSS
-
+-- `verifiedGenerateAsm_spec` moved after `buildPcMap_eq_take_length` and
+-- `codeAt_of_bodyFlat'` to discharge the Phase-2 `haltS_eq` spec clause.
 
 -- ──────────────────────────────────────────────────────────────
 -- § 5b-pre. Helper lemmas for register convention bridge
@@ -1756,6 +1686,24 @@ private theorem buildVarLayout_complete {p : Prog} {v : Var}
     · cases hmem with
       | head => rename_i hne; simp [beq_self_eq_true] at hne
       | tail _ h => exact ih h
+
+/-- Every observable variable is in `collectVars p`. Follows because
+    `collectVars` ends with a foldl over `p.observable` that adds each
+    unseen variable to the accumulator. -/
+private theorem observable_subset_collectVars {p : Prog} {v : Var}
+    (hv : v ∈ p.observable) : v ∈ collectVars p := by
+  unfold collectVars
+  -- After the inner code-foldl produces `vars`, the outer observable-foldl
+  -- preserves each observable via `mem_foldl_addIfNew_of_mem_list`.
+  exact mem_foldl_addIfNew_of_mem_list hv
+
+/-- Every variable in `collectVars p` has a `lookupVar` entry. Alias around the
+    existing private `lookupVar_of_mem_collectVars` for Phase-2 spec clients. -/
+private theorem buildVarMap_lookup_of_mem {p : Prog} {v : Var}
+    (hv : v ∈ collectVars p) :
+    lookupVar (buildVarMap (collectVars p)) v ≠ none := by
+  obtain ⟨off, hoff⟩ := lookupVar_of_mem_collectVars hv
+  rw [hoff]; simp
 
 /-- Every variable in `TAC.vars instr` for any instruction in `p.code` is in `collectVars p`. -/
 -- Helper: the collectVars step function adds all vars of the instruction
@@ -3462,6 +3410,220 @@ private theorem codeAt_of_bodyFlat (bodyPerPC : Array (List ArmInstr))
   have hj : i < bodyPerPC.toList[pc].length := by simp; exact hi
   exact flatMap_segment_getElem bodyPerPC.toList pc i hpc' hj
 
+/-- Wrapper: per-PC block embeds in `bodyFlat` (= flat ++ haltSaveBlock). -/
+private theorem codeAt_of_bodyFlat' (r : VerifiedAsmResult)
+    (lengths : Array Nat)
+    (hSz : lengths.size = r.bodyPerPC.size)
+    (hLen : ∀ (i : Nat) (hL : i < lengths.size) (hB : i < r.bodyPerPC.size),
+      lengths[i] = (r.bodyPerPC[i]).length)
+    (pc : Nat) (hpc : pc < r.bodyPerPC.size) :
+    CodeAt r.bodyFlat (buildPcMap lengths pc) r.bodyPerPC[pc] := by
+  have h := codeAt_of_bodyFlat r.bodyPerPC lengths hSz hLen pc hpc
+  exact CodeAt.liftToSuffix (suf := r.haltSaveBlock.toList) h
+
+/-- A successful `verifiedGenerateAsm` call satisfies `GenAsmSpec`. -/
+theorem verifiedGenerateAsm_spec {tyCtx : TyCtx} {p : Prog} {r : VerifiedAsmResult}
+    (hGen : verifiedGenerateAsm tyCtx p = .ok r) : GenAsmSpec tyCtx p r := by
+  -- Unfold and clear error guards
+  simp only [verifiedGenerateAsm] at hGen
+  split at hGen <;> simp_all                     -- checkWellTypedProg
+  -- regConventionSafe
+  split at hGen <;> simp_all
+  rename_i hRC
+  -- isInjective
+  split at hGen <;> simp_all
+  rename_i hII
+  -- checkWellTypedLayout
+  split at hGen
+  · simp_all
+  · -- none case — continue
+    -- checkCallerSaveSpec
+    split at hGen
+    · simp_all
+    · -- !checkCallerSaveSpec = false, i.e. checkCallerSaveSpec = true
+      rename_i hWTL hCSS
+      replace hCSS : checkCallerSaveSpec
+          (buildVarLayout (collectVars p) (buildVarMap (collectVars p)))
+          (buildVarMap (collectVars p)) = true := by
+        revert hCSS; simp
+      -- checkBranchTargets
+      split at hGen
+      · simp_all
+      · -- none case — continue to bodyResult
+        split at hGen
+        · simp_all
+        · -- some bodyPerPC
+          -- Extract r = constructed record
+          simp only [Except.ok.injEq] at hGen; subst r
+          rename_i bodyPerPC heqFold
+          -- Foldl properties: Lean unifies F from heqFold
+          have hBSz : bodyPerPC.size = p.code.size := by
+            apply foldl_push_size _ _ heqFold
+            · intro; rfl
+            · intro arr pc; exact bodyGenStep_push _ _ _ _ _ _ _ _ _ _ _ arr pc
+          refine ⟨
+            checkWellTypedProg_sound ‹_›,
+            checkWellTypedLayout_wellTyped ‹_›,
+            VarLayout.regConventionSafe_spec _ hRC,
+            VarLayout.isInjective_spec _ hII,
+            by simp [Prog.size_eq]; exact hBSz,
+            ?instrGen, ?pcMapLengths, ?layoutComplete, ?callSiteSaveRestore,
+            ?printSaveRestore, ?callerSaveSpec,
+            ?haltS_eq, ?haltFinal_eq, ?divS_eq, ?boundsS_eq,
+            ?haltSaveBlock_eq, ?haltSaveComplete⟩
+          case instrGen =>
+            intro pc hpc hNotLib hNotPrint
+            have hpcB : pc < bodyPerPC.size := by rw [hBSz]; simp [Prog.size_eq] at hpc; exact hpc
+            have hpcCode : pc < p.code.size := by simp [Prog.size_eq] at hpc; exact hpc
+            have hContent := by
+              apply foldl_push_content _ _ heqFold pc hpcB
+              · intro; rfl
+              · intro arr pc; exact bodyGenStep_push _ _ _ _ _ _ _ _ _ _ _ arr pc
+            obtain ⟨mid, _, hStep⟩ := hContent
+            simp only [bodyGenStep, Array.getD, show pc < p.code.size from hpcCode,
+              dite_true] at hStep
+            split at hStep <;> split at hStep
+            · simp_all
+            · simp_all
+            · simp_all
+            · simp at hStep
+              split at hStep
+              · simp at hStep
+              · rename_i armInstrs hGenInstr
+                have : isLibCallTAC p.code[pc] = false := hNotLib
+                rw [this] at hStep; simp at hStep
+                exact ⟨_, (Array.push_inj hStep) ▸ hGenInstr⟩
+          case pcMapLengths =>
+            refine ⟨_, ?_, rfl, ?_⟩
+            · simp [List.length_map, List.length_range, hBSz]
+            · intro i hL hB
+              have hpcCode : i < p.code.size := by rw [← hBSz]; exact hB
+              have hContent := by
+                apply foldl_push_content _ _ heqFold i hB
+                · intro; rfl
+                · intro arr pc; exact bodyGenStep_push _ _ _ _ _ _ _ _ _ _ _ arr pc
+              obtain ⟨mid, _, hStep⟩ := hContent
+              rw [bodyGenStep_length hStep hpcCode]
+              simp [List.getElem_toArray, List.getElem_map]
+          case layoutComplete =>
+            intro pc hpc v hv
+            exact checkWellTypedLayout_instrMapped ‹_› (by simp [Prog.size_eq] at hpc; exact hpc) hv
+          case callSiteSaveRestore =>
+            intro pc hpc hLib
+            have hpcB : pc < bodyPerPC.size := by rw [hBSz]; simp [Prog.size_eq] at hpc; exact hpc
+            have hpcCode : pc < p.code.size := by simp [Prog.size_eq] at hpc; exact hpc
+            have hContent := by
+              apply foldl_push_content _ _ heqFold pc hpcB
+              · intro; rfl
+              · intro arr pc; exact bodyGenStep_push _ _ _ _ _ _ _ _ _ _ _ arr pc
+            obtain ⟨mid, _, hStep⟩ := hContent
+            simp only [bodyGenStep, Array.getD, show pc < p.code.size from hpcCode,
+              dite_true] at hStep
+            split at hStep <;> split at hStep
+            · simp_all [isLibCallTAC]
+            · simp_all
+            · simp_all
+            · simp at hStep
+              split at hStep
+              · simp at hStep
+              · rename_i armInstrs hGenInstr
+                rw [show isLibCallTAC p.code[pc] = true from hLib] at hStep
+                simp only [ite_true] at hStep
+                have hEq := (Array.push_inj (Option.some.inj hStep)).symm
+                rw [← List.append_assoc] at hEq
+                exact ⟨armInstrs, hGenInstr, hEq⟩
+          case printSaveRestore =>
+            intro pc hpc ⟨fmt, vs, hPrint⟩
+            have hpcB : pc < bodyPerPC.size := by rw [hBSz]; simp [Prog.size_eq] at hpc; exact hpc
+            have hpcCode : pc < p.code.size := by simp [Prog.size_eq] at hpc; exact hpc
+            have hContent := by
+              apply foldl_push_content _ _ heqFold pc hpcB
+              · intro; rfl
+              · intro arr pc; exact bodyGenStep_push _ _ _ _ _ _ _ _ _ _ _ arr pc
+            obtain ⟨mid, _, hStep⟩ := hContent
+            simp only [bodyGenStep, Array.getD, show pc < p.code.size from hpcCode,
+              dite_true] at hStep
+            split at hStep <;> split at hStep
+            · have hEq := (Array.push_inj (Option.some.inj hStep)).symm
+              exact ⟨_, hEq⟩
+            · rename_i h; exact absurd rfl h
+            · rename_i heq h
+              have hPE : p[pc] = TAC.print fmt vs := hPrint
+              simp [Prog.getElem_eq] at hPE
+              simp_all
+            · rename_i heq h
+              have hPE : p[pc] = TAC.print fmt vs := hPrint
+              simp [Prog.getElem_eq] at hPE
+              simp_all
+          case callerSaveSpec =>
+            exact checkCallerSaveSpec_sound hCSS
+          case haltS_eq =>
+            -- r.haltS = bodyInstrSize = pcMap p.code.size = (bodyPerPC.toList.flatMap id).length
+            -- lArr has size bodyPerPC.size and lArr[i] = bodyPerPC[i].length.
+            generalize hlArrDef : ((List.range p.code.size).map fun pc =>
+              instrLength (buildVarLayout (collectVars p) (buildVarMap (collectVars p)))
+                p.arrayDecls
+                (isBoundsSafe p.arrayDecls (BoundsOpt.analyzeIntervals p) pc
+                  (p.code[pc]?.getD TAC.halt)) (p.code[pc]?.getD TAC.halt)
+                (buildVarMap (collectVars p))).toArray = lArr
+            have hSize : lArr.size = bodyPerPC.size := by
+              subst hlArrDef; simp [List.length_map, List.length_range, hBSz]
+            have hLenEq : ∀ (i : Nat) (_hL : i < lArr.size) (hB : i < bodyPerPC.size),
+                lArr[i] = (bodyPerPC[i]).length := by
+              intro i _ hB
+              have hpcCode : i < p.code.size := by rw [← hBSz]; exact hB
+              have hContent := by
+                apply foldl_push_content _ _ heqFold i hB
+                · intro; rfl
+                · intro arr pc; exact bodyGenStep_push _ _ _ _ _ _ _ _ _ _ _ arr pc
+              obtain ⟨mid, _, hStep⟩ := hContent
+              rw [bodyGenStep_length hStep hpcCode]
+              subst hlArrDef
+              simp [List.getElem_toArray, List.getElem_map]
+            change buildPcMap lArr p.code.size = _
+            rw [buildPcMap_eq_take_length bodyPerPC lArr hSize hLenEq
+                p.code.size (by omega)]
+            rw [show p.code.size = bodyPerPC.toList.length from by simp [hBSz]]
+            rw [List.take_of_length_le (Nat.le_refl _)]
+          case haltFinal_eq =>
+            -- haltFinal = bodyInstrSize + haltSaveBlockList.length by construction.
+            -- r.haltS = bodyInstrSize, r.haltSaveBlock.size = haltSaveBlockList.length.
+            show _ + _ = _ + _
+            simp
+          case divS_eq => rfl
+          case boundsS_eq => rfl
+          case haltSaveBlock_eq =>
+            -- r.haltSaveBlock = haltSaveBlockList.toArray; .toList restores the list.
+            show (genHaltSave p.observable _ _).toArray.toList = _
+            simp
+          case haltSaveComplete =>
+            intro v hv
+            have hvInCV := observable_subset_collectVars hv
+            have hVM := buildVarMap_lookup_of_mem hvInCV
+            have hLayout : buildVarLayout (collectVars p) (buildVarMap (collectVars p)) v ≠ none :=
+              buildVarLayout_complete hvInCV
+            -- r.layout after record-subst equals buildVarLayout ... at all v via rfl.
+            rcases h1 : (buildVarLayout (collectVars p) (buildVarMap (collectVars p))) v
+              with _ | loc
+            · exact absurd h1 hLayout
+            · cases loc with
+              | ireg r =>
+                obtain ⟨off, hoff⟩ : ∃ off,
+                    lookupVar (buildVarMap (collectVars p)) v = some off := by
+                  rcases hl : lookupVar (buildVarMap (collectVars p)) v with _ | off
+                  · exact absurd hl hVM
+                  · exact ⟨off, rfl⟩
+                exact Or.inl ⟨r, off, rfl, hoff⟩
+              | freg r =>
+                obtain ⟨off, hoff⟩ : ∃ off,
+                    lookupVar (buildVarMap (collectVars p)) v = some off := by
+                  rcases hl : lookupVar (buildVarMap (collectVars p)) v with _ | off
+                  · exact absurd hl hVM
+                  · exact ⟨off, rfl⟩
+                exact Or.inr (Or.inl ⟨r, off, rfl, hoff⟩)
+              | stack off =>
+                exact Or.inr (Or.inr ⟨off, rfl⟩)
+
 -- ──────────────────────────────────────────────────────────────
 -- Per-step simulation (wraps ext_backward_simulation)
 -- ──────────────────────────────────────────────────────────────
@@ -3551,7 +3713,7 @@ private theorem step_simulation {tyCtx : TyCtx} {p : Prog} {r : VerifiedAsmResul
     obtain ⟨lengths, hLSz, hPcMap, hLenEq⟩ := spec.pcMapLengths
     have hpcB : pc < r.bodyPerPC.size := spec.bodySize ▸ hPC
     have hCodeAt : CodeAt r.bodyFlat (r.pcMap pc) (r.bodyPerPC[pc]'hpcB) := by
-      rw [hPcMap]; exact codeAt_of_bodyFlat r.bodyPerPC lengths hLSz hLenEq pc hpcB
+      rw [hPcMap]; exact codeAt_of_bodyFlat' r lengths hLSz hLenEq pc hpcB
     rw [hBody] at hCodeAt
     -- Abbreviate entries
     let entries := callerSaveEntries r.layout r.varMap (DAEOpt.instrDef p[pc])
@@ -4982,7 +5144,7 @@ private theorem step_simulation {tyCtx : TyCtx} {p : Prog} {r : VerifiedAsmResul
       have hpcB : pc < r.bodyPerPC.size := spec.bodySize ▸ hPC
       -- CodeAt for the full bodyPerPC[pc] block
       have hCodeAt : CodeAt r.bodyFlat (r.pcMap pc) (r.bodyPerPC[pc]'hpcB) := by
-        rw [hPcMap]; exact codeAt_of_bodyFlat r.bodyPerPC lengths hLSz hLenEq pc hpcB
+        rw [hPcMap]; exact codeAt_of_bodyFlat' r lengths hLSz hLenEq pc hpcB
       rw [hBody] at hCodeAt
       -- Abbreviate entries
       let entries := genCallerSaveAll r.layout r.varMap
@@ -5098,7 +5260,7 @@ private theorem step_simulation {tyCtx : TyCtx} {p : Prog} {r : VerifiedAsmResul
       have hpcB : pc < r.bodyPerPC.size := spec.bodySize ▸ hPC
       -- CodeAt from codeAt_of_bodyFlat
       have hCodeAt : CodeAt r.bodyFlat (r.pcMap pc) (r.bodyPerPC[pc]'hpcB) := by
-        rw [hPcMap]; exact codeAt_of_bodyFlat r.bodyPerPC lengths hLSz hLenEq pc hpcB
+        rw [hPcMap]; exact codeAt_of_bodyFlat' r lengths hLSz hLenEq pc hpcB
       -- hPcNext from buildPcMap_succ
       have hPcNext : ∀ σ' am', cfg' = .run (pc + 1) σ' am' →
           r.pcMap (pc + 1) = r.pcMap pc + (r.bodyPerPC[pc]'hpcB).length := by
@@ -5411,7 +5573,7 @@ def generateAsm (tyCtx : TyCtx) (p : Prog) : Except String String := do
   -- outside the process (e.g., a debugger), then exit. Output happens only via
   -- explicit print* statements during program execution; observable values are
   -- a semantic-preservation contract for the verified compiler, not I/O.
-  let saveLines := ppInstrs lbl r.haltSaveInstrs.toList
+  let saveLines := ppInstrs lbl r.haltSaveBlock.toList
   let footer := [
     "",
     ".Lhalt:",
