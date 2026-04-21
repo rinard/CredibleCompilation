@@ -807,4 +807,181 @@ theorem checkLocalPreservation_sound (p : Prog) (inv : Array (Option IMap))
     have hinvPc'_none : inv[pc']? = none := Array.getElem?_eq_none_iff.mpr this
     simp [intervalMap, hinvPc'_none]
 
+-- ============================================================
+-- § 16. Phase 3 follow-up prep: refineCond soundness groundwork
+-- ============================================================
+--
+-- Nothing in this section is consumed by `checkLocalPreservation_sound` yet.
+-- The pieces here de-risk the follow-up phase that proves `refineCond_sound`
+-- and wires the refined interval into `certSuccessor`'s `.ifgoto` arm. The
+-- shape was validated by a probe on the livermore kernels (2026-04-21
+-- session): BoundsOpt's widened loop-counter ranges have `hi` up to ~5·10¹²,
+-- so the gate on `iv.hi` in `refineCond` must be *looser* than `validInterval`
+-- (which caps at 2³¹) — otherwise the whole widened-loop-counter case is
+-- rejected and no elision fires on the common `while (k <= N) { arr[k] }`
+-- pattern. `validIntervalLoose` uses a 2⁶² cap: accepts every empirical
+-- BoundsOpt output, stays comfortably under 2⁶³ so the `slt/sle` bridge
+-- produces unsigned comparisons.
+
+/-- Loose upper cap (`2⁶²`) for intermediate interval `hi` fields. Any value
+    under this cap is representable as an unsigned `BitVec 64` value with
+    top bit 0, so signed and unsigned comparisons agree. BoundsOpt's
+    empirical outputs stay ~5·10¹² (≈2⁴³), well under this bound. -/
+def looseCap : Int := 4611686018427387904  -- 2^62
+
+/-- `looseCap`-gated well-formedness: `0 ≤ lo ≤ hi ≤ 2⁶²`. Strictly weaker
+    than `validInterval` (which caps at `2³¹`); used as a precondition in the
+    refineCond soundness proofs to rule out the `irTop` fallback and force
+    `hi < 2⁶³` for the signed-unsigned bridge. -/
+def validIntervalLoose (r : IRange) : Bool :=
+  decide (0 ≤ r.lo) && decide (r.lo ≤ r.hi) && decide (r.hi ≤ looseCap)
+
+theorem validIntervalLoose_iff (r : IRange) :
+    validIntervalLoose r = true ↔ 0 ≤ r.lo ∧ r.lo ≤ r.hi ∧ r.hi ≤ looseCap := by
+  simp [validIntervalLoose, Bool.and_eq_true, decide_eq_true_eq, and_assoc]
+
+/-- `validInterval r ⇒ validIntervalLoose r`: the tight cap is stricter. Used
+    when we want a single source of truth on intermediate interval bounds. -/
+theorem validInterval_imp_loose {r : IRange} (h : validInterval r = true) :
+    validIntervalLoose r = true := by
+  obtain ⟨h1, h2, h3⟩ := (validInterval_iff _).mp h
+  rw [validIntervalLoose_iff]
+  refine ⟨h1, h2, ?_⟩
+  have : intervalCap ≤ looseCap := by decide
+  omega
+
+-- ============================================================
+-- § 17. Signed-to-unsigned bridges for BitVec 64
+-- ============================================================
+
+/-- If `bv.toNat < 2⁶³`, top bit is `0` so signed and unsigned agree. This
+    is the factored form of the `split <;> omega` idiom used inline in
+    `constInt_satisfies`; extracted here so the eight refineCond-leaf proofs
+    can share it. -/
+theorem BitVec64.toInt_eq_toNat_of_lt_pow63 {bv : BitVec 64}
+    (h : bv.toNat < 2 ^ 63) : bv.toInt = (bv.toNat : Int) := by
+  simp only [BitVec.toInt_eq_toNat_cond]
+  split <;> omega
+
+/-- Signed-to-unsigned bridge for `BitVec.slt`: when both operands fit under
+    `2⁶³` (so top bits are 0), signed strict-less-than matches unsigned. -/
+theorem BitVec64.slt_toNat_lt {a b : BitVec 64}
+    (ha : a.toNat < 2 ^ 63) (hb : b.toNat < 2 ^ 63)
+    (h : BitVec.slt a b = true) : a.toNat < b.toNat := by
+  rw [BitVec.slt_iff_toInt_lt] at h
+  have haInt : a.toInt = (a.toNat : Int) :=
+    BitVec64.toInt_eq_toNat_of_lt_pow63 ha
+  have hbInt : b.toInt = (b.toNat : Int) :=
+    BitVec64.toInt_eq_toNat_of_lt_pow63 hb
+  omega
+
+/-- Negation: signed `¬ slt` at small values gives unsigned `≥`. Used in the
+    false-branch of `.cmp .lt`. -/
+theorem BitVec64.not_slt_toNat_ge {a b : BitVec 64}
+    (ha : a.toNat < 2 ^ 63) (hb : b.toNat < 2 ^ 63)
+    (h : BitVec.slt a b = false) : b.toNat ≤ a.toNat := by
+  have h' : ¬ (BitVec.slt a b = true) := by rw [h]; simp
+  rw [BitVec.slt_iff_toInt_lt] at h'
+  have haInt : a.toInt = (a.toNat : Int) :=
+    BitVec64.toInt_eq_toNat_of_lt_pow63 ha
+  have hbInt : b.toInt = (b.toNat : Int) :=
+    BitVec64.toInt_eq_toNat_of_lt_pow63 hb
+  omega
+
+/-- Signed-to-unsigned bridge for `BitVec.sle`. -/
+theorem BitVec64.sle_toNat_le {a b : BitVec 64}
+    (ha : a.toNat < 2 ^ 63) (hb : b.toNat < 2 ^ 63)
+    (h : BitVec.sle a b = true) : a.toNat ≤ b.toNat := by
+  rw [BitVec.sle_iff_toInt_le] at h
+  have haInt : a.toInt = (a.toNat : Int) :=
+    BitVec64.toInt_eq_toNat_of_lt_pow63 ha
+  have hbInt : b.toInt = (b.toNat : Int) :=
+    BitVec64.toInt_eq_toNat_of_lt_pow63 hb
+  omega
+
+/-- Negation companion for `sle`. -/
+theorem BitVec64.not_sle_toNat_lt {a b : BitVec 64}
+    (ha : a.toNat < 2 ^ 63) (hb : b.toNat < 2 ^ 63)
+    (h : BitVec.sle a b = false) : b.toNat < a.toNat := by
+  have h' : ¬ (BitVec.sle a b = true) := by rw [h]; simp
+  rw [BitVec.sle_iff_toInt_le] at h'
+  have haInt : a.toInt = (a.toNat : Int) :=
+    BitVec64.toInt_eq_toNat_of_lt_pow63 ha
+  have hbInt : b.toInt = (b.toNat : Int) :=
+    BitVec64.toInt_eq_toNat_of_lt_pow63 hb
+  omega
+
+-- ============================================================
+-- § 18. Prototype leaf: `.cmp .lt (.var x) (.lit n)` true branch
+-- ============================================================
+
+/-- Prototype soundness for the true branch of
+    `refineCond m (.cmp .lt (.var x) (.lit n)) true`. Establishes the pattern
+    the other seven leaves will copy: `validIntervalLoose iv` gates the
+    lookup membership; `validInterval new` gates the output claim; the slt
+    bridge does the signed→unsigned transport.
+
+    **Shape validated** — the other leaves (`.cmp .lt .var`, `.cmp .le .lit`,
+    `.cmp .le .var`, each × true/false) follow the same outline. -/
+theorem refineCond_lt_lit_true_sound
+    {m : IMap} {σ : Store} {am : ArrayMem} {x : Var} {n : BitVec 64}
+    (hM : IMap.satisfies m σ)
+    (hIvLoose : validIntervalLoose (imLookup m x) = true)
+    (hEval : (BoolExpr.cmp CmpOp.lt (Expr.var x) (Expr.lit n)).eval σ am = true) :
+    ∀ v r, (v, r) ∈
+      imSet m x ⟨(imLookup m x).lo, min (imLookup m x).hi n.toInt⟩ →
+    validInterval r = true →
+    ∃ bv, σ v = .int bv ∧ IntervalInv.satisfies r bv := by
+  intro v r hMem hValid
+  rcases (mem_imSet.mp hMem) with ⟨rfl, rfl⟩ | ⟨hNe, hMemM⟩
+  · -- After `rcases ⟨rfl, rfl⟩`, `x` is gone (substituted to `v`); all
+    -- hypotheses that mentioned `x` — `hIvLoose`, `hEval`, the new range —
+    -- now reference `v` instead. Proof body uses `v` throughout.
+    obtain ⟨hNewLoNn, hNewLoHi, _⟩ := (validInterval_iff _).mp hValid
+    simp only at hNewLoNn hNewLoHi
+    obtain ⟨hIvLoNn, _, hIvHiLooseCap⟩ :=
+      (validIntervalLoose_iff _).mp hIvLoose
+    have hMemV : (v, imLookup m v) ∈ m := imLookup_mem_of_lo_nn hIvLoNn
+    have ⟨bv, hσv, hSat⟩ := hM v (imLookup m v) hMemV
+    obtain ⟨_, hIvLoNat, hIvHiNat⟩ := hSat
+    have hIvHiNat' : (imLookup m v).hi.toNat ≤ looseCap.toNat :=
+      Int.toNat_mono_of_nonneg hIvHiLooseCap
+    have hLooseNat : looseCap.toNat = 2 ^ 62 := by decide
+    have hBv63 : bv.toNat < 2 ^ 63 := by omega
+    -- Unfold `hEval` to `BitVec.slt bv n = true`
+    have hSlt : BitVec.slt bv n = true := by
+      have h := hEval
+      simp only [BoolExpr.eval, Expr.eval, CmpOp.eval] at h
+      rw [hσv] at h
+      simpa [Value.toInt] using h
+    -- `n.toInt ≥ 0` via the new-range validity chain
+    have hNtoInt : (0 : Int) ≤ n.toInt := by
+      have h1 : (imLookup m v).lo ≤ n.toInt := by
+        have : (imLookup m v).lo ≤ min (imLookup m v).hi n.toInt := hNewLoHi
+        omega
+      omega
+    have hNNat63 : n.toNat < 2 ^ 63 := by
+      have : n.toNat < 2 ^ 64 := n.isLt
+      simp only [BitVec.toInt_eq_toNat_cond] at hNtoInt
+      split at hNtoInt <;> omega
+    have hBvLtN : bv.toNat < n.toNat :=
+      BitVec64.slt_toNat_lt hBv63 hNNat63 hSlt
+    have hNIntEqToNat : n.toInt.toNat = n.toNat := by
+      have : n.toInt = (n.toNat : Int) :=
+        BitVec64.toInt_eq_toNat_of_lt_pow63 hNNat63
+      omega
+    refine ⟨bv, hσv, hNewLoNn, ?_, ?_⟩
+    · show (imLookup m v).lo.toNat ≤ bv.toNat
+      exact hIvLoNat
+    · show bv.toNat < (min (imLookup m v).hi n.toInt).toNat
+      -- `Int.min a b = if a ≤ b then a else b`; split and use the matching fact.
+      rw [Int.min_def]
+      split
+      · -- iv.hi selected → bv.toNat < iv.hi.toNat
+        exact hIvHiNat
+      · -- n.toInt selected → bv.toNat < n.toInt.toNat = n.toNat
+        rw [hNIntEqToNat]; exact hBvLtN
+  · -- Fall-through: pre-existing entry unchanged
+    exact hM v r hMemM
+
 end BoundsOpt

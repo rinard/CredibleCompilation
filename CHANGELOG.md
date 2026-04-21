@@ -4,6 +4,35 @@ Chronological record of what was built and why, to reconstruct the sequence of d
 
 ---
 
+## BoundsOptCert Phase 3 prep: refineCond soundness groundwork (2026-04-21)
+
+**Goal:** De-risk the full-fidelity Phase 3 follow-up (refineCond + mul) by landing the helper lemmas and validating the leaf-proof shape end-to-end. Nothing in this commit is consumed by `checkLocalPreservation_sound` — it all sits downstream, ready for the next session to plug in.
+
+**Empirical input (probe on 5 livermore kernels):** BoundsOpt's widened loop-counter ranges have `hi` up to ~5·10¹² (max seen on k02_iccg). This sits above the Phase 3 `validInterval` cap of `2³¹`, so any gate in `refineCond` keyed on `validInterval iv` would reject the most important case (loop counters with widened `hi`). Fix: a second, looser cap.
+
+**Shipped** ([BoundsOptCert.lean](CredibleCompilation/BoundsOptCert.lean)):
+- `looseCap = 2⁶²` and `validIntervalLoose` — wider validity check for intermediate intervals. Accepts all empirical BoundsOpt outputs, stays safely under `2⁶³` so signed-unsigned bridges still apply. Companion `validInterval_imp_loose` lets the tight cap flow into the loose context.
+- `BitVec64.toInt_eq_toNat_of_lt_pow63` — factors the `split <;> omega` idiom previously inlined in `constInt_satisfies`. Reused 8× in the refineCond leaves.
+- `BitVec64.slt_toNat_lt / not_slt_toNat_ge` and `sle_toNat_le / not_sle_toNat_lt` — signed-to-unsigned bridges over `BitVec.slt_iff_toInt_lt` / `sle_iff_toInt_le` (both in core Lean, confirmed by probe). Each ~8 lines; handles the four `CmpOp × {true, false}` combinations.
+- **Prototype leaf `refineCond_lt_lit_true_sound`** — full proof for the true branch of `refineCond m (.cmp .lt (.var x) (.lit n)) true`. Landed in ~55 lines; the other 7 leaves (`.cmp .lt (.var x) (.var bnd)` × 2, `.cmp .le (.var x) (.lit n)` × 2, `.cmp .le (.var x) (.var bnd)` × 2) follow the same outline. The `.var bnd` variants add `biv.lo + 1 = biv.hi` singleton reasoning on top of the same machinery.
+
+**Design note — what the prototype validated:**
+- `rcases ⟨rfl, rfl⟩` on `mem_imSet.mp` eliminates the theorem's `x` parameter (substituting `x := v`), not `v`. Proof body refers to `v` throughout post-rcases. Hypotheses mentioning `x` in the signature get rewritten to reference `v`. Pattern is load-bearing and worth capturing for the other seven leaves.
+- The signed-unsigned bridge needs `bv.toNat < 2⁶³`. `validIntervalLoose iv` gives `iv.hi ≤ 2⁶²`, so `bv.toNat < iv.hi.toNat ≤ 2⁶²` closes it. `n.toNat < 2⁶³` is derived from `n.toInt ≥ 0` (via the new-range validity chain) combined with `BitVec.toInt_eq_toNat_cond` — the latter pair implies `n.toNat < 2⁶³` by unsigned/signed dichotomy.
+- `(min a b).toNat` for mixed signed/unsigned is easier handled by `rw [Int.min_def]; split` than by pre-computing a `min_toNat` equality. Split into the two branches and invoke the matching premise (`bv < iv.hi.toNat` in one, `bv < n.toNat = n.toInt.toNat` in the other).
+
+**What's NOT shipped (follow-up):**
+- The other 7 cmp leaves. Each ~25–30 lines, mechanical copies of the prototype plus a biv-singleton step for `.var bnd` patterns.
+- `refineCond_sound` itself (induction on BoolExpr that dispatches to the 8 leaves + a trivial `_` case via `refineCond = m`).
+- `mul_sound` and `BitVec64.toNat_mul_small`.
+- Flipping `certSuccessor`'s `.ifgoto` arm to call `refineCond` (currently it returns `m`), and its `.mul` arm to re-enable the `[0, 2¹⁶)` claim.
+
+**Effort rollup** (revised with this probe): full-fidelity Phase 3 = this prep + 7 leaves (~2h) + `refineCond_sound` induction (~30min) + mul (~30min) + `certSuccessor` rewire (~15min). **~3–4 hours** on top of what's landed. Medium risk, de-risked by the working prototype.
+
+**Status:** 0 sorrys; full `lake build` green. Files touched: 1 (`BoundsOptCert.lean`); CHANGELOG. No wiring changes to CodeGen / ArmCorrectness.
+
+---
+
 ## BoundsOptCert Phase 3: Checker soundness (2026-04-21)
 
 **Goal:** Close the checker–concretization loop. Phase 3 of plans/certified-interval-pangolin.md. After this phase, `intervalMap inv` is a provably-`preserved` `PInvariantMap` whenever `checkLocalPreservation` accepts — ready for Phase 4's wiring into `GenAsmSpec`.
