@@ -1724,6 +1724,36 @@ def verifiedGenInstr (layout : VarLayout) (pcMap : Nat → Nat) (instr : TAC)
     some [.callPrintS lit]
 
 -- ────────────────────────────────────────────────────────────
+-- § 8d′. Positivity of verifiedGenBoolExpr output
+-- ────────────────────────────────────────────────────────────
+
+/-- `verifiedGenBoolExpr` emits at least one ARM instruction under
+    `hasSimpleOps`. The `.bexpr` arm with non-`.var` inner expression
+    yields `[]`, but `hasSimpleOps = true` rules out any `.bexpr`.
+    Used by `verifiedGenInstr_output_pos` (Phase 5b follow-up) to
+    discharge the `.boolop` / `.ifgoto` (fallback) cases. -/
+theorem verifiedGenBoolExpr_length_pos (layout : VarLayout) (be : BoolExpr)
+    (hSimple : be.hasSimpleOps = true) :
+    1 ≤ (verifiedGenBoolExpr layout be).length := by
+  cases be with
+  | lit b =>
+    simp only [verifiedGenBoolExpr, List.length_cons, List.length_nil]
+    omega
+  | bvar v =>
+    simp only [verifiedGenBoolExpr, List.length_append, List.length_cons, List.length_nil]
+    omega
+  | cmp op a b =>
+    simp only [verifiedGenBoolExpr, List.length_append, List.length_cons, List.length_nil]
+    omega
+  | not e =>
+    simp only [verifiedGenBoolExpr, List.length_append, List.length_cons, List.length_nil]
+    omega
+  | fcmp fop a b =>
+    simp only [verifiedGenBoolExpr, List.length_append, List.length_cons, List.length_nil]
+    omega
+  | bexpr e => simp [BoolExpr.hasSimpleOps] at hSimple
+
+-- ────────────────────────────────────────────────────────────
 -- § 8e. verifiedGenInstr output length is pcMap-independent
 -- ────────────────────────────────────────────────────────────
 

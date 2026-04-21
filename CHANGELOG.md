@@ -4,6 +4,25 @@ Chronological record of what was built and why, to reconstruct the sequence of d
 
 ---
 
+## Phase 5b side-lemma: verifiedGenBoolExpr_length_pos (2026-04-21)
+
+**Goal:** First slice of Phase 5b (plans/backward-jumping-octopus.md). Establishes the static positivity of verified boolean-expression codegen — one of three infrastructure lemmas feeding the eventual `bodyPerPCLengthPos` spec field (every live TAC PC emits ≥ 1 ARM instruction) required by the Phase 5b forward-divergence theorem.
+
+**Shipped** ([ArmSemantics.lean](CredibleCompilation/ArmSemantics.lean) § 8d′):
+
+- **`verifiedGenBoolExpr_length_pos`**: under `be.hasSimpleOps = true`, `(verifiedGenBoolExpr layout be).length ≥ 1`. Five structural cases (`.lit`, `.bvar`, `.cmp`, `.not`, `.fcmp`) discharge by `simp only [verifiedGenBoolExpr, List.length_append, List.length_cons, List.length_nil]` + `omega`. The `.bexpr` arm is dispatched by unfolding `BoolExpr.hasSimpleOps` at the hypothesis — it reduces any `.bexpr` to `false`, contradicting the `= true` hypothesis.
+
+**Why only this slice, not the full Phase 5b**: initial implementation attempted the full three-lemma infrastructure plus divergence theorem in a single pass. `verifiedGenInstr_output_pos` (the 19-constructor version) requires delicate hypothesis plumbing (`RegConventionSafe`, `VarLayoutInjective`, `WellTypedLayout`, `WellTypedInstr`, layout-completeness) with `.copy` freg/non-freg subcase splits that don't reduce cleanly under `split at hGen` + `simp`. More importantly, the plan's proposed divergence-theorem proof strategy ("chain `tacToArm_refinement` through n TAC steps, convert `ArmSteps → ArmStepsN`, show `k ≥ n` from `bodyPerPCLengthPos + pcMapLengths`") has a subtle gap: `bodyPerPCLengthPos` is a *static* length claim, but showing `ArmSteps s s'` (from `step_simulation`) has `k ≥ 1` step post-hoc requires ruling out `ArmSteps.refl`, which PC-based arguments cover in all cases *except* `.goto pc` self-loops (where `s = s'` is legitimately state-level). Fixing this needs either a `step_simulation` refactor to produce `ArmStepsN` with explicit step count, or manual per-case reconstruction — either way, substantially more than 160 LOC. Scoped this commit to the one piece that stands alone and is uncontroversial.
+
+**Remaining for Phase 5b** (see plan notes):
+- `verifiedGenInstr_output_pos` — 19-constructor case analysis under full spec invariants. ~115 LOC.
+- `bodyPerPCLengthPos` spec field on `GenAsmSpec` + discharge. ~30 LOC.
+- Divergence theorem itself — requires `step_simulation`-level step-count tracking. ~200 LOC refactor.
+
+**Status**: 0 sorrys; full `lake build` green. Files touched: 1. Net: +27 / -0.
+
+---
+
 ## Phase 5a: ArmStepsN infrastructure + ArmDiverges predicate (2026-04-21)
 
 **Goal:** Phase 5a of plans/backward-jumping-octopus.md — define the counted multi-step ARM closure and the ARM divergence predicate that Phase 7's backward theorems will consume. Leaves Phase 5b (the forward theorem `while_to_arm_divergence_preservation`) for a follow-up.
