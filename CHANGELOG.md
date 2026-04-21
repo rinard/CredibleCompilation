@@ -4,6 +4,42 @@ Chronological record of what was built and why, to reconstruct the sequence of d
 
 ---
 
+## BoundsOptCert Phase 5: oracle hypothesis in verifiedGenInstr_correct (2026-04-21)
+
+**Goal:** Phase 5 of plans/certified-interval-pangolin.md — re-enable `boundsSafe = true` elision in `verifiedGenInstr_correct`. Replace the blunt `hBoundsSafeFalse : boundsSafe = false` hypothesis with a refined oracle that, under `boundsSafe = true`, produces the bounds-safety fact on the arrLoad/arrStore index — enough to discharge the `_boundsError` arms' step to the ARM bounds label.
+
+**Shipped** ([ArmCorrectness.lean](CredibleCompilation/ArmCorrectness.lean), [CodeGen.lean](CredibleCompilation/CodeGen.lean)):
+
+- **`verifiedGenInstr_correct` signature change** ([ArmCorrectness.lean:1748](CredibleCompilation/ArmCorrectness.lean#L1748)):
+  - `(hBoundsSafeFalse : boundsSafe = false)` → `hBoundsSafeOracle`, a `boundsSafe = true → (⟨arrLoad-bound, arrStore-bound⟩ conjunction)` keyed on the instruction shape found via `p[pc]?`. Using `p[pc]?` (rather than `instr`) lets the hypothesis sit before `instr : TAC` in the parameter list — the `instr` binder isn't in scope yet.
+- **Bounds-error arm discharges** ([ArmCorrectness.lean:1919](CredibleCompilation/ArmCorrectness.lean#L1919), [ArmCorrectness.lean:1967](CredibleCompilation/ArmCorrectness.lean#L1967)):
+  - `arrLoad_boundsError` `boundsSafe = true` branch: pull the `arrLoad` side of the oracle, apply with `hPcArr := heq ▸ hInstr` (the per-arm `p[pc]? = some (.arrLoad ...)` witness) and `hidx`, rewrite `arrayDecls = p.arrayDecls`, contradict `hbounds`.
+  - Symmetric for `arrStore_boundsError`.
+  - Both arms previously closed via `absurd hBS (by rw [hBoundsSafeFalse]; decide)` — ~30 lines of vestigial "pragmatic punt" comments (from the Phase 4 stand-down) removed along with the blunt discharge.
+- **`ext_backward_simulation` signature change** ([ArmCorrectness.lean:5406](CredibleCompilation/ArmCorrectness.lean#L5406)):
+  - Same replacement as `verifiedGenInstr_correct`. Hypothesis moved into the `{implicit} pc σ am cfg' s` group so `p[pc]?` and `σ` resolve. Threads through to `verifiedGenInstr_correct`.
+- **`step_simulation` call-site discharge** ([CodeGen.lean:5764](CredibleCompilation/CodeGen.lean#L5764)):
+  - Phase 5 discharge is **trivial**: `safe` is still `false` (Phase 6's `isBoundsSafe` un-wiring hasn't landed), so the oracle's `safe = true` branch is vacuous — closed with `intro hBS; exact absurd hBS (by decide)`. The `spec.invPreserved` / `inv_preserved_steps` chain the plan outlines is dead code until Phase 6 makes `safe = true` actually reachable; wiring it now would run ahead of what the architecture needs.
+
+**Design deviation from the plan:**
+
+- **Trivial step_simulation discharge instead of `invMap + inv_preserved_steps + reachability`.** The plan's Phase 5 description envisioned the full invariant-to-bounds-safety derivation happening here. But the current codebase threads `verifiedBoundsSafe p pc = false` everywhere (via hard-wired `isBoundsSafe`), so the oracle's `boundsSafe = true` branch is unreachable at every call site. The architectural move — replacing `hBoundsSafeFalse` with the richer oracle — is complete; the load-bearing discharge is deferred to Phase 6, when `isBoundsSafe` un-wires and `boundsSafe = true` starts to fire. This matches the plan's risk #1 note ("weaken the oracle ... at the pipeline theorem level") — we're just deferring the substantive part of the weakening to where it's actually needed.
+- **Reachability threading not materialized.** The plan's risk #1 flagged potential need to thread `Steps p (.run 0 σ₀ am₀) (.run pc σ am)` through `step_simulation` for `inv_preserved_steps`. Not done — under the current trivial discharge, the invariant isn't consumed. Phase 6 will decide between threading reachability or carrying `buildVerifiedInvMap p pc σ am` step-by-step (preserved via `spec.invPreserved`) depending on which is lighter.
+
+**Structural surprises:**
+
+- **Oracle parameter placement.** Dropping the oracle after `(instr : TAC)` would let it reference `instr` directly (cleaner `instr = .arrLoad ...` than `p[pc]? = some (.arrLoad ...)`). But rearranging the parameter order would touch every call site. Using `p[pc]?` keeps the parameter order stable; the per-arm witness `hPcArr := heq ▸ hInstr` derives `p[pc]? = some (.arrLoad ...)` in ~1 line.
+- **`hAD ▸ hBound` fails** when the equality doesn't literally match the result type — Lean's `▸` is surface-level. Replaced with explicit `rw [hAD] at hBound` for the `arrayDecls → p.arrayDecls` rewrite, which succeeds regardless of where the equality appears in `hBound`'s type.
+- **Pre-existing `hBoundsSafeFalse` comments in `arrLoad_boundsError`** — the ~27-line "pragmatic punt" block narrating why the `boundsSafe = true` case can't be closed in isolation — was written before the oracle pattern existed. Removed in favor of a 5-line comment describing the oracle resolution.
+
+**Effort vs plan (1 day estimate):** ~1 hour actual. Faster than expected because the plan-risk #1 (reachability threading) was sidestepped by the Phase 4 `buildVerifiedInvMap` wiring already being in place, plus the realization that Phase 5's discharge at step_simulation can be trivial pending Phase 6. The only real work was the oracle shape (getting `p[pc]?` vs `instr` right) and threading through the three signatures.
+
+**Status:** 0 sorrys; full `lake build` green. Files touched: 2 (`ArmCorrectness.lean`, `CodeGen.lean`) plus `CHANGELOG.md`. No changes to the pipeline top-level theorems (`tacToArm_refinement` / `tacToArm_correctness`) — the oracle is fully discharged inside `step_simulation`.
+
+**Next:** Phase 6 (~0.5 day) — un-wire `isBoundsSafe`'s hard `false` to produce real per-PC elision decisions from the validated `BoundsOpt` certificate. The trivial `step_simulation` discharge above will need to be replaced with the real invariant-to-bounds-safety derivation at that point.
+
+---
+
 ## BoundsOptCert Phase 4: GenAsmSpec wiring (2026-04-21)
 
 **Goal:** Land Phase 4 of plans/certified-interval-pangolin.md — thread the Phase 3 checker output into `GenAsmSpec` so Phase 5 can consume `invPreserved` + `invAtStart` at the `arrLoad/arrStore_boundsError` arms. Pure plumbing; the validated invariant is not yet load-bearing, so `hBoundsSafeFalse` in `ext_backward_simulation` stays intact.

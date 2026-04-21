@@ -494,8 +494,8 @@ def verifiedBoundsSafe (p : Prog) (pc : Nat) : Bool :=
 /-- Phase 4: until `isBoundsSafe` is un-wired in Phase 6, `verifiedBoundsSafe`
     is `false` unconditionally. Callers rely on this to normalize the
     `boundsSafe` argument threaded through `verifiedGenInstr` back to `false`,
-    which keeps the `hBoundsSafeFalse` wiring in `ext_backward_simulation`
-    intact. -/
+    which lets the Phase 5 `hBoundsSafeOracle` in `ext_backward_simulation`
+    discharge trivially (the oracle's `boundsSafe = true` branch is vacuous). -/
 theorem verifiedBoundsSafe_rfl (p : Prog) (pc : Nat) :
     verifiedBoundsSafe p pc = false := rfl
 
@@ -953,12 +953,12 @@ structure GenAsmSpec (tyCtx : TyCtx) (p : Prog) (r : VerifiedAsmResult) : Prop w
   /-- bodyPerPC has one entry per TAC instruction. -/
   bodySize : r.bodyPerPC.size = p.size
   /-- Each non-print, non-lib-call bodyPerPC entry was produced by verifiedGenInstr
-      with `boundsSafe = verifiedBoundsSafe p pc`. Under Phase 4 (pre-Phase-6),
+      with `boundsSafe = verifiedBoundsSafe p pc`. Under Phases 4/5 (pre-Phase-6),
       `verifiedBoundsSafe` is hard-wired to `false` via `isBoundsSafe`, so the
-      `hBoundsSafeFalse` threading in `ext_backward_simulation` remains valid;
-      the shape of this field is already in place for Phase 6 un-wiring.
-      Print PCs use unverified codegen; lib-call PCs are wrapped (see
-      callSiteSaveRestore). -/
+      Phase 5 `hBoundsSafeOracle` in `ext_backward_simulation` discharges
+      trivially at the call site (`boundsSafe = true` is vacuous). The shape
+      of this field is already in place for Phase 6 un-wiring. Print PCs use
+      unverified codegen; lib-call PCs are wrapped (see callSiteSaveRestore). -/
   instrGen : ∀ pc, (hpc : pc < p.size) →
     isLibCallTAC p[pc] = false →
     (∀ fmt vs, p[pc] ≠ .print fmt vs) →
@@ -5761,8 +5761,19 @@ private theorem step_simulation {tyCtx : TyCtx} {p : Prog} {r : VerifiedAsmResul
             NoCallerSavedLayout r.layout := by
           intro lit heq
           simp [isLibCallTAC, heq] at hNotLib
+        -- Phase 5: the oracle hypothesis replaces the old `hBoundsSafeFalse = rfl`.
+        -- `safe` is still `false` (Phase 6 un-wiring not yet done), so the
+        -- oracle's `boundsSafe = true` branch is vacuous and discharges via
+        -- `Bool.noConfusion`. Phase 6 will turn this into a real derivation
+        -- from `spec.invPreserved` + `inv_preserved_steps`.
+        have hOracle : safe = true →
+            (∀ dst arr idx ty, p[pc]? = some (.arrLoad dst arr idx ty) →
+              ∀ idxVal, σ idx = .int idxVal → idxVal < arraySizeBv p.arrayDecls arr) ∧
+            (∀ arr idx val ty, p[pc]? = some (.arrStore arr idx val ty) →
+              ∀ idxVal, σ idx = .int idxVal → idxVal < arraySizeBv p.arrayDecls arr) := by
+          intro hBS; exact absurd hBS (by decide)
         obtain ⟨s', hArmSteps, hRelOut⟩ := ext_backward_simulation p r.bodyFlat r.layout r.pcMap
-          r.haltS r.divS r.boundsS p.arrayDecls safe rfl
+          r.haltS r.divS r.boundsS p.arrayDecls safe hOracle
           hStep hRel hPC tyCtx spec.wellTypedProg hTS spec.wellTypedLayout
           p[pc] (Prog.getElem?_eq_getElem hPC)
           (r.bodyPerPC[pc]'hpcB) hSome hCodeAt hPcNext

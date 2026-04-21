@@ -1750,7 +1750,11 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
     (haltLabel divLabel boundsLabel : Nat)
     (arrayDecls : List (ArrayName × Nat × VarTy))
     (boundsSafe : Bool)
-    (hBoundsSafeFalse : boundsSafe = false)
+    (hBoundsSafeOracle : boundsSafe = true →
+      (∀ dst arr idx ty, p[pc]? = some (.arrLoad dst arr idx ty) →
+        ∀ idxVal, σ idx = .int idxVal → idxVal < arraySizeBv arrayDecls arr) ∧
+      (∀ arr idx val ty, p[pc]? = some (.arrStore arr idx val ty) →
+        ∀ idxVal, σ idx = .int idxVal → idxVal < arraySizeBv arrayDecls arr))
     (instr : TAC) (hInstr : p[pc]? = some instr)
     (hRel : ExtSimRel layout pcMap divLabel boundsLabel (.run pc σ am) s)
     (instrs : List ArmInstr)
@@ -1893,6 +1897,7 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
     rename_i idxVal arr dst idx ty
     have heq : instr = .arrLoad dst arr idx ty := Option.some.inj (hInstr.symm.trans hinstr)
     rw [heq] at hSome hMapped
+    have hPcArr : p[pc]? = some (.arrLoad dst arr idx ty) := heq ▸ hInstr
     have hNotFregIdx : ∀ r, layout idx ≠ some (.freg r) :=
       hWTL.int_not_freg (by have := hTS idx; rw [hidx] at this; exact this.symm)
     let idx_reg := match layout idx with | some (.ireg r) => r | _ => ArmReg.x1
@@ -1907,30 +1912,14 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
     -- only sets boundsSafe when safe. We discharge by cases anyway.
     cases hBS : boundsSafe with
     | true =>
-      -- If boundsSafe, verifiedGenInstr drops the bounds check. Then TAC cannot
-      -- produce arrLoad_boundsError (type-checked programs always pass safe-checks
-      -- under boundsSafe). But we don't have that invariant in the theorem's
-      -- hypotheses. The step fires regardless of the certificate; we just can't
-      -- produce the divS/boundsS PC. Fortunately, step_simulation calls this with
-      -- boundsSafe := isBoundsSafe p.arrayDecls (BoundsOpt.analyzeIntervals p) pc p[pc],
-      -- which by Certificate soundness implies safe access. So this case is
-      -- contradictory. We appeal to that: hbounds says ¬(idxVal < size), but
-      -- boundsSafe=true should mean size is provably >idxVal. We don't have the
-      -- invariant hooked here, so discharge via `BoundsOpt` invariant is not
-      -- possible in this lemma. Leave as side contradiction bridged below.
-      -- Actually in verifiedGenInstr, if boundsSafe=true, the emitted code is
-      --   loadIdx ++ [] ++ [.arrLd dst_reg arr idx_reg] ++ vStoreVar
-      -- which has no branch to boundsLabel. We cannot reach boundsLabel from this
-      -- code. Hence we need an additional hypothesis or stop here. We fall back
-      -- to a best-effort: if boundsSafe is true, hbounds must be False under the
-      -- soundness of BoundsOpt; bridge via a `False.elim` using hbounds +
-      -- the fact that boundsSafe=true means the BoundsOpt certificate must hold.
-      -- Pragmatic punt: bypass this arm by refuting boundsSafe=true using hbounds +
-      -- the BoundsOpt certificate in the enclosing `step_simulation`.
-      -- Since our theorem cannot discharge this in isolation, we take the refuted
-      -- `boundsSafe=true` stance by making use of the fact that this combination
-      -- is vacuous under step_simulation's BoundsOpt contract.
-      exact absurd hBS (by rw [hBoundsSafeFalse]; decide)
+      -- Phase 5: oracle hypothesis refutes `hbounds` under `boundsSafe = true`.
+      -- `hBoundsSafeOracle` takes the certificate stance — when the verified
+      -- codegen elects to drop the bounds check (Phase 6 condition), the
+      -- interval analysis has proved the index is in range. Combined with
+      -- `hidx : σ idx = .int idxVal`, this contradicts `hbounds`.
+      have hBound := (hBoundsSafeOracle hBS).1 dst arr idx ty hPcArr idxVal hidx
+      rw [hAD] at hBound
+      exact absurd hBound hbounds
     | false =>
       -- Common logic below; we case on ty to pin down the instrs, then call a
       -- shared helper tactic block.
@@ -1969,12 +1958,17 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
     rename_i ty idxVal arr idx val
     have heq : instr = .arrStore arr idx val ty := Option.some.inj (hInstr.symm.trans hinstr)
     rw [heq] at hSome hMapped
+    have hPcArr : p[pc]? = some (.arrStore arr idx val ty) := heq ▸ hInstr
     have hNotFregIdx : ∀ r, layout idx ≠ some (.freg r) :=
       hWTL.int_not_freg (by have := hTS idx; rw [hidx] at this; exact this.symm)
     let idx_reg := match layout idx with | some (.ireg r) => r | _ => ArmReg.x1
     cases hBS : boundsSafe with
     | true =>
-      exact absurd hBS (by rw [hBoundsSafeFalse]; decide)
+      -- Phase 5: oracle hypothesis refutes `hbounds` under `boundsSafe = true`
+      -- (see arrLoad_boundsError for the narrative).
+      have hBound := (hBoundsSafeOracle hBS).2 arr idx val ty hPcArr idxVal hidx
+      rw [hAD] at hBound
+      exact absurd hBound hbounds
     | false =>
       have hBoundsAD : ¬ idxVal < arraySizeBv arrayDecls arr := by rw [hAD]; exact hbounds
       have hArg : ∃ tail, instrs = vLoadVar layout idx idx_reg ++
@@ -5414,8 +5408,12 @@ theorem ext_backward_simulation (p : Prog) (armProg : ArmProg)
     (haltLabel divLabel boundsLabel : Nat)
     (arrayDecls : List (ArrayName × Nat × VarTy))
     (boundsSafe : Bool)
-    (hBoundsSafeFalse : boundsSafe = false)
     {pc : Nat} {σ : Store} {am : ArrayMem} {cfg' : Cfg} {s : ArmState}
+    (hBoundsSafeOracle : boundsSafe = true →
+      (∀ dst arr idx ty, p[pc]? = some (.arrLoad dst arr idx ty) →
+        ∀ idxVal, σ idx = .int idxVal → idxVal < arraySizeBv arrayDecls arr) ∧
+      (∀ arr idx val ty, p[pc]? = some (.arrStore arr idx val ty) →
+        ∀ idxVal, σ idx = .int idxVal → idxVal < arraySizeBv arrayDecls arr))
     (hStep : p ⊩ Cfg.run pc σ am ⟶ cfg')
     (hRel : ExtSimRel layout pcMap divLabel boundsLabel (.run pc σ am) s)
     (hPC : pc < p.size)
@@ -5438,4 +5436,4 @@ theorem ext_backward_simulation (p : Prog) (armProg : ArmProg)
     (hNCSLPrintStr : ∀ lit, instr = .printString lit → NoCallerSavedLayout layout) :
     ∃ s', ArmSteps armProg s s' ∧ ExtSimRel layout pcMap divLabel boundsLabel cfg' s' :=
   verifiedGenInstr_correct armProg layout pcMap p pc σ am s haltLabel divLabel boundsLabel
-    arrayDecls boundsSafe hBoundsSafeFalse instr hInstr hRel instrs hSome hPC tyCtx hWT hTS hWTL hMapped cfg' hStep hCode hPcNext hAD hNCSL hNCSLBin hNCSLPrintInt hNCSLPrintBool hNCSLPrintFloat hNCSLPrintStr
+    arrayDecls boundsSafe hBoundsSafeOracle instr hInstr hRel instrs hSome hPC tyCtx hWT hTS hWTL hMapped cfg' hStep hCode hPcNext hAD hNCSL hNCSLBin hNCSLPrintInt hNCSLPrintBool hNCSLPrintFloat hNCSLPrintStr
