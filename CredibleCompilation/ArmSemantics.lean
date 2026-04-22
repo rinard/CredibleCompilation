@@ -2041,6 +2041,480 @@ private theorem verifiedGenInstr_ifgoto_output_pos
        simp only [List.length_append, List.length_cons, List.length_nil]
        omega)
 
+/-- `formalLoadImm64` emits ≥ 1 ARM instruction (either `[.mov rd n]`
+    or a `movz`-led sequence of 1–4 instructions). -/
+private theorem formalLoadImm64_length_pos (rd : ArmReg) (n : BitVec 64) :
+    1 ≤ (formalLoadImm64 rd n).length := by
+  unfold formalLoadImm64
+  split
+  · simp
+  · simp only [List.length_append, List.length_cons, List.length_nil]
+    omega
+
+/-- `verifiedGenInstr` for `.goto l` always emits exactly one `[.b (pcMap l)]`
+    instruction. -/
+private theorem verifiedGenInstr_goto_output_pos
+    (Γ : TyCtx) (layout : VarLayout) (pcMap : Nat → Nat)
+    (l : Nat)
+    (haltS divS boundsS : Nat) (arrayDecls : List (ArrayName × Nat × VarTy))
+    (safe : Bool)
+    {instrs : List ArmInstr}
+    (hGen : verifiedGenInstr layout pcMap (.goto l)
+      haltS divS boundsS arrayDecls safe = some instrs)
+    (hRC : RegConventionSafe layout)
+    (hInj : VarLayoutInjective layout)
+    (hWTL : WellTypedLayout Γ layout)
+    (hWTI : WellTypedInstr Γ arrayDecls (.goto l))
+    (hMapped : ∀ v, v ∈ (TAC.goto l).vars → layout v ≠ none) :
+    1 ≤ instrs.length := by
+  have hRCb : layout.regConventionSafe = true := by
+    cases hbool : layout.regConventionSafe
+    · simp [verifiedGenInstr, hbool] at hGen
+    · rfl
+  have hIIb : layout.isInjective = true := by
+    cases hbool : layout.isInjective
+    · simp [verifiedGenInstr, hRCb, hbool] at hGen
+    · rfl
+  simp [verifiedGenInstr, hRCb, hIIb] at hGen
+  subst hGen
+  simp
+
+/-- `verifiedGenInstr` for `.const v val` emits ≥ 1 ARM instruction when it
+    returns `some`. Three Value sub-cases:
+      - `.int n`: `formalLoadImm64 .x0 n ++ vStoreVar layout v .x0` — `formalLoadImm64_length_pos`.
+      - `.bool b`: `[.mov .x0 _] ++ vStoreVar layout v .x0` — the `.mov` is the witness.
+      - `.float f`: `formalLoadImm64 ++ [.fmovToFP _ _] ++ vStoreVarFP` — `.fmovToFP` is the witness. -/
+private theorem verifiedGenInstr_const_output_pos
+    (Γ : TyCtx) (layout : VarLayout) (pcMap : Nat → Nat)
+    (v : Var) (val : Value)
+    (haltS divS boundsS : Nat) (arrayDecls : List (ArrayName × Nat × VarTy))
+    (safe : Bool)
+    {instrs : List ArmInstr}
+    (hGen : verifiedGenInstr layout pcMap (.const v val)
+      haltS divS boundsS arrayDecls safe = some instrs)
+    (hRC : RegConventionSafe layout)
+    (hInj : VarLayoutInjective layout)
+    (hWTL : WellTypedLayout Γ layout)
+    (hWTI : WellTypedInstr Γ arrayDecls (.const v val))
+    (hMapped : ∀ v', v' ∈ (TAC.const v val).vars → layout v' ≠ none) :
+    1 ≤ instrs.length := by
+  have hRCb : layout.regConventionSafe = true := by
+    cases hbool : layout.regConventionSafe
+    · simp [verifiedGenInstr, hbool] at hGen
+    · rfl
+  have hIIb : layout.isInjective = true := by
+    cases hbool : layout.isInjective
+    · simp [verifiedGenInstr, hRCb, hbool] at hGen
+    · rfl
+  cases val with
+  | int n =>
+    simp [verifiedGenInstr, hRCb, hIIb] at hGen
+    split at hGen <;>
+      (first
+        | (subst hGen
+           simp only [List.length_append]
+           have := formalLoadImm64_length_pos .x0 n
+           omega)
+        | (obtain rfl := (Option.some.inj hGen).symm
+           simp only [List.length_append]
+           have := formalLoadImm64_length_pos .x0 n
+           omega)
+        | simp at hGen)
+  | bool b =>
+    simp [verifiedGenInstr, hRCb, hIIb] at hGen
+    split at hGen <;>
+      (first
+        | (subst hGen
+           simp only [List.length_append, List.length_cons, List.length_nil]
+           omega)
+        | (obtain rfl := (Option.some.inj hGen).symm
+           simp only [List.length_append, List.length_cons, List.length_nil]
+           omega)
+        | simp at hGen)
+  | float f =>
+    simp [verifiedGenInstr, hRCb, hIIb] at hGen
+    split at hGen <;>
+      (first
+        | (subst hGen
+           simp only [List.length_append, List.length_cons, List.length_nil]
+           omega)
+        | (obtain rfl := (Option.some.inj hGen).symm
+           simp only [List.length_append, List.length_cons, List.length_nil]
+           omega)
+        | simp at hGen)
+
+/-- `verifiedGenInstr` for `.arrLoad x arr idx ty` emits ≥ 1 ARM instruction.
+    Each of the three `ty` arms has a fixed-length, non-empty middle block
+    (`[.farrLd]` / `[.arrLd; .cmpImm; .cset]` / `[.arrLd]`) that supplies
+    the ≥ 1 witness independent of the layouts of `x`/`idx`. -/
+private theorem verifiedGenInstr_arrLoad_output_pos
+    (Γ : TyCtx) (layout : VarLayout) (pcMap : Nat → Nat)
+    (x : Var) (arr : ArrayName) (idx : Var) (ty : VarTy)
+    (haltS divS boundsS : Nat) (arrayDecls : List (ArrayName × Nat × VarTy))
+    (safe : Bool)
+    {instrs : List ArmInstr}
+    (hGen : verifiedGenInstr layout pcMap (.arrLoad x arr idx ty)
+      haltS divS boundsS arrayDecls safe = some instrs)
+    (hRC : RegConventionSafe layout)
+    (hInj : VarLayoutInjective layout)
+    (hWTL : WellTypedLayout Γ layout)
+    (hWTI : WellTypedInstr Γ arrayDecls (.arrLoad x arr idx ty))
+    (hMapped : ∀ v, v ∈ (TAC.arrLoad x arr idx ty).vars → layout v ≠ none) :
+    1 ≤ instrs.length := by
+  have hRCb : layout.regConventionSafe = true := by
+    cases hbool : layout.regConventionSafe
+    · simp [verifiedGenInstr, hbool] at hGen
+    · rfl
+  have hIIb : layout.isInjective = true := by
+    cases hbool : layout.isInjective
+    · simp [verifiedGenInstr, hRCb, hbool] at hGen
+    · rfl
+  simp [verifiedGenInstr, hRCb, hIIb] at hGen
+  cases ty <;>
+    (simp at hGen
+     split at hGen <;>
+       (subst hGen
+        simp only [List.length_append, List.length_cons, List.length_nil]
+        omega))
+
+/-- `verifiedGenInstr` for `.arrStore arr idx val ty`: the trailing
+    `[.farrSt]` / `[.arrSt]` provides the ≥ 1 witness. -/
+private theorem verifiedGenInstr_arrStore_output_pos
+    (Γ : TyCtx) (layout : VarLayout) (pcMap : Nat → Nat)
+    (arr : ArrayName) (idx val : Var) (ty : VarTy)
+    (haltS divS boundsS : Nat) (arrayDecls : List (ArrayName × Nat × VarTy))
+    (safe : Bool)
+    {instrs : List ArmInstr}
+    (hGen : verifiedGenInstr layout pcMap (.arrStore arr idx val ty)
+      haltS divS boundsS arrayDecls safe = some instrs)
+    (hRC : RegConventionSafe layout)
+    (hInj : VarLayoutInjective layout)
+    (hWTL : WellTypedLayout Γ layout)
+    (hWTI : WellTypedInstr Γ arrayDecls (.arrStore arr idx val ty))
+    (hMapped : ∀ v, v ∈ (TAC.arrStore arr idx val ty).vars → layout v ≠ none) :
+    1 ≤ instrs.length := by
+  have hRCb : layout.regConventionSafe = true := by
+    cases hbool : layout.regConventionSafe
+    · simp [verifiedGenInstr, hbool] at hGen
+    · rfl
+  have hIIb : layout.isInjective = true := by
+    cases hbool : layout.isInjective
+    · simp [verifiedGenInstr, hRCb, hbool] at hGen
+    · rfl
+  simp [verifiedGenInstr, hRCb, hIIb] at hGen
+  split at hGen <;>
+    (first
+      | (subst hGen
+         simp only [List.length_append, List.length_cons, List.length_nil]
+         omega)
+      | (rcases hGen with ⟨_, rfl⟩
+         simp only [List.length_append, List.length_cons, List.length_nil]
+         omega))
+
+/-- `verifiedGenInstr` for `.halt` always emits exactly one `[.b haltLabel]`
+    instruction. -/
+private theorem verifiedGenInstr_halt_output_pos
+    (Γ : TyCtx) (layout : VarLayout) (pcMap : Nat → Nat)
+    (haltS divS boundsS : Nat) (arrayDecls : List (ArrayName × Nat × VarTy))
+    (safe : Bool)
+    {instrs : List ArmInstr}
+    (hGen : verifiedGenInstr layout pcMap .halt
+      haltS divS boundsS arrayDecls safe = some instrs)
+    (hRC : RegConventionSafe layout)
+    (hInj : VarLayoutInjective layout)
+    (hWTL : WellTypedLayout Γ layout)
+    (hWTI : WellTypedInstr Γ arrayDecls .halt)
+    (hMapped : ∀ v, v ∈ TAC.vars .halt → layout v ≠ none) :
+    1 ≤ instrs.length := by
+  have hRCb : layout.regConventionSafe = true := by
+    cases hbool : layout.regConventionSafe
+    · simp [verifiedGenInstr, hbool] at hGen
+    · rfl
+  have hIIb : layout.isInjective = true := by
+    cases hbool : layout.isInjective
+    · simp [verifiedGenInstr, hRCb, hbool] at hGen
+    · rfl
+  simp [verifiedGenInstr, hRCb, hIIb] at hGen
+  subst hGen
+  simp
+
+/-- `verifiedGenInstr` for `.fbinop dst fop lv rv`: same pattern as `.binop`
+    with ireg-exclusion instead of freg-exclusion. The `[fpInstr]` in the
+    default arm provides ≥ 1. -/
+private theorem verifiedGenInstr_fbinop_output_pos
+    (Γ : TyCtx) (layout : VarLayout) (pcMap : Nat → Nat)
+    (dst : Var) (fop : FloatBinOp) (lv rv : Var)
+    (haltS divS boundsS : Nat) (arrayDecls : List (ArrayName × Nat × VarTy))
+    (safe : Bool)
+    {instrs : List ArmInstr}
+    (hGen : verifiedGenInstr layout pcMap (.fbinop dst fop lv rv)
+      haltS divS boundsS arrayDecls safe = some instrs)
+    (hRC : RegConventionSafe layout)
+    (hInj : VarLayoutInjective layout)
+    (hWTL : WellTypedLayout Γ layout)
+    (hWTI : WellTypedInstr Γ arrayDecls (.fbinop dst fop lv rv))
+    (hMapped : ∀ v, v ∈ (TAC.fbinop dst fop lv rv).vars → layout v ≠ none) :
+    1 ≤ instrs.length := by
+  have hRCb : layout.regConventionSafe = true := by
+    cases hbool : layout.regConventionSafe
+    · simp [verifiedGenInstr, hbool] at hGen
+    · rfl
+  have hIIb : layout.isInjective = true := by
+    cases hbool : layout.isInjective
+    · simp [verifiedGenInstr, hRCb, hbool] at hGen
+    · rfl
+  simp [verifiedGenInstr, hRCb, hIIb] at hGen
+  split at hGen <;> first
+    | (subst hGen
+       simp only [List.length_append, List.length_cons, List.length_nil]; omega)
+    | (rcases hGen with ⟨_, rfl⟩
+       simp only [List.length_append, List.length_cons, List.length_nil]; omega)
+    | simp at hGen
+
+/-- `verifiedGenInstr` for `.intToFloat dst src`: 2-way layout match
+    (freg src / ireg dst failures); default arm has `[.scvtf .x0]` ≥ 1. -/
+private theorem verifiedGenInstr_intToFloat_output_pos
+    (Γ : TyCtx) (layout : VarLayout) (pcMap : Nat → Nat)
+    (dst src : Var)
+    (haltS divS boundsS : Nat) (arrayDecls : List (ArrayName × Nat × VarTy))
+    (safe : Bool)
+    {instrs : List ArmInstr}
+    (hGen : verifiedGenInstr layout pcMap (.intToFloat dst src)
+      haltS divS boundsS arrayDecls safe = some instrs)
+    (hRC : RegConventionSafe layout)
+    (hInj : VarLayoutInjective layout)
+    (hWTL : WellTypedLayout Γ layout)
+    (hWTI : WellTypedInstr Γ arrayDecls (.intToFloat dst src))
+    (hMapped : ∀ v, v ∈ (TAC.intToFloat dst src).vars → layout v ≠ none) :
+    1 ≤ instrs.length := by
+  have hRCb : layout.regConventionSafe = true := by
+    cases hbool : layout.regConventionSafe
+    · simp [verifiedGenInstr, hbool] at hGen
+    · rfl
+  have hIIb : layout.isInjective = true := by
+    cases hbool : layout.isInjective
+    · simp [verifiedGenInstr, hRCb, hbool] at hGen
+    · rfl
+  simp [verifiedGenInstr, hRCb, hIIb] at hGen
+  split at hGen <;> first
+    | (subst hGen
+       simp only [List.length_append, List.length_cons, List.length_nil]; omega)
+    | (rcases hGen with ⟨_, rfl⟩
+       simp only [List.length_append, List.length_cons, List.length_nil]; omega)
+    | simp at hGen
+
+/-- `verifiedGenInstr` for `.floatToInt dst src`: 2-way layout match
+    (ireg src / freg dst failures); default arm has `[.fcvtzs .x0]` ≥ 1. -/
+private theorem verifiedGenInstr_floatToInt_output_pos
+    (Γ : TyCtx) (layout : VarLayout) (pcMap : Nat → Nat)
+    (dst src : Var)
+    (haltS divS boundsS : Nat) (arrayDecls : List (ArrayName × Nat × VarTy))
+    (safe : Bool)
+    {instrs : List ArmInstr}
+    (hGen : verifiedGenInstr layout pcMap (.floatToInt dst src)
+      haltS divS boundsS arrayDecls safe = some instrs)
+    (hRC : RegConventionSafe layout)
+    (hInj : VarLayoutInjective layout)
+    (hWTL : WellTypedLayout Γ layout)
+    (hWTI : WellTypedInstr Γ arrayDecls (.floatToInt dst src))
+    (hMapped : ∀ v, v ∈ (TAC.floatToInt dst src).vars → layout v ≠ none) :
+    1 ≤ instrs.length := by
+  have hRCb : layout.regConventionSafe = true := by
+    cases hbool : layout.regConventionSafe
+    · simp [verifiedGenInstr, hbool] at hGen
+    · rfl
+  have hIIb : layout.isInjective = true := by
+    cases hbool : layout.isInjective
+    · simp [verifiedGenInstr, hRCb, hbool] at hGen
+    · rfl
+  simp [verifiedGenInstr, hRCb, hIIb] at hGen
+  split at hGen <;> first
+    | (subst hGen
+       simp only [List.length_append, List.length_cons, List.length_nil]; omega)
+    | (rcases hGen with ⟨_, rfl⟩
+       simp only [List.length_append, List.length_cons, List.length_nil]; omega)
+    | simp at hGen
+
+/-- `verifiedGenInstr` for `.floatUnary dst op src`: 2-way layout match
+    (ireg src/dst failures); default arm has `[.floatUnaryInstr op _ _]` ≥ 1. -/
+private theorem verifiedGenInstr_floatUnary_output_pos
+    (Γ : TyCtx) (layout : VarLayout) (pcMap : Nat → Nat)
+    (dst : Var) (op : FloatUnaryOp) (src : Var)
+    (haltS divS boundsS : Nat) (arrayDecls : List (ArrayName × Nat × VarTy))
+    (safe : Bool)
+    {instrs : List ArmInstr}
+    (hGen : verifiedGenInstr layout pcMap (.floatUnary dst op src)
+      haltS divS boundsS arrayDecls safe = some instrs)
+    (hRC : RegConventionSafe layout)
+    (hInj : VarLayoutInjective layout)
+    (hWTL : WellTypedLayout Γ layout)
+    (hWTI : WellTypedInstr Γ arrayDecls (.floatUnary dst op src))
+    (hMapped : ∀ v, v ∈ (TAC.floatUnary dst op src).vars → layout v ≠ none) :
+    1 ≤ instrs.length := by
+  have hRCb : layout.regConventionSafe = true := by
+    cases hbool : layout.regConventionSafe
+    · simp [verifiedGenInstr, hbool] at hGen
+    · rfl
+  have hIIb : layout.isInjective = true := by
+    cases hbool : layout.isInjective
+    · simp [verifiedGenInstr, hRCb, hbool] at hGen
+    · rfl
+  simp [verifiedGenInstr, hRCb, hIIb] at hGen
+  split at hGen <;> first
+    | (subst hGen
+       simp only [List.length_append, List.length_cons, List.length_nil]; omega)
+    | (rcases hGen with ⟨_, rfl⟩
+       simp only [List.length_append, List.length_cons, List.length_nil]; omega)
+    | simp at hGen
+
+/-- `verifiedGenInstr` for `.fternop dst op a b c`: 4-way layout match
+    (ireg a/b/c/dst failures); default arm has `[fpInstr]` ≥ 1. -/
+private theorem verifiedGenInstr_fternop_output_pos
+    (Γ : TyCtx) (layout : VarLayout) (pcMap : Nat → Nat)
+    (dst : Var) (op : FloatTernOp) (a b c : Var)
+    (haltS divS boundsS : Nat) (arrayDecls : List (ArrayName × Nat × VarTy))
+    (safe : Bool)
+    {instrs : List ArmInstr}
+    (hGen : verifiedGenInstr layout pcMap (.fternop dst op a b c)
+      haltS divS boundsS arrayDecls safe = some instrs)
+    (hRC : RegConventionSafe layout)
+    (hInj : VarLayoutInjective layout)
+    (hWTL : WellTypedLayout Γ layout)
+    (hWTI : WellTypedInstr Γ arrayDecls (.fternop dst op a b c))
+    (hMapped : ∀ v, v ∈ (TAC.fternop dst op a b c).vars → layout v ≠ none) :
+    1 ≤ instrs.length := by
+  have hRCb : layout.regConventionSafe = true := by
+    cases hbool : layout.regConventionSafe
+    · simp [verifiedGenInstr, hbool] at hGen
+    · rfl
+  have hIIb : layout.isInjective = true := by
+    cases hbool : layout.isInjective
+    · simp [verifiedGenInstr, hRCb, hbool] at hGen
+    · rfl
+  simp [verifiedGenInstr, hRCb, hIIb] at hGen
+  split at hGen <;> first
+    | (subst hGen
+       simp only [List.length_append, List.length_cons, List.length_nil]; omega)
+    | (rcases hGen with ⟨_, rfl⟩
+       simp only [List.length_append, List.length_cons, List.length_nil]; omega)
+    | simp at hGen
+
+/-- `verifiedGenInstr` for `.printInt v`: default arm has `[.callPrintI]` ≥ 1. -/
+private theorem verifiedGenInstr_printInt_output_pos
+    (Γ : TyCtx) (layout : VarLayout) (pcMap : Nat → Nat) (v : Var)
+    (haltS divS boundsS : Nat) (arrayDecls : List (ArrayName × Nat × VarTy))
+    (safe : Bool)
+    {instrs : List ArmInstr}
+    (hGen : verifiedGenInstr layout pcMap (.printInt v)
+      haltS divS boundsS arrayDecls safe = some instrs)
+    (hRC : RegConventionSafe layout)
+    (hInj : VarLayoutInjective layout)
+    (hWTL : WellTypedLayout Γ layout)
+    (hWTI : WellTypedInstr Γ arrayDecls (.printInt v))
+    (hMapped : ∀ v', v' ∈ (TAC.printInt v).vars → layout v' ≠ none) :
+    1 ≤ instrs.length := by
+  have hRCb : layout.regConventionSafe = true := by
+    cases hbool : layout.regConventionSafe
+    · simp [verifiedGenInstr, hbool] at hGen
+    · rfl
+  have hIIb : layout.isInjective = true := by
+    cases hbool : layout.isInjective
+    · simp [verifiedGenInstr, hRCb, hbool] at hGen
+    · rfl
+  simp [verifiedGenInstr, hRCb, hIIb] at hGen
+  split at hGen <;> first
+    | (subst hGen
+       simp only [List.length_append, List.length_cons, List.length_nil]; omega)
+    | (rcases hGen with ⟨_, rfl⟩
+       simp only [List.length_append, List.length_cons, List.length_nil]; omega)
+    | simp at hGen
+
+/-- `verifiedGenInstr` for `.printBool v`: default arm has `[.callPrintB]` ≥ 1. -/
+private theorem verifiedGenInstr_printBool_output_pos
+    (Γ : TyCtx) (layout : VarLayout) (pcMap : Nat → Nat) (v : Var)
+    (haltS divS boundsS : Nat) (arrayDecls : List (ArrayName × Nat × VarTy))
+    (safe : Bool)
+    {instrs : List ArmInstr}
+    (hGen : verifiedGenInstr layout pcMap (.printBool v)
+      haltS divS boundsS arrayDecls safe = some instrs)
+    (hRC : RegConventionSafe layout)
+    (hInj : VarLayoutInjective layout)
+    (hWTL : WellTypedLayout Γ layout)
+    (hWTI : WellTypedInstr Γ arrayDecls (.printBool v))
+    (hMapped : ∀ v', v' ∈ (TAC.printBool v).vars → layout v' ≠ none) :
+    1 ≤ instrs.length := by
+  have hRCb : layout.regConventionSafe = true := by
+    cases hbool : layout.regConventionSafe
+    · simp [verifiedGenInstr, hbool] at hGen
+    · rfl
+  have hIIb : layout.isInjective = true := by
+    cases hbool : layout.isInjective
+    · simp [verifiedGenInstr, hRCb, hbool] at hGen
+    · rfl
+  simp [verifiedGenInstr, hRCb, hIIb] at hGen
+  split at hGen <;> first
+    | (subst hGen
+       simp only [List.length_append, List.length_cons, List.length_nil]; omega)
+    | (rcases hGen with ⟨_, rfl⟩
+       simp only [List.length_append, List.length_cons, List.length_nil]; omega)
+    | simp at hGen
+
+/-- `verifiedGenInstr` for `.printFloat v`: default arm has `[.callPrintF]` ≥ 1. -/
+private theorem verifiedGenInstr_printFloat_output_pos
+    (Γ : TyCtx) (layout : VarLayout) (pcMap : Nat → Nat) (v : Var)
+    (haltS divS boundsS : Nat) (arrayDecls : List (ArrayName × Nat × VarTy))
+    (safe : Bool)
+    {instrs : List ArmInstr}
+    (hGen : verifiedGenInstr layout pcMap (.printFloat v)
+      haltS divS boundsS arrayDecls safe = some instrs)
+    (hRC : RegConventionSafe layout)
+    (hInj : VarLayoutInjective layout)
+    (hWTL : WellTypedLayout Γ layout)
+    (hWTI : WellTypedInstr Γ arrayDecls (.printFloat v))
+    (hMapped : ∀ v', v' ∈ (TAC.printFloat v).vars → layout v' ≠ none) :
+    1 ≤ instrs.length := by
+  have hRCb : layout.regConventionSafe = true := by
+    cases hbool : layout.regConventionSafe
+    · simp [verifiedGenInstr, hbool] at hGen
+    · rfl
+  have hIIb : layout.isInjective = true := by
+    cases hbool : layout.isInjective
+    · simp [verifiedGenInstr, hRCb, hbool] at hGen
+    · rfl
+  simp [verifiedGenInstr, hRCb, hIIb] at hGen
+  split at hGen <;> first
+    | (subst hGen
+       simp only [List.length_append, List.length_cons, List.length_nil]; omega)
+    | (rcases hGen with ⟨_, rfl⟩
+       simp only [List.length_append, List.length_cons, List.length_nil]; omega)
+    | simp at hGen
+
+/-- `verifiedGenInstr` for `.printString lit`: emits exactly `[.callPrintS lit]`. -/
+private theorem verifiedGenInstr_printString_output_pos
+    (Γ : TyCtx) (layout : VarLayout) (pcMap : Nat → Nat) (lit : String)
+    (haltS divS boundsS : Nat) (arrayDecls : List (ArrayName × Nat × VarTy))
+    (safe : Bool)
+    {instrs : List ArmInstr}
+    (hGen : verifiedGenInstr layout pcMap (.printString lit)
+      haltS divS boundsS arrayDecls safe = some instrs)
+    (hRC : RegConventionSafe layout)
+    (hInj : VarLayoutInjective layout)
+    (hWTL : WellTypedLayout Γ layout)
+    (hWTI : WellTypedInstr Γ arrayDecls (.printString lit))
+    (hMapped : ∀ v, v ∈ (TAC.printString lit).vars → layout v ≠ none) :
+    1 ≤ instrs.length := by
+  have hRCb : layout.regConventionSafe = true := by
+    cases hbool : layout.regConventionSafe
+    · simp [verifiedGenInstr, hbool] at hGen
+    · rfl
+  have hIIb : layout.isInjective = true := by
+    cases hbool : layout.isInjective
+    · simp [verifiedGenInstr, hRCb, hbool] at hGen
+    · rfl
+  simp [verifiedGenInstr, hRCb, hIIb] at hGen
+  subst hGen
+  simp
+
 -- ────────────────────────────────────────────────────────────
 -- § 8e. verifiedGenInstr output length is pcMap-independent
 -- ────────────────────────────────────────────────────────────

@@ -4,6 +4,42 @@ Chronological record of what was built and why, to reconstruct the sequence of d
 
 ---
 
+## Phase 5b: all remaining verifiedGenInstr_<ctor>_output_pos lemmas (2026-04-22, same session)
+
+**Goal:** Complete the per-constructor output_pos lemmas needed to discharge `bodyPerPCLengthPos` (Phase 5b spec field) — covering every TAC constructor produced by `verifiedGenInstr`'s verified path. Extends the `split at hGen` pattern from `.binop`/`.boolop`/`.ifgoto`.
+
+**Shipped** ([ArmSemantics.lean](CredibleCompilation/ArmSemantics.lean) § 8d′):
+
+- **`formalLoadImm64_length_pos`**: helper — `formalLoadImm64 rd n` emits ≥ 1 instruction (either `[.mov]` or a `movz`-led 1–4 sequence).
+- **`verifiedGenInstr_const_output_pos`**: three Value sub-cases (`.int`/`.bool`/`.float`). The int arm uses `formalLoadImm64_length_pos`; bool/float use the `.mov`/`.fmovToFP` witness tokens.
+- **`verifiedGenInstr_goto_output_pos`** / **`_halt_output_pos`**: trivial `subst hGen; simp`, output is `[.b _]`.
+- **`verifiedGenInstr_arrLoad_output_pos`** / **`_arrStore_output_pos`**: the `[.arrLd]` / `[.arrSt]` / `[.farrLd]` / `[.farrSt]` middle token provides ≥ 1 uniformly across `ty` sub-cases.
+- **`verifiedGenInstr_fbinop_output_pos`**: 3-way layout match (ireg-exclusion); `[fpInstr]` in the default arm. Dropped the `cases fop` step — the match returns a single `ArmInstr` and `:: vStoreVarFP` makes it a cons, so `List.length_cons` + `omega` closes without enumerating the binop.
+- **`verifiedGenInstr_intToFloat_output_pos`** / **`_floatToInt_output_pos`** / **`_floatUnary_output_pos`**: 2-way layout matches.
+- **`verifiedGenInstr_fternop_output_pos`**: 4-way layout match.
+- **`verifiedGenInstr_printInt_output_pos`** / **`_printBool_output_pos`** / **`_printFloat_output_pos`**: 1-way layout match with `[.callPrintI]` / `[.callPrintB]` / `[.callPrintF]` trailing token.
+- **`verifiedGenInstr_printString_output_pos`**: layout-independent; emits exactly `[.callPrintS lit]`.
+
+**Refined pattern** (applied to all of the above):
+
+```
+  simp [verifiedGenInstr, hRCb, hIIb] at hGen
+  split at hGen <;> first
+    | (subst hGen
+       simp only [List.length_append, List.length_cons, List.length_nil]; omega)
+    | (rcases hGen with ⟨_, rfl⟩
+       simp only [List.length_append, List.length_cons, List.length_nil]; omega)
+    | simp at hGen
+```
+
+**Key lesson (corrects the `.boolop`/`.ifgoto` entry above)**: the `first` alternative ordering matters. `simp at hGen` must be LAST, not first — in the success arm, simp rewrites `some X = some Y` to `X = Y` *without closing*, causing `first` to greedily pick it and leave the goal open. Putting `subst hGen` / `rcases hGen with ⟨_, rfl⟩` first ensures they're tried before simp, and simp is the fallback for failure arms (`none = some _` → `False` → closes). When hGen's shape after simp is a conjunction (e.g., `.arrStore`'s `if`-guarded body), `rcases hGen with ⟨_, rfl⟩` strips the ignored Bool condition and substitutes the equation. `.const` was an earlier casualty of this ordering — its `first` initially had simp first, causing "simp made no progress" in the success arm.
+
+**Status**: 0 sorrys; full `lake build` green (3137 jobs). Files touched: 1 Lean file, +474 LOC. All 18 verifiedGenInstr non-`.print` constructors now have output_pos lemmas. The `.print` constructor returns `none` (handled by unverified codegen), so no lemma needed.
+
+**Remaining for Phase 5b**: `bodyPerPCLengthPos` GenAsmSpec field + discharge (~30 LOC), `step_simulation` ArmStepsN refactor (~150 LOC, main risk), `tacToArm_refinement` threading + divergence theorem (~60 LOC). Total ~240 LOC.
+
+---
+
 ## Phase 5b: collapsed output_pos lemmas (.binop, .boolop, .ifgoto) via `split at hGen` (2026-04-22)
 
 **Goal:** Investigate whether a Lean 4 tactic macro could collapse the 27-way `cases layout lv / layout rv / layout dst + freg-contradiction` pattern in `verifiedGenInstr_binop_output_pos` (312 LOC hand-unrolled). Target: ≤ 80 LOC.
