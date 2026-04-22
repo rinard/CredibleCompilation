@@ -4,6 +4,28 @@ Chronological record of what was built and why, to reconstruct the sequence of d
 
 ---
 
+## Phase 5b: collapsed output_pos lemmas (.binop, .boolop, .ifgoto) via `split at hGen` (2026-04-22)
+
+**Goal:** Investigate whether a Lean 4 tactic macro could collapse the 27-way `cases layout lv / layout rv / layout dst + freg-contradiction` pattern in `verifiedGenInstr_binop_output_pos` (312 LOC hand-unrolled). Target: ≤ 80 LOC.
+
+**Finding**: no custom macro needed — `split at hGen` already does it. Applied to `match layout lv, layout rv, layout dst with`, it enumerates the four *coverage arms* (three freg-failure → `none`, one default) in one tactic call, rather than the 4³ = 64 layout combinations the old `cases hL : layout x with | none | some ...` peeling produced. `first | simp at hGen | (split at hGen <;> ...)` dispatches.
+
+**Shipped** ([ArmSemantics.lean](CredibleCompilation/ArmSemantics.lean) § 8d′):
+
+- **`verifiedGenInstr_binop_output_pos`**: collapsed from 312 LOC → 36 LOC (15 proof body). Supersedes the hand-unrolled form from 7d77343.
+- **`verifiedGenInstr_boolop_output_pos`**: 36 LOC. `cases be.hasSimpleOps` for the outer guard, then inner `split at hGen` on the `notFreg` guard; `verifiedGenBoolExpr_length_pos` + `omega` for the success arm.
+- **`verifiedGenInstr_ifgoto_output_pos`**: 43 LOC. Three match arms (fused `.not (.cmp ...)`, fused `.not (.fcmp ...)`, fallback) all close uniformly under `split at hGen <;> (obtain rfl := ...; simp only; omega)` — the trailing `[cmp; bCond]` / `[cbnz]` suffix provides the ≥ 1 witness.
+
+**Key enabling conditions** (a.k.a. the P2 pitfall reaffirmed):
+1. Pre-extract `hRCb : layout.regConventionSafe = true` and `hIIb : layout.isInjective = true` from hGen. Without these, `simp [verifiedGenInstr]` produces a conjunction `(cond ∧ cond) ∧ ...` rather than a clean match equation.
+2. Use full `simp [verifiedGenInstr, hRCb, hIIb] at hGen` (not `simp only`) so the `!true || !true = false` reduction fires.
+
+**Why not `.copy`**: its 143-LOC proof needs per-case positivity helpers (`vLoadVar_length_pos_of_not_freg`, `vStoreVarFP` freg-r'≠r injectivity) that `split at hGen` can't synthesize. Left unchanged.
+
+**Status**: 0 sorrys; full `lake build` green. Full build: 3137 jobs ok. Files touched: 1 Lean file (-276 / +95 net LOC — 312-LOC theorem replaced, 79 LOC of new theorems added). Plus design note update.
+
+---
+
 ## Phase 5b side-lemma: verifiedGenBoolExpr_length_pos (2026-04-21)
 
 **Goal:** First slice of Phase 5b (plans/backward-jumping-octopus.md). Establishes the static positivity of verified boolean-expression codegen — one of three infrastructure lemmas feeding the eventual `bodyPerPCLengthPos` spec field (every live TAC PC emits ≥ 1 ARM instruction) required by the Phase 5b forward-divergence theorem.
