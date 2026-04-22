@@ -58,9 +58,13 @@ inductive ArmStep (prog : ArmProg) : ArmState → ArmState → Prop where
     prog[s.pc]? = some (.mulR rd rn rm) →
     ArmStep prog s (s.setReg rd (s.regs rn * s.regs rm) |>.nextPC)
 
+  /-- `sdiv Xd, Xn, Xm` — `BitVec.sdiv` is total (well-defined on a zero
+      divisor), so this rule fires unconditionally on any `rm`. The compiler
+      places a `cbz rm, divS` guard before every `sdivR`, so in verified
+      traces `rm ≠ 0` holds at the call site; but leaving the step rule
+      unconstrained makes Phase 6's ARM totality argument purely structural. -/
   | sdivR (rd rn rm : ArmReg) :
     prog[s.pc]? = some (.sdivR rd rn rm) →
-    s.regs rm ≠ 0 →
     ArmStep prog s (s.setReg rd (BitVec.sdiv (s.regs rn) (s.regs rm)) |>.nextPC)
 
   | cmpRR (rn rm : ArmReg) :
@@ -368,6 +372,90 @@ theorem ArmStepsN_prefix {prog : ArmProg} {s s' : ArmState} {n k : Nat}
     `ArmStep` successor — contradiction. -/
 def ArmDiverges (prog : ArmProg) (s₀ : ArmState) : Prop :=
   ∀ n, ∃ s, ArmStepsN prog s₀ s n
+
+/-- **ARM progress / totality.** Whenever there is an instruction at `s.pc`,
+    some `ArmStep` fires. Each `ArmStep` rule's only precondition is
+    `prog[s.pc]? = some instr` (there are no state-dependent stuck rules —
+    the two-branch rules like `cbz_taken`/`cbz_fall` exhaust their cases,
+    and `sdivR`'s rule is unconditional because `BitVec.sdiv` is total).
+    Consumed by Phase 6's ARM totality argument: any reachable state whose
+    PC has an instruction decoded can step. -/
+theorem ArmStep_total_of_codeAt {prog : ArmProg} {s : ArmState} {i : ArmInstr}
+    (h : prog[s.pc]? = some i) :
+    ∃ s', ArmStep prog s s' := by
+  cases i with
+  | mov rd imm => exact ⟨_, .mov rd imm h⟩
+  | movR rd rn => exact ⟨_, .movR rd rn h⟩
+  | movz rd imm16 shift => exact ⟨_, .movz rd imm16 shift h⟩
+  | movk rd imm16 shift => exact ⟨_, .movk rd imm16 shift h⟩
+  | ldr rd off => exact ⟨_, .ldr rd off h⟩
+  | str rs off => exact ⟨_, .str rs off h⟩
+  | addR rd rn rm => exact ⟨_, .addR rd rn rm h⟩
+  | subR rd rn rm => exact ⟨_, .subR rd rn rm h⟩
+  | mulR rd rn rm => exact ⟨_, .mulR rd rn rm h⟩
+  | sdivR rd rn rm => exact ⟨_, .sdivR rd rn rm h⟩
+  | cmp rn rm => exact ⟨_, .cmpRR rn rm h⟩
+  | cmpImm rn imm => exact ⟨_, .cmpRI rn imm h⟩
+  | cset rd c => exact ⟨_, .cset rd c h⟩
+  | cbz rn lbl =>
+    by_cases hz : s.regs rn = (0 : BitVec 64)
+    · exact ⟨_, .cbz_taken rn lbl h hz⟩
+    · exact ⟨_, .cbz_fall rn lbl h hz⟩
+  | cbnz rn lbl =>
+    by_cases hz : s.regs rn = (0 : BitVec 64)
+    · exact ⟨_, .cbnz_fall rn lbl h hz⟩
+    · exact ⟨_, .cbnz_taken rn lbl h hz⟩
+  | andImm rd rn imm => exact ⟨_, .andImm rd rn imm h⟩
+  | andR rd rn rm => exact ⟨_, .andR rd rn rm h⟩
+  | eorImm rd rn imm => exact ⟨_, .eorImm rd rn imm h⟩
+  | orrR rd rn rm => exact ⟨_, .orrR rd rn rm h⟩
+  | eorR rd rn rm => exact ⟨_, .eorR rd rn rm h⟩
+  | lslR rd rn rm => exact ⟨_, .lslR rd rn rm h⟩
+  | asrR rd rn rm => exact ⟨_, .asrR rd rn rm h⟩
+  | b lbl => exact ⟨_, .branch lbl h⟩
+  | printCall lines => exact ⟨_, .printCall lines (fun _ => 0) (fun _ => 0) h⟩
+  | callPrintI => exact ⟨_, .callPrintI (fun _ => 0) (fun _ => 0) h⟩
+  | callPrintB => exact ⟨_, .callPrintB (fun _ => 0) (fun _ => 0) h⟩
+  | callPrintF => exact ⟨_, .callPrintF (fun _ => 0) (fun _ => 0) h⟩
+  | callPrintS lit => exact ⟨_, .callPrintS lit (fun _ => 0) (fun _ => 0) h⟩
+  | bCond c lbl =>
+    by_cases hc : s.flags.condHolds c = true
+    · exact ⟨_, .bCond_taken c lbl h hc⟩
+    · exact ⟨_, .bCond_fall c lbl h (Bool.eq_false_iff.mpr hc)⟩
+  | arrLd dst arr idxReg => exact ⟨_, .arrLd dst arr idxReg h⟩
+  | arrSt arr idxReg valReg => exact ⟨_, .arrSt arr idxReg valReg h⟩
+  | fmovToFP fd rn => exact ⟨_, .fmovToFP fd rn h⟩
+  | fmovRR fd fn => exact ⟨_, .fmovRR fd fn h⟩
+  | fldr fd off => exact ⟨_, .fldr fd off h⟩
+  | fstr fs off => exact ⟨_, .fstr fs off h⟩
+  | faddR fd fn fm => exact ⟨_, .faddR fd fn fm h⟩
+  | fsubR fd fn fm => exact ⟨_, .fsubR fd fn fm h⟩
+  | fmulR fd fn fm => exact ⟨_, .fmulR fd fn fm h⟩
+  | fdivR fd fn fm => exact ⟨_, .fdivR fd fn fm h⟩
+  | fmaddR fd fn fm fa => exact ⟨_, .fmaddR fd fn fm fa h⟩
+  | fmsubR fd fn fm fa => exact ⟨_, .fmsubR fd fn fm fa h⟩
+  | fminR fd fn fm => exact ⟨_, .fminR fd fn fm h⟩
+  | fmaxR fd fn fm => exact ⟨_, .fmaxR fd fn fm h⟩
+  | callBinF fop fd fn fm => exact ⟨_, .callBinF fop fd fn fm (fun _ => 0) (fun _ => 0) h⟩
+  | fcmpR fn fm => exact ⟨_, .fcmpRR fn fm h⟩
+  | scvtf fd rn => exact ⟨_, .scvtf fd rn h⟩
+  | fcvtzs rd fn => exact ⟨_, .fcvtzs rd fn h⟩
+  | farrLd fd arr idxReg => exact ⟨_, .farrLd fd arr idxReg h⟩
+  | farrSt arr idxReg valFReg => exact ⟨_, .farrSt arr idxReg valFReg h⟩
+  | floatUnaryInstr op fd fn =>
+    by_cases hNat : op.isNative = true
+    · exact ⟨_, .floatUnaryNative op fd fn h hNat⟩
+    · exact ⟨_, .floatUnaryLibCall op fd fn (fun _ => 0) (fun _ => 0) h
+        (by cases hh : op.isNative <;> simp_all)⟩
+
+/-- **ARM sentinel stuckness.** At an off-the-end PC (`prog[pc]? = none`),
+    no `ArmStep` fires.  Every ARM step rule pattern-matches
+    `prog[s.pc]? = some instr`. -/
+theorem ArmStep_stuck_of_none {prog : ArmProg} {s : ArmState}
+    (h : prog[s.pc]? = none) :
+    ¬ ∃ s', ArmStep prog s s' := by
+  rintro ⟨s', hs⟩
+  cases hs <;> simp_all
 
 -- ============================================================
 -- § 6. Value encoding

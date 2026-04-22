@@ -2654,7 +2654,7 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
         have hSdiv := hCodecDE.tail.head; rw [← hPC_cbz] at hSdiv
         have hStepsSdiv : ArmSteps prog s2.nextPC
             (s2.nextPC.setReg dst_reg (BitVec.sdiv (s2.nextPC.regs lv_reg) (s2.nextPC.regs rv_reg))).nextPC :=
-          ArmSteps.single (.sdivR dst_reg lv_reg rv_reg hSdiv hRV_ne0_cbz)
+          ArmSteps.single (.sdivR dst_reg lv_reg rv_reg hSdiv)
         -- Rewrite to use a, b
         have hSdivEq : (s2.nextPC.setReg dst_reg (BitVec.sdiv (s2.nextPC.regs lv_reg) (s2.nextPC.regs rv_reg))).nextPC =
             (s2.nextPC.setReg dst_reg (BinOp.eval .div a b)).nextPC := by
@@ -2778,7 +2778,7 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
         let q := BitVec.sdiv a b
         have hStepsSdiv : ArmSteps prog s2.nextPC
             (s2.nextPC.setReg .x0 q).nextPC := by
-          have h := ArmSteps.single (.sdivR .x0 lv_reg rv_reg hSdiv hRV_ne0_cbz)
+          have h := ArmSteps.single (.sdivR .x0 lv_reg rv_reg hSdiv)
           rwa [hLV_cbz, hRV_cbz] at h
         let s_q := (s2.nextPC.setReg .x0 q).nextPC
         have hPC_q : s_q.pc = pcMap pc + (vLoadVar layout y lv_reg).length +
