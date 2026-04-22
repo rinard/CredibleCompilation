@@ -239,6 +239,57 @@ theorem program_behavior_of_init {p : Prog} {σ₀ : Store} {b : Behavior}
   | typeErrors _ => obtain ⟨am', hh⟩ := h; exact ⟨ArrayMem.init, am', hh⟩
   | diverges => exact h
 
+/-- **`has_behavior` with the initial-`ArrayMem` invariant exposed.**  Every
+    stepClosed TAC program has a well-defined behavior whose witnesses start
+    from `ArrayMem.init`.  Mirrors `has_behavior`'s structure exactly —
+    the by_cases dispatches are identical; only the halts/errors/typeErrors
+    witnesses are packaged into `program_behavior_init` (fixing `am` to
+    `ArrayMem.init`) instead of `program_behavior` (leaving `am`
+    existential). -/
+theorem has_behavior_init (p : Prog) (σ₀ : Store) (hclosed : StepClosedInBounds p) :
+    ∃ b, program_behavior_init p σ₀ b := by
+  -- Local clone of PropChecker's StepsN_to_Steps' (it's private there).
+  have stepsN_to_steps : ∀ {c c' : Cfg} {n : Nat}, StepsN p c c' n → (p ⊩ c ⟶* c') := by
+    intro c c' n h
+    induction n generalizing c with
+    | zero => exact h ▸ .refl
+    | succ n ih => obtain ⟨c'', hs, hm⟩ := h; exact .step hs (ih hm)
+  by_cases h : ∃ n σ' am', StepsN p (Cfg.run 0 σ₀ ArrayMem.init) (Cfg.halt σ' am') n
+  · obtain ⟨n, σ', am', hn⟩ := h
+    exact ⟨.halts σ', am', stepsN_to_steps hn⟩
+  · by_cases hed : ∃ n σ' am', StepsN p (Cfg.run 0 σ₀ ArrayMem.init) (Cfg.errorDiv σ' am') n
+    · obtain ⟨_, σ', am', hn⟩ := hed
+      exact ⟨.errors σ', am', .inl (stepsN_to_steps hn)⟩
+    · by_cases heb : ∃ n σ' am', StepsN p (Cfg.run 0 σ₀ ArrayMem.init) (Cfg.errorBounds σ' am') n
+      · obtain ⟨_, σ', am', hn⟩ := heb
+        exact ⟨.errors σ', am', .inr (stepsN_to_steps hn)⟩
+      · by_cases hte : ∃ n σ' am', StepsN p (Cfg.run 0 σ₀ ArrayMem.init) (Cfg.typeError σ' am') n
+        · obtain ⟨_, σ', am', hn⟩ := hte
+          exact ⟨.typeErrors σ', am', stepsN_to_steps hn⟩
+        · -- Diverges: reuse has_behavior's .diverges branch (same construction).
+          have h_run : ∀ n, ∃ pc σ am, StepsN p (Cfg.run 0 σ₀ ArrayMem.init) (Cfg.run pc σ am) n ∧ pc < p.size := by
+            intro n; induction n with
+            | zero => exact ⟨0, σ₀, ArrayMem.init, rfl, hclosed.1⟩
+            | succ n ih =>
+              obtain ⟨pc, σ, am, hn, hpc⟩ := ih
+              obtain ⟨c', hstep⟩ := Step.progress_untyped p pc σ am hpc
+              match c', hstep with
+              | .halt σ' am', s => exact absurd ⟨n+1, σ', am', StepsN_extend hn s⟩ h
+              | .errorDiv σ' am', s => exact absurd ⟨n+1, σ', am', StepsN_extend hn s⟩ hed
+              | .errorBounds σ' am', s => exact absurd ⟨n+1, σ', am', StepsN_extend hn s⟩ heb
+              | .typeError σ' am', s => exact absurd ⟨n+1, σ', am', StepsN_extend hn s⟩ hte
+              | .run pc' σ' am', s => exact ⟨pc', σ', am', StepsN_extend hn s, hclosed.2 pc pc' σ σ' am am' hpc s⟩
+          have g_spec : ∀ n, ∃ c, StepsN p (Cfg.run 0 σ₀ ArrayMem.init) c n ∧ ∃ pc σ am, c = Cfg.run pc σ am := by
+            intro n; obtain ⟨pc, σ, am, hn, _⟩ := h_run n; exact ⟨_, hn, pc, σ, am, rfl⟩
+          let g := fun n => (g_spec n).choose
+          have g_stepsN : ∀ n, StepsN p (Cfg.run 0 σ₀ ArrayMem.init) (g n) n :=
+            fun n => (g_spec n).choose_spec.1
+          refine ⟨.diverges, g, ⟨⟨σ₀, ArrayMem.init, ?_⟩, fun n => ?_⟩, ?_⟩
+          · exact (g_stepsN 0).symm
+          · exact StepsN_det (g_stepsN n) (StepsN_split_last (g_stepsN (n+1))).choose_spec.1 ▸
+              (StepsN_split_last (g_stepsN (n+1))).choose_spec.2
+          · exact (g_stepsN 0).symm
+
 /-- Convert `StepsN` to `RefStepsN`. -/
 private theorem StepsN_to_RefStepsN {p : Prog} {c c' : Cfg} {n : Nat}
     (h : StepsN p c c' n) : RefStepsN p n c c' := by

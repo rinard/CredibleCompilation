@@ -1150,6 +1150,96 @@ theorem pipelined_no_typeError
   have hts : TypedStore prog.tyCtx (Store.typedInit prog.tyCtx) := TypedStore.typedInit _
   exact type_safety hWTP hts hSC
 
+/-!
+### Fix B' infrastructure — self-loop divergence
+
+The design-doc "Fix B'" handles source-level divergence by recognizing
+its realization as a self-loop at the ARM level.  Given a TAC self-loop
+(`.goto pc` or an `.ifgoto` whose guard evaluates to `true`) at pc, the
+emitted ARM instruction is an unconditional branch back to the same PC,
+so a single `ArmStep` returns to the current state.  From there
+`ArmDiverges` follows immediately (witness every step count with the
+repeating state itself).
+
+Primitives ported from probes `PivotProbePF1.lean` and `PivotProbePF2.lean`.
+-/
+
+/-- **Fix B' primitive: ArmDiverges from a self-loop step.**  A single
+    `ArmStep` that returns to the same state witnesses divergence: every
+    length `n` has a trace (namely the one that repeats `s`). -/
+theorem arm_self_loop_diverges {prog : ArmProg} {s : ArmState}
+    (h : ArmStep prog s s) : ArmDiverges prog s := by
+  intro n
+  induction n with
+  | zero => exact ⟨s, rfl⟩
+  | succ k ih =>
+    obtain ⟨s'', hk⟩ := ih
+    exact ⟨s'', s, h, hk⟩
+
+/-- **Fix B' primitive: ArmDiverges lifted through a prefix.**  If
+    `init` reaches a self-loop state `s` in finitely many steps, then
+    `init` diverges.  Case-splits on whether the target step count is
+    inside the prefix (truncate) or past it (compose with repeated
+    self-loop steps). -/
+theorem arm_diverges_of_prefix_reaches_self_loop
+    {prog : ArmProg} {init s : ArmState}
+    (hReach : ArmSteps prog init s)
+    (hSelf : ArmStep prog s s) : ArmDiverges prog init := by
+  intro n
+  obtain ⟨k, hK⟩ := ArmSteps_to_ArmStepsN hReach
+  have hDiv : ArmDiverges prog s := arm_self_loop_diverges hSelf
+  by_cases hnk : n ≤ k
+  · have : ∃ m, k = n + m := ⟨k - n, by omega⟩
+    obtain ⟨m, hm⟩ := this
+    rw [hm] at hK
+    exact ArmStepsN_prefix hK
+  · obtain ⟨s', hDiv'⟩ := hDiv (n - k)
+    have heq : k + (n - k) = n := by omega
+    refine ⟨s', ?_⟩
+    rw [← heq]
+    exact ArmStepsN_trans hK hDiv'
+
+/-- **Fix B' primitive: TAC `.goto pc` self-loop → ARM self-loop.**
+
+    Given a TAC instruction `.goto pc` at PC pc (self-loop) and an ARM
+    state `s` matching via `ExtSimRel`, the ARM code at `pcMap pc` is
+    `.b (pcMap pc)` (from `spec.instrGen` + `verifiedGenInstr`
+    unfolding), and executing it from `s` (whose `s.pc = pcMap pc`)
+    yields `s` again.  Hence `ArmStep r.bodyFlat s s`. -/
+theorem tac_goto_self_loop_implies_arm_self_loop
+    {tyCtx : TyCtx} {p : Prog} {r : VerifiedAsmResult}
+    (spec : GenAsmSpec tyCtx p r)
+    {pc : Nat} {σ : Store} {am : ArrayMem} {s : ArmState}
+    (hRel : ExtSimRel r.layout r.pcMap r.divS r.boundsS (.run pc σ am) s)
+    (hPC : pc < p.size)
+    (hGoto : p[pc] = TAC.goto pc) :
+    ArmStep r.bodyFlat s s := by
+  have hsPc : s.pc = r.pcMap pc := hRel.2.1
+  have hNotLib : isLibCallTAC p[pc] = false := by rw [hGoto]; rfl
+  have hNotPrint : ∀ fmt vs, p[pc] ≠ .print fmt vs := by
+    intro fmt vs h; rw [hGoto] at h; exact TAC.noConfusion h
+  have hGenInstr := spec.instrGen pc hPC hNotLib hNotPrint
+  rw [hGoto] at hGenInstr
+  have hBodyEq : r.bodyPerPC[pc]'(spec.bodySize ▸ hPC) = [ArmInstr.b (r.pcMap pc)] := by
+    simp only [verifiedGenInstr] at hGenInstr
+    split at hGenInstr
+    · exact absurd hGenInstr (by intro h; cases h)
+    · simp only [Option.some.injEq] at hGenInstr
+      exact hGenInstr.symm
+  obtain ⟨lengths, hLSz, hPcMap, hLenEq⟩ := spec.pcMapLengths
+  have hCodeAt0 :=
+    codeAt_of_bodyFlat' r lengths hLSz hLenEq pc (spec.bodySize ▸ hPC)
+  rw [← hPcMap] at hCodeAt0
+  rw [hBodyEq] at hCodeAt0
+  have hCode : r.bodyFlat[r.pcMap pc]? = some (ArmInstr.b (r.pcMap pc)) :=
+    hCodeAt0.head
+  have hCode' : r.bodyFlat[s.pc]? = some (ArmInstr.b (r.pcMap pc)) := by
+    rw [hsPc]; exact hCode
+  have hStep := ArmStep.branch (r.pcMap pc) hCode'
+  have hsEq : { s with pc := r.pcMap pc } = s := by rw [← hsPc]
+  rw [hsEq] at hStep
+  exact hStep
+
 /-- **Phase 7 helper: observable determinism at `haltFinal`.**  The halt-save
     block writes observables to deterministic stack slots (independent of
     havoc, because havoc is always followed by restore before any branch in
@@ -1271,7 +1361,49 @@ theorem arm_diverges_implies_while_diverges
       (applyPassesPure prog.tyCtx passes prog.compileToTAC) = .ok r)
     (hDiv : ArmDiverges r.bodyFlat (Phase6.initArmState r)) :
     ∀ fuel, prog.interp fuel = none := by
-  sorry
+  have htc := prog.typeCheckStrict_typeCheck htcs
+  have hInitEq : Store.typedInit prog.tyCtx = prog.initStore :=
+    Program.typedInit_eq_initStore prog htc
+  have hSC : StepClosedInBounds (applyPassesPure prog.tyCtx passes prog.compileToTAC) :=
+    applyPassesPure_preserves_stepClosedInBounds prog.tyCtx passes _
+      (prog.compileToTAC_stepClosed htc)
+  have spec := verifiedGenerateAsm_spec hGen
+  -- Helper: contradict any `ArmSteps init s_sent` ending at a sentinel PC via
+  -- ArmDiverges + state_uniqueness + sentinel_stuck.
+  have sentinel_contradict : ∀ {s_sent : ArmState}
+      (_hReach : ArmSteps r.bodyFlat (Phase6.initArmState r) s_sent)
+      (_hPC : s_sent.pc = r.haltFinal ∨ s_sent.pc = r.divS ∨ s_sent.pc = r.boundsS),
+      False := by
+    intro s_sent hReach hPC
+    obtain ⟨n, hReachN⟩ := ArmSteps_to_ArmStepsN hReach
+    obtain ⟨s_ext, hExtN⟩ := hDiv (n + 1)
+    obtain ⟨s_mid, hN_mid, hStep_last⟩ := ArmStepsN_split_last hExtN
+    have hmid_eq : s_mid = s_sent :=
+      step_count_state_uniqueness n s_mid s_sent hN_mid hReachN
+    rw [hmid_eq] at hStep_last
+    exact sentinel_stuck spec hPC ⟨s_ext, hStep_last⟩
+  obtain ⟨b, hbeh⟩ := has_behavior_init _ (Store.typedInit prog.tyCtx) hSC
+  cases b with
+  | halts σ_opt =>
+    obtain ⟨am_opt, hhalt⟩ := hbeh
+    obtain ⟨_, _, _, s', _, hArm, _, hPC⟩ :=
+      while_to_arm_correctness prog htcs passes hGen hhalt
+    exact (sentinel_contradict hArm (.inl hPC)).elim
+  | errors σ_opt =>
+    obtain ⟨am_opt, hErr⟩ := hbeh
+    rcases hErr with hErrDiv | hErrBounds
+    · obtain ⟨s', hArm, hPC⟩ :=
+        (while_to_arm_div_preservation prog htcs passes hGen hErrDiv).2
+      exact (sentinel_contradict hArm (.inr (.inl hPC))).elim
+    · obtain ⟨s', hArm, hPC⟩ :=
+        (while_to_arm_bounds_preservation prog htcs passes hGen hErrBounds).2
+      exact (sentinel_contradict hArm (.inr (.inr hPC))).elim
+  | typeErrors σ_opt =>
+    obtain ⟨am', hte⟩ := hbeh
+    exact absurd hte (pipelined_no_typeError prog htcs passes σ_opt am')
+  | diverges =>
+    obtain ⟨f, hinf, hf0⟩ := hbeh
+    exact while_to_arm_divergence_preservation prog htcs passes hinf hf0
 
 end Phase7Skeleton
 
