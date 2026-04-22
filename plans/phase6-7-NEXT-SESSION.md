@@ -1,10 +1,20 @@
 # Phase 6/7 Next Session — Final Plan and Handoff
 
 **Read this first.**  Supersedes all earlier Phase 6/7 planning documents
-in this directory.  Last updated: 2026-04-22 after two full probe
-sessions.
+in this directory.  Last updated: 2026-04-23 after Phase A + Phase B
+partial (Phase 7d landed).
 
-## TL;DR
+## TL;DR for next session
+
+Phase A (pivot) and Phase B partial (Phase 7d) landed.  Sorry count:
+**9 → 7**.  Work remaining to close Phase 7: **Phase 7a/b/c + halt
+observables + Fix B' composition (Steps 7–8)**.  Estimate ~280 LOC.
+
+Phase 6 exhaustion (`bodyFlat_branch_target_bounded` + `arm_behavior_
+exhaustive` + `verifiedGenInstr_ifgoto_branch_bounded`) remains
+OUT OF SCOPE — separate ~700 LOC deliverable.
+
+## TL;DR of the original plan (historical)
 
 Close Phase 7 by doing **pivot (deterministic havoc) + Fix B' (direct
 ArmDiverges from self-loops)**.  Total budget ~750 LOC.  All major
@@ -86,20 +96,95 @@ un-privatized (no semantic change):
 - `codeAt_of_bodyFlat'`
 - `isLibCallTAC`
 
-### Current sorry count
+### What landed in session 3 (2026-04-23)
 
-9 sorrys in PipelineCorrectness.lean:
-- `bodyFlat_branch_target_bounded` (Phase 6)
-- `step_count_pc_uniqueness` (will be filled by pivot Step 4)
-- `arm_behavior_exhaustive` (Phase 6)
-- `halt_state_observables_deterministic` (Phase 7a helper)
-- Phase 7a/b/c/d theorem bodies
-- `verifiedGenInstr_ifgoto_branch_bounded` (P1 probe placeholder;
-  PE3 validated the fix pattern)
+**Phase A — deterministic havoc pivot** (commit `d41636e`, ~302 LOC,
+9 → 8 sorrys):
+
+- Added opaque `havocRegsFn` / `havocFRegsFn` in [ArmDefs.lean:208-210](../CredibleCompilation/ArmDefs.lean#L208-L210).
+- Refactored 7 `ArmStep` libcall constructors in [ArmSemantics.lean](../CredibleCompilation/ArmSemantics.lean)
+  (dropped `newRegs`/`newFregs` args; successors now determined by
+  `havocRegsFn s` / `havocFRegsFn s`).
+- Updated 19 call sites across ArmSemantics (6), ArmCorrectness (6),
+  CodeGen (7), and ArmStep.pc_eq_armNextPC binders in
+  PipelineCorrectness.
+- Added `armStepResult` (~85 LOC match), `ArmStep.eq_armStepResult`
+  (~65 LOC cases), `arm_step_det` (6 LOC), `step_count_state_
+  uniqueness` (15 LOC direct induction), and filled the
+  `step_count_pc_uniqueness` sorry as a 2-line corollary via `.pc`
+  projection.
+
+**Phase B partial — Phase 7d + Fix B' primitives** (commit `8524574`,
+~184 LOC, 8 → 7 sorrys):
+
+- In [Refinement.lean](../CredibleCompilation/RefCompiler/Refinement.lean):
+  `has_behavior_init` — mirrors `has_behavior`'s proof structure but
+  packages witnesses into `program_behavior_init` (fixing am to
+  `ArrayMem.init`).
+- In [PipelineCorrectness.lean](../CredibleCompilation/PipelineCorrectness.lean)
+  ported three Fix B' primitives from probe files:
+  - `arm_self_loop_diverges` (PF1')
+  - `arm_diverges_of_prefix_reaches_self_loop` (PF1')
+  - `tac_goto_self_loop_implies_arm_self_loop` (PF2')
+- Proved Phase 7d (`arm_diverges_implies_while_diverges`) via case on
+  `has_behavior_init`: halts/errors bins contradicted with
+  `step_count_state_uniqueness` + `sentinel_stuck`; typeErrors via
+  `pipelined_no_typeError`; diverges via
+  `while_to_arm_divergence_preservation`.
+
+### Plan deviation: Steps 7 and 8 deferred
+
+The original plan ordered Phase B as Steps 6 → 7 → 8 → 9 → 10, with
+Steps 7 (`tac_iftrue_self_loop_implies_arm_self_loop`) and 8
+(`source_diverges_gives_ArmDiverges_init`) as Fix B' composition
+infrastructure.
+
+Session 3 deferred Steps 7, 8 because Phase 7d (Step 10) does NOT
+consume them — its proof uses `step_count_state_uniqueness` +
+`sentinel_stuck` + `while_to_arm_divergence_preservation` directly.
+Steps 7, 8 are only needed for Phase C (7a/b/c) where source-
+divergence must be contradicted at div/bounds sentinels.
+
+**Structural concern with Step 7 raised during session 3**:
+`.ifgoto be pc` (with `be.eval σ = true`) compiles to a **multi-
+instruction** ARM sequence (evaluate `be` into regs/flags, then
+conditional branch).  So `ArmStep r.bodyFlat s s` (single-step
+self-loop) is **not directly provable** for the `.ifgoto` case —
+intermediate ARM states have modified regs/flags.  The plan's
+original framing ("similar to PF2'") needs revision for this case.
+
+Recommended pivot in next session: generalize
+`arm_diverges_of_prefix_reaches_self_loop` to accept an `ArmSteps s s'`
+cycle (where `s'.pc = s.pc` but `s' ≠ s` is allowed) rather than a
+single `ArmStep s s`.  Then the forward simulation for `.ifgoto` self-
+loop produces this `ArmSteps` cycle directly, without needing a
+dedicated `tac_iftrue_self_loop_implies_arm_self_loop` lemma.
+
+### Current sorry count: 7
+
+All in `CredibleCompilation/PipelineCorrectness.lean`:
+
+| Line | Sorry | Phase | Status |
+|---|---|---|---|
+| 770 | `bodyFlat_branch_target_bounded` | 6 | Out of scope |
+| 1022 | `arm_behavior_exhaustive` | 6 | Out of scope |
+| 1251 | `halt_state_observables_deterministic` | 7a helper | Next session |
+| 1281 | `arm_halts_implies_while_halts` | 7a | Next session |
+| 1309 | `arm_div_implies_while_unsafe_div` | 7b | Next session |
+| 1328 | `arm_bounds_implies_while_unsafe_bounds` | 7c | Next session |
+| 1863 | `verifiedGenInstr_ifgoto_branch_bounded` | 6 probe | Out of scope |
+
+Closing all 4 "Next session" sorrys takes the count to **3** (Phase 7
+done).  Closing the 3 "Out of scope" sorrys (Phase 6 exhaustion) takes
+it to 0.
 
 ## Commits on `phase6-prep`
 
 ```
+8524574 Phase B partial: Phase 7d closed + Fix B' primitives + has_behavior_init
+d41636e Phase A: deterministic havoc pivot + state_uniqueness (9 → 8 sorrys)
+632b130 Tune Livermore iteration counts and harden opt/C2 correctness check
+0173762 Phase 6/7 handoff: consolidated next-session plan
 4094678 Phase 6/7 micro-probe PF3: step_count_pc_uniqueness under nondet
 166f873 Phase 6/7 pivot probes PF1', PF2': Fix B' validated
 0732a55 Phase 6/7 pivot probes PE1, PE2, PE3: findings before starting pivot
@@ -110,9 +195,141 @@ eb899b9 Phase 6/7 session report: deterministic havoc pivot
 85cecb5 Bring main design doc into repo plans/
 ```
 
-## Next Session Work Plan
+Branch is pushed to `origin/phase6-prep`.
 
-### Phase A — pivot (Steps 1–5 of old plan, ~450 LOC total)
+## Next Session Work Plan (session 4, 2026-04-23+)
+
+**Goal**: close Phase 7 fully by landing 7a, 7b, 7c + halt observables.
+Target: 7 → 3 sorrys, ~280 LOC, ~80% confidence.
+
+### Step order and estimates
+
+**Step 1 (~40 LOC)** — Generalize `arm_diverges_of_prefix_reaches_self_loop`.
+
+The current primitive requires a single `ArmStep s s` witness.  For the
+`.ifgoto be pc` self-loop case, the ARM-level "loop" is a multi-step
+sequence `ArmSteps s s'` with `s'.pc = s.pc` but `s' ≠ s`.  Generalize:
+
+```lean
+theorem arm_diverges_of_prefix_and_cycle
+    {prog : ArmProg} {init s : ArmState}
+    (hReach : ArmSteps prog init s)
+    (hCycle : ArmSteps prog s s')
+    (hCycleNonrefl : ∃ k, k ≥ 1 ∧ ArmStepsN prog s s' k)
+    (hPcEq : s'.pc = s.pc)
+    : ArmDiverges prog init
+```
+
+Wait — the new `s'` after a cycle isn't the same state, so we can't
+"keep cycling" directly.  The right generalization uses ExtSimRel
+forcing post-cycle state to satisfy the same source configuration:
+
+```lean
+theorem arm_diverges_of_source_self_loop_cycle
+    {prog : ArmProg} {init : ArmState}
+    (hReach : ∀ n, ∃ s, ArmStepsN prog init s n)  -- an infinite family
+    : ArmDiverges prog init
+```
+
+This is definitionally `ArmDiverges`, so it's trivial.  The real lemma
+we need: **forward sim of source TAC self-loop iterated n times gives
+n distinct ArmSteps**.  Budget the first 40 LOC toward this.
+
+**Step 2 (~120 LOC)** — `source_diverges_gives_ArmDiverges_init`.
+
+Given `program_behavior_init p' σ_init .diverges` (i.e., an
+`IsInfiniteExec f` with `f 0 = Cfg.run 0 σ_init ArrayMem.init`),
+construct `ArmDiverges r.bodyFlat (Phase6.initArmState r)`.
+
+Strategy: induction on step count n.  Use the forward simulation
+(specifically `backward_simulation` / `tacToArm_correctness`'s
+iterative version) to map each TAC step to a non-empty ARM step
+sequence.  The cumulative ArmSteps give the ArmStepsN witness.
+
+Expected tricky case: if the infinite TAC trace keeps returning to the
+same TAC cfg (self-loop in source), ARM must still produce unboundedly
+many states — this is guaranteed because each forward-sim of a
+.goto/.ifgoto cycle is non-trivial (non-refl ArmSteps).
+
+Two drafting approaches:
+- **(a) Self-loop-aware**: case-split on whether any prefix ends in a
+  source self-loop; use the helper from Step 1 if so.
+- **(b) Uniform**: just prove each forward sim produces ≥ 1 ArmStep,
+  then construct the ArmDiverges by induction without self-loop cases.
+
+Approach (b) is cleaner if the forward-sim length is provably ≥ 1 for
+every non-trivial TAC step.  Check `tacToArm_correctness` details.
+
+**Step 3 (~60 LOC)** — Phase 7b (`arm_div_implies_while_unsafe_div`).
+
+Case on `has_behavior_init` for source bin:
+- halts σ': forward sim gives s' at haltFinal.  `step_count_state_
+  uniqueness` ⇒ the ArmDiverges-implied state at length k matches s'.
+  But here we're not given ArmDiverges — we're given an ARM reach at
+  `divS`.  Contradict via sentinel distinctness: the divS-reach at
+  some length m + the haltFinal-reach at length k both come from
+  init; if m = k, state_uniqueness says they're the same state, but
+  `haltFinal ≠ divS`; if m ≠ k, extend the shorter one or truncate
+  the longer one to match lengths, same contradiction.
+- errors σ' div: source is exactly what we want — return the witness.
+- errors σ' bounds: forward sim gives s' at boundsS.  `step_count_
+  state_uniqueness` at common length + `divS ≠ boundsS` → contradiction.
+- typeErrors: excluded via `pipelined_no_typeError`.
+- diverges: apply `source_diverges_gives_ArmDiverges_init` from Step 2
+  → contradict via `sentinel_stuck` on divS (same technique as Phase
+  7d's halts/errors branches).
+
+**Step 4 (~60 LOC)** — Phase 7c (`arm_bounds_implies_while_unsafe_
+bounds`).  Symmetric to Step 3 with boundsS instead of divS.
+
+**Step 5 (~80 LOC)** — Phase 7a (`arm_halts_implies_while_halts`).
+
+Case on `has_behavior_init`:
+- halts σ': forward sim gives s'_fwd at haltFinal.  `step_count_state_
+  uniqueness` at common length says s = s'_fwd (exact state equality
+  under the pivot — stronger than PC-only uniqueness).  So observables
+  match σ_src via the ExtStateRel in the forward sim.
+- errors/typeErrors/diverges: all contradict via state_uniqueness +
+  sentinel distinctness (`haltFinal ≠ divS`, `haltFinal ≠ boundsS`)
+  or sentinel_stuck + Step 2's source_diverges_gives_ArmDiverges_init.
+
+Phase 7a doesn't need `halt_state_observables_deterministic` as a
+separate helper under the pivot — the state_uniqueness at common
+length directly gives state equality, so observable match is inline.
+
+**Step 6 (~15 LOC)** — Fill `halt_state_observables_deterministic`
+sorry as a direct corollary of `step_count_state_uniqueness`.  Reach
+init → s₁ in k₁ steps, init → s₂ in k₂ steps.  WLOG k₁ ≤ k₂ (take
+min).  Truncate the longer; state_uniqueness at k = min says the
+truncated equals the shorter.  But both end at haltFinal, so one of
+them has an outgoing step from haltFinal — contradiction via
+sentinel_stuck unless k₁ = k₂.  Then state_uniqueness gives s₁ = s₂
+directly.
+
+**Checkpoint after session 4**: 7 → 3 sorrys.  Commit as "Phase 7
+complete."
+
+### Checkpoint discipline
+
+Commit after each step; `lake build` should be green with at most the
+previously-remaining sorry count at each checkpoint.  If Step 2
+exceeds 180 LOC, stop and reconsider — the composition might need
+weaker intermediate conclusions.
+
+### Still open after session 4
+
+Phase 6 exhaustion (separate ~700 LOC deliverable):
+- `bodyFlat_branch_target_bounded` (14-case sweep) — ~600 LOC
+- `arm_behavior_exhaustive` (König) — ~100 LOC
+- `verifiedGenInstr_ifgoto_branch_bounded` probe placeholder —
+  subsumed by sweep
+
+## Historical Work Plan (session 3, completed)
+
+The plan below is the one session 3 followed.  Kept as historical
+record for cross-referencing commit messages.
+
+### Phase A — pivot (Steps 1–5 of old plan, ~450 LOC total) ✅ DONE
 
 Goal: deterministic `ArmStep` + `step_count_state_uniqueness` + Phase 7d.
 
@@ -170,11 +387,24 @@ Goal: deterministic `ArmStep` + `step_count_state_uniqueness` + Phase 7d.
    `PivotProbePD2.lean`).  Also fill the existing
    `step_count_pc_uniqueness` sorry as a 3-line corollary.
 
-**Checkpoint after Phase A**: 9 → 8 sorrys (`step_count_pc_uniqueness`
+**Checkpoint after Phase A (landed ✅ in session 3, commit d41636e)**:
+9 → 8 sorrys (`step_count_pc_uniqueness`
 filled).  Commit as "Phase A: deterministic havoc + state_uniqueness
 landed."
 
-### Phase B — Fix B' + Phase 7d (~310 LOC)
+### Phase B — Fix B' + Phase 7d (~310 LOC) — PARTIAL ✅ (commit 8524574)
+
+**Session 3 outcome**: Steps 6 (PF1/PF2 port), 9 (has_behavior_init),
+and 10 (Phase 7d) landed.  Steps 7 (`tac_iftrue_self_loop_implies_arm_
+self_loop`) and 8 (`source_diverges_gives_ArmDiverges_init`) deferred
+— they are NOT needed for Phase 7d; consume them in Phase C instead.
+
+Structural issue with Step 7 as originally framed: `.ifgoto`
+compiles to multi-instruction ARM, so `ArmStep s s` (single-step self-
+loop) is structurally not provable for the `.ifgoto` case.  The fix
+for Phase C is to generalize Step 1's primitive to accept multi-step
+cycles.  See § Next Session Work Plan Step 1 for the revised approach.
+
 
 Goal: handle source-divergence bin for all Phase 7 theorems.
 
@@ -209,9 +439,15 @@ Goal: handle source-divergence bin for all Phase 7 theorems.
     - diverges: existing `while_to_arm_divergence_preservation`.
     ~35 LOC.
 
-**Checkpoint after Phase B**: 8 → 7 sorrys.  Commit.
+**Checkpoint after Phase B (PARTIAL ✅ in session 3)**: 8 → 7 sorrys.
+Phase 7d closed; Steps 7, 8 deferred to session 4.
 
-### Phase C — Phase 7a/b/c (~220 LOC)
+### Phase C — Phase 7a/b/c (~220 LOC) — PENDING (session 4 target)
+
+**Note**: session 4 should absorb Steps 7 and 8 (Fix B' composition)
+into Phase C rather than treating them as Phase B leftovers — see the
+"Next Session Work Plan (session 4)" above for the revised step order.
+
 
 11. **Phase 7b** (`arm_div_implies_while_unsafe_div`): case on source
     behavior.  Halts/errors-bounds/typeErrors: contradict via state

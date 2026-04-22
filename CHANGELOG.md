@@ -4,6 +4,160 @@ Chronological record of what was built and why, to reconstruct the sequence of d
 
 ---
 
+## Phase 6/7 session 3: Phase A + Phase B partial, Phase 7d closed (2026-04-23)
+
+**Goal**: execute the pivot + Fix B' plan written at the end of session 2
+(plans/phase6-7-NEXT-SESSION.md).  Target: 9 → 3 sorrys.
+
+**Achieved: 9 → 7 sorrys.**  Phase A (pivot) fully landed.  Phase B
+partial — Phase 7d closed, but Steps 7–8 (Fix B' composition) deferred
+to session 4 where they're actually consumed.
+
+### Phase A — deterministic havoc pivot (commit `d41636e`, ~302 LOC)
+
+- `ArmDefs.lean:208-210`: added opaque `havocRegsFn` / `havocFRegsFn`
+  oracles.  Rationale: pre-pivot `ArmStep` took post-libcall register
+  contents as existential arguments, making the step relation
+  nondeterministic and obstructing state-uniqueness proofs.  The pivot
+  makes post-call contents a fixed-but-unknown function of the pre-
+  call state.
+- `ArmSemantics.lean`: 7 `ArmStep` libcall constructors refactored
+  (printCall, callPrintI/B/F/S, callBinF, floatUnaryLibCall) — dropped
+  `newRegs`/`newFregs` args; successors now use `havocRegsFn s` /
+  `havocFRegsFn s` inline.  6 call sites in `ArmStep_total_of_codeAt`
+  updated.
+- `ArmCorrectness.lean`: 6 forward-sim call sites updated.  Minimal-
+  diff: kept `let newRegs := havocRegsFn s1` / `let newFregs :=
+  havocFRegsFn s1` bindings so downstream proofs (havoc preservation
+  of ExtStateRel, arrayMem irrelevance) work unchanged.
+- `CodeGen.lean`: 7 verifiedGenerateAsm_spec call sites updated.
+- `PipelineCorrectness.lean`:
+  - Fixed `ArmStep.pc_eq_armNextPC` binder counts for the 7 refactored
+    constructors.
+  - Added `armStepResult : ArmState → ArmInstr → ArmState` (~85 LOC
+    match over all ~53 ArmInstr variants).
+  - Added `ArmStep.eq_armStepResult` (full-state projection, ~65 LOC
+    `cases` enumeration — scales cleanly from PD2's 5-case probe).
+  - Added `arm_step_det` (6 LOC — direct projection + `Option.some.inj`).
+  - Added `step_count_state_uniqueness` (15 LOC — direct induction on
+    n using `arm_step_det`).  Pre-pivot, this lemma's inductive step
+    failed (two intermediate states could have same PC but different
+    regs under nondet).  Post-pivot it collapses to 15 LOC.
+  - Filled `step_count_pc_uniqueness` sorry as a 2-line `.pc`
+    projection corollary.
+
+Order chosen:
+1. Add opaque oracles (build still green, 9 sorrys).
+2. Refactor `ArmStep` rules (build breaks, 19 call sites become errors).
+3. Fix the 19 call sites + pc_eq_armNextPC binders (build green again,
+   9 sorrys).
+4. Add `armStepResult` / `eq_armStepResult` / `arm_step_det`.
+5. Move the block to before `step_count_state_uniqueness` (needed for
+   visibility — section ordering).
+6. Prove `step_count_state_uniqueness` + close `step_count_pc_
+   uniqueness` sorry.
+
+### Phase B partial — Phase 7d closed (commit `8524574`, ~184 LOC)
+
+**`has_behavior_init` wrapper** in [RefCompiler/Refinement.lean](CredibleCompilation/RefCompiler/Refinement.lean)
+(~50 LOC): mirrors `has_behavior`'s proof structure but packages
+witnesses into `program_behavior_init` (fixing am to `ArrayMem.init`)
+instead of `program_behavior` (leaving am existential).  Added in
+Refinement.lean rather than PropChecker.lean (which the original plan
+suggested) because `program_behavior_init` lives in Refinement.lean
+and PropChecker doesn't import it.
+
+**Fix B' primitives** ported from probe files to
+[PipelineCorrectness.lean](CredibleCompilation/PipelineCorrectness.lean):
+- `arm_self_loop_diverges` (from PF1')
+- `arm_diverges_of_prefix_reaches_self_loop` (from PF1')
+- `tac_goto_self_loop_implies_arm_self_loop` (from PF2')
+
+**Phase 7d** (`arm_diverges_implies_while_diverges`, ~50 LOC):
+- Case on `has_behavior_init` output.
+- halts/errors-div/errors-bounds: forward sim gives `ArmSteps init
+  s_sent` with `s_sent.pc = sentinel`.  ArmDiverges at length `n + 1`
+  (where n = length of forward trace) produces a state reached in
+  n+1 steps.  `ArmStepsN_split_last` decomposes: exists s_mid reached
+  in n steps + one outgoing ArmStep.  `step_count_state_uniqueness`
+  gives s_mid = s_sent, so the outgoing step fires at the sentinel
+  PC — but `sentinel_stuck` says no step leaves a sentinel PC.
+  Contradiction.
+- typeErrors: excluded via `pipelined_no_typeError`.
+- diverges: apply `while_to_arm_divergence_preservation` directly.
+
+Key observation that guided session 3's deviation from the plan:
+**Phase 7d does not require the Fix B' composition** (Steps 7, 8 of
+the plan).  The plan ordered Steps 7, 8 in Phase B because they're
+"Fix B' machinery" and Phase B was labeled "Fix B' + Phase 7d", but
+7d's proof above uses only state_uniqueness + sentinel_stuck +
+while_to_arm_divergence_preservation (for the .diverges source bin,
+which has an explicit IsInfiniteExec witness — no need to reconstruct
+one from scratch).
+
+Steps 7, 8 are only consumed by Phase C (7a/b/c) where source-
+diverges at a non-matching bin must be contradicted by showing ARM
+would also diverge (→ sentinel stuck).  Deferred to session 4.
+
+### Plan deviation: Step 7's structural issue
+
+The original plan said "Prove `tac_iftrue_self_loop_implies_arm_self_
+loop` — similar to PF2' but navigates `.ifgoto`'s 3-arm be match.  ~60
+LOC."
+
+Attempted in session 3 but revealed a **structural issue**:
+`.ifgoto be pc` (with `be.eval σ = true`) compiles to a multi-
+instruction ARM sequence (evaluate `be` into regs/flags, then a
+conditional branch).  The emitted sequence has at least 2 ARM
+instructions (usually 4+ for compare-based conditions).  So:
+
+- **`ArmStep r.bodyFlat s s`** (single-step self-loop, the PF2' form)
+  is NOT provable for the `.ifgoto` case.  Intermediate ARM states
+  after the evaluate-`be` loads/cmp have modified regs/flags; only the
+  final branch returns PC to `pcMap pc = s.pc`.
+
+The fix (for session 4): generalize
+`arm_diverges_of_prefix_reaches_self_loop` to accept an `ArmSteps s
+s'` cycle where `s'.pc = s.pc` but `s' ≠ s`.  Then the forward sim
+of a `.ifgoto` TAC self-loop produces this `ArmSteps` cycle directly,
+without a dedicated single-step lemma.
+
+This reframing also simplifies Step 8
+(`source_diverges_gives_ArmDiverges_init`): it no longer needs to
+case-split on whether a given TAC step is a self-loop — every TAC
+step produces an `ArmSteps prog s s'` of length ≥ 1 via forward sim,
+and the cumulative sequence forms `ArmDiverges` directly.
+
+Documented in plans/phase6-7-NEXT-SESSION.md § Next Session Work Plan
+(session 4).
+
+### Current sorry count: 7
+
+Remaining in PipelineCorrectness.lean:
+
+| Sorry | Scope for next session |
+|---|---|
+| `bodyFlat_branch_target_bounded` (Phase 6) | Out of scope — separate ~600 LOC |
+| `arm_behavior_exhaustive` (Phase 6) | Out of scope — ~100 LOC König |
+| `halt_state_observables_deterministic` (Phase 7a helper) | Session 4 — ~15 LOC corollary |
+| `arm_halts_implies_while_halts` (Phase 7a) | Session 4 — ~80 LOC |
+| `arm_div_implies_while_unsafe_div` (Phase 7b) | Session 4 — ~60 LOC |
+| `arm_bounds_implies_while_unsafe_bounds` (Phase 7c) | Session 4 — ~60 LOC |
+| `verifiedGenInstr_ifgoto_branch_bounded` (P1 probe placeholder) | Out of scope — subsumed by Phase 6 sweep |
+
+Session 4 target: **7 → 3 sorrys** (Phase 7 complete).
+
+### Branch status
+
+- `phase6-prep` on commit `8524574`.
+- 11 commits ahead of `main`.
+- Pushed to `origin/phase6-prep` (first push in session, set upstream).
+- Also merged in during session: unrelated benchmark tuning
+  (commit `632b130` — Livermore iteration counts + opt/C2 compare
+  harden).
+
+---
+
 ## Phase 6/7 probe session 2: Fix B' + pivot validated (2026-04-22)
 
 **Goal**: derisk the pivot plan further before committing to the full
