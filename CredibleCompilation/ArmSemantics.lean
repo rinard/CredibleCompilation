@@ -301,6 +301,16 @@ def ArmStepsN (prog : ArmProg) : ArmState → ArmState → Nat → Prop
   | s, s', 0     => s = s'
   | s, s', n + 1 => ∃ s'', ArmStep prog s s'' ∧ ArmStepsN prog s'' s' n
 
+/-- `ArmStepsN.single`: a single `ArmStep` is an `ArmStepsN` of count 1.
+    Drop-in replacement for `ArmSteps.single` when tracking step counts. -/
+theorem ArmStepsN.single {prog : ArmProg} {s s' : ArmState}
+    (h : ArmStep prog s s') : ArmStepsN prog s s' 1 :=
+  ⟨s', h, rfl⟩
+
+/-- `ArmStepsN.refl_zero`: reflexive `ArmStepsN` of count 0. -/
+@[simp] theorem ArmStepsN.refl_zero {prog : ArmProg} {s : ArmState} :
+    ArmStepsN prog s s 0 := rfl
+
 theorem ArmStepsN_extend {prog : ArmProg} {s s' s'' : ArmState} {n : Nat}
     (h1 : ArmStepsN prog s s' n) (h2 : ArmStep prog s' s'') :
     ArmStepsN prog s s'' (n + 1) := by
