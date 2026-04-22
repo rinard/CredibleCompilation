@@ -4,6 +4,88 @@ Chronological record of what was built and why, to reconstruct the sequence of d
 
 ---
 
+## Phase 6/7 probe session 2: Fix B' + pivot validated (2026-04-22)
+
+**Goal**: derisk the pivot plan further before committing to the full
+~750 LOC refactor.  Ran 6 additional probes beyond the initial PD1/PD2/PD3
+(landed in the prior session).
+
+**New probes** (files in `CCTests/Tests/PivotProbe*.lean`; not imported
+in `CCTests.lean`, build individually):
+
+- **PE1** (1-TAC-step ArmStepsN-length, partial): validated the
+  cases-on-ArmSteps pattern for halt/error sub-cases (.refl contradicted
+  by PC mismatch; .step gives K ≥ 1).  Confirmed BLOCKED for the
+  "source diverges" sub-case, since no forward-sim witness has a
+  definite sentinel PC there.
+
+- **PE2** (call-site grep): enumerated 19 `ArmStep.X` libcall sites
+  across `ArmSemantics.lean` (6), `ArmCorrectness.lean` (6), and
+  `CodeGen.lean` (7).  All mechanical-with-ripple (~15 LOC per site);
+  no deep rewrites needed.  Revised Step 2 estimate: 150 → 210 LOC.
+
+- **PE3** (.ifgoto v2 inline): rewrote the broken P1 probe without
+  helper `have` blocks; used `split at hmem` inline.  Compiled first
+  try.  Validates the 14-case sweep pattern and gives a blueprint
+  that unblocks the .ifgoto 3-nest case that had stalled previously.
+
+- **PF1'** (arm_self_loop_diverges): trivially proved
+  `ArmStep s s → ArmDiverges s` (~10 LOC) and a bonus
+  `arm_diverges_of_prefix_reaches_self_loop` (~15 LOC) that lifts via
+  ArmSteps prefix.  KEY INSIGHT: works under the CURRENT
+  nondeterministic ArmStep model — Fix B' doesn't require the pivot.
+
+- **PF2'** (TAC self-loop → ARM self-loop): `.goto pc` self-loop +
+  `GenAsmSpec` + `ExtSimRel.run` ⇒ `ArmStep r.bodyFlat s s` (~55 LOC).
+  Proof navigates spec.instrGen, unfolds verifiedGenInstr, uses the
+  newly-un-privatized `codeAt_of_bodyFlat'` to lift from bodyPerPC to
+  bodyFlat.
+
+- **PF3** (step_count_pc_uniqueness micro-probe, ❌ blocked): direct
+  induction stalls at the inductive step because `arm_step_pc_det`
+  requires SAME starting state; two traces from init produce
+  intermediate states with same PC but potentially different regs
+  (havoc divergence).  Confirms step_count_pc_uniqueness for bodyFlat
+  under nondeterminism requires ~300+ LOC (per-PC spec structure
+  analysis OR uninit-reads abstract interpretation), NOT the ~150 LOC
+  initially estimated.
+
+**Final decision**: pivot + Fix B'.  Total budget ~750 LOC for Phase 7.
+
+**Un-privatized** in `CodeGen.lean` (no semantic change):
+- `buildPcMap_eq_take_length`
+- `codeAt_of_bodyFlat`
+- `codeAt_of_bodyFlat'`
+- `isLibCallTAC`
+
+**New plan docs**:
+- [`plans/phase6-7-NEXT-SESSION.md`](plans/phase6-7-NEXT-SESSION.md) —
+  final authoritative plan + handoff for next session.
+  **Read this first.**
+- [`plans/phase6-7-pivot-probe-findings.md`](plans/phase6-7-pivot-probe-findings.md) —
+  PD1/PD2/PD3 detailed findings (from prior session).
+- [`plans/phase6-7-deterministic-pivot-plan.md`](plans/phase6-7-deterministic-pivot-plan.md) —
+  older pivot-only plan, superseded header added.
+
+**Status**: 9 sorrys unchanged (none closed this session; all probe-only
+work).  Full `lake build` green.  Branch `phase6-prep` has 8 commits
+ahead of `main`.
+
+**Commits**:
+- `63e88d3` — Path B infrastructure (prior session, sentinel_stuck,
+  feeder lemmas, pipelined helpers)
+- `eb899b9` — Session report (process narrative)
+- `ec91423` — Original pivot plan (now superseded)
+- `75a47f8` — PD1/PD2/PD3 probes + findings
+- `0732a55` — PE1/PE2/PE3 probes
+- `166f873` — PF1'/PF2' probes + un-privatizations
+- `4094678` — PF3 micro-probe confirming step_count_pc_uniqueness
+  is pivot-dependent
+
+Next session picks up with Phase A (pivot) per NEXT-SESSION.md.
+
+---
+
 ## Phase 6 Path B: infrastructure + 2 validated probes (2026-04-22)
 
 **Goal:** Land Phase 6/7 infrastructure that reliably compiles (feeder lemmas, pipelined helpers, sentinel lemmas) + validate two derisk probes for the remaining heavy work (14-case `bodyFlat_branch_target_bounded` sweep and `step_count_pc_uniqueness`).

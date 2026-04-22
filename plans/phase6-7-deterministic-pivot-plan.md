@@ -1,5 +1,21 @@
 # Phase 6/7 Deterministic Havoc Pivot — Implementation Plan
 
+**⚠️ SUPERSEDED** by [`plans/phase6-7-NEXT-SESSION.md`](phase6-7-NEXT-SESSION.md).
+That document reflects the final decision after two rounds of probes
+(PD*, PE*, PF*) and is the authoritative plan for the next session.
+
+This file records the pivot-only plan written BEFORE the PF* probes.
+It remains accurate for the pivot mechanics themselves (Steps 1–5 of
+what's now labeled Phase A) — useful as a detailed reference for the
+call-site refactor.  Subsequent phases (Step 6+ here) were re-scoped:
+`source_diverges_arm_pc_in_bodyFlat` is no longer the path.  Instead,
+Fix B' replaces it with a direct ArmDiverges-from-self-loop argument
+(~260 LOC vs the original ~150 LOC estimate for Step 6 + all the
+downstream complexity).  See the NEXT-SESSION doc for the updated
+work plan.
+
+---
+
 Concrete next-session plan for pivoting the ARM semantics to
 deterministic havoc and closing Phase 7 theorems.  Budget ~1–2 focused
 sessions depending on how clean the refactor goes.  Companion to
