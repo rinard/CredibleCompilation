@@ -359,7 +359,7 @@ where
 
 /-- Is a TAC instruction a library call that clobbers caller-saved registers?
     This includes non-native float unary ops (exp, sin, …) and fpow. -/
-private def isLibCallTAC : TAC → Bool
+def isLibCallTAC : TAC → Bool
   | .floatUnary _ op _ => !op.isNative
   | .fbinop _ .fpow _ _ => true
   | .printInt _ => true
@@ -3557,7 +3557,7 @@ theorem buildPcMap_eq_take_length (bodyPerPC : Array (List ArmInstr))
 
 /-- Each per-PC instruction block is embedded in the flat body at the
     offset given by `pcMap`. -/
-private theorem codeAt_of_bodyFlat (bodyPerPC : Array (List ArmInstr))
+theorem codeAt_of_bodyFlat (bodyPerPC : Array (List ArmInstr))
     (lengths : Array Nat)
     (hSz : lengths.size = bodyPerPC.size)
     (hLen : ∀ (i : Nat) (hL : i < lengths.size) (hB : i < bodyPerPC.size),
@@ -3576,7 +3576,7 @@ private theorem codeAt_of_bodyFlat (bodyPerPC : Array (List ArmInstr))
   exact flatMap_segment_getElem bodyPerPC.toList pc i hpc' hj
 
 /-- Wrapper: per-PC block embeds in `bodyFlat` (= flat ++ haltSaveBlock). -/
-private theorem codeAt_of_bodyFlat' (r : VerifiedAsmResult)
+theorem codeAt_of_bodyFlat' (r : VerifiedAsmResult)
     (lengths : Array Nat)
     (hSz : lengths.size = r.bodyPerPC.size)
     (hLen : ∀ (i : Nat) (hL : i < lengths.size) (hB : i < r.bodyPerPC.size),
