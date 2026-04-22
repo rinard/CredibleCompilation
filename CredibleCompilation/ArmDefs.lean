@@ -187,6 +187,28 @@ def ArmState.havocCallerSaved (s : ArmState)
     (newRegs : ArmReg → BitVec 64) (newFregs : ArmFReg → BitVec 64) :
     (s.havocCallerSaved newRegs newFregs).pc = s.pc := rfl
 
+/-!
+### Deterministic havoc oracles
+
+Library calls (printf, math builtins) clobber caller-saved registers
+with values the ARM semantics does not model precisely.  The pre-pivot
+`ArmStep` took the post-call register contents as existential
+arguments, which made `ArmStep` nondeterministic and obstructed
+state-uniqueness proofs (see `plans/phase6-7-NEXT-SESSION.md`).
+
+The pivot: treat post-call register contents as a fixed-but-unknown
+function of the pre-call state.  `havocRegsFn` / `havocFRegsFn` are
+`opaque` — no reduction rule, so downstream proofs cannot peek at
+their values — but they are total functions, so for each caller `s`
+there is exactly one possible successor state.  This restores
+determinism of `ArmStep` while preserving "the compiler must not
+depend on post-call register values" as a proof obligation.
+-/
+
+opaque havocRegsFn : ArmState → ArmReg → BitVec 64
+
+opaque havocFRegsFn : ArmState → ArmFReg → BitVec 64
+
 -- ============================================================
 -- § 4. ARM64 instructions
 -- ============================================================

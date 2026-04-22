@@ -4381,11 +4381,11 @@ private theorem step_simulation {tyCtx : TyCtx} {p : Prog} {r : VerifiedAsmResul
         have hNotNat : op.isNative = false := by
           rw [show p[pc] = p.code[pc] from rfl, hInstr] at hLib
           cases op <;> simp [isLibCallTAC, FloatUnaryOp.isNative] at hLib ⊢
-        let newRegs : ArmReg → BitVec 64 := fun _ => 0
-        let newFregs : ArmFReg → BitVec 64 := fun _ => 0
+        let newRegs : ArmReg → BitVec 64 := havocRegsFn s1
+        let newFregs : ArmFReg → BitVec 64 := havocFRegsFn s1
         let s2 := s1.havocCallerSaved newRegs newFregs |>.setFReg dst_reg (op.eval (s1.fregs src_reg)) |>.nextPC
         have hSteps2 : ArmSteps r.bodyFlat s1 s2 :=
-          .single (.floatUnaryLibCall op dst_reg src_reg newRegs newFregs hCall hNotNat)
+          .single (.floatUnaryLibCall op dst_reg src_reg hCall hNotNat)
         -- Phase C: store dst_reg into x (manual, ExtStateRel broken)
         have hPC2 : s2.pc = s1.pc + 1 := by
           simp [s2, ArmState.nextPC, ArmState.setFReg, ArmState.havocCallerSaved]
@@ -4757,12 +4757,12 @@ private theorem step_simulation {tyCtx : TyCtx} {p : Prog} {r : VerifiedAsmResul
                 (vLoadVarFP r.layout y lv_reg ++ vLoadVarFP r.layout z rv_reg).length := by
               simp [List.length_append]; omega
             rw [hIdx]; exact hCodeMid.head
-          let newRegs : ArmReg → BitVec 64 := fun _ => 0
-          let newFregs : ArmFReg → BitVec 64 := fun _ => 0
+          let newRegs : ArmReg → BitVec 64 := havocRegsFn s1b
+          let newFregs : ArmFReg → BitVec 64 := havocFRegsFn s1b
           let s2 := s1b.havocCallerSaved newRegs newFregs |>.setFReg dst_reg
             (FloatBinOp.eval .fpow (s1b.fregs lv_reg) (s1b.fregs rv_reg)) |>.nextPC
           have hSteps2 : ArmSteps r.bodyFlat s1b s2 :=
-            .single (.callBinF .fpow dst_reg lv_reg rv_reg newRegs newFregs hCall)
+            .single (.callBinF .fpow dst_reg lv_reg rv_reg hCall)
           -- Phase C setup: shared facts
           have hPC2 : s2.pc = s1b.pc + 1 := by
             simp [s2, ArmState.nextPC, ArmState.setFReg, ArmState.havocCallerSaved]
@@ -5142,11 +5142,11 @@ private theorem step_simulation {tyCtx : TyCtx} {p : Prog} {r : VerifiedAsmResul
           rw [show r.pcMap pc + (entriesToSaves entries).length = r.pcMap pc + entries.length from by
             simp [entriesToSaves_length]]
           exact h
-        let newRegs : ArmReg → BitVec 64 := fun _ => 0
-        let newFregs : ArmFReg → BitVec 64 := fun _ => 0
+        let newRegs : ArmReg → BitVec 64 := havocRegsFn s1
+        let newFregs : ArmFReg → BitVec 64 := havocFRegsFn s1
         let s_mid := (s1.havocCallerSaved newRegs newFregs).nextPC
         have hSteps2 : ArmSteps r.bodyFlat s1 s_mid :=
-          .single (.callPrintI newRegs newFregs hCodeCall)
+          .single (.callPrintI hCodeCall)
         -- Now discharge the 7 hBaseExists obligations
         refine ⟨s_mid, hSteps1.trans hSteps2, ?_, ?_, ?_, ?_, ?_, ?_⟩
         · -- (2) PC: s_mid.pc = s_saved.pc + baseInstrs.length
@@ -5324,11 +5324,11 @@ private theorem step_simulation {tyCtx : TyCtx} {p : Prog} {r : VerifiedAsmResul
           rw [show r.pcMap pc + (entriesToSaves entries).length = r.pcMap pc + entries.length from by
             simp [entriesToSaves_length]]
           exact h
-        let newRegs : ArmReg → BitVec 64 := fun _ => 0
-        let newFregs : ArmFReg → BitVec 64 := fun _ => 0
+        let newRegs : ArmReg → BitVec 64 := havocRegsFn s1
+        let newFregs : ArmFReg → BitVec 64 := havocFRegsFn s1
         let s_mid := (s1.havocCallerSaved newRegs newFregs).nextPC
         have hSteps2 : ArmSteps r.bodyFlat s1 s_mid :=
-          .single (.callPrintB newRegs newFregs hCodeCall)
+          .single (.callPrintB hCodeCall)
         refine ⟨s_mid, hSteps1.trans hSteps2, ?_, ?_, ?_, ?_, ?_, ?_⟩
         · show s_mid.pc = s_saved.pc + baseInstrs.length
           simp [s_mid, ArmState.nextPC, ArmState.havocCallerSaved]
@@ -5425,11 +5425,11 @@ private theorem step_simulation {tyCtx : TyCtx} {p : Prog} {r : VerifiedAsmResul
           rw [show r.pcMap pc + (entriesToSaves entries).length =
               r.pcMap pc + entries.length from by simp [entriesToSaves_length]]
           exact h
-        let newRegs : ArmReg → BitVec 64 := fun _ => 0
-        let newFregs : ArmFReg → BitVec 64 := fun _ => 0
+        let newRegs : ArmReg → BitVec 64 := havocRegsFn s_saved
+        let newFregs : ArmFReg → BitVec 64 := havocFRegsFn s_saved
         let s_mid := (s_saved.havocCallerSaved newRegs newFregs).nextPC
         have hSteps : ArmSteps r.bodyFlat s_saved s_mid :=
-          .single (.callPrintS lit newRegs newFregs hCodeCall)
+          .single (.callPrintS lit hCodeCall)
         refine ⟨s_mid, hSteps, ?_, ?_, ?_, ?_, ?_, ?_⟩
         · -- (2) PC
           show s_mid.pc = s_saved.pc + baseInstrs.length
@@ -5545,11 +5545,11 @@ private theorem step_simulation {tyCtx : TyCtx} {p : Prog} {r : VerifiedAsmResul
           rw [show r.pcMap pc + (entriesToSaves entries).length =
               r.pcMap pc + entries.length from by simp [entriesToSaves_length]]
           exact h
-        let newRegs : ArmReg → BitVec 64 := fun _ => 0
-        let newFregs : ArmFReg → BitVec 64 := fun _ => 0
+        let newRegs : ArmReg → BitVec 64 := havocRegsFn s1
+        let newFregs : ArmFReg → BitVec 64 := havocFRegsFn s1
         let s_mid := (s1.havocCallerSaved newRegs newFregs).nextPC
         have hSteps2 : ArmSteps r.bodyFlat s1 s_mid :=
-          .single (.callPrintF newRegs newFregs hCodeCall)
+          .single (.callPrintF hCodeCall)
         refine ⟨s_mid, hSteps1.trans hSteps2, ?_, ?_, ?_, ?_, ?_, ?_⟩
         · -- (2) PC
           show s_mid.pc = s_saved.pc + baseInstrs.length
@@ -5728,13 +5728,15 @@ private theorem step_simulation {tyCtx : TyCtx} {p : Prog} {r : VerifiedAsmResul
         have := hCodePrint 0 (by simp)
         simp only [List.getElem_cons_zero, entriesToSaves_length] at this
         rw [hSPC]; exact this
-      -- Pick arbitrary havoc values (callerSave_composition handles any)
-      let newRegs : ArmReg → BitVec 64 := fun _ => 0
-      let newFregs : ArmFReg → BitVec 64 := fun _ => 0
+      -- Opaque havoc oracles supply post-call register contents.
+      let newRegs : ArmReg → BitVec 64 :=
+        havocRegsFn {applyCallerSaves entries s with pc := s.pc + entries.length}
+      let newFregs : ArmFReg → BitVec 64 :=
+        havocFRegsFn {applyCallerSaves entries s with pc := s.pc + entries.length}
       have hStepPrint1 : ArmStep r.bodyFlat
           {applyCallerSaves entries s with pc := s.pc + entries.length}
           ({applyCallerSaves entries s with pc := s.pc + entries.length}.havocCallerSaved newRegs newFregs |>.nextPC) :=
-        .printCall lines newRegs newFregs hPrintCode
+        .printCall lines hPrintCode
       -- Step 3: restores
       have hRestorePC : s.pc + (entriesToSaves entries).length + 1 =
           r.pcMap pc + (entriesToSaves entries ++ [ArmInstr.printCall lines]).length := by

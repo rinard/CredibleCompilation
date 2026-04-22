@@ -793,24 +793,217 @@ theorem divS_ne_boundsS {tyCtx : TyCtx} {p : Prog} {r : VerifiedAsmResult}
     (spec : GenAsmSpec tyCtx p r) : r.divS ≠ r.boundsS := by
   rw [spec.divS_eq, spec.boundsS_eq]; omega
 
+/-- Deterministic successor state as a pure function of `s` and the
+    instruction at `s.pc`.  Under the deterministic-havoc pivot, every
+    `ArmStep` rule computes its successor from the pre-state and
+    instruction — no existential arguments.  Used to discharge
+    `arm_step_det` via the projection trick from probe PD2. -/
+private def armStepResult (s : ArmState) (i : ArmInstr) : ArmState :=
+  match i with
+  | .mov rd imm => s.setReg rd imm |>.nextPC
+  | .movR rd rn => s.setReg rd (s.regs rn) |>.nextPC
+  | .movz rd imm16 shift =>
+      s.setReg rd (BitVec.ofNat 64 (imm16 <<< shift.toUInt64).toNat) |>.nextPC
+  | .movk rd imm16 shift =>
+      s.setReg rd (insertBits (s.regs rd) imm16 shift) |>.nextPC
+  | .ldr rd off => s.setReg rd (s.stack off) |>.nextPC
+  | .str rs off => s.setStack off (s.regs rs) |>.nextPC
+  | .addR rd rn rm => s.setReg rd (s.regs rn + s.regs rm) |>.nextPC
+  | .subR rd rn rm => s.setReg rd (s.regs rn - s.regs rm) |>.nextPC
+  | .mulR rd rn rm => s.setReg rd (s.regs rn * s.regs rm) |>.nextPC
+  | .sdivR rd rn rm => s.setReg rd (BitVec.sdiv (s.regs rn) (s.regs rm)) |>.nextPC
+  | .cmp rn rm =>
+      { s with flags := Flags.mk (s.regs rn) (s.regs rm), pc := s.pc + 1 }
+  | .cmpImm rn imm =>
+      { s with flags := Flags.mk (s.regs rn) imm, pc := s.pc + 1 }
+  | .cset rd c =>
+      s.setReg rd (if s.flags.condHolds c then (1 : BitVec 64) else 0) |>.nextPC
+  | .cbz rn lbl =>
+      if s.regs rn = (0 : BitVec 64) then { s with pc := lbl } else s.nextPC
+  | .cbnz rn lbl =>
+      if s.regs rn = (0 : BitVec 64) then s.nextPC else { s with pc := lbl }
+  | .bCond c lbl =>
+      if s.flags.condHolds c = true then { s with pc := lbl } else s.nextPC
+  | .andImm rd rn imm => s.setReg rd (s.regs rn &&& imm) |>.nextPC
+  | .andR rd rn rm => s.setReg rd (s.regs rn &&& s.regs rm) |>.nextPC
+  | .eorImm rd rn imm => s.setReg rd (s.regs rn ^^^ imm) |>.nextPC
+  | .orrR rd rn rm => s.setReg rd (s.regs rn ||| s.regs rm) |>.nextPC
+  | .eorR rd rn rm => s.setReg rd (s.regs rn ^^^ s.regs rm) |>.nextPC
+  | .lslR rd rn rm => s.setReg rd (s.regs rn <<< s.regs rm) |>.nextPC
+  | .asrR rd rn rm =>
+      s.setReg rd (BitVec.sshiftRight (s.regs rn) (s.regs rm).toNat) |>.nextPC
+  | .b lbl => { s with pc := lbl }
+  | .printCall _ => s.havocCallerSaved (havocRegsFn s) (havocFRegsFn s) |>.nextPC
+  | .callPrintI => s.havocCallerSaved (havocRegsFn s) (havocFRegsFn s) |>.nextPC
+  | .callPrintB => s.havocCallerSaved (havocRegsFn s) (havocFRegsFn s) |>.nextPC
+  | .callPrintF => s.havocCallerSaved (havocRegsFn s) (havocFRegsFn s) |>.nextPC
+  | .callPrintS _ => s.havocCallerSaved (havocRegsFn s) (havocFRegsFn s) |>.nextPC
+  | .arrLd dst arr idxReg =>
+      s.setReg dst (s.arrayMem arr (s.regs idxReg)) |>.nextPC
+  | .arrSt arr idxReg valReg =>
+      s.setArrayMem arr (s.regs idxReg) (s.regs valReg) |>.nextPC
+  | .fmovToFP fd rn => s.setFReg fd (s.regs rn) |>.nextPC
+  | .fmovRR fd fn => s.setFReg fd (s.fregs fn) |>.nextPC
+  | .fldr fd off => s.setFReg fd (s.stack off) |>.nextPC
+  | .fstr fs off => s.setStack off (s.fregs fs) |>.nextPC
+  | .faddR fd fn fm =>
+      s.setFReg fd (FloatBinOp.eval .fadd (s.fregs fn) (s.fregs fm)) |>.nextPC
+  | .fsubR fd fn fm =>
+      s.setFReg fd (FloatBinOp.eval .fsub (s.fregs fn) (s.fregs fm)) |>.nextPC
+  | .fmulR fd fn fm =>
+      s.setFReg fd (FloatBinOp.eval .fmul (s.fregs fn) (s.fregs fm)) |>.nextPC
+  | .fdivR fd fn fm =>
+      s.setFReg fd (FloatBinOp.eval .fdiv (s.fregs fn) (s.fregs fm)) |>.nextPC
+  | .fmaddR fd fn fm fa =>
+      s.setFReg fd (FloatBinOp.eval .fadd (s.fregs fa)
+        (FloatBinOp.eval .fmul (s.fregs fn) (s.fregs fm))) |>.nextPC
+  | .fmsubR fd fn fm fa =>
+      s.setFReg fd (FloatBinOp.eval .fsub (s.fregs fa)
+        (FloatBinOp.eval .fmul (s.fregs fn) (s.fregs fm))) |>.nextPC
+  | .fminR fd fn fm =>
+      s.setFReg fd (FloatBinOp.eval .fmin (s.fregs fn) (s.fregs fm)) |>.nextPC
+  | .fmaxR fd fn fm =>
+      s.setFReg fd (FloatBinOp.eval .fmax (s.fregs fn) (s.fregs fm)) |>.nextPC
+  | .callBinF fop fd fn fm =>
+      s.havocCallerSaved (havocRegsFn s) (havocFRegsFn s)
+        |>.setFReg fd (FloatBinOp.eval fop (s.fregs fn) (s.fregs fm)) |>.nextPC
+  | .fcmpR fn fm =>
+      { s with flags := Flags.mk (s.fregs fn) (s.fregs fm), pc := s.pc + 1 }
+  | .scvtf fd rn => s.setFReg fd (intToFloatBv (s.regs rn)) |>.nextPC
+  | .fcvtzs rd fn => s.setReg rd (floatToIntBv (s.fregs fn)) |>.nextPC
+  | .farrLd fd arr idxReg =>
+      s.setFReg fd (s.arrayMem arr (s.regs idxReg)) |>.nextPC
+  | .farrSt arr idxReg valFReg =>
+      s.setArrayMem arr (s.regs idxReg) (s.fregs valFReg) |>.nextPC
+  | .floatUnaryInstr op fd fn =>
+      if op.isNative = true then
+        s.setFReg fd (op.eval (s.fregs fn)) |>.nextPC
+      else
+        s.havocCallerSaved (havocRegsFn s) (havocFRegsFn s)
+          |>.setFReg fd (op.eval (s.fregs fn)) |>.nextPC
+
+/-- **ArmStep full-state projection.**  Every `ArmStep` fires with a
+    specific instruction at `s.pc`, and the successor state equals
+    `armStepResult` applied to `s` and that instruction.  Companion to
+    `ArmStep.pc_eq_armNextPC` — strictly stronger, since state equality
+    implies PC equality. -/
+private theorem ArmStep.eq_armStepResult {prog : ArmProg} {s s' : ArmState}
+    (h : ArmStep prog s s') :
+    ∃ i, prog[s.pc]? = some i ∧ s' = armStepResult s i := by
+  cases h with
+  | mov rd imm hi => exact ⟨_, hi, rfl⟩
+  | movR rd rn hi => exact ⟨_, hi, rfl⟩
+  | movz rd imm sh hi => exact ⟨_, hi, rfl⟩
+  | movk rd imm sh hi => exact ⟨_, hi, rfl⟩
+  | ldr rd off hi => exact ⟨_, hi, rfl⟩
+  | str rs off hi => exact ⟨_, hi, rfl⟩
+  | addR _ _ _ hi => exact ⟨_, hi, rfl⟩
+  | subR _ _ _ hi => exact ⟨_, hi, rfl⟩
+  | mulR _ _ _ hi => exact ⟨_, hi, rfl⟩
+  | sdivR _ _ _ hi => exact ⟨_, hi, rfl⟩
+  | cmpRR _ _ hi => exact ⟨_, hi, rfl⟩
+  | cmpRI _ _ hi => exact ⟨_, hi, rfl⟩
+  | cset _ _ hi => exact ⟨_, hi, rfl⟩
+  | cbz_taken rn lbl hi hz =>
+    exact ⟨_, hi, by simp only [armStepResult, if_pos hz]⟩
+  | cbz_fall rn lbl hi hnz =>
+    exact ⟨_, hi, by simp only [armStepResult, if_neg hnz]⟩
+  | cbnz_taken rn lbl hi hnz =>
+    exact ⟨_, hi, by simp only [armStepResult, if_neg hnz]⟩
+  | cbnz_fall rn lbl hi hz =>
+    exact ⟨_, hi, by simp only [armStepResult, if_pos hz]⟩
+  | bCond_taken c lbl hi hc =>
+    exact ⟨_, hi, by simp only [armStepResult, if_pos hc]⟩
+  | bCond_fall c lbl hi hc =>
+    exact ⟨_, hi, by simp only [armStepResult, hc, if_false, Bool.false_eq_true]⟩
+  | andImm _ _ _ hi => exact ⟨_, hi, rfl⟩
+  | andR _ _ _ hi => exact ⟨_, hi, rfl⟩
+  | eorImm _ _ _ hi => exact ⟨_, hi, rfl⟩
+  | orrR _ _ _ hi => exact ⟨_, hi, rfl⟩
+  | eorR _ _ _ hi => exact ⟨_, hi, rfl⟩
+  | lslR _ _ _ hi => exact ⟨_, hi, rfl⟩
+  | asrR _ _ _ hi => exact ⟨_, hi, rfl⟩
+  | branch _ hi => exact ⟨_, hi, rfl⟩
+  | printCall _ hi => exact ⟨_, hi, rfl⟩
+  | callPrintI hi => exact ⟨_, hi, rfl⟩
+  | callPrintB hi => exact ⟨_, hi, rfl⟩
+  | callPrintF hi => exact ⟨_, hi, rfl⟩
+  | callPrintS _ hi => exact ⟨_, hi, rfl⟩
+  | arrLd _ _ _ hi => exact ⟨_, hi, rfl⟩
+  | arrSt _ _ _ hi => exact ⟨_, hi, rfl⟩
+  | fmovToFP _ _ hi => exact ⟨_, hi, rfl⟩
+  | fmovRR _ _ hi => exact ⟨_, hi, rfl⟩
+  | fldr _ _ hi => exact ⟨_, hi, rfl⟩
+  | fstr _ _ hi => exact ⟨_, hi, rfl⟩
+  | faddR _ _ _ hi => exact ⟨_, hi, rfl⟩
+  | fsubR _ _ _ hi => exact ⟨_, hi, rfl⟩
+  | fmulR _ _ _ hi => exact ⟨_, hi, rfl⟩
+  | fdivR _ _ _ hi => exact ⟨_, hi, rfl⟩
+  | fmaddR _ _ _ _ hi => exact ⟨_, hi, rfl⟩
+  | fmsubR _ _ _ _ hi => exact ⟨_, hi, rfl⟩
+  | fminR _ _ _ hi => exact ⟨_, hi, rfl⟩
+  | fmaxR _ _ _ hi => exact ⟨_, hi, rfl⟩
+  | callBinF _ _ _ _ hi => exact ⟨_, hi, rfl⟩
+  | fcmpRR _ _ hi => exact ⟨_, hi, rfl⟩
+  | scvtf _ _ hi => exact ⟨_, hi, rfl⟩
+  | fcvtzs _ _ hi => exact ⟨_, hi, rfl⟩
+  | farrLd _ _ _ hi => exact ⟨_, hi, rfl⟩
+  | farrSt _ _ _ hi => exact ⟨_, hi, rfl⟩
+  | floatUnaryNative _ _ _ hi hN =>
+    exact ⟨_, hi, by simp only [armStepResult, if_pos hN]⟩
+  | floatUnaryLibCall _ _ _ hi hN =>
+    exact ⟨_, hi, by simp only [armStepResult, hN, if_false, Bool.false_eq_true]⟩
+
+/-- **ARM step determinism.**  Under the deterministic-havoc pivot,
+    two `ArmStep`s from the same pre-state produce identical successor
+    states — not just identical PCs.  Proof: project both via
+    `ArmStep.eq_armStepResult`, match instructions by `Option.some.inj`,
+    rewrite. -/
+private theorem arm_step_det {prog : ArmProg} {s s₁ s₂ : ArmState}
+    (h1 : ArmStep prog s s₁) (h2 : ArmStep prog s s₂) : s₁ = s₂ := by
+  obtain ⟨i1, hi1, he1⟩ := h1.eq_armStepResult
+  obtain ⟨i2, hi2, he2⟩ := h2.eq_armStepResult
+  have : i1 = i2 := Option.some.inj (hi1 ▸ hi2)
+  rw [he1, he2, this]
+
+/-- **Phase 6 helper: step-count state uniqueness.**  Two `ArmStepsN`
+    traces from the same initial state, of the same length, end in the
+    same state.  Direct induction on `n` using `arm_step_det`: at the
+    inductive step both traces take a first `ArmStep` from `s₀`, which
+    by determinism go to the same intermediate state.
+
+    **Pivot payoff.**  Pre-pivot this lemma failed at the inductive
+    step (two traces could land in different intermediate states
+    because `ArmStep` was nondeterministic at havoc sites).  The
+    deterministic-havoc pivot replaces the existential newRegs/newFregs
+    with opaque oracles, restoring functional determinism and making
+    this a direct induction (probe PD2 validated the scaling). -/
+theorem step_count_state_uniqueness {prog : ArmProg} {s₀ : ArmState} :
+    ∀ n (s₁ s₂ : ArmState),
+      ArmStepsN prog s₀ s₁ n → ArmStepsN prog s₀ s₂ n → s₁ = s₂ := by
+  intro n
+  induction n generalizing s₀ with
+  | zero =>
+    intro s₁ s₂ h1 h2
+    change s₀ = s₁ at h1
+    change s₀ = s₂ at h2
+    subst h1; subst h2; rfl
+  | succ n ih =>
+    intro s₁ s₂ h1 h2
+    obtain ⟨m₁, hs₁, hr₁⟩ := h1
+    obtain ⟨m₂, hs₂, hr₂⟩ := h2
+    have hmid : m₁ = m₂ := arm_step_det hs₁ hs₂
+    subst hmid
+    exact ih _ _ hr₁ hr₂
+
 /-- **Phase 6 helper: step-count PC uniqueness.**  Two `ArmStepsN` traces
     from the same initial state, of the same length, end at the same PC.
-
-    **Design-doc risk realized.**  At havoc sites (`printCall`, `callBinF`,
-    `floatUnaryLibCall`, `callPrintI/B/F/S`), `regs`/`fregs` are replaced
-    with arbitrary functions.  A subsequent `cbz`/`cbnz`/`bCond` on a
-    havoc'd register could then branch to different PCs in different
-    traces.  So this lemma is **spec-dependent**: it holds because in
-    verified code every havoc is wrapped with save/restore, and no
-    branch reads a havoc'd register.  Proving that requires
-    `bodyFlat_branch_target_bounded` and a traversal of the bodyPerPC
-    structure — ~200 LOC at least, not the ~80 LOC design estimate.
-
-    Deferred to the full 14-case sweep + follow-up session. -/
+    Direct corollary of `step_count_state_uniqueness` via `.pc` projection. -/
 theorem step_count_pc_uniqueness {prog : ArmProg} {s₀ : ArmState} :
     ∀ n (s₁ s₂ : ArmState),
       ArmStepsN prog s₀ s₁ n → ArmStepsN prog s₀ s₂ n → s₁.pc = s₂.pc := by
-  sorry
+  intro n s₁ s₂ h1 h2
+  exact congrArg ArmState.pc (step_count_state_uniqueness n s₁ s₂ h1 h2)
 
 /-- **Phase 6 main theorem: ARM behavior exhaustion.**  Every ARM execution
     from the pipeline's initial state lands in one of four bins: clean halt
@@ -1319,11 +1512,11 @@ private theorem ArmStep.pc_eq_armNextPC {prog : ArmProg} {s s' : ArmState}
   | lslR _ _ _ hi => exact ⟨_, hi, rfl⟩
   | asrR _ _ _ hi => exact ⟨_, hi, rfl⟩
   | branch _ hi => exact ⟨_, hi, rfl⟩
-  | printCall _ _ _ hi => exact ⟨_, hi, rfl⟩
-  | callPrintI _ _ hi => exact ⟨_, hi, rfl⟩
-  | callPrintB _ _ hi => exact ⟨_, hi, rfl⟩
-  | callPrintF _ _ hi => exact ⟨_, hi, rfl⟩
-  | callPrintS _ _ _ hi => exact ⟨_, hi, rfl⟩
+  | printCall _ hi => exact ⟨_, hi, rfl⟩
+  | callPrintI hi => exact ⟨_, hi, rfl⟩
+  | callPrintB hi => exact ⟨_, hi, rfl⟩
+  | callPrintF hi => exact ⟨_, hi, rfl⟩
+  | callPrintS _ hi => exact ⟨_, hi, rfl⟩
   | arrLd _ _ _ hi => exact ⟨_, hi, rfl⟩
   | arrSt _ _ _ hi => exact ⟨_, hi, rfl⟩
   | fmovToFP _ _ hi => exact ⟨_, hi, rfl⟩
@@ -1338,14 +1531,14 @@ private theorem ArmStep.pc_eq_armNextPC {prog : ArmProg} {s s' : ArmState}
   | fmsubR _ _ _ _ hi => exact ⟨_, hi, rfl⟩
   | fminR _ _ _ hi => exact ⟨_, hi, rfl⟩
   | fmaxR _ _ _ hi => exact ⟨_, hi, rfl⟩
-  | callBinF _ _ _ _ _ _ hi => exact ⟨_, hi, rfl⟩
+  | callBinF _ _ _ _ hi => exact ⟨_, hi, rfl⟩
   | fcmpRR _ _ hi => exact ⟨_, hi, rfl⟩
   | scvtf _ _ hi => exact ⟨_, hi, rfl⟩
   | fcvtzs _ _ hi => exact ⟨_, hi, rfl⟩
   | farrLd _ _ _ hi => exact ⟨_, hi, rfl⟩
   | farrSt _ _ _ hi => exact ⟨_, hi, rfl⟩
   | floatUnaryNative _ _ _ hi _ => exact ⟨_, hi, rfl⟩
-  | floatUnaryLibCall _ _ _ _ _ hi _ => exact ⟨_, hi, rfl⟩
+  | floatUnaryLibCall _ _ _ hi _ => exact ⟨_, hi, rfl⟩
 
 /-- **Probe P2 — ARM step PC determinism.**  Two `ArmStep`s from the same
     initial state produce the same PC.  Follows from `ArmStep.pc_eq_armNextPC`

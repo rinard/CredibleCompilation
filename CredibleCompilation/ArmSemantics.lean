@@ -142,44 +142,41 @@ inductive ArmStep (prog : ArmProg) : ArmState → ArmState → Prop where
     ArmStep prog s { s with pc := lbl }
 
   /-- Print library call: havocs all caller-saved registers to arbitrary
-      values (models `bl _printf`). -/
-  | printCall (lines : List String)
-    (newRegs : ArmReg → BitVec 64) (newFregs : ArmFReg → BitVec 64) :
+      values (models `bl _printf`). Post-call register contents are given
+      by the opaque `havocRegsFn`/`havocFRegsFn` oracles — determined by
+      the pre-call state but invisible to downstream proofs. -/
+  | printCall (lines : List String) :
     prog[s.pc]? = some (.printCall lines) →
-    ArmStep prog s (s.havocCallerSaved newRegs newFregs |>.nextPC)
+    ArmStep prog s (s.havocCallerSaved (havocRegsFn s) (havocFRegsFn s) |>.nextPC)
 
   /-- Typed integer print library call (`bl _printInt`): havocs all
       caller-saved registers, no return value. Argument is consumed from `x0`
       by the C runtime; no part of the modeled state observes that read. -/
-  | callPrintI
-    (newRegs : ArmReg → BitVec 64) (newFregs : ArmFReg → BitVec 64) :
+  | callPrintI :
     prog[s.pc]? = some .callPrintI →
-    ArmStep prog s (s.havocCallerSaved newRegs newFregs |>.nextPC)
+    ArmStep prog s (s.havocCallerSaved (havocRegsFn s) (havocFRegsFn s) |>.nextPC)
 
   /-- Typed bool print library call (`bl _printBool`): havocs all
       caller-saved registers, no return value. Argument is consumed from `x0`
       by the C runtime; no part of the modeled state observes that read. -/
-  | callPrintB
-    (newRegs : ArmReg → BitVec 64) (newFregs : ArmFReg → BitVec 64) :
+  | callPrintB :
     prog[s.pc]? = some .callPrintB →
-    ArmStep prog s (s.havocCallerSaved newRegs newFregs |>.nextPC)
+    ArmStep prog s (s.havocCallerSaved (havocRegsFn s) (havocFRegsFn s) |>.nextPC)
 
   /-- Typed float print library call (`bl _printFloat`): havocs all
       caller-saved registers, no return value. Argument is consumed from `d0`
       by the C runtime; no part of the modeled state observes that read. -/
-  | callPrintF
-    (newRegs : ArmReg → BitVec 64) (newFregs : ArmFReg → BitVec 64) :
+  | callPrintF :
     prog[s.pc]? = some .callPrintF →
-    ArmStep prog s (s.havocCallerSaved newRegs newFregs |>.nextPC)
+    ArmStep prog s (s.havocCallerSaved (havocRegsFn s) (havocFRegsFn s) |>.nextPC)
 
   /-- Typed string print library call (`bl _printString`): self-contained;
       the string literal is loaded into `x0` from rodata by the emitted
       `adrp`/`add` sequence, then the call havocs all caller-saved registers.
       No return value. The string label is derived purely from the literal. -/
-  | callPrintS (lit : String)
-    (newRegs : ArmReg → BitVec 64) (newFregs : ArmFReg → BitVec 64) :
+  | callPrintS (lit : String) :
     prog[s.pc]? = some (.callPrintS lit) →
-    ArmStep prog s (s.havocCallerSaved newRegs newFregs |>.nextPC)
+    ArmStep prog s (s.havocCallerSaved (havocRegsFn s) (havocFRegsFn s) |>.nextPC)
 
   | arrLd (dst : ArmReg) (arr : ArrayName) (idxReg : ArmReg) :
     prog[s.pc]? = some (.arrLd dst arr idxReg) →
@@ -263,10 +260,9 @@ inductive ArmStep (prog : ArmProg) : ArmState → ArmState → Prop where
 
   /-- Binary float library call (pow): havocs all caller-saved registers
       to arbitrary values, then sets fd to result (models `bl _pow`). -/
-  | callBinF (fop : FloatBinOp) (fd fn fm : ArmFReg)
-    (newRegs : ArmReg → BitVec 64) (newFregs : ArmFReg → BitVec 64) :
+  | callBinF (fop : FloatBinOp) (fd fn fm : ArmFReg) :
     prog[s.pc]? = some (.callBinF fop fd fn fm) →
-    ArmStep prog s (s.havocCallerSaved newRegs newFregs |>.setFReg fd (FloatBinOp.eval fop (s.fregs fn) (s.fregs fm)) |>.nextPC)
+    ArmStep prog s (s.havocCallerSaved (havocRegsFn s) (havocFRegsFn s) |>.setFReg fd (FloatBinOp.eval fop (s.fregs fn) (s.fregs fm)) |>.nextPC)
 
   /-- Native float unary (fsqrt, fabs, fneg): pure, only modifies fd. -/
   | floatUnaryNative (op : FloatUnaryOp) (fd fn : ArmFReg) :
@@ -276,11 +272,10 @@ inductive ArmStep (prog : ArmProg) : ArmState → ArmState → Prop where
 
   /-- Library float unary (exp, sin, cos, …): havocs all caller-saved
       registers to arbitrary values, then sets fd to result (models `bl _exp`). -/
-  | floatUnaryLibCall (op : FloatUnaryOp) (fd fn : ArmFReg)
-    (newRegs : ArmReg → BitVec 64) (newFregs : ArmFReg → BitVec 64) :
+  | floatUnaryLibCall (op : FloatUnaryOp) (fd fn : ArmFReg) :
     prog[s.pc]? = some (.floatUnaryInstr op fd fn) →
     op.isNative = false →
-    ArmStep prog s (s.havocCallerSaved newRegs newFregs |>.setFReg fd (op.eval (s.fregs fn)) |>.nextPC)
+    ArmStep prog s (s.havocCallerSaved (havocRegsFn s) (havocFRegsFn s) |>.setFReg fd (op.eval (s.fregs fn)) |>.nextPC)
 
 /-- Multi-step closure. -/
 inductive ArmSteps (prog : ArmProg) : ArmState → ArmState → Prop where
@@ -413,11 +408,11 @@ theorem ArmStep_total_of_codeAt {prog : ArmProg} {s : ArmState} {i : ArmInstr}
   | lslR rd rn rm => exact ⟨_, .lslR rd rn rm h⟩
   | asrR rd rn rm => exact ⟨_, .asrR rd rn rm h⟩
   | b lbl => exact ⟨_, .branch lbl h⟩
-  | printCall lines => exact ⟨_, .printCall lines (fun _ => 0) (fun _ => 0) h⟩
-  | callPrintI => exact ⟨_, .callPrintI (fun _ => 0) (fun _ => 0) h⟩
-  | callPrintB => exact ⟨_, .callPrintB (fun _ => 0) (fun _ => 0) h⟩
-  | callPrintF => exact ⟨_, .callPrintF (fun _ => 0) (fun _ => 0) h⟩
-  | callPrintS lit => exact ⟨_, .callPrintS lit (fun _ => 0) (fun _ => 0) h⟩
+  | printCall lines => exact ⟨_, .printCall lines h⟩
+  | callPrintI => exact ⟨_, .callPrintI h⟩
+  | callPrintB => exact ⟨_, .callPrintB h⟩
+  | callPrintF => exact ⟨_, .callPrintF h⟩
+  | callPrintS lit => exact ⟨_, .callPrintS lit h⟩
   | bCond c lbl =>
     by_cases hc : s.flags.condHolds c = true
     · exact ⟨_, .bCond_taken c lbl h hc⟩
@@ -436,7 +431,7 @@ theorem ArmStep_total_of_codeAt {prog : ArmProg} {s : ArmState} {i : ArmInstr}
   | fmsubR fd fn fm fa => exact ⟨_, .fmsubR fd fn fm fa h⟩
   | fminR fd fn fm => exact ⟨_, .fminR fd fn fm h⟩
   | fmaxR fd fn fm => exact ⟨_, .fmaxR fd fn fm h⟩
-  | callBinF fop fd fn fm => exact ⟨_, .callBinF fop fd fn fm (fun _ => 0) (fun _ => 0) h⟩
+  | callBinF fop fd fn fm => exact ⟨_, .callBinF fop fd fn fm h⟩
   | fcmpR fn fm => exact ⟨_, .fcmpRR fn fm h⟩
   | scvtf fd rn => exact ⟨_, .scvtf fd rn h⟩
   | fcvtzs rd fn => exact ⟨_, .fcvtzs rd fn h⟩
@@ -445,7 +440,7 @@ theorem ArmStep_total_of_codeAt {prog : ArmProg} {s : ArmState} {i : ArmInstr}
   | floatUnaryInstr op fd fn =>
     by_cases hNat : op.isNative = true
     · exact ⟨_, .floatUnaryNative op fd fn h hNat⟩
-    · exact ⟨_, .floatUnaryLibCall op fd fn (fun _ => 0) (fun _ => 0) h
+    · exact ⟨_, .floatUnaryLibCall op fd fn h
         (by cases hh : op.isNative <;> simp_all)⟩
 
 /-- **ARM sentinel stuckness.** At an off-the-end PC (`prog[pc]? = none`),

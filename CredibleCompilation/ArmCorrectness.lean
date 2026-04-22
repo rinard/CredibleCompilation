@@ -2033,11 +2033,11 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
       have h := hCodeInstr.append_right (l1 := vLoadVar layout v .x0) 0 (by simp)
       simp at h
       rw [hPC1]; exact h
-    let newRegs : ArmReg → BitVec 64 := fun _ => 0
-    let newFregs : ArmFReg → BitVec 64 := fun _ => 0
+    let newRegs : ArmReg → BitVec 64 := havocRegsFn s1
+    let newFregs : ArmFReg → BitVec 64 := havocFRegsFn s1
     let s2 := (s1.havocCallerSaved newRegs newFregs).nextPC
     have hSteps2 : ArmSteps prog s1 s2 :=
-      .single (.callPrintI newRegs newFregs hCodeCall)
+      .single (.callPrintI hCodeCall)
     -- ExtStateRel preserved: havoc is safe under NoCallerSavedLayout
     have hNCS : NoCallerSavedLayout layout := hNCSLPrintInt v heq
     have hRel2 : ExtStateRel layout σ s2 :=
@@ -2072,11 +2072,11 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
       have h := hCodeInstr.append_right (l1 := vLoadVar layout v .x0) 0 (by simp)
       simp at h
       rw [hPC1]; exact h
-    let newRegs : ArmReg → BitVec 64 := fun _ => 0
-    let newFregs : ArmFReg → BitVec 64 := fun _ => 0
+    let newRegs : ArmReg → BitVec 64 := havocRegsFn s1
+    let newFregs : ArmFReg → BitVec 64 := havocFRegsFn s1
     let s2 := (s1.havocCallerSaved newRegs newFregs).nextPC
     have hSteps2 : ArmSteps prog s1 s2 :=
-      .single (.callPrintB newRegs newFregs hCodeCall)
+      .single (.callPrintB hCodeCall)
     have hNCS : NoCallerSavedLayout layout := hNCSLPrintBool v heq
     have hRel2 : ExtStateRel layout σ s2 :=
       (ExtStateRel.havocCallerSaved_preserved hRel1 hNCS).nextPC
@@ -2107,11 +2107,11 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
       have h := hCodeInstr.append_right (l1 := vLoadVarFP layout v .d0) 0 (by simp)
       simp at h
       rw [hPC1]; exact h
-    let newRegs : ArmReg → BitVec 64 := fun _ => 0
-    let newFregs : ArmFReg → BitVec 64 := fun _ => 0
+    let newRegs : ArmReg → BitVec 64 := havocRegsFn s1
+    let newFregs : ArmFReg → BitVec 64 := havocFRegsFn s1
     let s2 := (s1.havocCallerSaved newRegs newFregs).nextPC
     have hSteps2 : ArmSteps prog s1 s2 :=
-      .single (.callPrintF newRegs newFregs hCodeCall)
+      .single (.callPrintF hCodeCall)
     have hNCS : NoCallerSavedLayout layout := hNCSLPrintFloat v heq
     have hRel2 : ExtStateRel layout σ s2 :=
       (ExtStateRel.havocCallerSaved_preserved hRel1 hNCS).nextPC
@@ -2136,11 +2136,11 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
       have h := hCodeInstr 0 (by simp)
       simp at h; exact h
     rw [← hPcRel] at hCodeCall
-    let newRegs : ArmReg → BitVec 64 := fun _ => 0
-    let newFregs : ArmFReg → BitVec 64 := fun _ => 0
+    let newRegs : ArmReg → BitVec 64 := havocRegsFn s
+    let newFregs : ArmFReg → BitVec 64 := havocFRegsFn s
     let s2 := (s.havocCallerSaved newRegs newFregs).nextPC
     have hSteps : ArmSteps prog s s2 :=
-      .single (.callPrintS lit newRegs newFregs hCodeCall)
+      .single (.callPrintS lit hCodeCall)
     have hNCS : NoCallerSavedLayout layout := hNCSLPrintStr lit heq
     have hRel2 : ExtStateRel layout σ s2 :=
       (ExtStateRel.havocCallerSaved_preserved hStateRel hNCS).nextPC
@@ -4811,13 +4811,13 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
           | some (.ireg r) => exact absurd hLY (hNotIregY r)
         -- Step 3: callBinF — havocs caller-saved, sets dst_reg
         have hCall := hCodeCD.head; rw [← hPC2] at hCall
-        let newRegs : ArmReg → BitVec 64 := fun _ => 0
-        let newFregs : ArmFReg → BitVec 64 := fun _ => 0
+        let newRegs : ArmReg → BitVec 64 := havocRegsFn s2
+        let newFregs : ArmFReg → BitVec 64 := havocFRegsFn s2
         have hRV_eq : s2.fregs rv_reg = b := by rw [hRV_2, hz]; rfl
         let s3 := (s2.havocCallerSaved newRegs newFregs) |>.setFReg dst_reg
           (FloatBinOp.eval .fpow (s2.fregs lv_reg) (s2.fregs rv_reg)) |>.nextPC
         have hSteps3 : ArmSteps prog s2 s3 :=
-          ArmSteps.single (.callBinF .fpow dst_reg lv_reg rv_reg newRegs newFregs hCall)
+          ArmSteps.single (.callBinF .fpow dst_reg lv_reg rv_reg hCall)
         have hDR_3 : s3.fregs dst_reg = (Value.float (FloatBinOp.eval .fpow a b)).encode := by
           simp [s3, ArmState.setFReg, ArmState.nextPC, ArmState.havocCallerSaved, Value.encode]
           rw [hLV_2, hRV_eq]
@@ -5244,12 +5244,12 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
         · simp [hAM3, hAM2, hAM1, hArrayMem]
     · -- Library call (exp, sin, cos, …): havocs caller-saved to arbitrary values, then sets fd
       have hNotNat : op.isNative = false := by cases op <;> simp_all [FloatUnaryOp.isNative]
-      -- Pick arbitrary replacement values for havoc (proof works for any choice)
-      let newRegs : ArmReg → BitVec 64 := fun _ => 0
-      let newFregs : ArmFReg → BitVec 64 := fun _ => 0
+      -- Opaque havoc oracles supply post-call register contents.
+      let newRegs : ArmReg → BitVec 64 := havocRegsFn s1
+      let newFregs : ArmFReg → BitVec 64 := havocFRegsFn s1
       let s2 := (s1.havocCallerSaved newRegs newFregs) |>.setFReg dst_reg (op.eval (s1.fregs src_reg)) |>.nextPC
       have hSteps2 : ArmSteps prog s1 s2 :=
-        ArmSteps.single (.floatUnaryLibCall op dst_reg src_reg newRegs newFregs hCall hNotNat)
+        ArmSteps.single (.floatUnaryLibCall op dst_reg src_reg hCall hNotNat)
       have hDR_2 : s2.fregs dst_reg = (Value.float (op.eval f)).encode := by
         simp [s2, ArmState.setFReg, ArmState.nextPC, ArmState.havocCallerSaved, Value.encode]
         rw [hSR_1, hy]; rfl
