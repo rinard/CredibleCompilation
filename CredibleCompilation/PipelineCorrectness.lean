@@ -640,3 +640,462 @@ theorem generateAsm_total_with_passes (prog : Program) (htcs : prog.typeCheckStr
 theorem generateAsm_total (prog : Program) (htcs : prog.typeCheckStrict = true) :
     ∃ asm, verifiedGenerateAsm prog.tyCtx prog.compileToTAC = .ok asm :=
   generateAsm_total_with_passes prog htcs ([] : List (String × (Prog → ECertificate)))
+
+-- ============================================================
+-- § 8. Phase 6 — ARM behavior exhaustion (SKELETON)
+-- ============================================================
+
+/-!
+## Phase 6 skeleton
+
+The theorem statements in this section match the design at
+`plans/backward-jumping-octopus.md` § Phase 6 and
+`plans/backward-jumping-octopus-phase6-design.md`.  Every proof is
+currently `sorry`.  See the design doc for the proof-obligation
+dependency graph, LOC estimates, and discharge strategy.
+
+Foundational pieces already landed on `main` (commit `94f4fe6`):
+  - `ArmStep_total_of_codeAt` — stuck-free on in-bounds PCs.
+  - `ArmStep_stuck_of_none` — stuck on out-of-bounds PCs.
+  - sdivR rule unconditional (design doc line 27).
+Plus, from older commits: `bodyPerPC_length_pos`, `ArmStepsN.single`,
+`ArmStepsN.refl_zero`.
+
+The single load-bearing missing lemma is `bodyFlat_branch_target_bounded`:
+every branch instruction in `r.bodyFlat` targets a PC ≤ `r.boundsS`.
+Probes for two representative cases (`.goto`, `.binop .div`) live in
+`CredibleCompilation/ArmSemantics.lean` after the `verifiedGenInstr_*`
+cluster (committed on the `phase6-prep` branch alongside this skeleton).
+-/
+
+section Phase6Skeleton
+
+/-- Abbreviation for the zero-initialized ARM state used as the pipeline's
+    entry point.  Matches the state referenced by `while_to_arm_correctness`
+    et al. -/
+private def Phase6.initArmState (r : VerifiedAsmResult) : ArmState :=
+  { regs := fun _ => 0, fregs := fun _ => 0, stack := fun _ => 0,
+    pc := r.pcMap 0, flags := ⟨0, 0⟩ }
+
+/-- **Phase 6 helper: sentinel PCs are stuck.**  The three sentinels live at
+    `bodyFlat.size`, `bodyFlat.size + 1`, `bodyFlat.size + 2`, so
+    `bodyFlat[pc]? = none` at each; `ArmStep_stuck_of_none` finishes.
+
+    Proof size: ~10 LOC.  Risk: trivial. -/
+theorem sentinel_stuck {tyCtx : TyCtx} {p : Prog} {r : VerifiedAsmResult}
+    (spec : GenAsmSpec tyCtx p r) {s : ArmState}
+    (hS : s.pc = r.haltFinal ∨ s.pc = r.divS ∨ s.pc = r.boundsS) :
+    ¬ ∃ s', ArmStep r.bodyFlat s s' := by
+  sorry
+
+/-- **Phase 6 helper: branch targets are bounded.**  For every branch
+    instruction embedded in `r.bodyFlat`, its label target is ≤ `r.boundsS`.
+
+    Proof size: ~320 LOC.  Risk: mechanical but load-bearing.  Per-case
+    breakdown in the design doc.  Depends on feeder lemmas
+    `pcMap_le_haltS`, `checkBranchTargets_of_spec`, and a trivial
+    `verifiedGenBoolExpr_no_branches` (confirmed branch-free by grep). -/
+theorem bodyFlat_branch_target_bounded
+    {tyCtx : TyCtx} {p : Prog} {r : VerifiedAsmResult}
+    (spec : GenAsmSpec tyCtx p r) :
+    ∀ (pc : Nat) (lbl : Nat),
+      (r.bodyFlat[pc]? = some (ArmInstr.b lbl) ∨
+       (∃ rn, r.bodyFlat[pc]? = some (ArmInstr.cbz rn lbl)) ∨
+       (∃ rn, r.bodyFlat[pc]? = some (ArmInstr.cbnz rn lbl)) ∨
+       (∃ c,  r.bodyFlat[pc]? = some (ArmInstr.bCond c lbl))) →
+      lbl ≤ r.boundsS := by
+  sorry
+
+/-- **Phase 6 helper: step-count PC uniqueness.**  Two `ArmStepsN` traces
+    from the same initial state, of the same length, end at the same PC.
+    Havoc affects `regs`/`fregs` but not `pc`, so the PC sequence is
+    deterministic by step count.
+
+    Proof size: ~80 LOC.  Risk: moderate (havoc case).  Induction on `n`,
+    using per-`ArmStep`-rule PC determinism. -/
+theorem step_count_pc_uniqueness {prog : ArmProg} {s₀ : ArmState} :
+    ∀ n (s₁ s₂ : ArmState),
+      ArmStepsN prog s₀ s₁ n → ArmStepsN prog s₀ s₂ n → s₁.pc = s₂.pc := by
+  sorry
+
+/-- **Phase 6 main theorem: ARM behavior exhaustion.**  Every ARM execution
+    from the pipeline's initial state lands in one of four bins: clean halt
+    (`haltFinal`), div-by-zero sentinel (`divS`), bounds-error sentinel
+    (`boundsS`), or divergence (`ArmDiverges`).
+
+    Proof outline (Route 1 — classical em + König, design doc):
+    classical `em` on each sentinel-reach; the three positive cases dispatch
+    immediately.  In the fall-through (no sentinel reachable), build
+    `ArmDiverges = ∀ n, ∃ s, ArmStepsN init s n` by induction on `n`
+    maintaining the invariant `s.pc ≤ boundsS ∧ s.pc ∉ {haltFinal, divS, boundsS}`.
+    The inductive step uses `ArmStep_total_of_codeAt` for stuck-freedom and
+    `bodyFlat_branch_target_bounded` for the PC bound.
+
+    Proof size: ~100 LOC.  Risk: low given the helpers. -/
+theorem arm_behavior_exhaustive
+    (prog : Program) (htcs : prog.typeCheckStrict = true)
+    (passes : List (String × (Prog → ECertificate)))
+    {r : VerifiedAsmResult}
+    (hGen : verifiedGenerateAsm prog.tyCtx
+      (applyPassesPure prog.tyCtx passes prog.compileToTAC) = .ok r) :
+    (∃ s', ArmSteps r.bodyFlat (Phase6.initArmState r) s' ∧ s'.pc = r.haltFinal) ∨
+    (∃ s', ArmSteps r.bodyFlat (Phase6.initArmState r) s' ∧ s'.pc = r.divS) ∨
+    (∃ s', ArmSteps r.bodyFlat (Phase6.initArmState r) s' ∧ s'.pc = r.boundsS) ∨
+    ArmDiverges r.bodyFlat (Phase6.initArmState r) := by
+  sorry
+
+end Phase6Skeleton
+
+-- ============================================================
+-- § 9. Phase 7 — Backward theorems ARM → While (SKELETON)
+-- ============================================================
+
+/-!
+## Phase 7 skeleton
+
+Four backward theorems promoting ARM observations into source-side
+conclusions.  Together with the existing forward theorems
+(`while_to_arm_correctness`, `while_to_arm_div_preservation`,
+`while_to_arm_bounds_preservation`, `while_to_arm_divergence_preservation`)
+these establish full bidirectional end-to-end correctness.
+
+Schema (design doc § Phase 7): apply source totality via
+`pipelined_has_behavior`.  For each source-behavior bin, forward sim
+places ARM in a specific sentinel.  Use sentinel distinctness (all three
+`rfl`/`omega` from `spec.haltFinal_eq`, `spec.divS_eq`, `spec.boundsS_eq`)
+and `step_count_pc_uniqueness` to rule out non-matching source bins.
+The `typeErrors` source branch is excluded by pipeline-preserved
+well-typedness.
+-/
+
+section Phase7Skeleton
+
+/-- **Phase 7 helper: pipelined TAC has a well-defined behavior.**
+    Extends `applyPassesPure_preserves_invariants` to also carry
+    `checkStepClosed`, then appeals to `has_behavior` at the TAC level.
+
+    Proof size: ~35 LOC.  Risk: trivial.  Depends on a small extension
+    to `applyPassesPure_preserves_invariants` (also new) that threads
+    `checkStepClosed` through each pass. -/
+theorem pipelined_has_behavior
+    (prog : Program) (htcs : prog.typeCheckStrict = true)
+    (passes : List (String × (Prog → ECertificate)))
+    (σ₀ : Store) :
+    ∃ b, program_behavior
+      (applyPassesPure prog.tyCtx passes prog.compileToTAC) σ₀ b := by
+  sorry
+
+/-- **Phase 7 helper: pipelined TAC does not reach `typeError`.**
+    Well-typedness is preserved through passes (from
+    `applyPassesPure_preserves_invariants`), and standard type safety
+    (`type_safety` in `TypeSystem.lean`) excludes `typeError` reach at runtime.
+
+    Proof size: ~25 LOC. -/
+theorem pipelined_no_typeError
+    (prog : Program) (htcs : prog.typeCheckStrict = true)
+    (passes : List (String × (Prog → ECertificate)))
+    (σ' : Store) (am' : ArrayMem) :
+    ¬ ((applyPassesPure prog.tyCtx passes prog.compileToTAC) ⊩
+        Cfg.run 0 (Store.typedInit prog.tyCtx) ArrayMem.init ⟶* Cfg.typeError σ' am') := by
+  sorry
+
+/-- **Phase 7 helper: observable determinism at `haltFinal`.**  The halt-save
+    block writes observables to deterministic stack slots (independent of
+    havoc, because havoc is always followed by restore before any branch in
+    verified code).  So any ARM state with `pc = haltFinal` reached from
+    `init` has observables matching the source halt value.
+
+    Proof size: ~100 LOC.  Risk: moderate (interacts with halt-save block
+    semantics).  Used only by `arm_halts_implies_while_halts`. -/
+theorem halt_state_observables_deterministic
+    (prog : Program) (htcs : prog.typeCheckStrict = true)
+    (passes : List (String × (Prog → ECertificate)))
+    {r : VerifiedAsmResult}
+    (hGen : verifiedGenerateAsm prog.tyCtx
+      (applyPassesPure prog.tyCtx passes prog.compileToTAC) = .ok r)
+    {s₁ s₂ : ArmState}
+    (h₁ : ArmSteps r.bodyFlat (Phase6.initArmState r) s₁) (hPC₁ : s₁.pc = r.haltFinal)
+    (h₂ : ArmSteps r.bodyFlat (Phase6.initArmState r) s₂) (hPC₂ : s₂.pc = r.haltFinal) :
+    (∀ v loc, r.layout v = some loc →
+      (match loc with
+       | .stack off => s₁.stack off = s₂.stack off
+       | .ireg ir   => s₁.regs ir  = s₂.regs ir
+       | .freg fr   => s₁.fregs fr = s₂.fregs fr)) ∧
+    s₁.arrayMem = s₂.arrayMem := by
+  sorry
+
+/-- **Phase 7a — ARM halt implies source halt with matching observables.**
+
+    Forward counterpart: `while_to_arm_correctness`.  Given an ARM trace
+    ending at `haltFinal`, the source program halts safely and its output
+    store + array memory match the ARM state's observables.
+
+    Proof outline: apply `pipelined_has_behavior`; case on the source bin;
+    use `while_to_arm_correctness`/`..._div`/`..._bounds` to place ARM
+    in a specific sentinel for each non-matching bin; contradict via
+    `step_count_pc_uniqueness` + sentinel distinctness.  For the
+    `halts` bin, match observables via `halt_state_observables_deterministic`.
+    `typeErrors` excluded via `pipelined_no_typeError`; `diverges` excluded
+    via `ArmDiverges` reaching-vs-stuck argument (design doc § 7a). -/
+theorem arm_halts_implies_while_halts
+    (prog : Program) (htcs : prog.typeCheckStrict = true)
+    (passes : List (String × (Prog → ECertificate)))
+    {r : VerifiedAsmResult}
+    (hGen : verifiedGenerateAsm prog.tyCtx
+      (applyPassesPure prog.tyCtx passes prog.compileToTAC) = .ok r)
+    {s : ArmState}
+    (hArm : ArmSteps r.bodyFlat (Phase6.initArmState r) s)
+    (hPC : s.pc = r.haltFinal) :
+    ∃ fuel σ_src am_src,
+      prog.interp fuel = some (σ_src, am_src) ∧
+      ArmMatchesWhile r.layout prog.compileToTAC.observable σ_src am_src s := by
+  sorry
+
+/-- **Phase 7b — ARM div-by-zero sentinel implies source unsafe (division).**
+
+    Forward counterpart: `while_to_arm_div_preservation`.  Given an ARM
+    trace ending at `divS`, the source program is unsafe at some fuel with
+    cause = division by zero.
+
+    NOTE (Phase 4 caveat, design doc § Phase 4): the cause-specific
+    backward theorem currently concludes the cause-agnostic disjunction
+    `unsafeDiv ∨ unsafeBounds`.  Cause-specific matching (div → unsafeDiv
+    only) requires the `compileStmt_unsafe` refactor also deferred to
+    Phase 7.  Matching the existing forward theorem's conclusion for
+    consistency.
+
+    Proof size: ~60 LOC. -/
+theorem arm_div_implies_while_unsafe_div
+    (prog : Program) (htcs : prog.typeCheckStrict = true)
+    (passes : List (String × (Prog → ECertificate)))
+    {r : VerifiedAsmResult}
+    (hGen : verifiedGenerateAsm prog.tyCtx
+      (applyPassesPure prog.tyCtx passes prog.compileToTAC) = .ok r)
+    {s : ArmState}
+    (hArm : ArmSteps r.bodyFlat (Phase6.initArmState r) s)
+    (hPC : s.pc = r.divS) :
+    ∃ fuel,
+      prog.body.unsafeDiv fuel prog.initStore ArrayMem.init prog.arrayDecls ∨
+      prog.body.unsafeBounds fuel prog.initStore ArrayMem.init prog.arrayDecls := by
+  sorry
+
+/-- **Phase 7c — ARM bounds sentinel implies source unsafe (bounds).**
+
+    Symmetric to 7b; forward counterpart is `while_to_arm_bounds_preservation`.
+
+    Proof size: ~60 LOC. -/
+theorem arm_bounds_implies_while_unsafe_bounds
+    (prog : Program) (htcs : prog.typeCheckStrict = true)
+    (passes : List (String × (Prog → ECertificate)))
+    {r : VerifiedAsmResult}
+    (hGen : verifiedGenerateAsm prog.tyCtx
+      (applyPassesPure prog.tyCtx passes prog.compileToTAC) = .ok r)
+    {s : ArmState}
+    (hArm : ArmSteps r.bodyFlat (Phase6.initArmState r) s)
+    (hPC : s.pc = r.boundsS) :
+    ∃ fuel,
+      prog.body.unsafeDiv fuel prog.initStore ArrayMem.init prog.arrayDecls ∨
+      prog.body.unsafeBounds fuel prog.initStore ArrayMem.init prog.arrayDecls := by
+  sorry
+
+/-- **Phase 7d — ARM divergence implies source divergence.**
+
+    Forward counterpart: `while_to_arm_divergence_preservation`.  `ArmDiverges`
+    is taken as hypothesis (we do not construct it — Phase 6 builds it via
+    König where needed).
+
+    Proof outline: apply `pipelined_has_behavior`; for each non-`diverges`
+    source bin, forward sim gives `ArmSteps init s_sent` at a sentinel;
+    use `ArmDiverges` to pick a step count `n > (ArmStepsN-length of the
+    forward trace)`, yielding `ArmStepsN init s' n` with an outgoing
+    `ArmStep`; by `step_count_pc_uniqueness` the step-`n` state's PC is
+    the sentinel's; `sentinel_stuck` contradicts the outgoing step.
+
+    Proof size: ~40 LOC. -/
+theorem arm_diverges_implies_while_diverges
+    (prog : Program) (htcs : prog.typeCheckStrict = true)
+    (passes : List (String × (Prog → ECertificate)))
+    {r : VerifiedAsmResult}
+    (hGen : verifiedGenerateAsm prog.tyCtx
+      (applyPassesPure prog.tyCtx passes prog.compileToTAC) = .ok r)
+    (hDiv : ArmDiverges r.bodyFlat (Phase6.initArmState r)) :
+    ∀ fuel, prog.interp fuel = none := by
+  sorry
+
+end Phase7Skeleton
+
+-- ============================================================
+-- § 10. Phase 6 probes — validate branchTargetsBounded pattern
+-- ============================================================
+
+/-!
+## Probes
+
+Two per-`verifiedGenInstr`-case proofs that validate the pattern needed
+for `bodyFlat_branch_target_bounded`.  Landing these on `main` before the
+full 14-case sweep gives the next session a working blueprint to clone.
+
+The probes don't require `GenAsmSpec` — they take the pcMap-bound and
+sentinel-order hypotheses directly as arguments.  Full integration with
+spec comes when `bodyFlat_branch_target_bounded` is assembled.
+-/
+
+section Phase6Probes
+
+/-- **Probe 1 — `.goto`**.  The simplest branching case.  Output is
+    `[ArmInstr.b (pcMap l)]`; target `pcMap l` is assumed `≤ boundsS`
+    (eventually from `spec.pcMapLengths` + `spec.haltS_eq` +
+    `spec.boundsS_eq`). -/
+private theorem verifiedGenInstr_goto_branch_bounded
+    (layout : VarLayout) (pcMap : Nat → Nat) (l : Nat)
+    (haltS divS boundsS : Nat) (arrayDecls : List (ArrayName × Nat × VarTy))
+    (safe : Bool) {instrs : List ArmInstr}
+    (hGen : verifiedGenInstr layout pcMap (.goto l) haltS divS boundsS arrayDecls safe
+      = some instrs)
+    (hPcMapBound : pcMap l ≤ boundsS) :
+    ∀ instr' ∈ instrs, ∀ lbl,
+      (instr' = ArmInstr.b lbl ∨
+       (∃ rn, instr' = ArmInstr.cbz rn lbl) ∨
+       (∃ rn, instr' = ArmInstr.cbnz rn lbl) ∨
+       (∃ c, instr' = ArmInstr.bCond c lbl)) →
+      lbl ≤ boundsS := by
+  -- Unfold: the `if !regConv || !inj then none else …` guard.
+  simp only [verifiedGenInstr] at hGen
+  split at hGen
+  · exact absurd hGen (by intro h; cases h)
+  · -- Guard passes: output = [.b (pcMap l)].
+    simp only [Option.some.injEq] at hGen
+    subst hGen
+    intro instr' hmem lbl hbranch
+    simp only [List.mem_singleton] at hmem
+    subst hmem
+    -- instr' = ArmInstr.b (pcMap l).
+    rcases hbranch with h | ⟨rn, h⟩ | ⟨rn, h⟩ | ⟨c, h⟩
+    · -- h : ArmInstr.b (pcMap l) = ArmInstr.b lbl
+      cases h; exact hPcMapBound
+    · exact ArmInstr.noConfusion h
+    · exact ArmInstr.noConfusion h
+    · exact ArmInstr.noConfusion h
+
+/-- Helper for Probe 2: `vLoadVar` output contains no branch instructions. -/
+private theorem vLoadVar_no_branches (layout : VarLayout) (v : Var) (tmp : ArmReg) :
+    ∀ instr' ∈ vLoadVar layout v tmp,
+      (∀ lbl, instr' ≠ ArmInstr.b lbl) ∧
+      (∀ rn lbl, instr' ≠ ArmInstr.cbz rn lbl) ∧
+      (∀ rn lbl, instr' ≠ ArmInstr.cbnz rn lbl) ∧
+      (∀ c lbl, instr' ≠ ArmInstr.bCond c lbl) := by
+  intro instr' hmem
+  unfold vLoadVar at hmem
+  rcases hl : layout v with _ | loc
+  · rw [hl] at hmem; simp at hmem
+  · rw [hl] at hmem
+    cases loc with
+    | stack _ =>
+      simp at hmem; subst hmem
+      refine ⟨?_, ?_, ?_, ?_⟩ <;> intros <;> intro h <;> exact ArmInstr.noConfusion h
+    | ireg r =>
+      by_cases heq : r == tmp
+      · simp [heq] at hmem
+      · simp [heq] at hmem; subst hmem
+        refine ⟨?_, ?_, ?_, ?_⟩ <;> intros <;> intro h <;> exact ArmInstr.noConfusion h
+    | freg _ => simp at hmem
+
+/-- Helper for Probe 2: `vStoreVar` output contains no branch instructions. -/
+private theorem vStoreVar_no_branches (layout : VarLayout) (v : Var) (tmp : ArmReg) :
+    ∀ instr' ∈ vStoreVar layout v tmp,
+      (∀ lbl, instr' ≠ ArmInstr.b lbl) ∧
+      (∀ rn lbl, instr' ≠ ArmInstr.cbz rn lbl) ∧
+      (∀ rn lbl, instr' ≠ ArmInstr.cbnz rn lbl) ∧
+      (∀ c lbl, instr' ≠ ArmInstr.bCond c lbl) := by
+  intro instr' hmem
+  unfold vStoreVar at hmem
+  rcases hl : layout v with _ | loc
+  · rw [hl] at hmem; simp at hmem
+  · rw [hl] at hmem
+    cases loc with
+    | stack _ =>
+      simp at hmem; subst hmem
+      refine ⟨?_, ?_, ?_, ?_⟩ <;> intros <;> intro h <;> exact ArmInstr.noConfusion h
+    | ireg r =>
+      by_cases heq : r == tmp
+      · simp [heq] at hmem
+      · simp [heq] at hmem; subst hmem
+        refine ⟨?_, ?_, ?_, ?_⟩ <;> intros <;> intro h <;> exact ArmInstr.noConfusion h
+    | freg _ => simp at hmem
+
+/-- **Probe 2 — `.binop _ .div _ _`**.  Three-nest layout match + inner
+    `op ∈ {.div, .mod}` branch.  The output, under the guard, is:
+
+      `vLoadVar lv ++ vLoadVar rv ++ [.cbz rv_reg divLabel] ++ [.sdivR …] ++ vStoreVar dst`
+
+    The only branch is the `.cbz`, targeting `divLabel = divS`.  Helpers
+    `vLoadVar_no_branches` / `vStoreVar_no_branches` cover the non-branch
+    sections; `.sdivR` is a singleton non-branch. -/
+private theorem verifiedGenInstr_binop_div_branch_bounded
+    (layout : VarLayout) (pcMap : Nat → Nat) (dst lv rv : Var)
+    (haltS divS boundsS : Nat) (arrayDecls : List (ArrayName × Nat × VarTy))
+    (safe : Bool) {instrs : List ArmInstr}
+    (hGen : verifiedGenInstr layout pcMap (.binop dst .div lv rv)
+      haltS divS boundsS arrayDecls safe = some instrs)
+    (hRC : layout.regConventionSafe = true)
+    (hII : layout.isInjective = true)
+    (hDivBound : divS ≤ boundsS) :
+    ∀ instr' ∈ instrs, ∀ lbl,
+      (instr' = ArmInstr.b lbl ∨
+       (∃ rn, instr' = ArmInstr.cbz rn lbl) ∨
+       (∃ rn, instr' = ArmInstr.cbnz rn lbl) ∨
+       (∃ c, instr' = ArmInstr.bCond c lbl)) →
+      lbl ≤ boundsS := by
+  -- Close cases uniformly by case-splitting on the branch-form disjunction
+  -- against the specific `instr'` we know it to be.  The pattern factors
+  -- into three reusable tactics: for a non-branch instruction, show all four
+  -- disjuncts fail; for a cbz-with-divS, peel disjuncts to reach the cbz arm
+  -- and return hDivBound; for an instruction drawn from vLoad/vStore, invoke
+  -- the no-branches helper.
+  simp [verifiedGenInstr, hRC, hII] at hGen
+  -- The generated match is 3-way on `(layout lv, layout rv, layout dst)`
+  -- with the `freg` arms emitting `none`.  Split-with-simp closes those.
+  split at hGen <;> first | simp at hGen | skip
+  all_goals (split at hGen <;> first | simp at hGen | skip)
+  all_goals (split at hGen <;> first | simp at hGen | skip)
+  -- At this point, in each all-non-freg branch, simp + split has left hGen
+  -- as a raw list equation `<concrete list> = instrs`; `subst hGen` replaces
+  -- `instrs` with the concrete list in the goal.
+  all_goals (subst hGen)
+  -- Prove the conclusion in each of the 8 surviving branches uniformly:
+  -- the list is vLoadVar ++ vLoadVar ++ [.cbz _ divS] ++ [.sdivR _ _ _] ++ vStoreVar.
+  all_goals (
+    intro instr' hmem lbl hbranch
+    simp only [List.mem_append, List.mem_cons, List.not_mem_nil, or_false] at hmem
+    rcases hmem with hLv | hRv | hCbz | hSdiv | hStore
+    · have ⟨nb, nz, nnz, nbc⟩ := vLoadVar_no_branches layout lv _ instr' hLv
+      rcases hbranch with h | ⟨rn, h⟩ | ⟨rn, h⟩ | ⟨c, h⟩
+      · exact absurd h (nb _)
+      · exact absurd h (nz rn _)
+      · exact absurd h (nnz rn _)
+      · exact absurd h (nbc c _)
+    · have ⟨nb, nz, nnz, nbc⟩ := vLoadVar_no_branches layout rv _ instr' hRv
+      rcases hbranch with h | ⟨rn, h⟩ | ⟨rn, h⟩ | ⟨c, h⟩
+      · exact absurd h (nb _)
+      · exact absurd h (nz rn _)
+      · exact absurd h (nnz rn _)
+      · exact absurd h (nbc c _)
+    · -- .cbz _ divS
+      subst hCbz
+      rcases hbranch with h | ⟨rn, h⟩ | ⟨rn, h⟩ | ⟨c, h⟩
+      · exact ArmInstr.noConfusion h
+      · cases h; exact hDivBound
+      · exact ArmInstr.noConfusion h
+      · exact ArmInstr.noConfusion h
+    · -- .sdivR _ _ _
+      subst hSdiv
+      rcases hbranch with h | ⟨rn, h⟩ | ⟨rn, h⟩ | ⟨c, h⟩
+      all_goals exact ArmInstr.noConfusion h
+    · have ⟨nb, nz, nnz, nbc⟩ := vStoreVar_no_branches layout dst _ instr' hStore
+      rcases hbranch with h | ⟨rn, h⟩ | ⟨rn, h⟩ | ⟨c, h⟩
+      · exact absurd h (nb _)
+      · exact absurd h (nz rn _)
+      · exact absurd h (nnz rn _)
+      · exact absurd h (nbc c _))
+
+end Phase6Probes
