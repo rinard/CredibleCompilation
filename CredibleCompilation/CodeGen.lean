@@ -3529,7 +3529,7 @@ private theorem flatMap_segment_getElem (lss : List (List α)) (k j : Nat)
       exact ih n hk' hj
 
 /-- `buildPcMap lengths pc` equals the total length of the first `pc` segments. -/
-private theorem buildPcMap_eq_take_length (bodyPerPC : Array (List ArmInstr))
+theorem buildPcMap_eq_take_length (bodyPerPC : Array (List ArmInstr))
     (lengths : Array Nat)
     (hSz : lengths.size = bodyPerPC.size)
     (hLen : ∀ (i : Nat) (hL : i < lengths.size) (hB : i < bodyPerPC.size),

@@ -265,7 +265,8 @@ Phase 2a ─┤                           │            ├─→ Phase 7
 - ✅ After Phase 4 (forward theorems distinguish causes; name haltFinal) — 2026-04-21 (commit `915c019`)
 - ✅ Pre-Phase-5 prerequisite: self-copy nop emission — 2026-04-21 (commit `5870a78`)
 - ✅ After Phase 5a (ArmStepsN + ArmDiverges in reachability form) — 2026-04-21
-- After Phase 5b (forward divergence theorem)
+- After Phase 5b (forward divergence theorem) — deferred indefinitely; not on Phase 6/7 critical path
+- Phase 6/7 infrastructure partial (Path B, 2026-04-22): `sentinel_stuck`, feeder lemmas (`pcMap_le_haltS`, `checkBranchTargets_to_labels_in_bounds`), `applyPassesPure_preserves_stepClosedInBounds`, `pipelined_has_behavior`, `pipelined_no_typeError`, sentinel distinctness, P2 probe (`arm_step_pc_det` via `armNextPC` projection), P3 probe (`type_safety` fit confirmed), P1 probe attempted (needs restructuring). 9 sorrys remain, 14-case sweep + step_count_pc_uniqueness + Phase 7a-d pending.
 - After Phase 6 (ARM totality)
 - After Phase 7 (five backward theorems)
 

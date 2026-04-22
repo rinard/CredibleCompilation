@@ -4,6 +4,41 @@ Chronological record of what was built and why, to reconstruct the sequence of d
 
 ---
 
+## Phase 6 Path B: infrastructure + 2 validated probes (2026-04-22)
+
+**Goal:** Land Phase 6/7 infrastructure that reliably compiles (feeder lemmas, pipelined helpers, sentinel lemmas) + validate two derisk probes for the remaining heavy work (14-case `bodyFlat_branch_target_bounded` sweep and `step_count_pc_uniqueness`).
+
+**Shipped** (all in [PipelineCorrectness.lean](CredibleCompilation/PipelineCorrectness.lean)):
+
+- **`sentinel_stuck`** (§ 8 Phase6Skeleton): sentinel PC implies `bodyFlat[pc]? = none`, invokes `ArmStep_stuck_of_none`. Uses the `bodyFlat.size = haltFinal` rewrite via `spec.haltFinal_eq` + `spec.haltS_eq`.
+- **`pcMap_le_haltS`** (§ 8): every live TAC PC `l ≤ p.size` has `r.pcMap l ≤ r.haltS`. Uses the newly un-privatized `buildPcMap_eq_take_length` (CodeGen.lean:3532).
+- **`checkBranchTargets_to_labels_in_bounds`** (§ 8): bridge from `checkBranchTargets p.code = none` to `∀ pc < p.size, ∀ l, p[pc] = .goto l ∨ ∃ be, p[pc] = .ifgoto be l → l < p.size`.
+- **`haltFinal_ne_divS`, `haltFinal_ne_boundsS`, `divS_ne_boundsS`** (§ 8): sentinel distinctness, trivial by `omega` over spec equalities.
+- **`stepClosed_of_checkCertificateExec`** (§ 9): extracts `checkStepClosed cert.trans = true` from `checkCertificateExec cert = true` (condition 6).
+- **`applyPass_preserves_stepClosedInBounds`, `applyPassesPure_preserves_stepClosedInBounds`** (§ 9): Prop-form `StepClosedInBounds` preservation through certificate-checked passes. Parallel to the existing 4-invariant preservation.
+- **`pipelined_has_behavior`** (§ 9): `has_behavior` at the pipelined TAC level. Thin wrapper over `applyPassesPure_preserves_stepClosedInBounds` + existing `has_behavior`.
+- **`pipelined_no_typeError`** (§ 9): pipelined TAC never reaches `Cfg.typeError`. Uses existing `type_safety` in TypeSystem.lean (confirmed shape via P3 probe).
+
+**Probe P2 — validated** (§ 10b Phase6Probes2):
+- **`armNextPC`** helper + **`ArmStep.pc_eq_armNextPC`** projection theorem: every `ArmStep prog s s'` has `s'.pc = armNextPC s i` where `i` is the instruction at `s.pc`. Enumerates all ~50 `ArmStep` constructors, maps each to a pure function of `(s, instr)`. Havoc rules (printCall, callBinF, etc.) advance `pc` by 1 regardless of havoc outcomes (via `ArmState.havocCallerSaved_pc` simp lemma).
+- **`arm_step_pc_det`**: PC determinism for two `ArmStep`s from the same state. Uses the projection — sidesteps the 50×50 `cases`-explosion that timed out.
+
+**Probe P1 — partial, deferred**:
+- Helpers `formalLoadImm64_no_branches`, `vLoadVarFP_no_branches`, `verifiedGenBoolExpr_no_branches` landed and reusable.
+- `verifiedGenInstr_ifgoto_branch_bounded` attempted; proof structure sound but Lean's elaborator trips on nested-match type signatures inside `have loadA_nb / loadB_nb`. Fix requires inlining the load analysis (no helpers) or flattening the helper type. Deferred to the 14-case sweep session. Commented-out attempt preserved in the file for reference.
+
+**Probe P3 — validated**: `type_safety` in [TypeSystem.lean:560](CredibleCompilation/TypeSystem.lean#L560) matches the shape `pipelined_no_typeError` needs exactly; no adapter lemma required.
+
+**Status**: full `lake build` green; 9 sorrys remain (down from 11 baseline, net −2 after adding P1 placeholder). 3137 jobs. Touched files: [PipelineCorrectness.lean](CredibleCompilation/PipelineCorrectness.lean) (+≈600 LOC landed, +≈260 LOC P1 attempt commented), [CodeGen.lean](CredibleCompilation/CodeGen.lean) (buildPcMap_eq_take_length un-privatized).
+
+**Risks realized & deferred**:
+- **`step_count_pc_uniqueness`**: design doc estimated ~80 LOC; analysis shows it's spec-dependent — in generic ARM, havoc followed by cbz/cbnz/bCond on a havoc'd register can produce different next PCs in different traces. Proving the "no branch reads havoc'd reg" invariant for `r.bodyFlat` requires traversing `bodyPerPC` via spec, ~200+ LOC. Deferred.
+- **`.ifgoto` branch-target-bounded**: proof pattern works but helper type-signature elaboration is fiddly. Fix is ~30 min of inline rewrite.
+
+**Remaining for next session**: the 14-case `verifiedGenInstr_branch_target_bounded` sweep (~400 LOC; `.binop` and `.goto` already done as probes, `.ifgoto` attempted), `bodyFlat_branch_target_bounded` lift (~55 LOC), `step_count_pc_uniqueness` (spec-dependent, ~200 LOC), `arm_behavior_exhaustive` (~100 LOC), Phase 7a/b/c/d (~240 LOC + ~100 LOC observable-determinism helper).
+
+---
+
 ## Phase 5b: bodyPerPC_length_pos theorem (2026-04-22)
 
 **Goal:** Piece 1 of 4 remaining Phase 5b deliverables — prove every live TAC PC's ARM block has ≥ 1 instruction. Consumed by the upcoming `step_simulation` refactor to extract a positive ARM step count per TAC step.
