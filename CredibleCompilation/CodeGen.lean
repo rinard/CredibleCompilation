@@ -3586,6 +3586,45 @@ private theorem codeAt_of_bodyFlat' (r : VerifiedAsmResult)
   have h := codeAt_of_bodyFlat r.bodyPerPC lengths hSz hLen pc hpc
   exact CodeAt.liftToSuffix (suf := r.haltSaveBlock.toList) h
 
+/-- Every live TAC PC in a `GenAsmSpec`-satisfying result emits ≥ 1 ARM
+    instruction. Dispatches on three cases:
+    - **print** (via `printSaveRestore`): output = saves ++ `[.printCall _]` ++ restores.
+    - **lib-call** (via `callSiteSaveRestore`): output = saves ++ baseInstrs ++ restores,
+      where `baseInstrs` is from `verifiedGenInstr` (≥ 1 via `verifiedGenInstr_output_pos`).
+    - **normal** (via `instrGen`): output directly from `verifiedGenInstr` (≥ 1).
+
+    Consumed by Phase 5b's forward-divergence theorem to extract a positive
+    ARM step count for each TAC step in `step_simulation`. -/
+theorem bodyPerPC_length_pos
+    {tyCtx : TyCtx} {p : Prog} {r : VerifiedAsmResult}
+    (spec : GenAsmSpec tyCtx p r) :
+    ∀ pc (hpc : pc < p.size), 1 ≤ (r.bodyPerPC[pc]'(spec.bodySize ▸ hpc)).length := by
+  intro pc hpc
+  by_cases hPrint : ∃ fmt vs, p[pc] = .print fmt vs
+  · obtain ⟨lines, hEq⟩ := spec.printSaveRestore pc hpc hPrint
+    rw [hEq]
+    simp only [List.length_append, List.length_cons, List.length_nil]
+    omega
+  · by_cases hLib : isLibCallTAC p[pc] = true
+    · obtain ⟨baseInstrs, hGenInstr, hEq⟩ := spec.callSiteSaveRestore pc hpc hLib
+      rw [hEq]
+      simp only [List.length_append]
+      have hBaseLen : 1 ≤ baseInstrs.length :=
+        verifiedGenInstr_output_pos tyCtx r.layout r.pcMap p[pc]
+          r.haltS r.divS r.boundsS p.arrayDecls (verifiedBoundsSafe p pc)
+          hGenInstr spec.regConventionSafe spec.injective spec.wellTypedLayout
+          (spec.wellTypedProg pc hpc) (spec.layoutComplete pc hpc)
+      omega
+    · have hNotLib : isLibCallTAC p[pc] = false := by
+        cases h : isLibCallTAC p[pc] <;> simp_all
+      have hNotPrint : ∀ fmt vs, p[pc] ≠ .print fmt vs := by
+        intro fmt vs h; exact hPrint ⟨fmt, vs, h⟩
+      have hGenInstr := spec.instrGen pc hpc hNotLib hNotPrint
+      exact verifiedGenInstr_output_pos tyCtx r.layout r.pcMap p[pc]
+        r.haltS r.divS r.boundsS p.arrayDecls (verifiedBoundsSafe p pc)
+        hGenInstr spec.regConventionSafe spec.injective spec.wellTypedLayout
+        (spec.wellTypedProg pc hpc) (spec.layoutComplete pc hpc)
+
 /-- A successful `verifiedGenerateAsm` call satisfies `GenAsmSpec`. -/
 theorem verifiedGenerateAsm_spec {tyCtx : TyCtx} {p : Prog} {r : VerifiedAsmResult}
     (hGen : verifiedGenerateAsm tyCtx p = .ok r) : GenAsmSpec tyCtx p r := by

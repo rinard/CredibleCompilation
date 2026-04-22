@@ -1782,7 +1782,7 @@ private theorem vLoadVar_length_pos_of_not_freg (layout : VarLayout) (v : Var)
     non-self-copy branch (freg-src + stack/freg-dst; non-freg-src + freg-dst;
     non-freg-src + non-freg-dst) need the full hypothesis bundle to rule out
     `vStoreVarFP`/`vLoadVar`/`vStoreVar` emitting `[]`. -/
-private theorem verifiedGenInstr_copy_output_pos
+theorem verifiedGenInstr_copy_output_pos
     (Γ : TyCtx) (layout : VarLayout) (pcMap : Nat → Nat)
     (dst src : Var)
     (haltS divS boundsS : Nat) (arrayDecls : List (ArrayName × Nat × VarTy))
@@ -1933,7 +1933,7 @@ private theorem verifiedGenInstr_copy_output_pos
     dispatches: the freg arms close via `none ≠ some _`, the default arm
     inner-splits on `op ∈ {.div, .mod}` and enumerates `op` to bound length.
     Collapsed from a 312-LOC hand-unrolled 27-way case tree. -/
-private theorem verifiedGenInstr_binop_output_pos
+theorem verifiedGenInstr_binop_output_pos
     (Γ : TyCtx) (layout : VarLayout) (pcMap : Nat → Nat)
     (dst : Var) (op : BinOp) (lv rv : Var)
     (haltS divS boundsS : Nat) (arrayDecls : List (ArrayName × Nat × VarTy))
@@ -1967,7 +1967,7 @@ private theorem verifiedGenInstr_binop_output_pos
     returns `some`. When `be.hasSimpleOps = true`, `verifiedGenBoolExpr` emits
     ≥ 1 instruction (via `verifiedGenBoolExpr_length_pos`); the `vStoreVar`
     appended only extends the list. -/
-private theorem verifiedGenInstr_boolop_output_pos
+theorem verifiedGenInstr_boolop_output_pos
     (Γ : TyCtx) (layout : VarLayout) (pcMap : Nat → Nat)
     (dst : Var) (be : BoolExpr)
     (haltS divS boundsS : Nat) (arrayDecls : List (ArrayName × Nat × VarTy))
@@ -2009,7 +2009,7 @@ private theorem verifiedGenInstr_boolop_output_pos
         (2 instructions) — the fused compare-and-branch path.
       - Default: `verifiedGenBoolExpr layout be ++ [.cbnz .x0 (pcMap l)]` (the
         trailing cbnz is the ≥ 1 witness). -/
-private theorem verifiedGenInstr_ifgoto_output_pos
+theorem verifiedGenInstr_ifgoto_output_pos
     (Γ : TyCtx) (layout : VarLayout) (pcMap : Nat → Nat)
     (be : BoolExpr) (l : Nat)
     (haltS divS boundsS : Nat) (arrayDecls : List (ArrayName × Nat × VarTy))
@@ -2043,7 +2043,7 @@ private theorem verifiedGenInstr_ifgoto_output_pos
 
 /-- `formalLoadImm64` emits ≥ 1 ARM instruction (either `[.mov rd n]`
     or a `movz`-led sequence of 1–4 instructions). -/
-private theorem formalLoadImm64_length_pos (rd : ArmReg) (n : BitVec 64) :
+theorem formalLoadImm64_length_pos (rd : ArmReg) (n : BitVec 64) :
     1 ≤ (formalLoadImm64 rd n).length := by
   unfold formalLoadImm64
   split
@@ -2053,7 +2053,7 @@ private theorem formalLoadImm64_length_pos (rd : ArmReg) (n : BitVec 64) :
 
 /-- `verifiedGenInstr` for `.goto l` always emits exactly one `[.b (pcMap l)]`
     instruction. -/
-private theorem verifiedGenInstr_goto_output_pos
+theorem verifiedGenInstr_goto_output_pos
     (Γ : TyCtx) (layout : VarLayout) (pcMap : Nat → Nat)
     (l : Nat)
     (haltS divS boundsS : Nat) (arrayDecls : List (ArrayName × Nat × VarTy))
@@ -2084,7 +2084,7 @@ private theorem verifiedGenInstr_goto_output_pos
       - `.int n`: `formalLoadImm64 .x0 n ++ vStoreVar layout v .x0` — `formalLoadImm64_length_pos`.
       - `.bool b`: `[.mov .x0 _] ++ vStoreVar layout v .x0` — the `.mov` is the witness.
       - `.float f`: `formalLoadImm64 ++ [.fmovToFP _ _] ++ vStoreVarFP` — `.fmovToFP` is the witness. -/
-private theorem verifiedGenInstr_const_output_pos
+theorem verifiedGenInstr_const_output_pos
     (Γ : TyCtx) (layout : VarLayout) (pcMap : Nat → Nat)
     (v : Var) (val : Value)
     (haltS divS boundsS : Nat) (arrayDecls : List (ArrayName × Nat × VarTy))
@@ -2147,7 +2147,7 @@ private theorem verifiedGenInstr_const_output_pos
     Each of the three `ty` arms has a fixed-length, non-empty middle block
     (`[.farrLd]` / `[.arrLd; .cmpImm; .cset]` / `[.arrLd]`) that supplies
     the ≥ 1 witness independent of the layouts of `x`/`idx`. -/
-private theorem verifiedGenInstr_arrLoad_output_pos
+theorem verifiedGenInstr_arrLoad_output_pos
     (Γ : TyCtx) (layout : VarLayout) (pcMap : Nat → Nat)
     (x : Var) (arr : ArrayName) (idx : Var) (ty : VarTy)
     (haltS divS boundsS : Nat) (arrayDecls : List (ArrayName × Nat × VarTy))
@@ -2179,7 +2179,7 @@ private theorem verifiedGenInstr_arrLoad_output_pos
 
 /-- `verifiedGenInstr` for `.arrStore arr idx val ty`: the trailing
     `[.farrSt]` / `[.arrSt]` provides the ≥ 1 witness. -/
-private theorem verifiedGenInstr_arrStore_output_pos
+theorem verifiedGenInstr_arrStore_output_pos
     (Γ : TyCtx) (layout : VarLayout) (pcMap : Nat → Nat)
     (arr : ArrayName) (idx val : Var) (ty : VarTy)
     (haltS divS boundsS : Nat) (arrayDecls : List (ArrayName × Nat × VarTy))
@@ -2213,7 +2213,7 @@ private theorem verifiedGenInstr_arrStore_output_pos
 
 /-- `verifiedGenInstr` for `.halt` always emits exactly one `[.b haltLabel]`
     instruction. -/
-private theorem verifiedGenInstr_halt_output_pos
+theorem verifiedGenInstr_halt_output_pos
     (Γ : TyCtx) (layout : VarLayout) (pcMap : Nat → Nat)
     (haltS divS boundsS : Nat) (arrayDecls : List (ArrayName × Nat × VarTy))
     (safe : Bool)
@@ -2241,7 +2241,7 @@ private theorem verifiedGenInstr_halt_output_pos
 /-- `verifiedGenInstr` for `.fbinop dst fop lv rv`: same pattern as `.binop`
     with ireg-exclusion instead of freg-exclusion. The `[fpInstr]` in the
     default arm provides ≥ 1. -/
-private theorem verifiedGenInstr_fbinop_output_pos
+theorem verifiedGenInstr_fbinop_output_pos
     (Γ : TyCtx) (layout : VarLayout) (pcMap : Nat → Nat)
     (dst : Var) (fop : FloatBinOp) (lv rv : Var)
     (haltS divS boundsS : Nat) (arrayDecls : List (ArrayName × Nat × VarTy))
@@ -2273,7 +2273,7 @@ private theorem verifiedGenInstr_fbinop_output_pos
 
 /-- `verifiedGenInstr` for `.intToFloat dst src`: 2-way layout match
     (freg src / ireg dst failures); default arm has `[.scvtf .x0]` ≥ 1. -/
-private theorem verifiedGenInstr_intToFloat_output_pos
+theorem verifiedGenInstr_intToFloat_output_pos
     (Γ : TyCtx) (layout : VarLayout) (pcMap : Nat → Nat)
     (dst src : Var)
     (haltS divS boundsS : Nat) (arrayDecls : List (ArrayName × Nat × VarTy))
@@ -2305,7 +2305,7 @@ private theorem verifiedGenInstr_intToFloat_output_pos
 
 /-- `verifiedGenInstr` for `.floatToInt dst src`: 2-way layout match
     (ireg src / freg dst failures); default arm has `[.fcvtzs .x0]` ≥ 1. -/
-private theorem verifiedGenInstr_floatToInt_output_pos
+theorem verifiedGenInstr_floatToInt_output_pos
     (Γ : TyCtx) (layout : VarLayout) (pcMap : Nat → Nat)
     (dst src : Var)
     (haltS divS boundsS : Nat) (arrayDecls : List (ArrayName × Nat × VarTy))
@@ -2337,7 +2337,7 @@ private theorem verifiedGenInstr_floatToInt_output_pos
 
 /-- `verifiedGenInstr` for `.floatUnary dst op src`: 2-way layout match
     (ireg src/dst failures); default arm has `[.floatUnaryInstr op _ _]` ≥ 1. -/
-private theorem verifiedGenInstr_floatUnary_output_pos
+theorem verifiedGenInstr_floatUnary_output_pos
     (Γ : TyCtx) (layout : VarLayout) (pcMap : Nat → Nat)
     (dst : Var) (op : FloatUnaryOp) (src : Var)
     (haltS divS boundsS : Nat) (arrayDecls : List (ArrayName × Nat × VarTy))
@@ -2369,7 +2369,7 @@ private theorem verifiedGenInstr_floatUnary_output_pos
 
 /-- `verifiedGenInstr` for `.fternop dst op a b c`: 4-way layout match
     (ireg a/b/c/dst failures); default arm has `[fpInstr]` ≥ 1. -/
-private theorem verifiedGenInstr_fternop_output_pos
+theorem verifiedGenInstr_fternop_output_pos
     (Γ : TyCtx) (layout : VarLayout) (pcMap : Nat → Nat)
     (dst : Var) (op : FloatTernOp) (a b c : Var)
     (haltS divS boundsS : Nat) (arrayDecls : List (ArrayName × Nat × VarTy))
@@ -2400,7 +2400,7 @@ private theorem verifiedGenInstr_fternop_output_pos
     | simp at hGen
 
 /-- `verifiedGenInstr` for `.printInt v`: default arm has `[.callPrintI]` ≥ 1. -/
-private theorem verifiedGenInstr_printInt_output_pos
+theorem verifiedGenInstr_printInt_output_pos
     (Γ : TyCtx) (layout : VarLayout) (pcMap : Nat → Nat) (v : Var)
     (haltS divS boundsS : Nat) (arrayDecls : List (ArrayName × Nat × VarTy))
     (safe : Bool)
@@ -2430,7 +2430,7 @@ private theorem verifiedGenInstr_printInt_output_pos
     | simp at hGen
 
 /-- `verifiedGenInstr` for `.printBool v`: default arm has `[.callPrintB]` ≥ 1. -/
-private theorem verifiedGenInstr_printBool_output_pos
+theorem verifiedGenInstr_printBool_output_pos
     (Γ : TyCtx) (layout : VarLayout) (pcMap : Nat → Nat) (v : Var)
     (haltS divS boundsS : Nat) (arrayDecls : List (ArrayName × Nat × VarTy))
     (safe : Bool)
@@ -2460,7 +2460,7 @@ private theorem verifiedGenInstr_printBool_output_pos
     | simp at hGen
 
 /-- `verifiedGenInstr` for `.printFloat v`: default arm has `[.callPrintF]` ≥ 1. -/
-private theorem verifiedGenInstr_printFloat_output_pos
+theorem verifiedGenInstr_printFloat_output_pos
     (Γ : TyCtx) (layout : VarLayout) (pcMap : Nat → Nat) (v : Var)
     (haltS divS boundsS : Nat) (arrayDecls : List (ArrayName × Nat × VarTy))
     (safe : Bool)
@@ -2490,7 +2490,7 @@ private theorem verifiedGenInstr_printFloat_output_pos
     | simp at hGen
 
 /-- `verifiedGenInstr` for `.printString lit`: emits exactly `[.callPrintS lit]`. -/
-private theorem verifiedGenInstr_printString_output_pos
+theorem verifiedGenInstr_printString_output_pos
     (Γ : TyCtx) (layout : VarLayout) (pcMap : Nat → Nat) (lit : String)
     (haltS divS boundsS : Nat) (arrayDecls : List (ArrayName × Nat × VarTy))
     (safe : Bool)
@@ -2514,6 +2514,80 @@ private theorem verifiedGenInstr_printString_output_pos
   simp [verifiedGenInstr, hRCb, hIIb] at hGen
   subst hGen
   simp
+
+/-- Unified: `verifiedGenInstr` emits ≥ 1 ARM instruction for every TAC
+    constructor except `.print` (which returns `none` and is vacuous under
+    `hGen : ... = some instrs`). Dispatches to the per-constructor
+    `output_pos` lemmas. Consumed by `bodyPerPC_length_pos` in CodeGen. -/
+theorem verifiedGenInstr_output_pos
+    (Γ : TyCtx) (layout : VarLayout) (pcMap : Nat → Nat) (instr : TAC)
+    (haltS divS boundsS : Nat) (arrayDecls : List (ArrayName × Nat × VarTy))
+    (safe : Bool)
+    {instrs : List ArmInstr}
+    (hGen : verifiedGenInstr layout pcMap instr
+      haltS divS boundsS arrayDecls safe = some instrs)
+    (hRC : RegConventionSafe layout)
+    (hInj : VarLayoutInjective layout)
+    (hWTL : WellTypedLayout Γ layout)
+    (hWTI : WellTypedInstr Γ arrayDecls instr)
+    (hMapped : ∀ v, v ∈ instr.vars → layout v ≠ none) :
+    1 ≤ instrs.length := by
+  cases instr with
+  | const v val =>
+    exact verifiedGenInstr_const_output_pos Γ layout pcMap v val
+      haltS divS boundsS arrayDecls safe hGen hRC hInj hWTL hWTI hMapped
+  | copy dst src =>
+    exact verifiedGenInstr_copy_output_pos Γ layout pcMap dst src
+      haltS divS boundsS arrayDecls safe hGen hRC hInj hWTL hWTI hMapped
+  | binop dst op lv rv =>
+    exact verifiedGenInstr_binop_output_pos Γ layout pcMap dst op lv rv
+      haltS divS boundsS arrayDecls safe hGen hRC hInj hWTL hWTI hMapped
+  | boolop dst be =>
+    exact verifiedGenInstr_boolop_output_pos Γ layout pcMap dst be
+      haltS divS boundsS arrayDecls safe hGen hRC hInj hWTL hWTI hMapped
+  | goto l =>
+    exact verifiedGenInstr_goto_output_pos Γ layout pcMap l
+      haltS divS boundsS arrayDecls safe hGen hRC hInj hWTL hWTI hMapped
+  | ifgoto be l =>
+    exact verifiedGenInstr_ifgoto_output_pos Γ layout pcMap be l
+      haltS divS boundsS arrayDecls safe hGen hRC hInj hWTL hWTI hMapped
+  | halt =>
+    exact verifiedGenInstr_halt_output_pos Γ layout pcMap
+      haltS divS boundsS arrayDecls safe hGen hRC hInj hWTL hWTI hMapped
+  | arrLoad x arr idx ty =>
+    exact verifiedGenInstr_arrLoad_output_pos Γ layout pcMap x arr idx ty
+      haltS divS boundsS arrayDecls safe hGen hRC hInj hWTL hWTI hMapped
+  | arrStore arr idx val ty =>
+    exact verifiedGenInstr_arrStore_output_pos Γ layout pcMap arr idx val ty
+      haltS divS boundsS arrayDecls safe hGen hRC hInj hWTL hWTI hMapped
+  | fbinop dst fop lv rv =>
+    exact verifiedGenInstr_fbinop_output_pos Γ layout pcMap dst fop lv rv
+      haltS divS boundsS arrayDecls safe hGen hRC hInj hWTL hWTI hMapped
+  | intToFloat dst src =>
+    exact verifiedGenInstr_intToFloat_output_pos Γ layout pcMap dst src
+      haltS divS boundsS arrayDecls safe hGen hRC hInj hWTL hWTI hMapped
+  | floatToInt dst src =>
+    exact verifiedGenInstr_floatToInt_output_pos Γ layout pcMap dst src
+      haltS divS boundsS arrayDecls safe hGen hRC hInj hWTL hWTI hMapped
+  | floatUnary dst op src =>
+    exact verifiedGenInstr_floatUnary_output_pos Γ layout pcMap dst op src
+      haltS divS boundsS arrayDecls safe hGen hRC hInj hWTL hWTI hMapped
+  | fternop dst op a b c =>
+    exact verifiedGenInstr_fternop_output_pos Γ layout pcMap dst op a b c
+      haltS divS boundsS arrayDecls safe hGen hRC hInj hWTL hWTI hMapped
+  | print _ _ => simp [verifiedGenInstr] at hGen
+  | printInt v =>
+    exact verifiedGenInstr_printInt_output_pos Γ layout pcMap v
+      haltS divS boundsS arrayDecls safe hGen hRC hInj hWTL hWTI hMapped
+  | printBool v =>
+    exact verifiedGenInstr_printBool_output_pos Γ layout pcMap v
+      haltS divS boundsS arrayDecls safe hGen hRC hInj hWTL hWTI hMapped
+  | printFloat v =>
+    exact verifiedGenInstr_printFloat_output_pos Γ layout pcMap v
+      haltS divS boundsS arrayDecls safe hGen hRC hInj hWTL hWTI hMapped
+  | printString lit =>
+    exact verifiedGenInstr_printString_output_pos Γ layout pcMap lit
+      haltS divS boundsS arrayDecls safe hGen hRC hInj hWTL hWTI hMapped
 
 -- ────────────────────────────────────────────────────────────
 -- § 8e. verifiedGenInstr output length is pcMap-independent

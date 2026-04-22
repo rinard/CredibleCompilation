@@ -4,6 +4,29 @@ Chronological record of what was built and why, to reconstruct the sequence of d
 
 ---
 
+## Phase 5b: bodyPerPC_length_pos theorem (2026-04-22)
+
+**Goal:** Piece 1 of 4 remaining Phase 5b deliverables — prove every live TAC PC's ARM block has ≥ 1 instruction. Consumed by the upcoming `step_simulation` refactor to extract a positive ARM step count per TAC step.
+
+**Shipped**:
+
+- **`verifiedGenInstr_output_pos`** ([ArmSemantics.lean](CredibleCompilation/ArmSemantics.lean) § 8d′): unified dispatcher over all 19 TAC constructors. `.print` is vacuous (returns `none`, contradicted by hGen); the other 18 delegate to the per-constructor `verifiedGenInstr_<ctor>_output_pos` lemmas. Also removed `private` from those lemmas + `formalLoadImm64_length_pos` so downstream modules can use them.
+- **`bodyPerPC_length_pos`** ([CodeGen.lean](CredibleCompilation/CodeGen.lean) before `verifiedGenerateAsm_spec`): `GenAsmSpec tyCtx p r → ∀ pc (hpc : pc < p.size), 1 ≤ (r.bodyPerPC[pc]).length`. Three-case split:
+  - **print** (`spec.printSaveRestore`): output = saves ++ `[.printCall _]` ++ restores → trailing `.printCall` gives ≥ 1.
+  - **lib-call** (`spec.callSiteSaveRestore`): output = saves ++ baseInstrs ++ restores, baseInstrs from `verifiedGenInstr` → apply `verifiedGenInstr_output_pos`.
+  - **normal** (`spec.instrGen`): output directly from `verifiedGenInstr` → apply `verifiedGenInstr_output_pos`.
+
+**Design choice**: `bodyPerPC_length_pos` is a standalone theorem, not a `GenAsmSpec` structure field. Since it's derivable from the existing spec fields (plus the output_pos suite), making it a theorem avoids re-proving it inside `verifiedGenerateAsm_spec` and is easier to evolve.
+
+**Status**: 0 sorrys; full `lake build` green (3137 jobs). Files touched: 2 Lean files, +132 LOC (78 in ArmSemantics, 39 in CodeGen, net new; minus 18 `private` keywords removed).
+
+**Remaining for Phase 5b** (deferred to a later session with a fresh context):
+- `step_simulation` refactor to return `ArmStepsN _ _ _ (k+1)` (~150 LOC, 60% confidence — the main Phase 5b risk).
+- `tacToArm_refinement` threading the step count through induction (~30 LOC).
+- `while_to_arm_divergence_preservation` divergence theorem (~30 LOC).
+
+---
+
 ## Phase 5b: all remaining verifiedGenInstr_<ctor>_output_pos lemmas (2026-04-22, same session)
 
 **Goal:** Complete the per-constructor output_pos lemmas needed to discharge `bodyPerPCLengthPos` (Phase 5b spec field) — covering every TAC constructor produced by `verifiedGenInstr`'s verified path. Extends the `split at hGen` pattern from `.binop`/`.boolop`/`.ifgoto`.
