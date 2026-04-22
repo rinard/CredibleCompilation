@@ -22,7 +22,7 @@ C
       N = 1001
       M = (1001 - 7) / 2
 C
-      DO 200 REP = 1, 10000
+      DO 200 REP = 1, 11250000
 C         Reset X each rep
           FUZZ  = 1.2345D-3
           BUZZ  = 1.0D0 + FUZZ

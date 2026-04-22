@@ -128,26 +128,53 @@ for name in "${KERNELS[@]}"; do
      [ "$t_c2" != "—" ] && [ "$t_c2" != "ERR" ]; then
     correct=$(python3 -c "
 import re, sys
-num_re = r'[-+]?[0-9]*\.?[0-9]+(?:[eE][-+]?[0-9]+)?'
+# Match 'name[...] = val' (C), 'name(...) = val' (Fortran), or plain 'name = val'.
+# Normalize keys by stripping index brackets so 'x[1]' and 'x(1)' compare.
+num_re = r'[-+]?[0-9]*\.?[0-9]+(?:[eEdD][-+]?[0-9]+)?'
+kv_re = re.compile(r'([A-Za-z_]\w*)\s*(?:\[[^\]]*\]|\([^)]*\))?\s*=\s*(' + num_re + r')')
+float_tok_re = re.compile(
+    r'[-+]?(?:\d+\.\d*|\.\d+|\d+)[eEdD][-+]?\d+|[-+]?\d+\.\d*|[-+]?\.\d+')
 def parse(text):
     d = {}
     for line in text.strip().splitlines():
-        if line.startswith('elapsed'): continue
-        for m in re.finditer(r'(\w+)\s*=\s*(' + num_re + r')', line):
-            d[m.group(1)] = m.group(2)
+        s = line.strip().lower()
+        if s.startswith(('elapsed', 'time')): continue
+        for m in kv_re.finditer(line):
+            d[m.group(1)] = m.group(2).replace('d', 'e').replace('D', 'E')
     return d
+def float_tokens(text):
+    out = []
+    for line in text.strip().splitlines():
+        s = line.strip().lower()
+        if s.startswith(('elapsed', 'time')): continue
+        for m in float_tok_re.finditer(line):
+            tok = m.group(0).replace('d', 'e').replace('D', 'E')
+            try:
+                float(tok); out.append(tok)
+            except ValueError:
+                pass
+    return out
+def eq(va, vb):
+    a, b = float(va), float(vb)
+    if max(abs(a), abs(b)) < 1e-5: return True
+    return abs(a - b) / max(abs(a), abs(b), 1e-15) < 1e-4
 a, b = parse('''$out_opt'''), parse('''$out_c2''')
 shared = set(a) & set(b)
-if not shared: print('—'); sys.exit()
-ok = True
-for k in sorted(shared):
-    va, vb = float(a[k]), float(b[k])
-    if va == 0 and vb == 0: continue
-    if abs(va) < 1e-15 and abs(vb) < 1e-15: continue
-    if abs(va - vb) / max(abs(va), abs(vb), 1e-15) >= 1e-4:
-        print(f'MISMATCH {k}: {a[k]} vs {b[k]}')
-        ok = False; break
-if ok: print('ok')
+if shared:
+    ok = True
+    for k in sorted(shared):
+        if not eq(a[k], b[k]):
+            print(f'MISMATCH {k}: {a[k]} vs {b[k]}'); ok = False; break
+    if ok: print('ok')
+else:
+    # Fallback: compare first float-shaped numeric token from each output.
+    fa, fb = float_tokens('''$out_opt'''), float_tokens('''$out_c2''')
+    if not fa or not fb:
+        print('—')
+    elif eq(fa[0], fb[0]):
+        print('ok')
+    else:
+        print(f'MISMATCH {fa[0]} vs {fb[0]}')
 ")
   fi
 

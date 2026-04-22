@@ -83,7 +83,7 @@ C
 C
 C     Kernel 13: 2-D PIC (Particle-in-Cell)
 C
-      DO 500 IREP = 1, 10000
+      DO 500 IREP = 1, 2570000
 C
 C        Re-init particles each rep to avoid drift
          DS = 1.0D0
