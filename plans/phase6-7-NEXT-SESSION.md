@@ -10,7 +10,13 @@ Sorry count stands at **4** — all pre-existing in PipelineCorrectness.lean.
 Build green. All Phase A helpers have length-tracked ArmStepsN signatures
 with filled bodies.
 
-**Session 7 starts with Phase B.**  Remaining work:
+**Session 7 starts with Phase B.** Reference probe at
+[CCTests/Tests/PivotProbeFA1.lean](../CCTests/Tests/PivotProbeFA1.lean)
+validates the Phase B return type + chain pattern on the `.const` stack
+sub-case. Clone its structure for each of the ~60 `verifiedGenInstr_correct`
+cases.
+
+Remaining work:
 
 1. **Phase B.0**: change `verifiedGenInstr_correct` return type to
    length-tracked form (spec [§ Phase B](flavor-a-signatures.md#phase-b--verifiedgeninstr_correct-armcorrectnessleen1748))
