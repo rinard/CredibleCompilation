@@ -1,23 +1,36 @@
 # Phase 6/7 Next Session — Final Plan and Handoff
 
 **Read this first.**  Supersedes all earlier Phase 6/7 planning documents
-in this directory.  Last updated: 2026-04-23 after **session 4** —
-Phase 7a/b/c landed modulo one deferred composition lemma.
+in this directory.  Last updated: 2026-04-23 after **session 5** —
+root-cause analysis confirmed Flavor A is the only path; detailed
+signature spec landed.
 
-## TL;DR for next session (session 5)
+## TL;DR for next session (session 6)
 
-Sessions 3–4 took sorry count **9 → 4**.  Phase 7a/b/c all closed
-session 4 (Step 6 + trio).  Remaining to close Phase 7:
-**`source_diverges_gives_ArmDiverges_init`** at
-[PipelineCorrectness.lean:1324](../CredibleCompilation/PipelineCorrectness.lean#L1324).
+Sorry count stands at **4**, unchanged from session 5.  To close Phase 7,
+execute **Flavor A** (length-tracked simulation signatures) against the
+detailed spec at **[plans/flavor-a-signatures.md](flavor-a-signatures.md)**.
 
-**Chosen approach (session-4 analysis): Flavor A — modify
-`ext_backward_simulation` / `step_simulation` return types in place
-to track ArmStepsN length ≥ 1.**  All downstream callers updated.
-Enhanced interface makes `source_diverges_gives_ArmDiverges_init`
-a trivial ~40-LOC induction.  Estimate **~600 LOC** total; closes
-Phase 7 fully (4 → 3 sorrys) with **~85% confidence** (mechanical
-but many moving parts).
+The spec enumerates every theorem in the chain
+(helpers → `verifiedGenInstr_correct` → `ext_backward_simulation` →
+`step_simulation` → `tacToArm_refinement` → `tacToArm_correctness` →
+`while_to_arm_*` → `source_diverges_gives_ArmDiverges_init`) with exact
+new signatures, length-claim forms, and caller-update expectations.
+Execute the phases in order (A → H); commit after each phase.
+
+**Revised scope: ~1000 LOC, 2–3 focused sessions.**  Phase B is the
+largest (~60 cases in `verifiedGenInstr_correct`); everything else is
+smaller.  Phase H (closing the target sorry) is ~40 LOC once phases A–G
+are in.
+
+### Why Flavor A and nothing else
+
+Session 5 exhaustively explored alternatives and confirmed all of them
+fail at the `.ifgoto pc_self` stable-state case due to Lean 4's proof
+irrelevance for theorems (see CHANGELOG.md §Phase 6/7 session 5 for the
+analysis).  The root cause is that `∃ s', ArmSteps s s'` hides length in
+the opaque proof body.  The only fix is to put length in the observable
+return type — Flavor A does exactly this.
 
 Phase 6 exhaustion (`bodyFlat_branch_target_bounded` +
 `arm_behavior_exhaustive` + `verifiedGenInstr_ifgoto_branch_bounded`)

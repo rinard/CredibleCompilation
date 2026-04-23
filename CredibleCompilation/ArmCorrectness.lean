@@ -25,32 +25,35 @@ private theorem insertBits_unfold (bv : BitVec 64) (imm16 : UInt64) (shift : Nat
     insertBits bv imm16 shift =
     (bv &&& ~~~(0xFFFF#64 <<< shift)) ||| (BitVec.ofNat 64 imm16.toNat <<< shift) := by
   unfold insertBits; rfl
-/-- Execute an optional movk instruction (present when w ≠ 0, skipped when w = 0). -/
+/-- Execute an optional movk instruction (present when w ≠ 0, skipped when w = 0).
+    Returns an ArmStepsN-length-tracked witness: `k` equals the list length
+    (1 if emitted, 0 if skipped). -/
 private theorem optional_movk_step (prog : ArmProg) (rd : ArmReg) (w : UInt64) (shift : Nat)
     (s : ArmState) (pc0 : Nat) (hPC : s.pc = pc0)
     (hCode : CodeAt prog pc0 (if (w != 0) = true then [ArmInstr.movk rd w shift] else [])) :
-    ∃ s', ArmSteps prog s s' ∧
+    ∃ s' k, ArmStepsN prog s s' k ∧
+      k = (if (w != 0) = true then [ArmInstr.movk rd w shift] else []).length ∧
       s'.regs rd = (if (w != 0) = true then insertBits (s.regs rd) w shift else s.regs rd) ∧
       s'.stack = s.stack ∧
       s'.pc = pc0 + (if (w != 0) = true then [ArmInstr.movk rd w shift] else []).length ∧
       (∀ r, r ≠ rd → s'.regs r = s.regs r) ∧
       s'.arrayMem = s.arrayMem := by
   by_cases hw : (w != 0) = true
-  · -- w ≠ 0: one movk instruction
+  · -- w ≠ 0: one movk instruction (length 1)
     simp only [hw, ite_true] at hCode ⊢
     have hInstr := hCode.head
     rw [← hPC] at hInstr
-    refine ⟨s.setReg rd (insertBits (s.regs rd) w shift) |>.nextPC,
-      .single (.movk rd w shift hInstr), ?_, ?_, ?_, ?_, ?_⟩
+    refine ⟨s.setReg rd (insertBits (s.regs rd) w shift) |>.nextPC, 1,
+      ArmStepsN.single (.movk rd w shift hInstr), rfl, ?_, ?_, ?_, ?_, ?_⟩
     · simp [ArmState.setReg, ArmState.nextPC]
     · simp [ArmState.setReg, ArmState.nextPC]
     · simp [ArmState.setReg, ArmState.nextPC, hPC]
     · intro r hr; exact ArmState.setReg_regs_other _ _ _ _ hr
     · rfl
-  · -- w = 0: no instruction, identity
+  · -- w = 0: no instruction (length 0), identity
     simp only [hw] at hCode ⊢
     simp only [Bool.false_eq_true, ite_false]
-    exact ⟨s, .refl, rfl, rfl, by simp [hPC], fun _ _ => rfl, rfl⟩
+    exact ⟨s, 0, rfl, rfl, rfl, rfl, by simp [hPC], fun _ _ => rfl, rfl⟩
 private theorem uint64_shl_zero (u : UInt64) : u <<< (0 : UInt64) = u := by
   apply UInt64.eq_of_toBitVec_eq; simp
 private theorem uint64_eq_zero_toBitVec (u : UInt64) (h : u = 0) :
@@ -82,7 +85,8 @@ theorem loadImm64_correct (prog : ArmProg) (rd : ArmReg) (n : BitVec 64)
     (s : ArmState) (startPC : Nat)
     (hCode : CodeAt prog startPC (formalLoadImm64 rd n))
     (hPC : s.pc = startPC) :
-    ∃ s', ArmSteps prog s s' ∧
+    ∃ s' k, ArmStepsN prog s s' k ∧
+      k = (formalLoadImm64 rd n).length ∧
       s'.regs rd = n ∧
       s'.stack = s.stack ∧
       s'.pc = startPC + (formalLoadImm64 rd n).length ∧
@@ -91,14 +95,17 @@ theorem loadImm64_correct (prog : ArmProg) (rd : ArmReg) (n : BitVec 64)
   unfold formalLoadImm64 at hCode
   split at hCode
   case isTrue hSmall =>
-    -- Small case: single mov instruction
+    -- Small case: single mov instruction (length 1)
     have hMov := hCode.head
     rw [← hPC] at hMov
-    exact ⟨s.setReg rd n |>.nextPC, .single (.mov rd n hMov),
+    refine ⟨s.setReg rd n |>.nextPC, 1, ArmStepsN.single (.mov rd n hMov),
+      ?_,
       by simp [ArmState.setReg, ArmState.nextPC],
       by simp [ArmState.setReg, ArmState.nextPC],
       by simp [ArmState.setReg, ArmState.nextPC, hPC, formalLoadImm64, hSmall],
       fun r hr => ArmState.setReg_regs_other _ _ _ _ hr, rfl⟩
+    -- k = 1 = (formalLoadImm64 rd n).length in small case
+    unfold formalLoadImm64; simp [hSmall]
   case isFalse hLarge =>
     -- Large case: movz/movk sequence
     -- Beta-reduce the have-bindings from the unfolded let
@@ -127,7 +134,7 @@ theorem loadImm64_correct (prog : ArmProg) (rd : ArmReg) (n : BitVec 64)
     have hRd0 : s0.regs rd = BitVec.ofNat 64 w0.toNat := by
       simp [s0, ArmState.setReg, ArmState.nextPC, hw0_shift]
     -- Step 2: optional movk for w1 at shift 16
-    obtain ⟨s1, hSteps1, hRd1, hStack1, hPC1, hRegs1, hAM1⟩ :=
+    obtain ⟨s1, k1, hStepsN1, hk1, hRd1, hStack1, hPC1, hRegs1, hAM1⟩ :=
       optional_movk_step prog rd w1 16 s0 (startPC + 1) hPC0 hCodeK1rest
     -- Step 3: optional movk for w2 at shift 32
     -- Need to show the PC for k2
@@ -138,7 +145,7 @@ theorem loadImm64_correct (prog : ArmProg) (rd : ArmReg) (n : BitVec 64)
         startPC + 1 + (if (w1 != 0) = true then [ArmInstr.movk rd w1 16] else []).length := by
       simp; omega
     rw [hPC_k2] at hCodeK2rest
-    obtain ⟨s2, hSteps2, hRd2, hStack2, hPC2, hRegs2, hAM2⟩ :=
+    obtain ⟨s2, k2, hStepsN2, hk2, hRd2, hStack2, hPC2, hRegs2, hAM2⟩ :=
       optional_movk_step prog rd w2 32 s1
         (startPC + 1 + (if (w1 != 0) = true then [ArmInstr.movk rd w1 16] else []).length)
         hPC1 hCodeK2rest
@@ -151,16 +158,28 @@ theorem loadImm64_correct (prog : ArmProg) (rd : ArmReg) (n : BitVec 64)
         (if (w2 != 0) = true then [ArmInstr.movk rd w2 32] else []).length := by
       simp; omega
     rw [hPC_k3] at hCodeK3rest
-    obtain ⟨s3, hSteps3, hRd3, hStack3, hPC3, hRegs3, hAM3⟩ :=
+    obtain ⟨s3, k3, hStepsN3, hk3, hRd3, hStack3, hPC3, hRegs3, hAM3⟩ :=
       optional_movk_step prog rd w3 48 s2
         (startPC + 1 +
          (if (w1 != 0) = true then [ArmInstr.movk rd w1 16] else []).length +
          (if (w2 != 0) = true then [ArmInstr.movk rd w2 32] else []).length)
         hPC2 hCodeK3rest
-    -- Chain all steps together
-    refine ⟨s3,
-      (.step (.movz rd w0 0 hMovz) (hSteps1.trans (hSteps2.trans hSteps3))),
-      ?_, ?_, ?_, ?_, ?_⟩
+    -- Chain: movz (1 step) + 3 optional movks (k1+k2+k3 steps)
+    have hMovzN : ArmStepsN prog s s0 1 := ArmStepsN.single (.movz rd w0 0 hMovz)
+    have hChain : ArmStepsN prog s s3 (1 + k1 + k2 + k3) := by
+      have h01 : ArmStepsN prog s s1 (1 + k1) := ArmStepsN_trans hMovzN hStepsN1
+      have h02 : ArmStepsN prog s s2 (1 + k1 + k2) :=
+        (show 1 + k1 + k2 = (1 + k1) + k2 from by omega) ▸
+          ArmStepsN_trans h01 hStepsN2
+      exact (show 1 + k1 + k2 + k3 = (1 + k1 + k2) + k3 from by omega) ▸
+        ArmStepsN_trans h02 hStepsN3
+    refine ⟨s3, 1 + k1 + k2 + k3, hChain, ?_, ?_, ?_, ?_, ?_, ?_⟩
+    · -- k = (formalLoadImm64 rd n).length
+      rw [hk1, hk2, hk3]
+      unfold formalLoadImm64
+      simp only [hLarge, ite_false]
+      simp only [List.length_append, List.length_cons, List.length_nil]
+      split <;> split <;> split <;> simp <;> omega
     · -- s3.regs rd = n
       -- Key fact: bits.toBitVec = n
       have hbits_bv : bits.toBitVec = n := by

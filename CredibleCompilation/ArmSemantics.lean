@@ -344,6 +344,14 @@ theorem ArmSteps_to_ArmStepsN {prog : ArmProg} {s s' : ArmState}
   | refl => exact ⟨0, rfl⟩
   | step s _ ih => obtain ⟨n, hn⟩ := ih; exact ⟨n + 1, ⟨_, s, hn⟩⟩
 
+/-- `ArmStepsN` entails `ArmSteps` (reverse direction of `ArmSteps_to_ArmStepsN`).
+    Erases the length index for backward compatibility with ArmSteps-based callers. -/
+theorem ArmStepsN_to_ArmSteps {prog : ArmProg} {s s' : ArmState} {n : Nat}
+    (h : ArmStepsN prog s s' n) : ArmSteps prog s s' := by
+  induction n generalizing s with
+  | zero => change s = s' at h; subst h; exact .refl
+  | succ n ih => obtain ⟨c, h1, h2⟩ := h; exact .step h1 (ih h2)
+
 theorem ArmStepsN_prefix {prog : ArmProg} {s s' : ArmState} {n k : Nat}
     (h : ArmStepsN prog s s' (n + k)) : ∃ s'', ArmStepsN prog s s'' n := by
   induction k generalizing s' with

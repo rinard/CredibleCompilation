@@ -4,6 +4,88 @@ Chronological record of what was built and why, to reconstruct the sequence of d
 
 ---
 
+## Phase 6/7 session 5: Flavor A signature spec + root-cause analysis (2026-04-23)
+
+**Planned goal**: close `source_diverges_gives_ArmDiverges_init` via
+"Flavor A" (length-tracked simulation signatures), per
+`plans/phase6-7-NEXT-SESSION.md § Session 5 work plan`.  Previous session
+estimated 600 LOC / 1 day / 85% confidence.
+
+**Actual outcome**: session used for scope re-estimation and signature
+specification.  No sorrys closed.  4 sorrys remain.
+
+### Root-cause analysis
+
+Investigated whether any post-hoc alternative could close the theorem
+without modifying the simulation chain's return types.  Verdict: **no**.
+
+The `.ifgoto pc_self` stable-state case (iteration ≥ 2 of an `.ifgoto`
+self-loop, where scratch registers settle into a fixed-point pattern)
+produces externally-visible `ArmSteps s s` with `s = s'`.  For such
+witnesses, `.refl` (length 0) and `.step × L ∘ .refl` (length L)
+are both valid proofs propositionally, and Lean 4's proof irrelevance
+for theorems makes the specific internal structure **unobservable** from
+outside the theorem.  Post-hoc extraction via `ArmSteps_to_ArmStepsN`
+or case analysis cannot distinguish them.
+
+Determinism (`arm_step_det`), pigeonhole on finite ARM states, König-style
+arguments, and block-walker approaches were all evaluated and rejected:
+each reduces to the same opacity barrier.  The ONLY fix is to carry length
+in the return type — Flavor A proper.
+
+### Scope re-estimate
+
+The plan's 600 LOC / 1 day estimate was optimistic.  Actual scope:
+- Helpers cascade: ~15 helpers × 3–20 callsites each = ~150–200
+  destructure updates (mechanical but numerous).
+- `verifiedGenInstr_correct`: ~60 cases, each needs length-equality
+  proof for `.run` targets (~5–15 LOC per case).
+- Wrappers and closure: ~200 LOC.
+
+**Revised total: ~1000 LOC, 2–3 focused sessions.**
+
+### Signature spec landed
+
+Detailed per-theorem signatures for the entire Flavor A refactor chain
+landed at [plans/flavor-a-signatures.md](plans/flavor-a-signatures.md).
+Each of the ~20 theorems has its new signature, length-claim form, and
+caller-update expectation documented.  Next session executes directly
+against this spec — no re-analysis required.
+
+### Supporting infrastructure
+
+- `ArmStepsN_to_ArmSteps` lemma added to `ArmSemantics.lean`:
+  reverse of the existing `ArmSteps_to_ArmStepsN`.  Used during the
+  refactor to bridge ArmStepsN-returning theorems to any residual
+  ArmSteps-typed caller (primarily in Phase G while_to_arm_*).
+- `loadImm64_correct` and `optional_movk_step` updated to the new
+  length-tracked signature.  These have no external callers (first
+  consumed only within helpers that still have old signatures), so
+  the updates sit benignly as proof-of-pattern for the refactor.
+
+### Plan-doc revision
+
+[plans/phase6-7-NEXT-SESSION.md](plans/phase6-7-NEXT-SESSION.md) updated:
+- TL;DR now points at the signature spec as the authoritative
+  implementation guide.
+- "Session 5 work plan" replaced with "Session 5 outcome".
+- Session 6+ marching orders reference the spec.
+
+### Why the session didn't execute the refactor
+
+Two factors converged:
+1. The first pass of helper updates revealed the cascade magnitude —
+   ~15 callsites per helper across `verifiedGenBoolExpr_correct` and
+   `verifiedGenInstr_correct` — which wasn't visible at plan-write time.
+2. Committing partial Phase A with broken downstream callers would
+   leave the tree in an unbuildable state between sessions.
+
+Rather than push through partial work, session terminated at checkpoint
+(spec doc + infrastructure commit) so Session 6 can execute the full
+refactor atomically.
+
+---
+
 ## Phase 6/7 session 4: Phase 7a/b/c closed modulo one lemma (2026-04-23)
 
 **Goal (plans/phase6-7-NEXT-SESSION.md)**: close Phase 7a/b/c + halt-obs
