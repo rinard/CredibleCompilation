@@ -11,10 +11,11 @@ Chronological record of what was built and why, to reconstruct the sequence of d
 destructures, fill helper bodies. Budget: ~1000 LOC across 2–3 sessions;
 session 6 aims to complete Phase A (helpers) and possibly de-risk Phase B.
 
-**Actual outcome**: Phase A.0 (signatures + cascade) complete; 12 of 13
-Phase A helpers filled; `verifiedGenBoolExpr_correct` (A.15) remains
-sorried. Sorry count 4 → 5 (the new sorry is the A.15 placeholder;
-pre-existing 4 unchanged).
+**Actual outcome**: **Phase A fully complete** — all 13 helper sigs
+updated, all 102 cascade destructures adjusted, all 13 helper bodies
+filled including the 503-LOC `verifiedGenBoolExpr_correct` (A.15)
+with its 11 structural sub-cases. Sorry count 4 → 4 (pre-existing
+unchanged; no new sorrys introduced net).
 
 ### Phase A.0: helper signatures + cascade destructures
 
@@ -64,19 +65,40 @@ the bv_reassemble case-split produces 8 goals × multiple rewrites each.
 
 Commit: [1af6343]
 
+### Phase A.15 fill detail
+
+Filled `verifiedGenBoolExpr_correct`'s full body (~500 LOC translated
+from pre-session-6 state at commit `f680bed`, plus ArmStepsN length
+chaining throughout). All 11 structural cases:
+
+- `bexpr`: contradiction via `hasSimpleOps`
+- `lit`: `k = 1` (single `.mov`)
+- `bvar`: `k = k1 + 1` (`vLoadVar` + `.andImm`)
+- `not`: `k = k1 + 1` (recursive + `.eorImm`)
+- `cmp` × 4 sub-cases (var+var, var+lit, lit+var, lit+lit):
+  load-load-cmp-cset, `k = k1 + k2 + 2`
+- `fcmp` × 4 sub-cases (var+var, var+flit, flit+var, flit+flit):
+  load-load-[fmovToFP]-fcmp-cset, `k` varies 4-6
+
+Key techniques:
+- `let sN := ...` for intermediate states, with `sN` added to simp sets
+  to unfold on demand.
+- Chain ArmStepsN witnesses explicitly via `ArmStepsN_trans` with
+  arithmetic rewrites.
+- For flit+flit (6-step chain), use `simp only [sN, ..., hD1_s4, hD2_s4]`
+  surgically to avoid over-unfolding that breaks the normal form
+  expected by `Flags.condHolds_float_correct`.
+
 ### What's left
 
-- **A.15 `verifiedGenBoolExpr_correct`** — ~200 LOC body with 4 main
-  cases (lit, bvar, not, cmp) plus cmp/fcmp sub-cases (var+var, var+lit,
-  lit+var). Structure preserved but each case needs ArmStepsN chain
-  conversion (`.trans` → `ArmStepsN_trans`, explicit k computation).
-  The old proof body is preserved in a comment block at
-  `ArmCorrectness.lean:1024-end` for reference.
 - **Phase B** (`verifiedGenInstr_correct`): signature change + ~60
-  per-case sorries + fills.
+  per-case sorries + fills. **The 102 destructure sites already bridge
+  to ArmSteps via `ArmStepsN_to_ArmSteps`** (laid down in A.0 cascade);
+  Phase B will remove these bridges per-case as it rewrites bodies to
+  the length-tracked return type.
 - **Phases C-H**: mechanical wrappers + final `source_diverges`.
 
-### Current sorry count: 5
+### Current sorry count: 4
 
 | Line | Sorry | Phase | Status |
 |---|---|---|---|
@@ -84,7 +106,6 @@ Commit: [1af6343]
 | PipelineCorrectness.lean:1022 | `arm_behavior_exhaustive` | 6 | Out of scope |
 | PipelineCorrectness.lean:1324 | `source_diverges_gives_ArmDiverges_init` | 7 target | Pending Phase H |
 | PipelineCorrectness.lean:2115 | `verifiedGenInstr_ifgoto_branch_bounded` | 6 probe | Out of scope |
-| ArmCorrectness.lean (verifiedGenBoolExpr_correct) | A.15 placeholder | 7/A.15 | Session 7 |
 
 No new axioms introduced. Two pre-existing float axioms
 (`Flags.condHolds_float_correct`, `FloatBinOp.fadd_comm`) unchanged.

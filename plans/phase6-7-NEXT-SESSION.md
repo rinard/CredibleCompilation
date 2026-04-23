@@ -2,33 +2,35 @@
 
 **Read this first.**  Supersedes all earlier Phase 6/7 planning documents
 in this directory.  Last updated: 2026-04-23 after **session 6** —
-Phase A (helpers) largely landed; `verifiedGenBoolExpr_correct` (A.15)
-and Phases B–H remain.
+**Phase A fully complete**; Phases B–H remain.
 
 ## TL;DR for next session (session 7)
 
-Sorry count stands at **5** (4 pre-existing + 1 new = verifiedGenBoolExpr_
-correct placeholder).  Build green.
+Sorry count stands at **4** — all pre-existing in PipelineCorrectness.lean.
+Build green. All Phase A helpers have length-tracked ArmStepsN signatures
+with filled bodies.
 
-**Session 7's goals in order:**
+**Session 7 starts with Phase B.**  Remaining work:
 
-1. **Fill `verifiedGenBoolExpr_correct` (A.15)** — last Phase A helper.
-   Old proof preserved at `ArmCorrectness.lean:1024-end` in a comment
-   block labeled `/-  Old proof text preserved for reference:`.
-   Translate 183 LOC ArmSteps → ArmStepsN (`.trans` →
-   `ArmStepsN_trans`, `.single` → `ArmStepsN.single`, compute
-   `k = (verifiedGenBoolExpr layout be).length` per case).
-   See § Session 7 A.15 plan below. Budget: ~250 LOC, ~2 hours.
+1. **Phase B.0**: change `verifiedGenInstr_correct` return type to
+   length-tracked form (spec [§ Phase B](flavor-a-signatures.md#phase-b--verifiedgeninstr_correct-armcorrectnessleen1748))
+   — the ~60 per-case sorry cascade. Remove the
+   `have hStepsX := ArmStepsN_to_ArmSteps hStepsXN` bridges laid down
+   in session 6's cascade (they'll be naturally subsumed by length-
+   aware destructures per-case).
 
-2. **Phase B.0**: change `verifiedGenInstr_correct` return type to
-   length-tracked form (spec [§ Phase B](flavor-a-signatures.md#phase-b--verifiedgeninstr_correct-armcorrectnessleen1748)).
-   Per-case sorry. Cascade into `ext_backward_simulation`.
+2. **Phase B.1+**: fill per-case proofs. Spec recommends hard-first
+   order: `.binop` normal → `.ifgoto_true` → `.floatUnary` →
+   `.arrLoad/.arrStore` normal → simple cases (`.goto`, `.halt`,
+   `.const`, `.copy`) → typeError/dead-injectivity discharge.
 
-3. **Phase B.1+**: fill per-case proofs in order (`.binop` normal first
-   as validation).
+3. **Phases C-H**: mechanical wrappers + final target close
+   (`source_diverges_gives_ArmDiverges_init`). Budget per spec:
+   C ~60 LOC, D ~80-120, E ~40-60, F ~20, G ~15, H ~40.
 
-If Phase A.15 + Phase B.0 land cleanly, session 7 can push into Phase
-B.1. Otherwise, stop after Phase A.15 and plan session 8 for Phase B.
+If the full Phase B completes in session 7, session 8 can wrap up
+Phases C-H and close the target.  Realistically session 7 covers
+B.0 + the high-risk B.1 cases; sessions 8+ finish.
 
 **Read [plans/flavor-a-signatures.md](flavor-a-signatures.md) in full
 before continuing.**  That doc is the authoritative execution guide;
@@ -53,64 +55,30 @@ largest (~60 cases in `verifiedGenInstr_correct`); everything else is
 smaller.  Phase H (closing the target sorry) is ~40 LOC once phases A–G
 are in.
 
-## Session 7 A.15 fill plan
+## Session 6 retrospective — what worked for A.15
 
-`verifiedGenBoolExpr_correct`'s new sig:
+For future phases, the pattern proven effective in session 6 A.15:
 
-```lean
-theorem verifiedGenBoolExpr_correct ... :
-    ∃ s' k, ArmStepsN prog s s' k ∧
-      k = (verifiedGenBoolExpr layout be).length ∧
-      s'.regs .x0 = (if be.eval σ am then (1 : BitVec 64) else 0) ∧
-      ExtStateRel layout σ s' ∧
-      s'.pc = startPC + (verifiedGenBoolExpr layout be).length ∧
-      s'.arrayMem = s.arrayMem
-```
+1. **Intermediate state lets** — `let s3 := { s2 with flags := ... }`
+   for each chain step. Include `s3` in simp sets where needed.
+2. **Explicit ArmStepsN chain construction** — bind each step's
+   `hStepN : ArmStepsN prog sPrev sNext 1` separately, then chain
+   via `ArmStepsN_trans` with visible arithmetic:
+   ```lean
+   have h12 : ArmStepsN prog s s2 (k1 + k2) := ArmStepsN_trans hStepsN1 hStepsN2
+   have h23 : ArmStepsN prog s s3 (k1 + k2 + 1) := ArmStepsN_trans h12 hStepCmpN
+   ```
+3. **k-equality proof** — after the refine, prove
+   `k_total = (verifiedGenBoolExpr layout be).length` via:
+   ```lean
+   rw [hk1, hk2]; simp [verifiedGenBoolExpr, List.length_append]; omega
+   ```
+4. **surgical `simp only`** — for cases where simp over-unfolds and
+   breaks the expected normal form (e.g., flit+flit `Flags.condHolds_
+   float_correct`), use `simp only [sN, ...specific lemmas...]` first
+   to stage the form, then `simp` + `exact` for the final step.
 
-Cases (from `WellTypedBoolExpr`):
-
-| Case | k | Old refine shape | New refine shape |
-|---|---|---|---|
-| `bexpr` | - | contradiction via `hasSimpleOps` | unchanged |
-| `lit` | 1 | `⟨_, .single (.mov ...)⟩` | `⟨s.setReg .x0 _ \|>.nextPC, 1, ArmStepsN.single (.mov ...)⟩` + rfl for k |
-| `bvar hty` | `(vLoadVar _ x .x0).length + 1` | `⟨_, hSteps1.trans (.single .andImm)⟩` | `ArmStepsN_trans hStepsN1 (.single .andImm)`, compute k = k1 + 1 |
-| `not hbe` | `(verifiedGenBoolExpr _ e).length + 1` | `hSteps1.trans (.single .eorImm)` | `ArmStepsN_trans hStepsN1 (.single .eorImm)`, k = k1 + 1 (recursive call on e) |
-| `cmp` var+var | `lv_len + rv_len + 2` | `(hSteps1.trans hSteps2).trans (.step cmp .single cset)` | chain 4 ArmStepsN pieces via `ArmStepsN_trans`, total k = k1+k2+2 |
-| `cmp` var+lit | `lv_len + loadImm_len + 2` | same structure | chain 4 ArmStepsN, k = k1+k2+2 |
-| `cmp` lit+var | `loadImm_len + rv_len + 2` | same structure | chain 4 ArmStepsN, k = k1+k2+2 |
-| `fcmp` (3 sub-cases) | similar to cmp but with FP loads | same structure | same strategy |
-
-**Strategy**: for each chained step sequence (e.g. `cmp var+var`),
-introduce intermediate `ArmStepsN` witnesses explicitly:
-
-```lean
-let k1 := (vLoadVar layout va .x1).length  -- from hk1 destructure
-let k2 := (vLoadVar layout vb .x2).length  -- from hk2 destructure
-have hChain : ArmStepsN prog s s3 (k1 + k2 + 2) := by
-  have h01 := ArmStepsN_trans hStepsN1 hStepsN2
-  -- h01 : ArmStepsN prog s s2 (k1 + k2)
-  have hCmpN : ArmStepsN prog s2 s3 1 := ArmStepsN.single (.cmpRR ...)
-  have h02 := ArmStepsN_trans h01 hCmpN
-  -- h02 : ArmStepsN prog s s3 (k1 + k2 + 1)
-  have hCsetN : ArmStepsN prog s3 sResult 1 := ArmStepsN.single (.cset ...)
-  exact (show k1 + k2 + 2 = (k1 + k2 + 1) + 1 from by omega) ▸
-    ArmStepsN_trans h02 hCsetN
-refine ⟨sResult, k1 + k2 + 2, hChain, ?_, ?_, ?_, ?_, ?_⟩
--- Then: k = verifiedGenBoolExpr.length (reflect by simp + omega)
--- Remaining conjuncts as in old proof
-```
-
-The `k = (verifiedGenBoolExpr layout be).length` proof per case requires
-unfolding `verifiedGenBoolExpr` and computing list lengths. Pattern:
-
-```lean
-· show k1 + k2 + 2 = (verifiedGenBoolExpr layout be).length
-  simp [verifiedGenBoolExpr, List.length_append]
-  omega  -- after rewriting hk1, hk2
-```
-
-Estimated size: ~250 LOC translated from ~183 LOC old. Reference
-comment block at `ArmCorrectness.lean:1024` has the old proof text.
+These patterns should transfer directly to Phase B's per-case fills.
 
 ### Where everything lives
 
