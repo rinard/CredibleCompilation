@@ -1240,14 +1240,31 @@ theorem tac_goto_self_loop_implies_arm_self_loop
   rw [hsEq] at hStep
   exact hStep
 
-/-- **Phase 7 helper: observable determinism at `haltFinal`.**  The halt-save
-    block writes observables to deterministic stack slots (independent of
-    havoc, because havoc is always followed by restore before any branch in
-    verified code).  So any ARM state with `pc = haltFinal` reached from
-    `init` has observables matching the source halt value.
+/-- **ArmStepsN split-at-prefix helper.**  A length-`(n+k)` ArmStepsN trace
+    factors through a midpoint at length `n`.  Dual to `ArmStepsN_split_last`. -/
+private theorem ArmStepsN_split_first {prog : ArmProg} :
+    ∀ (n k : Nat) {s s' : ArmState},
+      ArmStepsN prog s s' (n + k) →
+      ∃ s_mid, ArmStepsN prog s s_mid n ∧ ArmStepsN prog s_mid s' k := by
+  intro n k
+  induction n with
+  | zero =>
+    intro s s' h
+    rw [Nat.zero_add] at h
+    exact ⟨s, rfl, h⟩
+  | succ n ih =>
+    intro s s' h
+    rw [show n + 1 + k = (n + k) + 1 from by omega] at h
+    obtain ⟨m, hStep, hRest⟩ := h
+    obtain ⟨s_mid, h1, h2⟩ := ih hRest
+    exact ⟨s_mid, ⟨m, hStep, h1⟩, h2⟩
 
-    Proof size: ~100 LOC.  Risk: moderate (interacts with halt-save block
-    semantics).  Used only by `arm_halts_implies_while_halts`. -/
+/-- **Phase 7 helper: observable determinism at `haltFinal`.**  Under the
+    deterministic-havoc pivot, any two ARM states at `haltFinal` reached
+    from `init` are *equal* (not just observably equivalent).  Proof:
+    equalize trace lengths via `step_count_state_uniqueness` at the
+    shorter length; any surplus steps from a `haltFinal` state contradict
+    `sentinel_stuck`. -/
 theorem halt_state_observables_deterministic
     (prog : Program) (htcs : prog.typeCheckStrict = true)
     (passes : List (String × (Prog → ECertificate)))
@@ -1263,7 +1280,35 @@ theorem halt_state_observables_deterministic
        | .ireg ir   => s₁.regs ir  = s₂.regs ir
        | .freg fr   => s₁.fregs fr = s₂.fregs fr)) ∧
     s₁.arrayMem = s₂.arrayMem := by
-  sorry
+  have spec := verifiedGenerateAsm_spec hGen
+  have stuck : ∀ (d : Nat) (s s' : ArmState), s.pc = r.haltFinal →
+      ArmStepsN r.bodyFlat s s' d → s = s' := by
+    intro d s s' hs hN
+    cases d with
+    | zero => exact hN
+    | succ _ =>
+      obtain ⟨m, hStep, _⟩ := hN
+      exact absurd ⟨m, hStep⟩ (sentinel_stuck spec (.inl hs))
+  obtain ⟨k₁, hN₁⟩ := ArmSteps_to_ArmStepsN h₁
+  obtain ⟨k₂, hN₂⟩ := ArmSteps_to_ArmStepsN h₂
+  have hEq : s₁ = s₂ := by
+    by_cases hle : k₁ ≤ k₂
+    · have hd : k₂ = k₁ + (k₂ - k₁) := by omega
+      rw [hd] at hN₂
+      obtain ⟨s_mid, h_pre, h_suf⟩ := ArmStepsN_split_first k₁ (k₂ - k₁) hN₂
+      have hmid := step_count_state_uniqueness k₁ s_mid s₁ h_pre hN₁
+      rw [hmid] at h_suf
+      exact stuck _ _ _ hPC₁ h_suf
+    · push_neg at hle
+      have hd : k₁ = k₂ + (k₁ - k₂) := by omega
+      rw [hd] at hN₁
+      obtain ⟨s_mid, h_pre, h_suf⟩ := ArmStepsN_split_first k₂ (k₁ - k₂) hN₁
+      have hmid := step_count_state_uniqueness k₂ s_mid s₂ h_pre hN₂
+      rw [hmid] at h_suf
+      exact (stuck _ _ _ hPC₂ h_suf).symm
+  subst hEq
+  refine ⟨fun _ loc _ => ?_, rfl⟩
+  cases loc <;> rfl
 
 /-- **Phase 7a — ARM halt implies source halt with matching observables.**
 
