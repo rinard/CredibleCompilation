@@ -4369,10 +4369,11 @@ private theorem step_simulation {tyCtx : TyCtx} {p : Prog} {r : VerifiedAsmResul
           have := spec.layoutComplete pc (by simp [Prog.size_eq] at hPC; exact hPC) y
           rw [show p[pc] = p.code[pc] from rfl, hInstr] at this
           exact this (by simp [TAC.vars])
-        obtain ⟨s1, hSteps1, hSR1, hRel1, hRegs1, hPC1, hAM1, hFregs1, hStack1⟩ :=
+        obtain ⟨s1, _, hSteps1N, _, hSR1, hRel1, hRegs1, hPC1, hAM1, hFregs1, hStack1⟩ :=
           vLoadVarFP_eff_exec r.bodyFlat r.layout y σ s_saved
             (r.pcMap pc + (entriesToSaves entries).length) .d0
             hRelSaved hRegConv hSavedPC hNotIregY (Or.inl rfl) hMappedY hCodeLoad
+        have hSteps1 := ArmStepsN_to_ArmSteps hSteps1N
         -- Phase B: havoc (floatUnaryLibCall)
         have hCodeMid := hCodeBase.append_left.append_right
           (l1 := vLoadVarFP r.layout y src_reg)
@@ -4726,10 +4727,11 @@ private theorem step_simulation {tyCtx : TyCtx} {p : Prog} {r : VerifiedAsmResul
             have := spec.layoutComplete pc (by simp [Prog.size_eq] at hPC; exact hPC) y
             rw [show p[pc] = p.code[pc] from rfl, hInstr] at this
             exact this (by simp [TAC.vars])
-          obtain ⟨s1, hSteps1, hSR1, hRel1, hRegs1, hPC1, hAM1, hFregs1, hStack1⟩ :=
+          obtain ⟨s1, _, hSteps1N, _, hSR1, hRel1, hRegs1, hPC1, hAM1, hFregs1, hStack1⟩ :=
             vLoadVarFP_eff_exec r.bodyFlat r.layout y σ s_saved
               (r.pcMap pc + (entriesToSaves entries).length) .d1
               hRelSaved hRegConv hSavedPC hNotIregY (Or.inr (Or.inl rfl)) hMappedY hCodeLoad1
+          have hSteps1 := ArmStepsN_to_ArmSteps hSteps1N
           -- Second load: z into rv_reg
           have hCodeLoad2 : CodeAt r.bodyFlat s1.pc (vLoadVarFP r.layout z rv_reg) := by
             rw [hPC1]
@@ -4739,10 +4741,11 @@ private theorem step_simulation {tyCtx : TyCtx} {p : Prog} {r : VerifiedAsmResul
             have := spec.layoutComplete pc (by simp [Prog.size_eq] at hPC; exact hPC) z
             rw [show p[pc] = p.code[pc] from rfl, hInstr] at this
             exact this (by simp [TAC.vars])
-          obtain ⟨s1b, hSteps1b, hSR1b, hRel1b, hRegs1b, hPC1b, hAM1b, hFregs1b, hStack1b⟩ :=
+          obtain ⟨s1b, _, hSteps1bN, _, hSR1b, hRel1b, hRegs1b, hPC1b, hAM1b, hFregs1b, hStack1b⟩ :=
             vLoadVarFP_eff_exec r.bodyFlat r.layout z σ s1
               s1.pc .d2
               hRel1 hRegConv rfl hNotIregZ (Or.inr (Or.inr rfl)) hMappedZ hCodeLoad2
+          have hSteps1b := ArmStepsN_to_ArmSteps hSteps1bN
           -- Phase B: havoc (callBinF)
           have hCodeMid := hCodeBase.append_left.append_right
             (l1 := vLoadVarFP r.layout y lv_reg ++ vLoadVarFP r.layout z rv_reg)
@@ -5534,10 +5537,11 @@ private theorem step_simulation {tyCtx : TyCtx} {p : Prog} {r : VerifiedAsmResul
           simp [callerSaveEntries, DAEOpt.instrDef]
         rw [hInstrs] at hCodeBase
         have hCodeLoad := hCodeBase.append_left (l2 := [ArmInstr.callPrintF])
-        obtain ⟨s1, hSteps1, _, hRel1, hRegs1, hPC1, hAM1, hOther1, hStack1⟩ :=
+        obtain ⟨s1, k1_U, hSteps1N, hk1_U, hFregsD0_U, hRel1, hRegs1, hPC1, hAM1, hOther1, hStack1⟩ :=
           vLoadVarFP_exec r.bodyFlat r.layout v .d0 σ s_saved
             (r.pcMap pc + (entriesToSaves entries).length)
             hRelSaved hRegConv hSavedPC hCodeLoad (.inl rfl) hNotIreg hVMapped
+        have hSteps1 := ArmStepsN_to_ArmSteps hSteps1N
         have hCodeCall : r.bodyFlat[s1.pc]? = some .callPrintF := by
           have h := hCodeBase.append_right (l1 := vLoadVarFP r.layout v .d0) 0 (by simp)
           simp at h
