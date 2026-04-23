@@ -1,18 +1,76 @@
 # Phase 6/7 Next Session — Final Plan and Handoff
 
 **Read this first.**  Supersedes all earlier Phase 6/7 planning documents
-in this directory.  Last updated: 2026-04-23 after Phase A + Phase B
-partial (Phase 7d landed).
+in this directory.  Last updated: 2026-04-23 after **session 4** —
+Phase 7a/b/c landed modulo one deferred composition lemma.
 
 ## TL;DR for next session
 
-Phase A (pivot) and Phase B partial (Phase 7d) landed.  Sorry count:
-**9 → 7**.  Work remaining to close Phase 7: **Phase 7a/b/c + halt
-observables + Fix B' composition (Steps 7–8)**.  Estimate ~280 LOC.
+Sessions 3–4 took sorry count **9 → 4**.  Phase 7a/b/c all closed this
+session (Step 6 + trio).  Remaining: **`source_diverges_gives_Arm
+Diverges_init`** (Step 2 of the plan, deferred because its 120-LOC
+estimate ballooned past 300 once `step_simulation` length-positivity
+surfaced as a required sub-theorem).  Estimate **~255 LOC** for the
+next session; closes Phase 7 fully (4 → 3 sorrys).
 
 Phase 6 exhaustion (`bodyFlat_branch_target_bounded` + `arm_behavior_
 exhaustive` + `verifiedGenInstr_ifgoto_branch_bounded`) remains
 OUT OF SCOPE — separate ~700 LOC deliverable.
+
+## Session 4 outcome (2026-04-23)
+
+**Achieved: 7 → 4 sorrys.**  See CHANGELOG.md §Phase 6/7 session 4
+for the full report.  Summary:
+
+- `halt_state_observables_deterministic` closed (~30 LOC; full state
+  equality via `step_count_state_uniqueness` + `sentinel_stuck`).
+- `sentinel_state_unique` helper added — generalizes the above to any
+  pair of sentinel endpoints.
+- Phase 7a/b/c (`arm_halts_implies_while_halts`, `arm_div_implies_
+  while_unsafe_div`, `arm_bounds_implies_while_unsafe_bounds`) all
+  closed by case-splitting on `has_behavior_init`, using
+  `sentinel_state_unique` for cross-sentinel contradiction and
+  reducing the `.diverges` case to `source_diverges_gives_ArmDiverges_
+  init` + `sentinel_stuck`.
+- `source_diverges_gives_ArmDiverges_init` introduced as a **stated
+  theorem with `sorry` body** — a single deferred obligation.  No
+  axioms introduced.
+
+### Next session strategy for Step 2
+
+The 120-LOC plan estimate assumed approach (b) — "each TAC step's
+forward-sim output has ArmStepsN-length ≥ 1".  This length-positivity
+is NOT externally derivable from `tacToArm_refinement`'s return type
+(`ArmSteps s s'` without a length witness).  Two viable paths:
+
+1. **Invasive**: modify `step_simulation` in CodeGen.lean (~1800 LOC
+   private theorem) to output `ArmStepsN s s' k` with a length-≥-1
+   conjunct.  Mechanical but high-risk given the size.
+2. **Compositional (recommended)**: stack four helpers on top of the
+   existing `step_simulation` output:
+   - a. Generalize `arm_diverges_of_prefix_reaches_self_loop` for
+        multi-step cycles (`ArmStepsN s s k`, `k ≥ 1`) — ~15 LOC.
+        Trivial from existing Fix B' primitives + `ArmStepsN_trans`.
+   - b. `.ifgoto`-true self-loop Fix B': forward sim of `.ifgoto be
+        pc` with `be.eval = true` and `cfg' = cfg` produces
+        `ArmStepsN s s k` with `k ≥ 1` — ~80 LOC.  Extend PF2'
+        blueprint with multi-instruction branch evaluation.
+   - c. `step_sim_advances_or_self_loop` dichotomy: given forward-sim
+        ExtSimRel in/out, either `s ≠ s'` (⟹ non-refl ArmSteps) OR
+        TAC step is a self-loop.  Case-split on cfg' type + PC /
+        arrayMem / store equality forcing via ExtSimRel's
+        conjuncts.  ~80 LOC.
+   - d. Main induction on target `N`: if self-loop detected along
+        the forward-sim chain, apply generalized Fix B'; else chain
+        positive-length `ArmStepsN` via `ArmStepsN_trans` to reach
+        length ≥ N — ~80 LOC.
+
+   Total: ~255 LOC.  Clean, no axioms.  Approach (c) is the trickiest
+   — its case-split must handle every `Step` constructor and derive
+   s ≠ s' OR self-loop.  Most cases fall out from PC-change arguments
+   (.const, .copy, .binop, .arrLoad, etc. all bump pc by +1 —
+   s.pc ≠ s'.pc via pcMap injectivity).  Only `.goto` and `.ifgoto`
+   can produce cfg' = cfg (self-loops).
 
 ## TL;DR of the original plan (historical)
 
@@ -160,7 +218,7 @@ single `ArmStep s s`.  Then the forward simulation for `.ifgoto` self-
 loop produces this `ArmSteps` cycle directly, without needing a
 dedicated `tac_iftrue_self_loop_implies_arm_self_loop` lemma.
 
-### Current sorry count: 7
+### Current sorry count: 4 (post-session-4)
 
 All in `CredibleCompilation/PipelineCorrectness.lean`:
 
@@ -168,19 +226,20 @@ All in `CredibleCompilation/PipelineCorrectness.lean`:
 |---|---|---|---|
 | 770 | `bodyFlat_branch_target_bounded` | 6 | Out of scope |
 | 1022 | `arm_behavior_exhaustive` | 6 | Out of scope |
-| 1251 | `halt_state_observables_deterministic` | 7a helper | Next session |
-| 1281 | `arm_halts_implies_while_halts` | 7a | Next session |
-| 1309 | `arm_div_implies_while_unsafe_div` | 7b | Next session |
-| 1328 | `arm_bounds_implies_while_unsafe_bounds` | 7c | Next session |
-| 1863 | `verifiedGenInstr_ifgoto_branch_bounded` | 6 probe | Out of scope |
+| 1324 | `source_diverges_gives_ArmDiverges_init` | 7 (Step 2) | Next session |
+| 2115 | `verifiedGenInstr_ifgoto_branch_bounded` | 6 probe | Out of scope |
 
-Closing all 4 "Next session" sorrys takes the count to **3** (Phase 7
-done).  Closing the 3 "Out of scope" sorrys (Phase 6 exhaustion) takes
-it to 0.
+Closing the "Next session" sorry takes the count to **3** (Phase 7
+fully done).  Closing the 3 "Out of scope" sorrys (Phase 6 exhaustion)
+takes it to 0.
 
 ## Commits on `phase6-prep`
 
 ```
+74f89ec Phase 7a/b/c close + source_diverges_gives_ArmDiverges_init placeholder
+1ee116e Phase 7 Step 6: close halt_state_observables_deterministic
+400dbbf Add LOC-over-time plots to plans/
+72ace2f Phase 6/7 session 3 handoff: update plan + CHANGELOG
 8524574 Phase B partial: Phase 7d closed + Fix B' primitives + has_behavior_init
 d41636e Phase A: deterministic havoc pivot + state_uniqueness (9 → 8 sorrys)
 632b130 Tune Livermore iteration counts and harden opt/C2 correctness check

@@ -268,7 +268,9 @@ Phase 2a ─┤                           │            ├─→ Phase 7
 - After Phase 5b (forward divergence theorem) — deferred indefinitely; not on Phase 6/7 critical path
 - Phase 6/7 infrastructure partial (Path B, 2026-04-22): `sentinel_stuck`, feeder lemmas (`pcMap_le_haltS`, `checkBranchTargets_to_labels_in_bounds`), `applyPassesPure_preserves_stepClosedInBounds`, `pipelined_has_behavior`, `pipelined_no_typeError`, sentinel distinctness, P2 probe (`arm_step_pc_det` via `armNextPC` projection), P3 probe (`type_safety` fit confirmed), P1 probe attempted (needs restructuring). 9 sorrys remain.
 - Phase 6/7 derisk probe session 2 (2026-04-22): PD1/PD2 validated opaque havoc + projection trick; PE1/PE2/PE3 validated call-site refactor and .ifgoto pattern; PF1'/PF2' validated Fix B' (self-loop ArmDiverges); PF3 confirmed step_count_pc_uniqueness requires the pivot. **Final plan: pivot + Fix B' per [`plans/phase6-7-NEXT-SESSION.md`](phase6-7-NEXT-SESSION.md).**
-- After Phase 7 pivot + Fix B' — next session target, ~980 LOC, 9 → 3 sorrys
+- Phase 6/7 session 3 (2026-04-23): Phase A (deterministic havoc pivot + state_uniqueness) + Phase B partial (Phase 7d closed, Fix B' primitives landed). 9 → 7 sorrys.
+- Phase 6/7 session 4 (2026-04-23): Phase 7a/b/c closed modulo `source_diverges_gives_ArmDiverges_init` composition lemma (which replaced three sorrys with one). 7 → 4 sorrys. Step 2 estimate revised from 120 LOC to ~255 LOC after design-analysis surfaced the need for external `step_simulation` length-positivity analysis.
+- After session 5 (Step 2 composition): ~255 LOC, 4 → 3 sorrys (Phase 7 fully closed)
 - After Phase 6 exhaustion — separate session, ~700 LOC, 3 → 0 sorrys
 
 ## Effort estimate (post-probe, post-Phase-4)
