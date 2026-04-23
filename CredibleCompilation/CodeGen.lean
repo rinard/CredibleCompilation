@@ -5939,12 +5939,13 @@ private theorem step_simulation {tyCtx : TyCtx} {p : Prog} {r : VerifiedAsmResul
             (∀ arr idx val ty, p[pc]? = some (.arrStore arr idx val ty) →
               ∀ idxVal, σ idx = .int idxVal → idxVal < arraySizeBv p.arrayDecls arr) :=
           fun hBS => verifiedBoundsSafe_sound hPC hBS hInv
-        obtain ⟨s', hArmSteps, hRelOut⟩ := ext_backward_simulation p r.bodyFlat r.layout r.pcMap
+        obtain ⟨s', _kEBS, hArmStepsN, _hKEBS, hRelOut⟩ := ext_backward_simulation p r.bodyFlat r.layout r.pcMap
           r.haltS r.divS r.boundsS p.arrayDecls safe hOracle
           hStep hRel hPC tyCtx spec.wellTypedProg hTS spec.wellTypedLayout
           p[pc] (Prog.getElem?_eq_getElem hPC)
           (r.bodyPerPC[pc]'hpcB) hSome hCodeAt hPcNext
           (spec.layoutComplete pc hPC) rfl hNCSL hNCSLBin hNCSLPrintInt hNCSLPrintBool hNCSLPrintFloat hNCSLPrintStr
+        have hArmSteps := ArmStepsN_to_ArmSteps hArmStepsN
         refine ⟨s', hArmSteps, hRelOut, ?haltCond⟩
         case haltCond =>
           intro σ' am' hEq
