@@ -313,6 +313,64 @@ Most proofs are 2–5 LOC of linear arithmetic.
 arithmetic. Keep build green by completing all cases before commit —
 do not commit partial Phase B.
 
+### Session 6 technique patterns that transfer to Phase B
+
+From the A.15 `verifiedGenBoolExpr_correct` fill (~500 LOC, 11 sub-cases,
+chains of length 1–6), the following patterns proved robust and should
+be reused in Phase B:
+
+1. **Intermediate state lets** — `let s3 := { s2 with flags := ..., pc := ... }`.
+   Include `s3` in simp sets (e.g. `simp [s3, ArmState.setReg, ...]`)
+   to unfold when goals need the field-update form expanded.
+
+2. **Explicit ArmStepsN chain construction** — bind each step's
+   `hStepN : ArmStepsN prog sPrev sNext 1` separately, then chain
+   via `ArmStepsN_trans` with visible arithmetic:
+   ```lean
+   have hStepCmpN : ArmStepsN prog s2 s3 1 := ArmStepsN.single (.cmpRR .x1 .x2 hCmp)
+   have hStepCsetN : ArmStepsN prog s3 _ 1 := ArmStepsN.single (.cset .x0 _ hCset)
+   have h12 : ArmStepsN prog s s2 (k1 + k2) := ArmStepsN_trans hStepsN1 hStepsN2
+   have h23 : ArmStepsN prog s s3 (k1 + k2 + 1) := ArmStepsN_trans h12 hStepCmpN
+   have hChain : ArmStepsN prog s _ ((k1 + k2 + 1) + 1) :=
+     ArmStepsN_trans h23 hStepCsetN
+   ```
+   Avoid "`.step h1 (.step h2 (.single h3))`" chains written inline —
+   they work for ArmSteps but require type annotations in ArmStepsN that
+   quickly get messy. Explicit `ArmStepsN_trans` chains are clearer.
+
+3. **k-equality proof pattern** — after the main refine:
+   ```lean
+   · rw [hk1, hk2]; simp [verifiedGenInstr, List.length_append]; omega
+   ```
+
+4. **Surgical `simp only` for flag-handling cases** — when a chain
+   ends with `Flags.condHolds_correct` / `_float_correct`, over-
+   unfolding with plain `simp` breaks the expected normal form
+   `{ lhs := a, rhs := b }.condHolds`. Workaround:
+   ```lean
+   simp only [sN, ArmState.setReg, ArmState.nextPC, hD1_s4, hD2_s4]
+   simp [BoolExpr.eval, Expr.eval, Value.toFloat]
+   exact congrArg ... (Flags.condHolds_float_correct ...)
+   ```
+   First `simp only` stages the form; second `simp` simplifies remaining
+   non-flag bits; `exact` closes.
+
+5. **Python cascade script for mechanical destructure migration** —
+   session 6's script (`grep` + regex-based transform) handled 102 of
+   106 cascade sites correctly. Edge cases that tripped the regex:
+   - apostrophe-named variables (`s'`, `hSteps'`) — regex used `\w+`
+     which doesn't match apostrophe; fix: use `[\w']+`.
+   - same-line obtains (`obtain ⟨...⟩ := helper ...` on one line) —
+     regex required `:= ...\n$`; fix: allow optional same-line content.
+   - complex destructure patterns with multiple `_` wildcards — in
+     one site (`CodeGen.lean:5540`), Lean misinterpreted the field
+     positions when `_` was used; fix: name the wildcards (`k1_U`,
+     `hFregsD0_U`, etc.) to disambiguate.
+
+   Phase B has its own cascade (verifiedGenInstr_correct's callers:
+   `ext_backward_simulation`, `step_simulation`, `tacToArm_*`,
+   `while_to_arm_*`). Reuse the script with these fixes.
+
 ## Phase C — `ext_backward_simulation` (ArmCorrectness.lean:5433)
 
 Trivial re-export. New signature mirrors verifiedGenInstr_correct:
@@ -455,42 +513,61 @@ With the sorry-ratchet procedure (Rule 1), sorry count temporarily
 balloons during X.0 sub-steps and monotonically decreases during X.1+
 fills. Commit frequently.
 
-| Checkpoint | Sorry count (expected) | Green build |
-|---|---|---|
-| start of session 6 | 4 | yes |
-| A.0 complete (helper sigs + cascade + sorried bodies) | ~19 (4 + 15 helper sorries) | yes |
-| A.1+ fills through `verifiedGenBoolExpr_correct` | ~18 | yes |
-| A complete (all helper sorries filled) | 4 | yes |
-| B.0 complete (verifiedGenInstr_correct sig + per-case sorries) | ~64 (4 + 60) | yes |
-| B.1 fill `.binop` normal | ~63 | yes |
-| B.2 fill `.ifgoto_true` | ~62 | yes |
-| B complete | 4 | yes |
-| C complete (ext_backward_simulation) | 4 | yes |
-| D complete (step_simulation) | 4 | yes |
-| E complete (tacToArm_refinement) | 4 | yes |
-| F complete (tacToArm_correctness) | 4 | yes |
-| G complete (while_to_arm_*) | 4 | yes |
-| **H complete (source_diverges closed)** | **3** | yes |
+| Checkpoint | Sorry count (expected) | Actual | Green build |
+|---|---|---|---|
+| start of session 6 | 4 | 4 | yes |
+| A.0 complete (helper sigs + cascade + sorried bodies) | ~19 (4 + 15 helper sorries) | 17 (4 + 13 new sorries; A.1/A.2 were already filled session 5) | yes |
+| A.1+ fills through `verifiedGenBoolExpr_correct` | ~18 | tracked descent to 4 | yes |
+| **A complete (all helper sorries filled)** | 4 | **4 ✅ session 6** | yes |
+| B.0 complete (verifiedGenInstr_correct sig + per-case sorries) | ~64 (4 + 60) | — session 7 target | — |
+| B.1 fill `.binop` normal | ~63 | | |
+| B.2 fill `.ifgoto_true` | ~62 | | |
+| B complete | 4 | | |
+| C complete (ext_backward_simulation) | 4 | | |
+| D complete (step_simulation) | 4 | | |
+| E complete (tacToArm_refinement) | 4 | | |
+| F complete (tacToArm_correctness) | 4 | | |
+| G complete (while_to_arm_*) | 4 | | |
+| **H complete (source_diverges closed)** | **3** | | |
 
 **Sorry count regression check**: after each sub-step, the running total
 of sorrys should be monotone non-increasing (or the expected bump from a
 fresh X.0 sub-step). Any unexpected new sorry = investigate immediately.
 
+### Session 6 actuals vs estimate
+
+| Metric | Spec estimate | Session 6 actual |
+|---|---|---|
+| Phase A total LOC | ~150 | ~850 (includes full 500-LOC A.15 fill + 102-site cascade) |
+| Phase A caller updates | ~150–200 destructure patterns | 102 automated + 4 hand-fixed (3 apostrophe-var sites + 1 named-wildcard site) |
+| Phase A sessions | 1 day / across 2-3 sessions | 1 session |
+| Remaining session 6 budget allocated to Phase B | optional | 0 (scope consumed by A) |
+
+Phase A took ~5× the LOC estimate. Main driver: A.15 verifiedGenBoolExpr_
+correct had 11 sub-cases (bexpr/lit/bvar/not + cmp×4 + fcmp×4), each
+requiring 4–6 step ArmStepsN chains with explicit k arithmetic.
+Takeaway for Phase B: the ~60-case `verifiedGenInstr_correct` cascade
+likely runs 500–1500 LOC, probably 2 sessions not 1.
+
 ## Risks and mitigations
 
 1. **Helper length equality proofs trip on non-trivial list algebra.**
-   Mitigation: each helper's length is `concrete_list.length`, omega
-   handles linear combinations. If a case resists, relax equality to
-   inequality (`k ≤ list.length`) — this works as long as Phase F can
-   still derive `n ≤ k` from cumulative bounds.
+   ~~Mitigation: each helper's length is `concrete_list.length`, omega
+   handles linear combinations.~~ **Resolved session 6**: all 13 helper
+   length proofs closed cleanly with `rw [hk_i]; simp [..., List.length_append]; omega`.
 
 2. **Phase B destructure cascades touch more callers than enumerated.**
    Mitigation: build after each ~10 case updates to catch drift.
+   Session 6 note: the Python cascade script is the fastest route;
+   see § "Session 6 technique patterns" above for edge cases.
 
 3. **Some callsite uses the old `hArm : ArmSteps` by composition
-   (`hArm1.trans hArm2`).** Mitigation: `ArmStepsN_trans` is a drop-in
-   replacement. If the caller also consumes it as plain ArmSteps
-   elsewhere, use `ArmStepsN_to_ArmSteps` to bridge.
+   (`hArm1.trans hArm2`).** ~~Mitigation: `ArmStepsN_trans` is a drop-in
+   replacement.~~ **Session 6 preferred alternative**: keep the old
+   `hArm : ArmSteps` name via `have hArm := ArmStepsN_to_ArmSteps hArmN`
+   bridge, leaving downstream `.trans` / `.single` usages intact.
+   Phase B case rewrites can remove bridges per-case as they adopt
+   length-tracked chains. Session 6 applied this at 102+ sites.
 
 4. **Phase D step_simulation's lib-call save/restore math.**
    Mitigation: `1 ≤ k` is the minimal claim; don't pursue tighter
@@ -499,6 +576,19 @@ fresh X.0 sub-step). Any unexpected new sorry = investigate immediately.
 5. **Phase G while_to_arm_* might need deeper updates if internal
    reasoning relied on specific ArmSteps structure.** Mitigation: the
    bridging lemma preserves ArmSteps view; internal reasoning unchanged.
+
+6. **NEW: Phase B complex cases may have 4-6-step chains like A.15's
+   flit+flit fcmp case.** Mitigation: use the surgical `simp only`
+   pattern (see § Session 6 technique patterns #4). For cases with
+   mixed FP/integer ops (e.g., `.floatUnary` → `fp_exec_and_store`),
+   lean on the helper's k-equality rather than inlining.
+
+7. **NEW: Phase B `verifiedGenInstr_correct` has ~60 cases but only
+   ~15 are `.run` targets requiring the length claim.** The terminal
+   cases (halt, errorDiv, errorBounds, typeError, dead injectivity)
+   discharge `(cfg' = .run → k = instrs.length)` vacuously. Mitigation:
+   group cases by target kind for efficiency — tackle all `.run` cases
+   first, then batch the vacuous-discharge cases.
 
 ## What to do if Phase B stalls mid-session
 
