@@ -1259,6 +1259,80 @@ private theorem ArmStepsN_split_first {prog : ArmProg} :
     obtain ⟨s_mid, h1, h2⟩ := ih hRest
     exact ⟨s_mid, ⟨m, hStep, h1⟩, h2⟩
 
+/-- **Sentinel-state collision.**  Two `ArmSteps` from a common start ending
+    at sentinel PCs force full-state equality (hence PC equality).  Generalizes
+    `halt_state_observables_deterministic` to any pair of sentinel endpoints.
+    Same proof shape: equalize lengths at the shorter via
+    `step_count_state_uniqueness`, then surplus steps are ruled out by
+    `sentinel_stuck`. -/
+private theorem sentinel_state_unique
+    {tyCtx : TyCtx} {p : Prog} {r : VerifiedAsmResult}
+    (spec : GenAsmSpec tyCtx p r)
+    {init s₁ s₂ : ArmState}
+    (h₁ : ArmSteps r.bodyFlat init s₁)
+    (hSent₁ : s₁.pc = r.haltFinal ∨ s₁.pc = r.divS ∨ s₁.pc = r.boundsS)
+    (h₂ : ArmSteps r.bodyFlat init s₂)
+    (hSent₂ : s₂.pc = r.haltFinal ∨ s₂.pc = r.divS ∨ s₂.pc = r.boundsS) :
+    s₁ = s₂ := by
+  have stuck : ∀ (d : Nat) (s s' : ArmState),
+      (s.pc = r.haltFinal ∨ s.pc = r.divS ∨ s.pc = r.boundsS) →
+      ArmStepsN r.bodyFlat s s' d → s = s' := by
+    intro d s s' hs hN
+    cases d with
+    | zero => exact hN
+    | succ _ =>
+      obtain ⟨m, hStep, _⟩ := hN
+      exact absurd ⟨m, hStep⟩ (sentinel_stuck spec hs)
+  obtain ⟨k₁, hN₁⟩ := ArmSteps_to_ArmStepsN h₁
+  obtain ⟨k₂, hN₂⟩ := ArmSteps_to_ArmStepsN h₂
+  by_cases hle : k₁ ≤ k₂
+  · have hd : k₂ = k₁ + (k₂ - k₁) := by omega
+    rw [hd] at hN₂
+    obtain ⟨s_mid, h_pre, h_suf⟩ := ArmStepsN_split_first k₁ (k₂ - k₁) hN₂
+    have hmid := step_count_state_uniqueness k₁ s_mid s₁ h_pre hN₁
+    rw [hmid] at h_suf
+    exact stuck _ _ _ hSent₁ h_suf
+  · push_neg at hle
+    have hd : k₁ = k₂ + (k₁ - k₂) := by omega
+    rw [hd] at hN₁
+    obtain ⟨s_mid, h_pre, h_suf⟩ := ArmStepsN_split_first k₂ (k₁ - k₂) hN₁
+    have hmid := step_count_state_uniqueness k₂ s_mid s₂ h_pre hN₂
+    rw [hmid] at h_suf
+    exact (stuck _ _ _ hSent₂ h_suf).symm
+
+/-- **Phase 7 auxiliary: source divergence gives ARM divergence.**
+
+    Given an infinite TAC execution of the pipelined program starting from
+    `init`, produce `ArmDiverges r.bodyFlat (initArmState r)`.  This is the
+    Step 2 composition theorem from `plans/phase6-7-NEXT-SESSION.md`, needed
+    by the `.diverges` branch of Phase 7a/b/c to rule out a source-diverges
+    coexisting with a sentinel ARM reach.
+
+    Proof strategy (plans §§Step 2 approach b + Step 1): for each `n`,
+    forward sim of `StepsN (f 0) (f n)` via `tacToArm_correctness` produces
+    `ArmStepsN init s_n m_n`.  Show the `m_n` sequence is unbounded OR
+    a source self-loop produces an ARM cycle (multi-step Fix B').  In the
+    former case, truncate via `ArmStepsN_prefix` to hit any target `N`.
+    In the latter, `arm_diverges_of_prefix_reaches_cycle` (generalized
+    Fix B') gives the conclusion directly.
+
+    **Status: deferred.**  External analysis of `step_simulation`'s
+    length-positive output + case-split on source self-loops requires
+    ~300 LOC of infrastructure beyond the budget of the current session.
+    Landed as a stated hypothesis so Phase 7a/b/c can close their
+    `.diverges` branches.  See session 4 report in CHANGELOG. -/
+private theorem source_diverges_gives_ArmDiverges_init
+    (prog : Program) (htcs : prog.typeCheckStrict = true)
+    (passes : List (String × (Prog → ECertificate)))
+    {r : VerifiedAsmResult}
+    (hGen : verifiedGenerateAsm prog.tyCtx
+      (applyPassesPure prog.tyCtx passes prog.compileToTAC) = .ok r)
+    {f : Nat → Cfg}
+    (_hinf : IsInfiniteExec (applyPassesPure prog.tyCtx passes prog.compileToTAC) f)
+    (_hf0 : f 0 = Cfg.run 0 prog.initStore ArrayMem.init) :
+    ArmDiverges r.bodyFlat (Phase6.initArmState r) := by
+  sorry
+
 /-- **Phase 7 helper: observable determinism at `haltFinal`.**  Under the
     deterministic-havoc pivot, any two ARM states at `haltFinal` reached
     from `init` are *equal* (not just observably equivalent).  Proof:
@@ -1335,7 +1409,54 @@ theorem arm_halts_implies_while_halts
     ∃ fuel σ_src am_src,
       prog.interp fuel = some (σ_src, am_src) ∧
       ArmMatchesWhile r.layout prog.compileToTAC.observable σ_src am_src s := by
-  sorry
+  have htc := prog.typeCheckStrict_typeCheck htcs
+  have hSC : StepClosedInBounds (applyPassesPure prog.tyCtx passes prog.compileToTAC) :=
+    applyPassesPure_preserves_stepClosedInBounds prog.tyCtx passes _
+      (prog.compileToTAC_stepClosed htc)
+  have spec := verifiedGenerateAsm_spec hGen
+  obtain ⟨b, hbeh⟩ := has_behavior_init _ (Store.typedInit prog.tyCtx) hSC
+  cases b with
+  | halts σ_opt =>
+    obtain ⟨am_opt, hhalt⟩ := hbeh
+    obtain ⟨fuel, σ_src, am_src, s', hinterp, hArm', hMatch, hPC'⟩ :=
+      while_to_arm_correctness prog htcs passes hGen hhalt
+    have heq := sentinel_state_unique spec hArm (.inl hPC) hArm' (.inl hPC')
+    subst heq
+    exact ⟨fuel, σ_src, am_src, hinterp, hMatch⟩
+  | errors σ_opt =>
+    exfalso
+    obtain ⟨am_opt, hErr⟩ := hbeh
+    rcases hErr with hErrDiv | hErrBounds
+    · obtain ⟨s', hArm', hPC'⟩ :=
+        (while_to_arm_div_preservation prog htcs passes hGen hErrDiv).2
+      have heq := sentinel_state_unique spec hArm (.inl hPC) hArm' (.inr (.inl hPC'))
+      have : s.pc = s'.pc := congrArg ArmState.pc heq
+      rw [hPC, hPC'] at this
+      exact (haltFinal_ne_divS spec) this
+    · obtain ⟨s', hArm', hPC'⟩ :=
+        (while_to_arm_bounds_preservation prog htcs passes hGen hErrBounds).2
+      have heq := sentinel_state_unique spec hArm (.inl hPC) hArm' (.inr (.inr hPC'))
+      have : s.pc = s'.pc := congrArg ArmState.pc heq
+      rw [hPC, hPC'] at this
+      exact (haltFinal_ne_boundsS spec) this
+  | typeErrors σ_opt =>
+    exfalso
+    obtain ⟨am_opt, hte⟩ := hbeh
+    exact absurd hte (pipelined_no_typeError prog htcs passes σ_opt am_opt)
+  | diverges =>
+    exfalso
+    obtain ⟨f, hinf, hf0⟩ := hbeh
+    have hInitEq : Store.typedInit prog.tyCtx = prog.initStore :=
+      Program.typedInit_eq_initStore prog htc
+    have hDiv : ArmDiverges r.bodyFlat (Phase6.initArmState r) :=
+      source_diverges_gives_ArmDiverges_init prog htcs passes hGen hinf (hInitEq ▸ hf0)
+    obtain ⟨n_reach, hN_reach⟩ := ArmSteps_to_ArmStepsN hArm
+    obtain ⟨s_ext, hN_ext⟩ := hDiv (n_reach + 1)
+    obtain ⟨s_mid, hN_mid, hStep_last⟩ := ArmStepsN_split_last hN_ext
+    have hmid_eq : s_mid = s :=
+      step_count_state_uniqueness n_reach s_mid s hN_mid hN_reach
+    rw [hmid_eq] at hStep_last
+    exact sentinel_stuck spec (.inl hPC) ⟨s_ext, hStep_last⟩
 
 /-- **Phase 7b — ARM div-by-zero sentinel implies source unsafe (division).**
 
@@ -1363,7 +1484,50 @@ theorem arm_div_implies_while_unsafe_div
     ∃ fuel,
       prog.body.unsafeDiv fuel prog.initStore ArrayMem.init prog.arrayDecls ∨
       prog.body.unsafeBounds fuel prog.initStore ArrayMem.init prog.arrayDecls := by
-  sorry
+  have htc := prog.typeCheckStrict_typeCheck htcs
+  have hSC : StepClosedInBounds (applyPassesPure prog.tyCtx passes prog.compileToTAC) :=
+    applyPassesPure_preserves_stepClosedInBounds prog.tyCtx passes _
+      (prog.compileToTAC_stepClosed htc)
+  have spec := verifiedGenerateAsm_spec hGen
+  obtain ⟨b, hbeh⟩ := has_behavior_init _ (Store.typedInit prog.tyCtx) hSC
+  cases b with
+  | halts σ_opt =>
+    exfalso
+    obtain ⟨am_opt, hhalt⟩ := hbeh
+    obtain ⟨_, _, _, s', _, hArm', _, hPC'⟩ :=
+      while_to_arm_correctness prog htcs passes hGen hhalt
+    have heq := sentinel_state_unique spec hArm (.inr (.inl hPC)) hArm' (.inl hPC')
+    have : s.pc = s'.pc := congrArg ArmState.pc heq
+    rw [hPC, hPC'] at this
+    exact (haltFinal_ne_divS spec) this.symm
+  | errors σ_opt =>
+    obtain ⟨am_opt, hErr⟩ := hbeh
+    rcases hErr with hErrDiv | hErrBounds
+    · exact while_to_arm_error_source_side prog htcs passes (.inl hErrDiv)
+    · exfalso
+      obtain ⟨s', hArm', hPC'⟩ :=
+        (while_to_arm_bounds_preservation prog htcs passes hGen hErrBounds).2
+      have heq := sentinel_state_unique spec hArm (.inr (.inl hPC)) hArm' (.inr (.inr hPC'))
+      have : s.pc = s'.pc := congrArg ArmState.pc heq
+      rw [hPC, hPC'] at this
+      exact (divS_ne_boundsS spec) this
+  | typeErrors σ_opt =>
+    obtain ⟨am_opt, hte⟩ := hbeh
+    exact absurd hte (pipelined_no_typeError prog htcs passes σ_opt am_opt)
+  | diverges =>
+    exfalso
+    obtain ⟨f, hinf, hf0⟩ := hbeh
+    have hInitEq : Store.typedInit prog.tyCtx = prog.initStore :=
+      Program.typedInit_eq_initStore prog htc
+    have hDiv : ArmDiverges r.bodyFlat (Phase6.initArmState r) :=
+      source_diverges_gives_ArmDiverges_init prog htcs passes hGen hinf (hInitEq ▸ hf0)
+    obtain ⟨n_reach, hN_reach⟩ := ArmSteps_to_ArmStepsN hArm
+    obtain ⟨s_ext, hN_ext⟩ := hDiv (n_reach + 1)
+    obtain ⟨s_mid, hN_mid, hStep_last⟩ := ArmStepsN_split_last hN_ext
+    have hmid_eq : s_mid = s :=
+      step_count_state_uniqueness n_reach s_mid s hN_mid hN_reach
+    rw [hmid_eq] at hStep_last
+    exact sentinel_stuck spec (.inr (.inl hPC)) ⟨s_ext, hStep_last⟩
 
 /-- **Phase 7c — ARM bounds sentinel implies source unsafe (bounds).**
 
@@ -1382,7 +1546,50 @@ theorem arm_bounds_implies_while_unsafe_bounds
     ∃ fuel,
       prog.body.unsafeDiv fuel prog.initStore ArrayMem.init prog.arrayDecls ∨
       prog.body.unsafeBounds fuel prog.initStore ArrayMem.init prog.arrayDecls := by
-  sorry
+  have htc := prog.typeCheckStrict_typeCheck htcs
+  have hSC : StepClosedInBounds (applyPassesPure prog.tyCtx passes prog.compileToTAC) :=
+    applyPassesPure_preserves_stepClosedInBounds prog.tyCtx passes _
+      (prog.compileToTAC_stepClosed htc)
+  have spec := verifiedGenerateAsm_spec hGen
+  obtain ⟨b, hbeh⟩ := has_behavior_init _ (Store.typedInit prog.tyCtx) hSC
+  cases b with
+  | halts σ_opt =>
+    exfalso
+    obtain ⟨am_opt, hhalt⟩ := hbeh
+    obtain ⟨_, _, _, s', _, hArm', _, hPC'⟩ :=
+      while_to_arm_correctness prog htcs passes hGen hhalt
+    have heq := sentinel_state_unique spec hArm (.inr (.inr hPC)) hArm' (.inl hPC')
+    have : s.pc = s'.pc := congrArg ArmState.pc heq
+    rw [hPC, hPC'] at this
+    exact (haltFinal_ne_boundsS spec) this.symm
+  | errors σ_opt =>
+    obtain ⟨am_opt, hErr⟩ := hbeh
+    rcases hErr with hErrDiv | hErrBounds
+    · exfalso
+      obtain ⟨s', hArm', hPC'⟩ :=
+        (while_to_arm_div_preservation prog htcs passes hGen hErrDiv).2
+      have heq := sentinel_state_unique spec hArm (.inr (.inr hPC)) hArm' (.inr (.inl hPC'))
+      have : s.pc = s'.pc := congrArg ArmState.pc heq
+      rw [hPC, hPC'] at this
+      exact (divS_ne_boundsS spec) this.symm
+    · exact while_to_arm_error_source_side prog htcs passes (.inr hErrBounds)
+  | typeErrors σ_opt =>
+    obtain ⟨am_opt, hte⟩ := hbeh
+    exact absurd hte (pipelined_no_typeError prog htcs passes σ_opt am_opt)
+  | diverges =>
+    exfalso
+    obtain ⟨f, hinf, hf0⟩ := hbeh
+    have hInitEq : Store.typedInit prog.tyCtx = prog.initStore :=
+      Program.typedInit_eq_initStore prog htc
+    have hDiv : ArmDiverges r.bodyFlat (Phase6.initArmState r) :=
+      source_diverges_gives_ArmDiverges_init prog htcs passes hGen hinf (hInitEq ▸ hf0)
+    obtain ⟨n_reach, hN_reach⟩ := ArmSteps_to_ArmStepsN hArm
+    obtain ⟨s_ext, hN_ext⟩ := hDiv (n_reach + 1)
+    obtain ⟨s_mid, hN_mid, hStep_last⟩ := ArmStepsN_split_last hN_ext
+    have hmid_eq : s_mid = s :=
+      step_count_state_uniqueness n_reach s_mid s hN_mid hN_reach
+    rw [hmid_eq] at hStep_last
+    exact sentinel_stuck spec (.inr (.inr hPC)) ⟨s_ext, hStep_last⟩
 
 /-- **Phase 7d — ARM divergence implies source divergence.**
 
