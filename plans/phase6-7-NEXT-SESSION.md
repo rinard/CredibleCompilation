@@ -7,21 +7,50 @@ signature spec landed.
 
 ## TL;DR for next session (session 6)
 
+**Read [plans/flavor-a-signatures.md](flavor-a-signatures.md) in full
+before starting work.**  That doc is the authoritative execution guide;
+this handoff is a pointer.
+
 Sorry count stands at **4**, unchanged from session 5.  To close Phase 7,
 execute **Flavor A** (length-tracked simulation signatures) against the
-detailed spec at **[plans/flavor-a-signatures.md](flavor-a-signatures.md)**.
+signature spec, following the **two procedural rules** defined there:
+
+1. **Sorry-ratchet within each phase** — update all signatures + cascade
+   destructures in one pass with sorried bodies (sub-step X.0), then fill
+   sorrys individually (sub-step X.1+).  Build stays green throughout.
+   Sorry count temporarily balloons then monotonically decreases.
+2. **Hard cases first within each sub-step** — validate the signature by
+   attempting the hardest case first.  Specific ordering in spec.
 
 The spec enumerates every theorem in the chain
 (helpers → `verifiedGenInstr_correct` → `ext_backward_simulation` →
 `step_simulation` → `tacToArm_refinement` → `tacToArm_correctness` →
 `while_to_arm_*` → `source_diverges_gives_ArmDiverges_init`) with exact
-new signatures, length-claim forms, and caller-update expectations.
-Execute the phases in order (A → H); commit after each phase.
+new signatures, length-claim forms, caller-update expectations, and a
+per-sub-step checkpoint table showing expected sorry counts.
 
 **Revised scope: ~1000 LOC, 2–3 focused sessions.**  Phase B is the
 largest (~60 cases in `verifiedGenInstr_correct`); everything else is
 smaller.  Phase H (closing the target sorry) is ~40 LOC once phases A–G
 are in.
+
+### Where everything lives
+
+| Artifact | Location |
+|---|---|
+| Signature spec + execution rules | [plans/flavor-a-signatures.md](flavor-a-signatures.md) |
+| Session 5 root-cause analysis | [CHANGELOG.md](../CHANGELOG.md) §Phase 6/7 session 5 |
+| Target sorry to close | [PipelineCorrectness.lean:1324](../CredibleCompilation/PipelineCorrectness.lean#L1324) (`source_diverges_gives_ArmDiverges_init`) |
+| `ArmStepsN` + length-tracking primitives | [ArmSemantics.lean:299–353](../CredibleCompilation/ArmSemantics.lean#L299) |
+| `ArmStepsN_to_ArmSteps` bridging lemma | [ArmSemantics.lean](../CredibleCompilation/ArmSemantics.lean) (after `ArmSteps_to_ArmStepsN`) |
+| Helpers to update (Phase A) | [ArmCorrectness.lean:81–1000](../CredibleCompilation/ArmCorrectness.lean#L81) |
+| `verifiedGenInstr_correct` (Phase B) | [ArmCorrectness.lean:1748](../CredibleCompilation/ArmCorrectness.lean#L1748) |
+| `ext_backward_simulation` (Phase C) | [ArmCorrectness.lean:5433](../CredibleCompilation/ArmCorrectness.lean#L5433) |
+| `step_simulation` (Phase D) | [CodeGen.lean:4182](../CredibleCompilation/CodeGen.lean#L4182) |
+| `tacToArm_refinement` (Phase E) | [CodeGen.lean:6044](../CredibleCompilation/CodeGen.lean#L6044) |
+| `tacToArm_correctness` (Phase F) | [CodeGen.lean:6135](../CredibleCompilation/CodeGen.lean#L6135) |
+| `while_to_arm_*` callers (Phase G) | [PipelineCorrectness.lean:349, 443, 470](../CredibleCompilation/PipelineCorrectness.lean#L349) |
+| `verifiedGenInstr_output_pos` (consumed by length claims) | [ArmSemantics.lean:2615](../CredibleCompilation/ArmSemantics.lean#L2615) |
 
 ### Why Flavor A and nothing else
 

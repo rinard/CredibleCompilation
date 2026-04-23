@@ -34,6 +34,91 @@ breaking the Lean 4 proof-irrelevance barrier that defeats post-hoc extraction.
 - `bodyPerPC_length_pos` in CodeGen.lean — per-PC block has length ≥ 1.
 - `arm_step_det` in PipelineCorrectness.lean — deterministic ARM successor.
 
+## Execution strategy — READ BEFORE STARTING
+
+**Two procedural rules govern the refactor:**
+
+### Rule 1: Sorry-ratchet within each phase
+
+For each phase (A, B, C, ...), do it in two sub-steps:
+
+**Sub-step X.0 (signatures + cascade)**: Update ALL the phase's theorem
+signatures in one pass. Update ALL caller destructure patterns to match
+the new signatures (e.g., `obtain ⟨s, hSteps, ...⟩ := foo ...` becomes
+`obtain ⟨s, k, hStepsN, hk, ...⟩ := foo ...`). Replace each theorem body
+with `sorry` (at the finest case granularity possible — e.g., per `|
+case =>` arm in `verifiedGenInstr_correct`). Replace any caller proof
+that uses `.trans` / `.single` in a non-trivially-composing way with
+`sorry`. **Build must be green with temporarily bloated sorry count.**
+
+**Sub-step X.1+ (fill sorrys)**: Fill each sorry individually, one at a
+time. Commit per case or per logical group. Sorry count monotonically
+decreases through this sub-step.
+
+**Why this works:** destructure updates are cascade-sensitive (must be
+right at signature-change time) but mechanical; proofs are intellectual
+but case-local once signatures are fixed. Separating them avoids the
+"break-everything-then-scramble" failure mode.
+
+**Peak sorry count projection:** 4 (starting) → ~30 after A.0 → ~90
+after B.0 → back down through A.1+, B.1+ → 3 at end.
+
+### Rule 2: Hard cases first within each sub-step
+
+De-risk the signature by attempting the hardest case before the easy
+ones. If the hard case exposes a signature flaw, you fix it once; if
+you'd done easy cases first, all their proofs would need re-doing.
+
+**Specific hard-first ordering per phase:**
+
+**Phase A fill order** (dependencies permitting):
+1. `verifiedGenBoolExpr_correct` — most complex (recursive over BoolExpr
+   AST), exercises layer-2 helpers. Validates Phase A signatures.
+2. `fp_exec_and_store` — composite, variable-length sub-chunk composition.
+3. `loadFloatExpr_exec` — match-based length claim on expression form.
+4. `loadImm64_fregs_preserved` — 4-chunk composition via `optional_movk_step'`.
+5. Remaining helpers in any order (simpler).
+
+**Phase B fill order**:
+1. `.binop` normal case — 4-chunk composition (load lv, load rv, op,
+   store). Exercises `vLoadVar_eff_exec` × 2, `vStoreVar_exec`, direct
+   ArmStep. Validates the `k = instrs.length` claim over a concatenated
+   block.
+2. `.ifgoto_true` case — integrates `verifiedGenBoolExpr_correct` +
+   conditional branch. Validates bool-expr integration with the length
+   claim.
+3. `.floatUnary` case — exercises `fp_exec_and_store` composition.
+4. `.arrLoad` normal + `.arrStore` normal — bounds-check integration.
+5. `.goto` normal, `.goto` self-loop, `.halt`, `.const`, `.copy` (self-
+   and non-self) — simple cases, pure mechanical.
+6. typeError and dead injectivity cases — vacuous discharge via
+   `cfg' ≠ .run` implication, ~5 min each.
+
+**Phase C–H fill order**: one-pass, no per-case sorry required. Complete
+each phase in a single sitting. Phase H (`source_diverges_gives_
+ArmDiverges_init`) is the final target — its proof sketch is in § Phase H
+below and should be ~40 LOC once A–G are done.
+
+### Build discipline
+
+- `lake build` after each signature change (confirm cascade is complete).
+- `lake build` after each sorry fill (confirm no regression).
+- `grep -c "sorry" CredibleCompilation/*.lean` to track progress per
+  sub-step.
+- Commit per case or per logical group. Never commit with broken build.
+- If a hard case fails to close: FIX THE SIGNATURE first (may require
+  re-doing other sorrys). Do not paper over with weaker claims.
+
+### Entry point for every session
+
+1. Read this doc end-to-end first.
+2. `git log --oneline -5` to see current state.
+3. `lake build 2>&1 | grep "declaration uses \`sorry\`"` to see current
+   sorry list.
+4. Compare to expected sorry count for current phase (in Checkpoints
+   table below). Resume from the next unchecked item.
+5. Follow Rule 1 + Rule 2 above for whatever phase is active.
+
 ## Phase A — Helpers in ArmCorrectness.lean lines 81–1000
 
 15 theorems. For each, the return type picks up `∃ ... k, ArmStepsN ... k ∧ k = <list>.length ∧ ...`.
@@ -366,18 +451,30 @@ private theorem source_diverges_gives_ArmDiverges_init
 
 ## Checkpoints
 
-Per-phase commits recommended:
+With the sorry-ratchet procedure (Rule 1), sorry count temporarily
+balloons during X.0 sub-steps and monotonically decreases during X.1+
+fills. Commit frequently.
 
-| Commit | Sorry count | Green build |
+| Checkpoint | Sorry count (expected) | Green build |
 |---|---|---|
-| A complete | 4 | yes |
+| start of session 6 | 4 | yes |
+| A.0 complete (helper sigs + cascade + sorried bodies) | ~19 (4 + 15 helper sorries) | yes |
+| A.1+ fills through `verifiedGenBoolExpr_correct` | ~18 | yes |
+| A complete (all helper sorries filled) | 4 | yes |
+| B.0 complete (verifiedGenInstr_correct sig + per-case sorries) | ~64 (4 + 60) | yes |
+| B.1 fill `.binop` normal | ~63 | yes |
+| B.2 fill `.ifgoto_true` | ~62 | yes |
 | B complete | 4 | yes |
-| C complete | 4 | yes |
-| D complete | 4 | yes |
-| E complete | 4 | yes |
-| F complete | 4 | yes |
-| G complete | 4 | yes |
-| H complete | **3** | yes |
+| C complete (ext_backward_simulation) | 4 | yes |
+| D complete (step_simulation) | 4 | yes |
+| E complete (tacToArm_refinement) | 4 | yes |
+| F complete (tacToArm_correctness) | 4 | yes |
+| G complete (while_to_arm_*) | 4 | yes |
+| **H complete (source_diverges closed)** | **3** | yes |
+
+**Sorry count regression check**: after each sub-step, the running total
+of sorrys should be monotone non-increasing (or the expected bump from a
+fresh X.0 sub-step). Any unexpected new sorry = investigate immediately.
 
 ## Risks and mitigations
 
