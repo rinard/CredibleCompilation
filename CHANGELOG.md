@@ -4,6 +4,93 @@ Chronological record of what was built and why, to reconstruct the sequence of d
 
 ---
 
+## Phase 6/7 session 6: Flavor A Phase A execution (2026-04-23)
+
+**Planned goal**: execute Flavor A refactor per `plans/flavor-a-signatures.md`
+— update helper signatures to length-tracked `ArmStepsN`, cascade
+destructures, fill helper bodies. Budget: ~1000 LOC across 2–3 sessions;
+session 6 aims to complete Phase A (helpers) and possibly de-risk Phase B.
+
+**Actual outcome**: Phase A.0 (signatures + cascade) complete; 12 of 13
+Phase A helpers filled; `verifiedGenBoolExpr_correct` (A.15) remains
+sorried. Sorry count 4 → 5 (the new sorry is the A.15 placeholder;
+pre-existing 4 unchanged).
+
+### Phase A.0: helper signatures + cascade destructures
+
+Updated 13 helper signatures in `ArmCorrectness.lean` lines 270-1000 to
+return `∃ s' k, ArmStepsN prog s s' k ∧ k = <list>.length ∧ <rest>`
+form. Removed the 485-line body of `verifiedGenBoolExpr_correct` (A.15)
+and replaced with `sorry` — signatures alone are kept; body fill
+deferred to session 7.
+
+Cascade: 102 destructure patterns in `verifiedGenInstr_correct` and
+4 in `CodeGen.lean` updated programmatically. Each callsite gains
+two additional `_` slots (for `k` and `hk`) and a bridge
+`have hSteps := ArmStepsN_to_ArmSteps hStepsN` to preserve the old
+proof using the ArmSteps witness.
+
+**Lesson learned** applying the cascade: anonymous `_` wildcards
+at the first destructure position can occasionally be misinterpreted
+by Lean when the tuple has structural complexity. Workaround: name
+the intermediate-position wildcards (e.g. `k1_U`, `hk1_U`) where
+Lean's type-shift analysis needs the guidance. One such rename was
+required at `CodeGen.lean:5540` for `vLoadVarFP_exec`'s printF
+call-site.
+
+Commit: [cad1d64]
+
+### Phase A.1+: helper body fills
+
+Filled 12 of 13 helpers:
+
+| Phase | Helper | k | Strategy |
+|---|---|---|---|
+| A.3 | `optional_movk_step'` | 0 or 1 | `ArmStepsN.single` on movk; `rfl` on skip |
+| A.4 | `loadImm64_fregs_preserved` | `(formalLoadImm64 rd n).length` | Movz + 3× `optional_movk_step'` chained via `ArmStepsN_trans`; mirrors `loadImm64_correct` (A.2) |
+| A.5 | `vStoreVar_x0_correct` | 1 | `ArmStepsN.single (.str ...)` |
+| A.6 | `vStoreVar_x0_ireg_correct` | 1 | `ArmStepsN.single (.movR ...)` |
+| A.7 | `vLoadVar_exec` | `(vLoadVar layout v tmp).length` | case-split on layout; each emits 0 or 1 step |
+| A.8 | `vLoadVar_eff_exec` | `(vLoadVar layout v eff).length` | delegates to A.7 or 0-step refl |
+| A.9 | `vStoreVar_exec` | `(vStoreVar layout v .x0).length` | case-split; 0 or 1 step |
+| A.10 | `vStoreVarFP_exec` | `(vStoreVarFP layout v .d0).length` | case-split; 0 or 1 step |
+| A.11 | `fp_exec_and_store` | `1 + (vStoreVarFP layout x dst_reg).length` | composite: fp op step + vStoreVarFP |
+| A.12 | `vLoadVarFP_exec` | `(vLoadVarFP layout v tmp).length` | case-split; 1 step |
+| A.13 | `vLoadVarFP_eff_exec` | `(vLoadVarFP layout v eff).length` | delegates to A.12 or 0-step refl |
+| A.14 | `loadFloatExpr_exec` | `<match list>.length` | var: delegates to A.12; flit: A.4 + fmovToFP chain |
+
+A.4 required `set_option maxHeartbeats 40000000` matching A.2's budget —
+the bv_reassemble case-split produces 8 goals × multiple rewrites each.
+
+Commit: [1af6343]
+
+### What's left
+
+- **A.15 `verifiedGenBoolExpr_correct`** — ~200 LOC body with 4 main
+  cases (lit, bvar, not, cmp) plus cmp/fcmp sub-cases (var+var, var+lit,
+  lit+var). Structure preserved but each case needs ArmStepsN chain
+  conversion (`.trans` → `ArmStepsN_trans`, explicit k computation).
+  The old proof body is preserved in a comment block at
+  `ArmCorrectness.lean:1024-end` for reference.
+- **Phase B** (`verifiedGenInstr_correct`): signature change + ~60
+  per-case sorries + fills.
+- **Phases C-H**: mechanical wrappers + final `source_diverges`.
+
+### Current sorry count: 5
+
+| Line | Sorry | Phase | Status |
+|---|---|---|---|
+| PipelineCorrectness.lean:770 | `bodyFlat_branch_target_bounded` | 6 | Out of scope |
+| PipelineCorrectness.lean:1022 | `arm_behavior_exhaustive` | 6 | Out of scope |
+| PipelineCorrectness.lean:1324 | `source_diverges_gives_ArmDiverges_init` | 7 target | Pending Phase H |
+| PipelineCorrectness.lean:2115 | `verifiedGenInstr_ifgoto_branch_bounded` | 6 probe | Out of scope |
+| ArmCorrectness.lean (verifiedGenBoolExpr_correct) | A.15 placeholder | 7/A.15 | Session 7 |
+
+No new axioms introduced. Two pre-existing float axioms
+(`Flags.condHolds_float_correct`, `FloatBinOp.fadd_comm`) unchanged.
+
+---
+
 ## Phase 6/7 session 5: Flavor A signature spec + root-cause analysis (2026-04-23)
 
 **Planned goal**: close `source_diverges_gives_ArmDiverges_init` via

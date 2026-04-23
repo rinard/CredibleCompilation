@@ -1,19 +1,38 @@
 # Phase 6/7 Next Session — Final Plan and Handoff
 
 **Read this first.**  Supersedes all earlier Phase 6/7 planning documents
-in this directory.  Last updated: 2026-04-23 after **session 5** —
-root-cause analysis confirmed Flavor A is the only path; detailed
-signature spec landed.
+in this directory.  Last updated: 2026-04-23 after **session 6** —
+Phase A (helpers) largely landed; `verifiedGenBoolExpr_correct` (A.15)
+and Phases B–H remain.
 
-## TL;DR for next session (session 6)
+## TL;DR for next session (session 7)
+
+Sorry count stands at **5** (4 pre-existing + 1 new = verifiedGenBoolExpr_
+correct placeholder).  Build green.
+
+**Session 7's goals in order:**
+
+1. **Fill `verifiedGenBoolExpr_correct` (A.15)** — last Phase A helper.
+   Old proof preserved at `ArmCorrectness.lean:1024-end` in a comment
+   block labeled `/-  Old proof text preserved for reference:`.
+   Translate 183 LOC ArmSteps → ArmStepsN (`.trans` →
+   `ArmStepsN_trans`, `.single` → `ArmStepsN.single`, compute
+   `k = (verifiedGenBoolExpr layout be).length` per case).
+   See § Session 7 A.15 plan below. Budget: ~250 LOC, ~2 hours.
+
+2. **Phase B.0**: change `verifiedGenInstr_correct` return type to
+   length-tracked form (spec [§ Phase B](flavor-a-signatures.md#phase-b--verifiedgeninstr_correct-armcorrectnessleen1748)).
+   Per-case sorry. Cascade into `ext_backward_simulation`.
+
+3. **Phase B.1+**: fill per-case proofs in order (`.binop` normal first
+   as validation).
+
+If Phase A.15 + Phase B.0 land cleanly, session 7 can push into Phase
+B.1. Otherwise, stop after Phase A.15 and plan session 8 for Phase B.
 
 **Read [plans/flavor-a-signatures.md](flavor-a-signatures.md) in full
-before starting work.**  That doc is the authoritative execution guide;
-this handoff is a pointer.
-
-Sorry count stands at **4**, unchanged from session 5.  To close Phase 7,
-execute **Flavor A** (length-tracked simulation signatures) against the
-signature spec, following the **two procedural rules** defined there:
+before continuing.**  That doc is the authoritative execution guide;
+this handoff is a pointer.  The **two procedural rules** remain:
 
 1. **Sorry-ratchet within each phase** — update all signatures + cascade
    destructures in one pass with sorried bodies (sub-step X.0), then fill
@@ -34,23 +53,86 @@ largest (~60 cases in `verifiedGenInstr_correct`); everything else is
 smaller.  Phase H (closing the target sorry) is ~40 LOC once phases A–G
 are in.
 
+## Session 7 A.15 fill plan
+
+`verifiedGenBoolExpr_correct`'s new sig:
+
+```lean
+theorem verifiedGenBoolExpr_correct ... :
+    ∃ s' k, ArmStepsN prog s s' k ∧
+      k = (verifiedGenBoolExpr layout be).length ∧
+      s'.regs .x0 = (if be.eval σ am then (1 : BitVec 64) else 0) ∧
+      ExtStateRel layout σ s' ∧
+      s'.pc = startPC + (verifiedGenBoolExpr layout be).length ∧
+      s'.arrayMem = s.arrayMem
+```
+
+Cases (from `WellTypedBoolExpr`):
+
+| Case | k | Old refine shape | New refine shape |
+|---|---|---|---|
+| `bexpr` | - | contradiction via `hasSimpleOps` | unchanged |
+| `lit` | 1 | `⟨_, .single (.mov ...)⟩` | `⟨s.setReg .x0 _ \|>.nextPC, 1, ArmStepsN.single (.mov ...)⟩` + rfl for k |
+| `bvar hty` | `(vLoadVar _ x .x0).length + 1` | `⟨_, hSteps1.trans (.single .andImm)⟩` | `ArmStepsN_trans hStepsN1 (.single .andImm)`, compute k = k1 + 1 |
+| `not hbe` | `(verifiedGenBoolExpr _ e).length + 1` | `hSteps1.trans (.single .eorImm)` | `ArmStepsN_trans hStepsN1 (.single .eorImm)`, k = k1 + 1 (recursive call on e) |
+| `cmp` var+var | `lv_len + rv_len + 2` | `(hSteps1.trans hSteps2).trans (.step cmp .single cset)` | chain 4 ArmStepsN pieces via `ArmStepsN_trans`, total k = k1+k2+2 |
+| `cmp` var+lit | `lv_len + loadImm_len + 2` | same structure | chain 4 ArmStepsN, k = k1+k2+2 |
+| `cmp` lit+var | `loadImm_len + rv_len + 2` | same structure | chain 4 ArmStepsN, k = k1+k2+2 |
+| `fcmp` (3 sub-cases) | similar to cmp but with FP loads | same structure | same strategy |
+
+**Strategy**: for each chained step sequence (e.g. `cmp var+var`),
+introduce intermediate `ArmStepsN` witnesses explicitly:
+
+```lean
+let k1 := (vLoadVar layout va .x1).length  -- from hk1 destructure
+let k2 := (vLoadVar layout vb .x2).length  -- from hk2 destructure
+have hChain : ArmStepsN prog s s3 (k1 + k2 + 2) := by
+  have h01 := ArmStepsN_trans hStepsN1 hStepsN2
+  -- h01 : ArmStepsN prog s s2 (k1 + k2)
+  have hCmpN : ArmStepsN prog s2 s3 1 := ArmStepsN.single (.cmpRR ...)
+  have h02 := ArmStepsN_trans h01 hCmpN
+  -- h02 : ArmStepsN prog s s3 (k1 + k2 + 1)
+  have hCsetN : ArmStepsN prog s3 sResult 1 := ArmStepsN.single (.cset ...)
+  exact (show k1 + k2 + 2 = (k1 + k2 + 1) + 1 from by omega) ▸
+    ArmStepsN_trans h02 hCsetN
+refine ⟨sResult, k1 + k2 + 2, hChain, ?_, ?_, ?_, ?_, ?_⟩
+-- Then: k = verifiedGenBoolExpr.length (reflect by simp + omega)
+-- Remaining conjuncts as in old proof
+```
+
+The `k = (verifiedGenBoolExpr layout be).length` proof per case requires
+unfolding `verifiedGenBoolExpr` and computing list lengths. Pattern:
+
+```lean
+· show k1 + k2 + 2 = (verifiedGenBoolExpr layout be).length
+  simp [verifiedGenBoolExpr, List.length_append]
+  omega  -- after rewriting hk1, hk2
+```
+
+Estimated size: ~250 LOC translated from ~183 LOC old. Reference
+comment block at `ArmCorrectness.lean:1024` has the old proof text.
+
 ### Where everything lives
 
 | Artifact | Location |
 |---|---|
 | Signature spec + execution rules | [plans/flavor-a-signatures.md](flavor-a-signatures.md) |
 | Session 5 root-cause analysis | [CHANGELOG.md](../CHANGELOG.md) §Phase 6/7 session 5 |
+| Session 6 outcome | [CHANGELOG.md](../CHANGELOG.md) §Phase 6/7 session 6 |
 | Target sorry to close | [PipelineCorrectness.lean:1324](../CredibleCompilation/PipelineCorrectness.lean#L1324) (`source_diverges_gives_ArmDiverges_init`) |
 | `ArmStepsN` + length-tracking primitives | [ArmSemantics.lean:299–353](../CredibleCompilation/ArmSemantics.lean#L299) |
 | `ArmStepsN_to_ArmSteps` bridging lemma | [ArmSemantics.lean](../CredibleCompilation/ArmSemantics.lean) (after `ArmSteps_to_ArmStepsN`) |
-| Helpers to update (Phase A) | [ArmCorrectness.lean:81–1000](../CredibleCompilation/ArmCorrectness.lean#L81) |
-| `verifiedGenInstr_correct` (Phase B) | [ArmCorrectness.lean:1748](../CredibleCompilation/ArmCorrectness.lean#L1748) |
-| `ext_backward_simulation` (Phase C) | [ArmCorrectness.lean:5433](../CredibleCompilation/ArmCorrectness.lean#L5433) |
+| Phase A helpers (all landed except A.15) | [ArmCorrectness.lean:81–1000](../CredibleCompilation/ArmCorrectness.lean#L81) |
+| **A.15 `verifiedGenBoolExpr_correct` (session 7 start)** | [ArmCorrectness.lean:1005](../CredibleCompilation/ArmCorrectness.lean#L1005) — sorried |
+| A.15 old proof (reference) | [ArmCorrectness.lean:1024-](../CredibleCompilation/ArmCorrectness.lean#L1024) in comment block |
+| `verifiedGenInstr_correct` (Phase B) | [ArmCorrectness.lean] `grep -n "^theorem verifiedGenInstr_correct"` (was line 1748; shifted after session 6 edits) |
+| `ext_backward_simulation` (Phase C) | [ArmCorrectness.lean] `grep -n "^theorem ext_backward_simulation"` |
 | `step_simulation` (Phase D) | [CodeGen.lean:4182](../CredibleCompilation/CodeGen.lean#L4182) |
 | `tacToArm_refinement` (Phase E) | [CodeGen.lean:6044](../CredibleCompilation/CodeGen.lean#L6044) |
 | `tacToArm_correctness` (Phase F) | [CodeGen.lean:6135](../CredibleCompilation/CodeGen.lean#L6135) |
 | `while_to_arm_*` callers (Phase G) | [PipelineCorrectness.lean:349, 443, 470](../CredibleCompilation/PipelineCorrectness.lean#L349) |
 | `verifiedGenInstr_output_pos` (consumed by length claims) | [ArmSemantics.lean:2615](../CredibleCompilation/ArmSemantics.lean#L2615) |
+| Bridge pattern used at Phase B callsites | `have hStepsX := ArmStepsN_to_ArmSteps hStepsXN` — preserved across ~100 cascade sites in `verifiedGenInstr_correct` to keep old proofs compiling on ArmSteps. Phase B will remove these bridges per-case as it rewrites bodies. |
 
 ### Why Flavor A and nothing else
 
