@@ -1,42 +1,82 @@
 # Phase 6/7 Next Session — Final Plan and Handoff
 
 **Read this first.**  Supersedes all earlier Phase 6/7 planning documents
-in this directory.  Last updated: 2026-04-23 after **session 6** —
-**Phase A fully complete**; Phases B–H remain.
+in this directory.  Last updated: 2026-04-23 after **session 7** —
+**Phase B.0 + 21 of 31 Phase B.1 cases complete**; 10 cases remain in
+verifiedGenInstr_correct plus Phases C–H.
 
-## TL;DR for next session (session 7)
+## TL;DR for next session (session 8)
 
-Sorry count stands at **4** — all pre-existing in PipelineCorrectness.lean.
-Build green. All Phase A helpers have length-tracked ArmStepsN signatures
-with filled bodies.
+Sorry count stands at **5** — 4 pre-existing in PipelineCorrectness.lean
+(3 Phase 6 out-of-scope + 1 Phase 7 target), and 1 on
+`verifiedGenInstr_correct` with 10 internal per-case sorries remaining.
+Build green. Phase B signature is locked in place and cannot be reverted
+mid-way — session 8 must finish filling the remaining 10 cases atomically
+before committing any sig-level change.
 
-**Session 7 starts with Phase B.** Reference probe at
-[CCTests/Tests/PivotProbeFA1.lean](../CCTests/Tests/PivotProbeFA1.lean)
-validates the Phase B return type + chain pattern on the `.const` stack
-sub-case. Clone its structure for each of the ~60 `verifiedGenInstr_correct`
-cases.
+**Session 8 starts with Phase B.1 continuation.** Reference the session 7
+commits (f7b5b78 through 48b0778) for worked examples spanning terminal,
+sentinel, and multi-helper .run cases. The spec's hard-first order:
+`.binop` → `.iftrue/.iffall` → `.floatUnary` → `.arrLoad/.arrStore` →
+`.const/.copy/.fbinop/.fternop`.
 
-Remaining work:
+### 10 cases remaining
 
-1. **Phase B.0**: change `verifiedGenInstr_correct` return type to
-   length-tracked form (spec [§ Phase B](flavor-a-signatures.md#phase-b--verifiedgeninstr_correct-armcorrectnessleen1748))
-   — the ~60 per-case sorry cascade. Remove the
-   `have hStepsX := ArmStepsN_to_ArmSteps hStepsXN` bridges laid down
-   in session 6's cascade (they'll be naturally subsumed by length-
-   aware destructures per-case).
+| Case | Complexity | Sketch |
+|---|---|---|
+| `.const` | complex | 3 value types × 4 layouts = ~12 leaves; FA1 probe covers stack-int |
+| `.copy` | complex | self-copy + freg + int; 4 layout combos |
+| `.binop` | complex | per-op (10 ops) with ×/÷ div-check prefix |
+| `.iftrue`, `.iffall` | complex | BoolExpr nested, ~400 LOC each |
+| `.arrLoad`, `.arrStore` | complex | 3 types × 3 layouts + bounds-check prefix |
+| `.fbinop` | complex | per-op native + libcall (fpow) |
+| `.floatUnary` | complex | native + libcall variants |
+| `.fternop` | complex | 3-arg load chain + per-op |
 
-2. **Phase B.1+**: fill per-case proofs. Spec recommends hard-first
-   order: `.binop` normal → `.ifgoto_true` → `.floatUnary` →
-   `.arrLoad/.arrStore` normal → simple cases (`.goto`, `.halt`,
-   `.const`, `.copy`) → typeError/dead-injectivity discharge.
+### Session 7 patterns — REUSE THESE
 
-3. **Phases C-H**: mechanical wrappers + final target close
-   (`source_diverges_gives_ArmDiverges_init`). Budget per spec:
-   C ~60 LOC, D ~80-120, E ~40-60, F ~20, G ~15, H ~40.
+1. **Length-claim proof for `.run` cases**:
+   ```lean
+   · intro pc' σ' am' _hCfg
+     rw [hInstrs, hk1, hk2, ...]; simp [List.length_append]; omega
+   ```
+   `rw [hInstrs]` is CRITICAL — the cascade rewrite
+   `rw [hInstrs] at hCodeInstr hPcNext` does NOT propagate to the
+   length-claim subgoal, which still has `instrs.length` literally.
+   Omega closes associativity mismatches after simp.
 
-If the full Phase B completes in session 7, session 8 can wrap up
-Phases C-H and close the target.  Realistically session 7 covers
-B.0 + the high-risk B.1 cases; sessions 8+ finish.
+2. **Vacuous length-claim for sentinel/terminal cfg'**:
+   ```lean
+   · intro pc' σ' am' h; cases h
+   ```
+   Discharges impossible `.errorDiv/.typeError/.halt = .run` equation.
+
+3. **Chain construction** via `ArmStepsN_trans` with visible arithmetic:
+   ```lean
+   have h12 : ArmStepsN prog s s2 (k1 + k2) := ArmStepsN_trans hSteps1N hSteps2N
+   have hChain : ArmStepsN prog s s3 (k1 + k2 + 1) := ArmStepsN_trans h12 hStepN
+   ```
+   Drop the session-6 compat bridge `hStepsX := ArmStepsN_to_ArmSteps hStepsXN`
+   per-case as each case rewrites.
+
+4. **Syntax gotcha**: `exact ⟨..., by tac, next⟩` parses the comma into
+   the `by`-block. Use `refine ⟨..., ?_, next⟩` then prove subgoals.
+
+5. **Prelude is already in place** at the top of `verifiedGenInstr_correct`
+   (hRC, hII, hRegConv, hInjective, ⟨hStateRel, hPcRel, hArrayMem⟩). Each
+   case body should reference these directly — do not re-derive.
+
+### After Phase B completes
+
+Phase C (`ext_backward_simulation` — sig already changed to mirror;
+body already delegates via term-mode. Trivial ~0 LOC.). Phase D
+(`step_simulation` body is already cascaded with the `ArmStepsN_to_ArmSteps`
+bridge at the one call site in CodeGen.lean:5942 — nothing more to do
+unless we want to fully thread ArmStepsN through step_simulation's signature,
+which is Phase D proper and spec-estimated at 80-120 LOC). Phases E-H follow.
+
+Realistically session 8 covers B.1 completion + C. Phases D-H would be
+session 9.
 
 **Read [plans/flavor-a-signatures.md](flavor-a-signatures.md) in full
 before continuing.**  That doc is the authoritative execution guide;

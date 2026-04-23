@@ -4,6 +4,120 @@ Chronological record of what was built and why, to reconstruct the sequence of d
 
 ---
 
+## Phase 6/7 session 7: Flavor A Phase B partial (2026-04-23)
+
+**Planned goal**: execute Flavor A Phase B per `plans/flavor-a-signatures.md`
+— change `verifiedGenInstr_correct` return type to length-tracked form,
+cascade to callers, fill the ~60 per-case sorries hard-first. Budget: 1-2
+sessions given session 6's actuals.
+
+**Actual outcome**: **Phase B partial** — B.0 landed atomically (sig +
+cascade), then 21 of 31 top-level case arms filled over 5 commits. Sorry
+count stays at 5 throughout (verifiedGenInstr_correct has one declaration
+with an internal sorry count descending from 31 → 10). Build green at
+every checkpoint. 10 harder cases remain for session 8.
+
+### Phase B.0: verifiedGenInstr_correct sig change + cascade
+
+- Return type changed from
+  `∃ s', ArmSteps prog s s' ∧ ExtSimRel ...`
+  to
+  `∃ s' k, ArmStepsN prog s s' k ∧ (∀ pc' σ' am', cfg' = .run pc' σ' am' → k = instrs.length) ∧ ExtSimRel ...`.
+- Body replaced with a `cases hStep with` skeleton of 31 per-case `=> sorry` arms.
+- `ext_backward_simulation` sig mirrored (thin wrapper, body unchanged).
+- `step_simulation` (`CodeGen.lean:5942`): single destructure site updated
+  to bind length-tracked components, bridge back to ArmSteps via
+  `ArmStepsN_to_ArmSteps` so the rest of step_simulation's body compiles
+  unchanged.
+
+Commit: [f7b5b78]
+
+### Phase B.1: per-case fills (21 of 31 filled)
+
+**Terminal / vacuous-on-.run (10 cases, commit [5f4d2d5]):**
+- `.goto`: k=1, `ArmStepsN.single (.branch ...)`; length-claim rw+rfl.
+- `.halt`: k=1, same; length-claim vacuous (cfg' = .halt).
+- `.binop_divByZero`: k = k1 + k2 + 1 chain (load-y, load-z, cbz to divLabel);
+  length-claim vacuous (cfg' = .errorDiv).
+- 7× `*_typeError`: k=0 / `.refl_zero`; length-claim vacuous.
+
+**Sentinel discharge + simple .run (6 cases, commit [efcfd33]):**
+- `.arrLoad_boundsError`, `.arrStore_boundsError`: k = k1 + 1 + 1 chain
+  (load idx, cmp, bCond_taken to boundsLabel); oracle discharges
+  boundsSafe=true branch.
+- `.print`: vacuous (verifiedGenInstr returns none).
+- `.printInt`, `.printBool`: vLoadVar + bl _printX; k = k1 + 1.
+- `.printFloat`: vLoadVarFP + bl _printF; k = k1 + 1.
+- `.printString`: single bl _printS; k = 1.
+
+**Composite .run cases (3 cases, commits [fe9ea71], [20b9fef], [48b0778]):**
+- `.boolop`: verifiedGenBoolExpr_correct + vStoreVar_exec; k = k1 + k2.
+- `.intToFloat`: per-layout(x) split; freg k = k1 + 1, stack k = k1 + 1 + k3.
+- `.floatToInt`: per-layout(y) split; freg k = 1 + k2, stack k = k1 + 1 + k3.
+
+### Session 7 patterns that transfer to session 8
+
+1. **Length-claim proof template** for `.run` cases:
+   ```
+   · intro pc' σ' am' _hCfg
+     rw [hInstrs, hk1, hk2, ...]; simp [List.length_append]; omega
+   ```
+   The `rw [hInstrs]` is CRITICAL — `rw [hInstrs] at hCodeInstr hPcNext`
+   does NOT propagate to the length-claim subgoal, which still has `instrs`
+   literally. Omega is often needed after simp for associativity
+   reshuffles like `(k1 + 1) + k3 = k1 + (k3 + 1)`.
+
+2. **Vacuous length-claim** for sentinel/terminal targets:
+   ```
+   · intro pc' σ' am' h; cases h
+   ```
+   `cases h` on the impossible equation `(.errorDiv | .typeError | .halt) = .run`
+   discharges via no-matching-constructor.
+
+3. **Chain construction**: keep the session 6 cascade's `hStepsXN` witnesses
+   (ArmStepsN) and compose via `ArmStepsN_trans` with visible arithmetic
+   `(k1 + k2) + 1`, etc. Avoid relying on the `hStepsX := ArmStepsN_to_ArmSteps hStepsXN`
+   bridge (session 6's compat layer) — drop it per-case to use ArmStepsN
+   composition directly.
+
+4. **Syntax gotcha**: `exact ⟨..., by tac, next⟩` parses the comma as part of
+   the `by`-block. Use `refine ⟨..., ?_, next⟩` then prove subgoals.
+
+### What remains for session 8
+
+10 cases remain in `verifiedGenInstr_correct`:
+
+| Case | Complexity | Sketch |
+|---|---|---|
+| `.const` | complex | 3 value types × 4 layouts = ~12 leaves; FA1 probe covers stack-int sub-case |
+| `.copy` | complex | self-copy branch + freg-copy + int-copy; 4 layout combos |
+| `.binop` | complex | per-op (10 ops) with ×/÷ div-check prefix |
+| `.iftrue`, `.iffall` | complex | BoolExpr nested (cmp/fcmp × var/lit combos × 4 ops); ~400 LOC each |
+| `.arrLoad`, `.arrStore` | complex | 3 types × 3 layouts + bounds-check prefix |
+| `.fbinop` | complex | per-op native + libcall (fpow) variants |
+| `.floatUnary` | complex | native (fsqrt/fabs/fneg) + libcall (sin/cos/etc.) variants |
+| `.fternop` | complex | 3-argument load chain + per-op variants |
+
+Session 8 should:
+1. `lake build` — confirm green with sorry count 5.
+2. Fill cases hard-first (spec recommends .binop → .iftrue/.iffall → .floatUnary → .arrLoad/.arrStore → .const/.copy/.fbinop/.fternop).
+3. Transfer the patterns above — length-claim + rw+omega + ArmStepsN chain.
+4. Complete Phase B (all 31 cases filled), then Phase C (ext_backward_simulation wrapper — trivial now; sig already changed, just needs `by` proof instead of direct term) and Phase D (step_simulation body — already cascaded, need to actually port the logic to use the new length-tracked form upstream if/when that's worthwhile; currently the bridge to ArmSteps is fine).
+
+Sorry count projection: 5 at end of session 7 → 5 through all of session 8
+until verifiedGenInstr_correct's final sorry is eliminated → 4.
+Phase H closes the source_diverges sorry → 3.
+
+Commits this session (on phase6-prep):
+- f7b5b78 — B.0 sig + cascade
+- 5f4d2d5 — B.1 .goto/.halt/binop_divByZero/7×typeError
+- efcfd33 — B.1 boundsError + 5 prints
+- fe9ea71 — B.1 .boolop
+- 20b9fef — B.1 .intToFloat
+- 48b0778 — B.1 .floatToInt
+
+---
+
 ## Phase 6/7 session 6: Flavor A Phase A execution (2026-04-23)
 
 **Planned goal**: execute Flavor A refactor per `plans/flavor-a-signatures.md`
