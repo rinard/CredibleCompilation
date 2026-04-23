@@ -4,18 +4,24 @@
 in this directory.  Last updated: 2026-04-23 after **session 4** —
 Phase 7a/b/c landed modulo one deferred composition lemma.
 
-## TL;DR for next session
+## TL;DR for next session (session 5)
 
-Sessions 3–4 took sorry count **9 → 4**.  Phase 7a/b/c all closed this
-session (Step 6 + trio).  Remaining: **`source_diverges_gives_Arm
-Diverges_init`** (Step 2 of the plan, deferred because its 120-LOC
-estimate ballooned past 300 once `step_simulation` length-positivity
-surfaced as a required sub-theorem).  Estimate **~255 LOC** for the
-next session; closes Phase 7 fully (4 → 3 sorrys).
+Sessions 3–4 took sorry count **9 → 4**.  Phase 7a/b/c all closed
+session 4 (Step 6 + trio).  Remaining to close Phase 7:
+**`source_diverges_gives_ArmDiverges_init`** at
+[PipelineCorrectness.lean:1324](../CredibleCompilation/PipelineCorrectness.lean#L1324).
 
-Phase 6 exhaustion (`bodyFlat_branch_target_bounded` + `arm_behavior_
-exhaustive` + `verifiedGenInstr_ifgoto_branch_bounded`) remains
-OUT OF SCOPE — separate ~700 LOC deliverable.
+**Chosen approach (session-4 analysis): Flavor A — modify
+`ext_backward_simulation` / `step_simulation` return types in place
+to track ArmStepsN length ≥ 1.**  All downstream callers updated.
+Enhanced interface makes `source_diverges_gives_ArmDiverges_init`
+a trivial ~40-LOC induction.  Estimate **~600 LOC** total; closes
+Phase 7 fully (4 → 3 sorrys) with **~85% confidence** (mechanical
+but many moving parts).
+
+Phase 6 exhaustion (`bodyFlat_branch_target_bounded` +
+`arm_behavior_exhaustive` + `verifiedGenInstr_ifgoto_branch_bounded`)
+remains OUT OF SCOPE — separate ~700 LOC deliverable.
 
 ## Session 4 outcome (2026-04-23)
 
@@ -36,41 +42,322 @@ for the full report.  Summary:
   theorem with `sorry` body** — a single deferred obligation.  No
   axioms introduced.
 
-### Next session strategy for Step 2
+### Why the earlier compositional plan was abandoned
 
-The 120-LOC plan estimate assumed approach (b) — "each TAC step's
-forward-sim output has ArmStepsN-length ≥ 1".  This length-positivity
-is NOT externally derivable from `tacToArm_refinement`'s return type
-(`ArmSteps s s'` without a length witness).  Two viable paths:
+Session 4 considered a compositional approach (Fix B' cycle
+primitives + self-loop detection + non-self-loop dichotomy).
+Analysis revealed:
 
-1. **Invasive**: modify `step_simulation` in CodeGen.lean (~1800 LOC
-   private theorem) to output `ArmStepsN s s' k` with a length-≥-1
-   conjunct.  Mechanical but high-risk given the size.
-2. **Compositional (recommended)**: stack four helpers on top of the
-   existing `step_simulation` output:
-   - a. Generalize `arm_diverges_of_prefix_reaches_self_loop` for
-        multi-step cycles (`ArmStepsN s s k`, `k ≥ 1`) — ~15 LOC.
-        Trivial from existing Fix B' primitives + `ArmStepsN_trans`.
-   - b. `.ifgoto`-true self-loop Fix B': forward sim of `.ifgoto be
-        pc` with `be.eval = true` and `cfg' = cfg` produces
-        `ArmStepsN s s k` with `k ≥ 1` — ~80 LOC.  Extend PF2'
-        blueprint with multi-instruction branch evaluation.
-   - c. `step_sim_advances_or_self_loop` dichotomy: given forward-sim
-        ExtSimRel in/out, either `s ≠ s'` (⟹ non-refl ArmSteps) OR
-        TAC step is a self-loop.  Case-split on cfg' type + PC /
-        arrayMem / store equality forcing via ExtSimRel's
-        conjuncts.  ~80 LOC.
-   - d. Main induction on target `N`: if self-loop detected along
-        the forward-sim chain, apply generalized Fix B'; else chain
-        positive-length `ArmStepsN` via `ArmStepsN_trans` to reach
-        length ≥ N — ~80 LOC.
+1. The `.ifgoto`-true self-loop Fix B' primitive requires showing
+   `ArmStepsN s s k ≥ 1` where s cycles back to itself.  In practice
+   the first iteration changes flags (s ≠ s'), but the cycle only
+   establishes after a steady state is reached, which requires
+   reasoning about `.ifgoto`'s multi-instruction ARM block.
 
-   Total: ~255 LOC.  Clean, no axioms.  Approach (c) is the trickiest
-   — its case-split must handle every `Step` constructor and derive
-   s ≠ s' OR self-loop.  Most cases fall out from PC-change arguments
-   (.const, .copy, .binop, .arrLoad, etc. all bump pc by +1 —
-   s.pc ≠ s'.pc via pcMap injectivity).  Only `.goto` and `.ifgoto`
-   can produce cfg' = cfg (self-loops).
+2. The "non-self-loop ⇒ s ≠ s' ⇒ length ≥ 1" case analysis STILL
+   fails for self-loop cases (where `cfg' = cfg`, so ExtSimRel admits
+   s = s' propositionally), and we cannot externally rule out
+   `.refl` from `tacToArm_refinement`'s output.
+
+3. Both obstacles trace back to the same root cause: `ArmSteps`
+   propositions don't track length.  `step_simulation`'s proof
+   internally constructs length-≥-1 chains for every case, but the
+   length is **erased** in the return type.
+
+Flavor A addresses the root cause directly by adding length
+tracking.  This makes every downstream closing argument trivial.
+
+## Session 5 work plan — Flavor A specification
+
+### Goal
+
+Change the return type of `ext_backward_simulation` /
+`step_simulation` / `tacToArm_refinement` / `tacToArm_correctness`
+from `∃ s', ArmSteps ... ∧ ...` to
+`∃ s' k, ArmStepsN ... k ∧ k ≥ 1 ∧ ...`
+(or `∃ s' k, ArmStepsN ... k ∧ k ≥ <step-count> ∧ ...` for the
+multi-step versions).
+
+Then close `source_diverges_gives_ArmDiverges_init` using the
+enhanced interface.
+
+### Signature-change specification
+
+**Target 1: [`verifiedGenInstr_correct`](../CredibleCompilation/ArmCorrectness.lean#L1748)**
+— the per-TAC-instruction forward-sim core at ArmCorrectness.lean:1748,
+~3700 lines.  Currently returns:
+
+```lean
+∃ s', ArmSteps prog s s' ∧ ExtSimRel layout pcMap divLabel boundsLabel cfg' s'
+```
+
+Change to:
+
+```lean
+∃ s' k, ArmStepsN prog s s' k ∧ 1 ≤ k ∧
+        ExtSimRel layout pcMap divLabel boundsLabel cfg' s'
+```
+
+**Target 2: [`ext_backward_simulation`](../CredibleCompilation/ArmCorrectness.lean#L5433)**
+— thin re-export at ArmCorrectness.lean:5433.  Same return-type
+change; body unchanged (just threads the enhanced tuple through).
+
+**Target 3: [`step_simulation`](../CredibleCompilation/CodeGen.lean#L4182)**
+— wrapper at CodeGen.lean:4182, ~1800 lines.  Currently returns:
+
+```lean
+∃ s', ArmSteps r.bodyFlat s s' ∧
+      ExtSimRel r.layout r.pcMap r.divS r.boundsS cfg' s' ∧
+      (∀ σ' am', cfg' = .halt σ' am' → s'.pc = r.haltFinal)
+```
+
+Change to:
+
+```lean
+∃ s' k, ArmStepsN r.bodyFlat s s' k ∧ 1 ≤ k ∧
+        ExtSimRel r.layout r.pcMap r.divS r.boundsS cfg' s' ∧
+        (∀ σ' am', cfg' = .halt σ' am' → s'.pc = r.haltFinal)
+```
+
+**Target 4: [`tacToArm_refinement`](../CredibleCompilation/CodeGen.lean#L6044)**
+— the multi-step theorem at CodeGen.lean:6044.  Currently returns:
+
+```lean
+∃ s', ArmSteps r.bodyFlat s s' ∧
+      ExtSimRel ... cfg' s' ∧ (halt-pc conj)
+```
+
+Change to (parameterizing over TAC step count via StepsN input):
+
+```lean
+theorem tacToArm_refinement ... {n : Nat} (hSteps : StepsN p ... cfg' n) :
+    ∃ s' k, ArmStepsN r.bodyFlat s s' k ∧ n ≤ k ∧
+            ExtSimRel ... cfg' s' ∧ (halt-pc conj)
+```
+
+(If StepsN isn't directly available, keep the Steps signature but
+return `∃ s' k, k ≥ 0 ∧ ArmStepsN ... k ∧ ...` — though then session
+5's main theorem needs to extract step count another way.  StepsN is
+preferred.)
+
+**Target 5: [`tacToArm_correctness`](../CredibleCompilation/CodeGen.lean#L6135)**
+— wraps `tacToArm_refinement` with initial state.  Signature change
+mirrors Target 4.
+
+**Targets 6–8: `while_to_arm_correctness`, `while_to_arm_div_
+preservation`, `while_to_arm_bounds_preservation`** in
+PipelineCorrectness.lean.  These destructure `tacToArm_correctness`'s
+output; only need a cosmetic update (add a `_` or `k` binder in the
+`obtain ⟨s, hArm, hRel, hPC⟩ := tacToArm_correctness ...` lines, and
+either discard k or thread it through if callers want it).
+
+### Helper theorems that also need length tracking
+
+`verifiedGenInstr_correct` invokes ~15 helper theorems that all
+return `∃ s', ArmSteps prog s s' ∧ ...` without length tracking.
+Each helper must be updated (bottom-up, so `verifiedGenInstr_correct`
+can consume the enhanced helpers):
+
+| Line | Helper | Typical length |
+|---|---|---|
+| 81 | `loadImm64_correct` | = `loadImm64 n`.length (≤ 4, ≥ 1 unless n has trivial zero-shifts) |
+| 253 | `optional_movk_step'` | 0 or 1 (length 0 case — skip if skipMovk) |
+| 272 | `loadImm64_fregs_preserved` | mirrors loadImm64_correct |
+| 488 | `vStoreVar_x0_correct` | = `vStoreVar x`.length (≥ 1 if stack/freg; 0 if ireg-same) |
+| 508 | `vStoreVar_x0_ireg_correct` | same |
+| 527 | `vLoadVar_exec` | similar |
+| 590 | `vLoadVar_eff_exec` | similar |
+| 618 | `vStoreVar_exec` | similar |
+| 659 | `vStoreVarFP_exec` | similar |
+| 701 | `fp_exec_and_store` | composite, ≥ 1 |
+| 762 | `vLoadVarFP_exec` | similar to vLoadVar |
+| 824 | `vLoadVarFP_eff_exec` | similar |
+| 859 | `loadFloatExpr_exec` | ≥ 1 (always emits at least one step) |
+| 925 | `verifiedGenBoolExpr_correct` | ≥ 1 |
+
+**Flag**: some helpers (e.g., `vStoreVar_x0_correct` when src == dst
+register) have a degenerate 0-step case.  For Flavor A at the
+`verifiedGenInstr_correct` level we need **k ≥ 1**, not k ≥ 0, so
+the helpers may return `k ≥ 0` while the composition at the
+`verifiedGenInstr_correct` level adds a final non-degenerate step
+(like a branch or cmp) that guarantees the total ≥ 1.
+
+Alternative: relax the top-level claim to `k ≥ 0` everywhere, then
+add a separate "total block has ≥ 1 instruction" argument at
+`source_diverges_gives_ArmDiverges_init` using
+`bodyPerPC_length_pos`.  **This is likely the cleaner path** —
+avoids per-helper length-positivity tracking.
+
+**Refined signature recommendation**:
+- Helpers: return `∃ s' k, ArmStepsN ... k ∧ k = <helper-specific-
+  length> ∧ ...`.  The equality is more informative than a bound.
+- `verifiedGenInstr_correct`: return `∃ s' k, ArmStepsN ... k ∧
+  k = instrs.length ∧ ...`.  Since `instrs.length ≥ 1` from
+  `bodyPerPC_length_pos` (via `verifiedGenInstr_output_pos`), the
+  `k ≥ 1` follows at the call site.
+- `step_simulation`: return `∃ s' k, ArmStepsN ... k ∧ 1 ≤ k ∧ ...`
+  (simpler bound; length varies by case).
+- `tacToArm_refinement` / `tacToArm_correctness`: return
+  `∃ s' k, ArmStepsN ... k ∧ n ≤ k ∧ ...` where n = StepsN count.
+
+### Case-conversion pattern
+
+For each case of the enhanced theorems, the conversion is rote.
+Example: `verifiedGenInstr_correct` for `.goto`:
+
+**Before** (line 1798-1799):
+```lean
+exact ⟨{ s with pc := pcMap _ }, .single (.branch _ hb),
+  ⟨hStateRel, rfl, hArrayMem⟩⟩
+```
+
+**After**:
+```lean
+exact ⟨{ s with pc := pcMap _ }, 1,
+  ArmStepsN.single (.branch _ hb), rfl,
+  ⟨hStateRel, rfl, hArrayMem⟩⟩
+```
+
+(The `rfl` discharges `k = instrs.length` since `instrs = [.b ...]`
+has length 1.)
+
+Pattern transformations:
+- `.single h` (ArmSteps) → `ArmStepsN.single h` (ArmStepsN ... 1)
+- `hArm1.trans hArm2` → `ArmStepsN_trans hArmN1 hArmN2`
+  (where hArmN1/hArmN2 are enhanced versions from helpers)
+- `.step h1 h2` → unfolded to `⟨s_mid, h1, h2_N⟩` (ArmStepsN ... (k+1))
+- `ArmSteps.refl` → `(rfl : ArmStepsN ... _ _ 0)` — but this case
+  should not arise at the `verifiedGenInstr_correct` level since
+  every block is non-empty; if it appears in a helper, track k = 0
+  explicitly.
+
+### Work order (session 5)
+
+Work bottom-up to keep `lake build` green after each phase.
+
+**Phase A: helpers (ArmCorrectness.lean lines 81-1000)** — ~150 LOC.
+Update each helper's return type to include length tracking.  Prove
+case-by-case.  Most helpers have trivial structure — either emit a
+single instruction (length 1) or chain via `.trans` (length sum).
+
+Checkpoint after Phase A: `lake build` green, same sorry count (4).
+
+**Phase B: `verifiedGenInstr_correct`** — ~300 LOC across ~60 cases.
+Work through each `| constructor => ...` arm.  Many cases delegate
+to helpers — the enhanced helper output plugs in directly.
+
+Checkpoint after Phase B: `lake build` green, same sorry count (4).
+
+**Phase C: `ext_backward_simulation` + `step_simulation`** — ~60 LOC.
+Thin wrappers; mechanical updates.
+
+**Phase D: `tacToArm_refinement` + `tacToArm_correctness`** —
+~30 LOC.  Consumes `step_simulation`'s enhanced output; composes
+via `ArmStepsN_trans` instead of `ArmSteps.trans`.  Induction on
+`Steps` or `StepsN` — recommend introducing StepsN-indexed variant
+alongside for clean step-count threading.
+
+Checkpoint after Phase D: `lake build` green, same sorry count (4).
+
+**Phase E: `while_to_arm_*`** — ~20 LOC.  Purely cosmetic:
+destructure the enhanced tuple with an extra `_` or `k` binder.
+
+**Phase F: close `source_diverges_gives_ArmDiverges_init`** —
+~40 LOC.  Sketch:
+
+```lean
+private theorem source_diverges_gives_ArmDiverges_init ... := by
+  intro N
+  -- Extract first (N+1) TAC steps from IsInfiniteExec.
+  have hStepsN : StepsN (applyPassesPure ...) (f 0) (f (N+1)) (N+1) := by
+    induction (N+1) with
+    | zero => exact rfl
+    | succ n ih => exact ⟨f n, hinf.2 n, ih⟩  -- or similar
+  -- Convert StepsN to Steps; apply enhanced tacToArm_correctness_N.
+  -- Enhanced return: ∃ s_fwd k, ArmStepsN init s_fwd k ∧ k ≥ N+1 ∧ ExtSimRel ...
+  rw [hf0] at hStepsN
+  obtain ⟨s_fwd, k, hArmN, hk_ge, _⟩ :=
+    tacToArm_correctness_N hGen (by exact hStepsN.toSteps)
+  -- Truncate to length N via ArmStepsN_prefix.
+  have hN_le_k : N ≤ k := by omega
+  obtain ⟨diff, hdiff⟩ : ∃ d, k = N + d := ⟨k - N, by omega⟩
+  rw [hdiff] at hArmN
+  exact ArmStepsN_prefix hArmN
+```
+
+Checkpoint after Phase F: `lake build` green, **sorry count 3**
+(the deferred lemma closed).  Phase 7 fully done.
+
+### Budget
+
+| Phase | LOC | Risk |
+|---|---|---|
+| A: helpers | ~150 | Low |
+| B: verifiedGenInstr_correct | ~300 | Low-medium (scale) |
+| C: ext_backward_simulation + step_simulation | ~60 | Low |
+| D: tacToArm_refinement + tacToArm_correctness | ~30 | Medium (StepsN threading) |
+| E: while_to_arm_* | ~20 | Trivial |
+| F: source_diverges_gives_ArmDiverges_init | ~40 | Low (once D is done) |
+| **Total** | **~600** | **Overall ~85% confidence** |
+
+Estimated wall-clock: 1 focused day if ratchet is maintained
+case-by-case; 2 days if debugging obstructs.
+
+### Risks and mitigations
+
+1. **Helper with length-0 case** (e.g., `vStoreVar_x0` when
+   layout == source register yields empty ArmSteps).  Mitigation:
+   track exact length (`k = <helper-list>.length`) rather than a
+   lower bound; this preserves compositionality and lets
+   `verifiedGenInstr_correct` derive `k ≥ 1` from
+   `bodyPerPC_length_pos`.
+
+2. **StepsN isn't in the TAC infrastructure.**  Check
+   [TAC.lean](../CredibleCompilation/TAC.lean) and
+   [PropChecker.lean](../CredibleCompilation/PropChecker.lean) — if
+   StepsN isn't defined with a length index, add a local variant
+   alongside the Steps-indexed refinement theorem.  If the search
+   shows StepsN exists (used by Refinement.lean's has_behavior_init
+   proof — line 252-257 in Refinement.lean), adapt to that variant.
+
+3. **Unexpected downstream caller breakage.**  Beyond the listed
+   callers, `grep -rn 'tacToArm_correctness\|tacToArm_refinement\|
+   step_simulation\|ext_backward_simulation\|verifiedGenInstr_correct'`
+   across CredibleCompilation/ and CCTests/ to catch anything
+   missed.  Probe files in CCTests/Tests/PivotProbe*.lean may
+   reference old signatures — update or retire.
+
+4. **Stuck on a specific case.**  If any case of
+   `verifiedGenInstr_correct` resists length tracking after 30
+   minutes, document the obstacle in a CHANGELOG-style note and
+   stop.  Partial progress (green build, subset of cases updated)
+   still reduces risk for a follow-up session.
+
+### Rollback plan
+
+If the session stalls partway:
+- **Phase A partial**: commit what's done; the enhanced helpers
+  exist alongside old signatures (if kept via Flavor-B-style
+  coexistence) OR in a clean intermediate state (if in-place).
+- **Phase B partial**: `verifiedGenInstr_correct` has mixed return
+  types — not composable.  Either finish Phase B fully before
+  committing, or revert Phase B.
+- **Phase D partial**: `tacToArm_refinement` / `tacToArm_
+  correctness` similarly need atomic commit.
+
+Net: Phases B and D are the only "must-complete" units.  Phases A,
+C, E, F are incrementally commitable.
+
+### Success criteria
+
+- `lake build` green.
+- Sorry count: 4 → 3 (source_diverges_gives_ArmDiverges_init closed).
+- `grep -rE "axiom\s" CredibleCompilation/` shows no new axioms.
+- `git log --oneline -10` shows session 5's commits on top of
+  `fd2d542` (session 4's handoff commit).
+- CHANGELOG.md updated with session 5 entry.
+- This plan doc updated: replace "Session 5 work plan" with
+  "Session 5 outcome" + open items for Phase 6 exhaustion.
 
 ## TL;DR of the original plan (historical)
 
