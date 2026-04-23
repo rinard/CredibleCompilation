@@ -278,8 +278,17 @@ private theorem optional_movk_step' (prog : ArmProg) (rd : ArmReg) (w : UInt64) 
       s'.pc = pc0 + (if (w != 0) = true then [ArmInstr.movk rd w shift] else []).length ∧
       (∀ r, r ≠ rd → s'.regs r = s.regs r) ∧
       s'.arrayMem = s.arrayMem := by
-  sorry
+  by_cases hw : (w != 0) = true
+  · simp only [hw, ite_true] at hCode ⊢
+    have hInstr := hCode.head; rw [← hPC] at hInstr
+    exact ⟨s.setReg rd (insertBits (s.regs rd) w shift) |>.nextPC, 1,
+      ArmStepsN.single (.movk rd w shift hInstr), rfl,
+      by simp, by simp, by simp, by simp [hPC],
+      fun r hr => ArmState.setReg_regs_other _ _ _ _ hr, by simp⟩
+  · simp only [hw] at hCode ⊢; simp only [Bool.false_eq_true, ite_false]
+    exact ⟨s, 0, rfl, rfl, rfl, rfl, rfl, by simp [hPC], fun _ _ => rfl, rfl⟩
 
+set_option maxHeartbeats 40000000 in
 /-- Re-execute formalLoadImm64 tracking fregs. Since mov/movz/movk only use
     setReg+nextPC (which preserve fregs), the resulting state has s'.fregs = s.fregs.
     This is a standalone re-derivation — it doesn't depend on loadImm64_correct's witness.
@@ -296,7 +305,129 @@ theorem loadImm64_fregs_preserved (prog : ArmProg) (rd : ArmReg) (n : BitVec 64)
       s'.pc = startPC + (formalLoadImm64 rd n).length ∧
       (∀ r, r ≠ rd → s'.regs r = s.regs r) ∧
       s'.arrayMem = s.arrayMem := by
-  sorry
+  unfold formalLoadImm64 at hCode
+  split at hCode
+  case isTrue hSmall =>
+    have hMov := hCode.head
+    rw [← hPC] at hMov
+    refine ⟨s.setReg rd n |>.nextPC, 1, ArmStepsN.single (.mov rd n hMov),
+      ?_,
+      by simp [ArmState.setReg, ArmState.nextPC],
+      by simp [ArmState.setReg, ArmState.nextPC],
+      by simp [ArmState.setReg, ArmState.nextPC],
+      by simp [ArmState.setReg, ArmState.nextPC, hPC, formalLoadImm64, hSmall],
+      fun r hr => ArmState.setReg_regs_other _ _ _ _ hr, rfl⟩
+    unfold formalLoadImm64; simp [hSmall]
+  case isFalse hLarge =>
+    dsimp only at hCode
+    let bits : UInt64 := n.toNat.toUInt64
+    let w0 : UInt64 := bits &&& 65535
+    let w1 : UInt64 := bits >>> 16 &&& 65535
+    let w2 : UInt64 := bits >>> 32 &&& 65535
+    let w3 : UInt64 := bits >>> 48 &&& 65535
+    have hCodeBase := hCode.append_left.append_left.append_left
+    have hCodeK1rest := hCode.append_left.append_left.append_right
+    have hCodeK1K2 := hCode.append_left
+    have hCodeK2rest := hCodeK1K2.append_right
+    have hCodeK3rest := hCode.append_right
+    have hMovz := hCodeBase.head
+    rw [← hPC] at hMovz
+    let s0 := s.setReg rd (BitVec.ofNat 64 (w0 <<< (0 : UInt64)).toNat) |>.nextPC
+    have hPC0 : s0.pc = startPC + 1 := by
+      simp [s0, ArmState.setReg, ArmState.nextPC, hPC]
+    have hs0f : s0.fregs = s.fregs := by simp [s0]
+    have hw0_shift : (w0 <<< (0 : UInt64)) = w0 := uint64_shl_zero w0
+    have hRd0 : s0.regs rd = BitVec.ofNat 64 w0.toNat := by
+      simp [s0, ArmState.setReg, ArmState.nextPC, hw0_shift]
+    obtain ⟨s1, k1, hStepsN1, hk1, hRd1, hStack1, hFregs1, hPC1, hRegs1, hAM1⟩ :=
+      optional_movk_step' prog rd w1 16 s0 (startPC + 1) hPC0 hCodeK1rest
+    have hPC_k2 : startPC + ([ArmInstr.movz rd w0 0] ++
+        (if (w1 != 0) = true then [ArmInstr.movk rd w1 16] else [])).length =
+        startPC + 1 + (if (w1 != 0) = true then [ArmInstr.movk rd w1 16] else []).length := by
+      simp; omega
+    rw [hPC_k2] at hCodeK2rest
+    obtain ⟨s2, k2, hStepsN2, hk2, hRd2, hStack2, hFregs2, hPC2, hRegs2, hAM2⟩ :=
+      optional_movk_step' prog rd w2 32 s1
+        (startPC + 1 + (if (w1 != 0) = true then [ArmInstr.movk rd w1 16] else []).length)
+        hPC1 hCodeK2rest
+    have hPC_k3 : startPC + (([ArmInstr.movz rd w0 0] ++
+        (if (w1 != 0) = true then [ArmInstr.movk rd w1 16] else [])) ++
+        (if (w2 != 0) = true then [ArmInstr.movk rd w2 32] else [])).length =
+        startPC + 1 +
+        (if (w1 != 0) = true then [ArmInstr.movk rd w1 16] else []).length +
+        (if (w2 != 0) = true then [ArmInstr.movk rd w2 32] else []).length := by
+      simp; omega
+    rw [hPC_k3] at hCodeK3rest
+    obtain ⟨s3, k3, hStepsN3, hk3, hRd3, hStack3, hFregs3, hPC3, hRegs3, hAM3⟩ :=
+      optional_movk_step' prog rd w3 48 s2
+        (startPC + 1 +
+         (if (w1 != 0) = true then [ArmInstr.movk rd w1 16] else []).length +
+         (if (w2 != 0) = true then [ArmInstr.movk rd w2 32] else []).length)
+        hPC2 hCodeK3rest
+    have hMovzN : ArmStepsN prog s s0 1 := ArmStepsN.single (.movz rd w0 0 hMovz)
+    have hChain : ArmStepsN prog s s3 (1 + k1 + k2 + k3) := by
+      have h01 : ArmStepsN prog s s1 (1 + k1) := ArmStepsN_trans hMovzN hStepsN1
+      have h02 : ArmStepsN prog s s2 (1 + k1 + k2) :=
+        (show 1 + k1 + k2 = (1 + k1) + k2 from by omega) ▸
+          ArmStepsN_trans h01 hStepsN2
+      exact (show 1 + k1 + k2 + k3 = (1 + k1 + k2) + k3 from by omega) ▸
+        ArmStepsN_trans h02 hStepsN3
+    refine ⟨s3, 1 + k1 + k2 + k3, hChain, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+    · rw [hk1, hk2, hk3]
+      unfold formalLoadImm64
+      simp only [hLarge, ite_false]
+      simp only [List.length_append, List.length_cons, List.length_nil]
+      split <;> split <;> split <;> simp <;> omega
+    · rw [hFregs3, hFregs2, hFregs1, hs0f]
+    · have hbits_bv : bits.toBitVec = n := by
+        show n.toNat.toUInt64.toBitVec = n
+        rw [UInt64.toBitVec]
+        apply BitVec.eq_of_toNat_eq
+        simp [Nat.toUInt64]
+      have hc0 : w0.toBitVec = bits.toBitVec &&& 0xFFFF#64 := uint64_toBitVec_chunk0 bits
+      have hc1 : w1.toBitVec = (bits.toBitVec >>> 16) &&& 0xFFFF#64 := uint64_toBitVec_chunk16 bits
+      have hc2 : w2.toBitVec = (bits.toBitVec >>> 32) &&& 0xFFFF#64 := uint64_toBitVec_chunk32 bits
+      have hc3 : w3.toBitVec = (bits.toBitVec >>> 48) &&& 0xFFFF#64 := uint64_toBitVec_chunk48 bits
+      by_cases hw1z : w1 = 0 <;> by_cases hw2z : w2 = 0 <;> by_cases hw3z : w3 = 0
+      all_goals simp only [show (w1 != 0) = true ↔ w1 ≠ 0 from by simp [bne]] at hRd1
+      all_goals simp only [show (w2 != 0) = true ↔ w2 ≠ 0 from by simp [bne]] at hRd2
+      all_goals simp only [show (w3 != 0) = true ↔ w3 ≠ 0 from by simp [bne]] at hRd3
+      all_goals (try simp only [hw1z, ne_eq, not_true_eq_false, ite_false, not_false_eq_true, ite_true] at hRd1)
+      all_goals (try simp only [hw2z, ne_eq, not_true_eq_false, ite_false, not_false_eq_true, ite_true] at hRd2)
+      all_goals (try simp only [hw3z, ne_eq, not_true_eq_false, ite_false, not_false_eq_true, ite_true] at hRd3)
+      all_goals rw [hRd3]
+      all_goals (try rw [insertBits_unfold])
+      all_goals rw [hRd2]
+      all_goals (try rw [insertBits_unfold])
+      all_goals rw [hRd1]
+      all_goals (try rw [insertBits_unfold])
+      all_goals rw [hRd0]
+      all_goals simp only [BitVec_ofNat_UInt64_toNat]
+      all_goals rw [hc0]
+      all_goals try rw [hc1]
+      all_goals try rw [hc2]
+      all_goals try rw [hc3]
+      all_goals rw [← hbits_bv]
+      · exact bv_reassemble_000 bits.toBitVec (by rw [← hc1]; exact uint64_eq_zero_toBitVec w1 hw1z) (by rw [← hc2]; exact uint64_eq_zero_toBitVec w2 hw2z) (by rw [← hc3]; exact uint64_eq_zero_toBitVec w3 hw3z)
+      · exact bv_reassemble_001 bits.toBitVec (by rw [← hc1]; exact uint64_eq_zero_toBitVec w1 hw1z) (by rw [← hc2]; exact uint64_eq_zero_toBitVec w2 hw2z)
+      · exact bv_reassemble_010 bits.toBitVec (by rw [← hc1]; exact uint64_eq_zero_toBitVec w1 hw1z) (by rw [← hc3]; exact uint64_eq_zero_toBitVec w3 hw3z)
+      · exact bv_reassemble_011 bits.toBitVec (by rw [← hc1]; exact uint64_eq_zero_toBitVec w1 hw1z)
+      · exact bv_reassemble_100 bits.toBitVec (by rw [← hc2]; exact uint64_eq_zero_toBitVec w2 hw2z) (by rw [← hc3]; exact uint64_eq_zero_toBitVec w3 hw3z)
+      · exact bv_reassemble_101 bits.toBitVec (by rw [← hc2]; exact uint64_eq_zero_toBitVec w2 hw2z)
+      · exact bv_reassemble_110 bits.toBitVec (by rw [← hc3]; exact uint64_eq_zero_toBitVec w3 hw3z)
+      · exact bv_reassemble bits.toBitVec
+    · rw [hStack3, hStack2, hStack1]
+      simp [s0, ArmState.setReg, ArmState.nextPC]
+    · rw [hPC3]
+      unfold formalLoadImm64
+      simp only [hLarge, ite_false]
+      simp only [List.length_append, List.length_cons, List.length_nil]
+      split <;> split <;> split <;> simp <;> omega
+    · intro r hr
+      rw [hRegs3 r hr, hRegs2 r hr, hRegs1 r hr]
+      simp [s0, ArmState.setReg, ArmState.nextPC]
+      intro heq; exact absurd heq hr
+    · rw [hAM3, hAM2, hAM1]; simp [s0, ArmState.setReg, ArmState.nextPC]
 
 
 -- ============================================================
@@ -412,7 +543,12 @@ theorem vStoreVar_x0_correct (prog : ArmProg) (layout : VarLayout) (v : Var)
         ExtStateRel layout (σ[v ↦ val]) s' ∧
         s'.pc = startPC + 1 ∧
         s'.arrayMem = s.arrayMem := by
-  sorry
+  have hStr := hCode.head; rw [← hPC] at hStr
+  refine ⟨s.setStack off (s.regs .x0) |>.nextPC, 1,
+    ArmStepsN.single (.str .x0 off hStr), rfl, ?_, ?_, ?_⟩
+  · rw [hX0]; exact ExtStateRel.update_stack hRel hInj hLoc
+  · simp [hPC]
+  · simp
 
 /-- After executing `vStoreVar layout v .x0` when v is in ireg r (r ≠ x0),
     `ExtStateRel layout (σ[v ↦ val]) s'` holds.
@@ -429,7 +565,12 @@ theorem vStoreVar_x0_ireg_correct (prog : ArmProg) (layout : VarLayout) (v : Var
         ExtStateRel layout (σ[v ↦ val]) s' ∧
         s'.pc = startPC + 1 ∧
         s'.arrayMem = s.arrayMem := by
-  sorry
+  have hMovR := hCode.head; rw [← hPC] at hMovR
+  refine ⟨s.setReg r (s.regs .x0) |>.nextPC, 1,
+    ArmStepsN.single (.movR r .x0 hMovR), rfl, ?_, ?_, ?_⟩
+  · rw [hX0]; exact ExtStateRel.update_ireg hRel hInj hLoc
+  · simp [hPC]
+  · simp
 
 /-- Execute vLoadVar: loads v into scratch register tmp, preserving ExtStateRel.
     Case-splits on layout to determine instruction sequence.
@@ -450,7 +591,54 @@ theorem vLoadVar_exec (prog : ArmProg) (layout : VarLayout) (v : Var) (tmp : Arm
         s'.pc = startPC + (vLoadVar layout v tmp).length ∧
         s'.arrayMem = s.arrayMem ∧
         (∀ r, r ≠ tmp → s'.regs r = s.regs r) := by
-  sorry
+  match hv : layout v with
+  | some (.stack off) =>
+    have hEq := vLoadVar_stack layout v tmp off hv
+    rw [hEq] at hCode ⊢
+    have hInstr := hCode.head; rw [← hPC] at hInstr
+    refine ⟨s.setReg tmp (s.stack off) |>.nextPC, 1,
+      ArmStepsN.single (.ldr tmp off hInstr), rfl,
+      ?_, ?_, ?_, ?_, ?_, ?_⟩
+    · simp; exact hRel.read_stack hv
+    · exact (ExtStateRel.setReg_preserved hRel (fun w => by
+        rcases hTmpScratch with rfl | rfl | rfl
+        · exact hRegConv.not_x0 w
+        · exact hRegConv.not_x1 w
+        · exact hRegConv.not_x2 w)).nextPC
+    · simp
+    · simp [hPC]
+    · simp
+    · intro r hne; simp [ArmState.setReg, ArmState.nextPC]
+      exact fun h => absurd h hne
+  | some (.ireg r) =>
+    by_cases heq : r = tmp
+    · subst heq
+      have hEq := vLoadVar_ireg_same layout v r hv
+      rw [hEq] at hCode ⊢; simp
+      exact ⟨s, 0, rfl, rfl, hRel.read_ireg hv, hRel, rfl, by omega, rfl, fun _ _ => rfl⟩
+    · have hbeq : (r == tmp) = false := by
+        cases h : r == tmp
+        · rfl
+        · simp [beq_iff_eq] at h; exact absurd h heq
+      have hEq := vLoadVar_ireg_diff layout v tmp r hv hbeq
+      rw [hEq] at hCode ⊢
+      have hInstr := hCode.head; rw [← hPC] at hInstr
+      refine ⟨s.setReg tmp (s.regs r) |>.nextPC, 1,
+        ArmStepsN.single (.movR tmp r hInstr), rfl,
+        ?_, ?_, ?_, ?_, ?_, ?_⟩
+      · simp; exact hRel.read_ireg hv
+      · exact (ExtStateRel.setReg_preserved hRel (fun w => by
+          rcases hTmpScratch with rfl | rfl | rfl
+          · exact hRegConv.not_x0 w
+          · exact hRegConv.not_x1 w
+          · exact hRegConv.not_x2 w)).nextPC
+      · simp
+      · simp [hPC]
+      · simp
+      · intro r' hne; simp [ArmState.setReg, ArmState.nextPC]
+        exact fun h => absurd h hne
+  | some (.freg r) => exact absurd hv (hNotFreg r)
+  | none => exact absurd hv hMapped
 
 /-- Execute vLoadVar with effective register: if v is in an ireg, use it directly (no-op);
     otherwise fall back to the scratch register. -/
@@ -471,7 +659,16 @@ theorem vLoadVar_eff_exec (prog : ArmProg) (layout : VarLayout) (v : Var)
         s'.pc = startPC + (vLoadVar layout v eff).length ∧
         s'.arrayMem = s.arrayMem ∧
         (∀ r, r ≠ eff → s'.regs r = s.regs r) := by
-  sorry
+  match hv : layout v with
+  | some (.ireg r) =>
+    simp [vLoadVar, hv]
+    intro _
+    exact ⟨s, 0, rfl, rfl, hRel.read_ireg hv, hRel, rfl, by omega, rfl, fun _ _ => rfl⟩
+  | some (.stack off) =>
+    simp only [show (match some (VarLoc.stack off) with | some (.ireg r) => r | _ => fallback) = fallback from rfl]
+    exact fun hCode => vLoadVar_exec prog layout v fallback σ s startPC hRel hRegConv hPC hCode hFB hNotFreg hMapped
+  | some (.freg r) => exact absurd hv (hNotFreg r)
+  | none => exact absurd hv hMapped
 
 /-- Execute vStoreVar from x0: stores result into v's location, updating ExtStateRel.
     Length-tracked variant (Flavor A Phase A.9): `k = (vStoreVar layout v .x0).length`. -/
@@ -487,7 +684,36 @@ theorem vStoreVar_exec (prog : ArmProg) (layout : VarLayout) (v : Var)
         ExtStateRel layout (σ[v ↦ val]) s' ∧
         s'.pc = startPC + (vStoreVar layout v .x0).length ∧
         s'.arrayMem = s.arrayMem := by
-  sorry
+  match hv : layout v with
+  | some (.stack off) =>
+    have hEq := vStoreVar_stack layout v .x0 off hv
+    rw [hEq] at hCode ⊢
+    have hStr := hCode.head; rw [← hPC] at hStr
+    refine ⟨s.setStack off (s.regs .x0) |>.nextPC, 1,
+      ArmStepsN.single (.str .x0 off hStr), rfl, ?_, ?_, ?_⟩
+    · rw [hX0]; exact (ExtStateRel.update_stack hRel hInj hv).nextPC
+    · simp [hPC]
+    · simp
+  | some (.ireg r) =>
+    have hne : (r == ArmReg.x0) = false := by
+      cases hr : r == ArmReg.x0
+      · rfl
+      · simp [beq_iff_eq] at hr; exact absurd (hr ▸ hv) (hRegConv.not_x0 v)
+    have hEq := vStoreVar_ireg_diff layout v .x0 r hv hne
+    rw [hEq] at hCode ⊢
+    have hMovR := hCode.head; rw [← hPC] at hMovR
+    refine ⟨s.setReg r (s.regs .x0) |>.nextPC, 1,
+      ArmStepsN.single (.movR r .x0 hMovR), rfl, ?_, ?_, ?_⟩
+    · rw [hX0]; exact (ExtStateRel.update_ireg hRel hInj hv).nextPC
+    · simp [hPC]
+    · simp
+  | some (.freg r) => exact absurd hv (hNotFreg r)
+  | none =>
+    simp [vStoreVar, hv]
+    refine ⟨s, 0, rfl, rfl, ?_, by omega, rfl⟩
+    intro w loc hw
+    have hwv : w ≠ v := fun h => by subst h; simp [hv] at hw
+    rw [Store.update_other σ v w val hwv]; exact hRel w loc hw
 
 /-- Execute vStoreVarFP from d0: stores FP result into v's location.
     Length-tracked variant (Flavor A Phase A.10): `k = (vStoreVarFP layout v .d0).length`. -/
@@ -504,7 +730,33 @@ theorem vStoreVarFP_exec (prog : ArmProg) (layout : VarLayout) (v : Var)
         ExtStateRel layout (σ[v ↦ val]) s' ∧
         s'.pc = startPC + (vStoreVarFP layout v .d0).length ∧
         s'.arrayMem = s.arrayMem := by
-  sorry
+  match hv : layout v with
+  | some (.stack off) =>
+    have hEq := vStoreVarFP_stack layout v .d0 off hv
+    rw [hEq] at hCode ⊢
+    have hFstr := hCode.head; rw [← hPC] at hFstr
+    refine ⟨s.setStack off (s.fregs .d0) |>.nextPC, 1,
+      ArmStepsN.single (.fstr .d0 off hFstr), rfl, ?_, ?_, ?_⟩
+    · rw [hD0]; exact (ExtStateRel.update_stack hRel hInj hv).nextPC
+    · simp [hPC]
+    · simp
+  | some (.ireg r) => exact absurd hv (hNotIreg r)
+  | some (.freg r) =>
+    have hne : (r == ArmFReg.d0) = false := by
+      simp; exact fun h => absurd hv (h ▸ hRegConv.not_d0 v)
+    simp only [vStoreVarFP, hv, hne] at hCode ⊢
+    have hFmov := hCode.head; rw [← hPC] at hFmov
+    refine ⟨(s.setFReg r (s.fregs .d0)).nextPC, 1,
+      ArmStepsN.single (.fmovRR r .d0 hFmov), rfl, ?_, ?_, ?_⟩
+    · rw [hD0]; exact (ExtStateRel.update_freg hRel hInj hv).nextPC
+    · simp [ArmState.nextPC, ArmState.setFReg, hPC]
+    · simp [ArmState.nextPC, ArmState.setFReg]
+  | none =>
+    simp [vStoreVarFP, hv]
+    refine ⟨s, 0, rfl, rfl, ?_, by omega, rfl⟩
+    intro w loc hw
+    have hwv : w ≠ v := fun h => by subst h; simp [hv] at hw
+    rw [Store.update_other σ v w val hwv]; exact hRel w loc hw
 
 /-- Execute one FP instruction and store the result into a variable's location.
     Abstracts the common "op + store" pattern shared by fbinop, fternop, and
@@ -534,7 +786,46 @@ theorem fp_exec_and_store (prog : ArmProg) (layout : VarLayout) (pcMap : Nat →
     ∃ s' k, ArmStepsN prog s_pre s' k ∧
       k = 1 + (vStoreVarFP layout x dst_reg).length ∧
       ExtSimRel layout pcMap divS boundsS (.run (pc + 1) (σ[x ↦ resultVal]) am) s' := by
-  sorry
+  let s_op := (s_pre.setFReg dst_reg resultBv).nextPC
+  have hStepsOpN : ArmStepsN prog s_pre s_op 1 := ArmStepsN.single hArmStep
+  have hPC_op : s_op.pc = prePC + 1 := by simp [s_op, ArmState.nextPC, ArmState.setFReg, hPC_pre]
+  have hAM_op : s_op.arrayMem = am := by simp [s_op, hAM_pre]
+  by_cases hXFR : ∃ r, layout x = some (.freg r)
+  · obtain ⟨r_dst, hDst⟩ := hXFR
+    have hDR : dst_reg = r_dst := by rw [hDstReg]; simp [hDst]
+    have hStore : vStoreVarFP layout x dst_reg = [] := by simp [vStoreVarFP, hDst, hDR]
+    have hRelPost : ExtStateRel layout (σ[x ↦ resultVal]) s_op := by
+      show ExtStateRel layout (σ[x ↦ resultVal])
+        (s_pre.setFReg dst_reg resultBv).nextPC
+      rw [hDR, hResultEnc]
+      exact (ExtStateRel.update_freg hRelPre hInjective hDst).nextPC
+    refine ⟨s_op, 1, hStepsOpN, ?_, ⟨hRelPost, ?_, hAM_op⟩⟩
+    · rw [hStore]; simp
+    · show s_op.pc = pcMap (pc + 1)
+      simp [hStore] at hPcNext
+      simp [s_op, ArmState.nextPC, ArmState.setFReg, hPC_pre, hPrePC_eq]; omega
+  · have hDR : dst_reg = .d0 := by
+      rw [hDstReg]; split
+      · next r h => exact absurd ⟨r, h⟩ hXFR
+      · rfl
+    have hRelOp : ExtStateRel layout σ s_op := by
+      show ExtStateRel layout σ (s_pre.setFReg dst_reg resultBv).nextPC
+      rw [hDR]; exact (ExtStateRel.setFReg_preserved hRelPre (fun v => hRegConv.not_d0 v)).nextPC
+    have hD0 : s_op.fregs .d0 = resultVal.encode := by
+      simp [s_op, hDR, ArmState.setFReg, ArmState.nextPC, hResultEnc]
+    have hCodeStore : CodeAt prog (prePC + 1) (vStoreVarFP layout x .d0) := by
+      rw [← hDR]; exact hCodeOpStore.tail
+    obtain ⟨s_fin, k_fin, hStepsFinN, hk_fin, hRelFin, hPC_fin, hAM_fin⟩ :=
+      vStoreVarFP_exec prog layout x resultVal σ s_op (prePC + 1)
+        hRelOp hInjective hRegConv hPC_op hD0 hCodeStore hNotIregX
+        (fun r h => absurd ⟨r, h⟩ hXFR)
+    have hChain : ArmStepsN prog s_pre s_fin (1 + k_fin) :=
+      ArmStepsN_trans hStepsOpN hStepsFinN
+    have : dst_reg = .d0 := hDR
+    refine ⟨s_fin, 1 + k_fin, hChain, ?_, ⟨hRelFin, ?_, by simp [hAM_fin, hAM_op]⟩⟩
+    · rw [hk_fin]; rw [this]
+    · show s_fin.pc = pcMap (pc + 1)
+      simp [this] at hPcNext; omega
 
 /-- Execute vLoadVarFP: loads float variable v into scratch FP register tmp,
     preserving ExtStateRel. Case-splits on layout.
@@ -556,7 +847,50 @@ theorem vLoadVarFP_exec (prog : ArmProg) (layout : VarLayout) (v : Var) (tmp : A
         s'.arrayMem = s.arrayMem ∧
         (∀ r, r ≠ tmp → s'.fregs r = s.fregs r) ∧
         s'.stack = s.stack := by
-  sorry
+  match hv : layout v with
+  | some (.stack off) =>
+    have hEq := vLoadVarFP_stack layout v tmp off hv
+    rw [hEq] at hCode ⊢
+    have hInstr := hCode.head; rw [← hPC] at hInstr
+    refine ⟨s.setFReg tmp (s.stack off) |>.nextPC, 1,
+      ArmStepsN.single (.fldr tmp off hInstr), rfl,
+      ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+    · simp [ArmState.setFReg, ArmState.nextPC]; exact hRel.read_stack hv
+    · exact (ExtStateRel.setFReg_preserved hRel (fun w => by
+        rcases hTmpScratch with rfl | rfl | rfl
+        · exact hRegConv.not_d0 w
+        · exact hRegConv.not_d1 w
+        · exact hRegConv.not_d2 w)).nextPC
+    · simp
+    · simp [hPC]
+    · simp
+    · intro r hr; simp [ArmState.setFReg, ArmState.nextPC, hr]
+    · simp
+  | some (.freg r) =>
+    have hne : (r == tmp) = false := by
+      simp
+      rcases hTmpScratch with rfl | rfl | rfl
+      · exact fun h => absurd hv (h ▸ hRegConv.not_d0 v)
+      · exact fun h => absurd hv (h ▸ hRegConv.not_d1 v)
+      · exact fun h => absurd hv (h ▸ hRegConv.not_d2 v)
+    simp only [vLoadVarFP, hv, hne] at hCode ⊢
+    have hFmov := hCode.head; rw [← hPC] at hFmov
+    refine ⟨(s.setFReg tmp (s.fregs r)).nextPC, 1,
+      ArmStepsN.single (.fmovRR tmp r hFmov), rfl,
+      ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+    · simp [ArmState.setFReg, ArmState.nextPC]; exact hRel.read_freg hv
+    · exact (ExtStateRel.setFReg_preserved hRel (fun w => by
+        rcases hTmpScratch with rfl | rfl | rfl
+        · exact hRegConv.not_d0 w
+        · exact hRegConv.not_d1 w
+        · exact hRegConv.not_d2 w)).nextPC
+    · simp
+    · simp [ArmState.setFReg, ArmState.nextPC, hPC]
+    · simp
+    · intro r' hr'; simp [ArmState.setFReg, ArmState.nextPC, hr']
+    · simp
+  | some (.ireg r) => exact absurd hv (hNotIreg r)
+  | none => exact absurd hv hMapped
 
 /-- Execute vLoadVarFP with effective register: if v is in a freg, uses that freg directly;
     otherwise falls back to a scratch register. Analogous to vLoadVar_eff_exec.
@@ -579,7 +913,17 @@ theorem vLoadVarFP_eff_exec (prog : ArmProg) (layout : VarLayout) (v : Var)
         s'.arrayMem = s.arrayMem ∧
         (∀ r, r ≠ eff → s'.fregs r = s.fregs r) ∧
         s'.stack = s.stack := by
-  sorry
+  match hv : layout v with
+  | some (.freg r) =>
+    simp [vLoadVarFP, hv]
+    intro _
+    exact ⟨s, 0, rfl, rfl, hRel.read_freg hv, hRel, rfl, by omega, rfl, fun _ _ => rfl, rfl⟩
+  | some (.stack off) =>
+    simp only [show (match some (VarLoc.stack off) with | some (.freg r) => r | _ => fallback) = fallback from rfl]
+    exact fun hCode => vLoadVarFP_exec prog layout v fallback σ s startPC hRel hRegConv hPC hCode
+      hFB hNotIreg hMapped
+  | some (.ireg r) => exact absurd hv (hNotIreg r)
+  | none => exact absurd hv hMapped
 
 -- ============================================================
 -- § loadFloatExpr_exec: unified float operand loading
@@ -613,7 +957,44 @@ theorem loadFloatExpr_exec (prog : ArmProg) (layout : VarLayout) (e : Expr) (dst
                       | _ => []).length ∧
       s'.arrayMem = s.arrayMem ∧
       (∀ r, r ≠ dst → s'.fregs r = s.fregs r) := by
-  sorry
+  rcases hSimple with ⟨v, rfl⟩ | ⟨n, rfl⟩
+  · simp only [] at hCode
+    have hNotIreg : ∀ r, layout v ≠ some (.ireg r) := hWTL.float_not_ireg hTy
+    have hMappedV : layout v ≠ none := hMapped v (by simp [Expr.freeVars])
+    obtain ⟨s', k', hStepsN', hk', hFreg, hRel', _, hPC', hAM', hFregs', _⟩ :=
+      vLoadVarFP_exec prog layout v dst σ s startPC hRel hRegConv hPC hCode hDst hNotIreg hMappedV
+    have hTyV := hTS v; rw [hTy] at hTyV
+    obtain ⟨fv, hfv⟩ := Value.float_of_typeOf_float hTyV
+    refine ⟨s', k', hStepsN', hk', ?_, hRel', hPC', hAM', hFregs'⟩
+    simp [Expr.eval, Value.toFloat, hFreg, hfv, Value.encode]
+  · simp only [] at hCode
+    have hCodeImm := hCode.append_left
+    have hCodeFmov := hCode.append_right
+    obtain ⟨s1, k1, hStepsN1, hk1, hFregs1, hX0, hStack1, hPC1, hRegs1, hAM1⟩ :=
+      loadImm64_fregs_preserved prog .x0 n s startPC hCodeImm hPC
+    have hRel1 : ExtStateRel layout σ s1 :=
+      loadImm64_preserves_ExtStateRel prog layout .x0 n σ s s1
+        hRel hRegConv hStack1 hFregs1 hRegs1 hAM1 (Or.inl rfl)
+    have hFmov := hCodeFmov.head; rw [← hPC1] at hFmov
+    let s2 := s1.setFReg dst (s1.regs .x0) |>.nextPC
+    have hRel2 : ExtStateRel layout σ s2 := by
+      have hNotDst : ∀ w, layout w ≠ some (.freg dst) := by
+        cases hDst with
+        | inl h => subst h; exact fun w => hRegConv.not_d0 w
+        | inr h => cases h with
+          | inl h => subst h; exact fun w => hRegConv.not_d1 w
+          | inr h => subst h; exact fun w => hRegConv.not_d2 w
+      exact (ExtStateRel.setFReg_preserved hRel1 hNotDst).nextPC
+    have hStepsFmovN : ArmStepsN prog s1 s2 1 :=
+      ArmStepsN.single (ArmStep.fmovToFP dst .x0 hFmov)
+    have hChain : ArmStepsN prog s s2 (k1 + 1) :=
+      ArmStepsN_trans hStepsN1 hStepsFmovN
+    refine ⟨s2, k1 + 1, hChain, ?_, ?_, hRel2, ?_, ?_, ?_⟩
+    · rw [hk1]; simp [List.length_append]
+    · simp [s2, ArmState.setFReg, ArmState.nextPC, hX0, Expr.eval, Value.toFloat]
+    · simp [s2, ArmState.setFReg, ArmState.nextPC, List.length_append, hPC1]; omega
+    · simp [s2, ArmState.setFReg, ArmState.nextPC, hAM1]
+    · intro r hr; simp [s2, ArmState.setFReg, ArmState.nextPC, hr, hFregs1]
 
 -- ============================================================
 -- § verifiedGenBoolExpr_correct
