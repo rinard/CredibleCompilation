@@ -2196,7 +2196,43 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
   | const _ => sorry
   | copy _ => sorry
   | binop _ _ _ _ => sorry
-  | boolop _ => sorry
+  | boolop hinstr =>
+    rename_i x be
+    have heq : instr = .boolop x be := Option.some.inj (hInstr.symm.trans hinstr)
+    rw [heq] at hSome
+    have hSimpleBE : be.hasSimpleOps = true := by
+      cases hb : be.hasSimpleOps with
+      | true => rfl
+      | false => simp [verifiedGenInstr, hRC, hII, hb] at hSome
+    have hNotFregX : ∀ r, layout x ≠ some (.freg r) := by
+      intro r h; have := hSome; simp [verifiedGenInstr, hRC, hII, hSimpleBE, h] at this
+    have hInstrs : instrs = verifiedGenBoolExpr layout be ++ vStoreVar layout x .x0 := by
+      have := hSome; simp [verifiedGenInstr, hRC, hII, hSimpleBE] at this; exact this.symm
+    rw [hInstrs] at hCodeInstr hPcNext
+    have hCodeBE := hCodeInstr.append_left
+    have hCodeStore := hCodeInstr.append_right
+    have hWTbe : WellTypedBoolExpr tyCtx be := by
+      have hwti := hWT pc hPC_bound
+      have heq_i := Prog.getElem?_eq_getElem hPC_bound
+      rw [hinstr] at heq_i; rw [← Option.some.inj heq_i] at hwti
+      cases hwti with | boolop _ hbe => exact hbe
+    obtain ⟨s1, k1, hSteps1N, hk1, hX0_1, hRel1, hPC1, hAM1⟩ :=
+      verifiedGenBoolExpr_correct prog layout be σ s (pcMap pc) hStateRel hRegConv hCodeBE
+        hPcRel tyCtx hTS hWTbe hWTL
+        (fun v hv => hMapped v (by simp [heq, TAC.vars]; exact Or.inr hv)) hSimpleBE am
+    have hX0_val : s1.regs .x0 = (Value.bool (be.eval σ am)).encode := by
+      rw [hX0_1]; simp [Value.encode]
+    obtain ⟨s2, k2, hSteps2N, hk2, hRel2, hPC2, hAM2⟩ :=
+      vStoreVar_exec prog layout x (Value.bool (be.eval σ am)) σ s1
+        (pcMap pc + (verifiedGenBoolExpr layout be).length)
+        hRel1 hInjective hRegConv hPC1 hX0_val hCodeStore hNotFregX
+    have hChain : ArmStepsN prog s s2 (k1 + k2) := ArmStepsN_trans hSteps1N hSteps2N
+    refine ⟨s2, k1 + k2, hChain, ?_, hRel2, ?_, ?_⟩
+    · intro pc' σ' am' _hCfg
+      rw [hInstrs, hk1, hk2]; simp [List.length_append]
+    · show s2.pc = pcMap (pc + 1)
+      have := hPcNext _ _ rfl; simp at this; rw [hPC2]; omega
+    · simp [hAM2, hAM1, hArrayMem]
   | iftrue _ _ => sorry
   | iffall _ _ => sorry
   | arrLoad _ _ _ => sorry
