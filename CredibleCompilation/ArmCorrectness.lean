@@ -1835,22 +1835,134 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
     ∃ s' k, ArmStepsN prog s s' k ∧
         (∀ pc' σ' am', cfg' = .run pc' σ' am' → k = instrs.length) ∧
         ExtSimRel layout pcMap divLabel boundsLabel cfg' s' := by
-  -- Phase B.0 (session 7): per-case sorries; bodies will be filled in B.1+.
+  -- Phase B.0 (session 7): per-case sorries; bodies filled in B.1+.
   -- Sig is length-tracked: k tracks ArmStepsN; on .run targets, k = instrs.length.
-  -- Prelude (hRC, hII, hRegConv, hInjective, ⟨hStateRel, hPcRel, hArrayMem⟩) inlined
-  -- per-case during fills; suppressed here to avoid unused-var lints.
+  have hRC : layout.regConventionSafe = true := by
+    cases h : layout.regConventionSafe
+    · simp [verifiedGenInstr, h] at hSome
+    · rfl
+  have hII : layout.isInjective = true := by
+    cases h : layout.isInjective
+    · simp [verifiedGenInstr, hRC, h] at hSome
+    · rfl
+  have hRegConv : RegConventionSafe layout := VarLayout.regConventionSafe_spec layout hRC
+  have hInjective : VarLayoutInjective layout := VarLayout.isInjective_spec layout hII
+  obtain ⟨hStateRel, hPcRel, hArrayMem⟩ := hRel
   cases hStep with
-  | goto _ => sorry
-  | halt _ => sorry
-  | binop_divByZero _ _ _ _ => sorry
-  | binop_typeError _ _ => sorry
-  | arrLoad_typeError _ _ => sorry
-  | arrStore_typeError _ _ => sorry
-  | fbinop_typeError _ _ => sorry
-  | intToFloat_typeError _ _ => sorry
-  | floatToInt_typeError _ _ => sorry
-  | floatUnary_typeError _ _ => sorry
-  | fternop_typeError _ _ => sorry
+  | goto hinstr =>
+    -- Block: [.b (pcMap l)]; k = 1 = instrs.length.
+    have heq : instr = .goto _ := Option.some.inj (hInstr.symm.trans hinstr)
+    rw [heq] at hSome; simp [verifiedGenInstr, hRC, hII] at hSome
+    rw [← hSome] at hCodeInstr
+    have hb := hCodeInstr.head
+    rw [← hPcRel] at hb
+    refine ⟨{ s with pc := pcMap _ }, 1, ArmStepsN.single (.branch _ hb), ?_,
+      ⟨hStateRel, rfl, hArrayMem⟩⟩
+    intro pc' σ' am' _hCfg
+    rw [← hSome]; rfl
+  | halt hinstr =>
+    -- Block: [.b haltLabel]; k = 1, but cfg' = .halt so length-claim vacuous.
+    have heq : instr = .halt := Option.some.inj (hInstr.symm.trans hinstr)
+    rw [heq] at hSome; simp [verifiedGenInstr, hRC, hII] at hSome
+    rw [← hSome] at hCodeInstr
+    have hb := hCodeInstr.head
+    rw [← hPcRel] at hb
+    refine ⟨{ s with pc := haltLabel }, 1, ArmStepsN.single (.branch haltLabel hb), ?_,
+      ⟨hStateRel, hArrayMem⟩⟩
+    intro pc' σ' am' hCfg
+    exact absurd hCfg (by simp)
+  | binop_divByZero hinstr hy hz hs =>
+    -- cfg' = .errorDiv σ am — length-claim vacuous; chain reaches divLabel sentinel.
+    rename_i x op y z a b
+    have heq : instr = .binop x op y z := Option.some.inj (hInstr.symm.trans hinstr)
+    rw [heq] at hSome hMapped
+    have hNotFregY : ∀ r, layout y ≠ some (.freg r) := by
+      intro r h; have := hSome; simp [verifiedGenInstr, hRC, hII, h] at this
+    have hNotFregZ : ∀ r, layout z ≠ some (.freg r) := by
+      intro r h; have := hSome; simp [verifiedGenInstr, hRC, hII, h] at this
+    have hNotFregX : ∀ r, layout x ≠ some (.freg r) := by
+      intro r h; have := hSome; simp [verifiedGenInstr, hRC, hII, h] at this
+    let lv_reg := match layout y with | some (.ireg r) => r | _ => ArmReg.x1
+    let rv_reg := match layout z with | some (.ireg r) => r | _ => ArmReg.x2
+    let dst_reg := match layout x with | some (.ireg r) => r | _ => ArmReg.x0
+    have hb_ne0 : b = 0 := by
+      cases op with
+      | div => have := hs; simp [BinOp.safe] at this; exact this
+      | mod => have := hs; simp [BinOp.safe] at this; exact this
+      | add => exact absurd trivial hs
+      | sub => exact absurd trivial hs
+      | mul => exact absurd trivial hs
+      | band => exact absurd trivial hs
+      | bor => exact absurd trivial hs
+      | bxor => exact absurd trivial hs
+      | shl => exact absurd trivial hs
+      | shr => exact absurd trivial hs
+    have hDivMod : op = .div ∨ op = .mod := by
+      cases op with
+      | div => exact .inl rfl
+      | mod => exact .inr rfl
+      | _ => exact absurd trivial hs
+    have hPrefix : ∃ rest, instrs = vLoadVar layout y lv_reg ++
+        (vLoadVar layout z rv_reg ++ (.cbz rv_reg divLabel :: rest)) := by
+      rcases hDivMod with h | h
+      · subst h
+        refine ⟨.sdivR dst_reg lv_reg rv_reg :: vStoreVar layout x dst_reg, ?_⟩
+        have := hSome; simp [verifiedGenInstr, hRC, hII] at this; exact this.symm
+      · subst h
+        refine ⟨.sdivR .x0 lv_reg rv_reg :: .mulR .x0 .x0 rv_reg ::
+                .subR dst_reg lv_reg .x0 :: vStoreVar layout x dst_reg, ?_⟩
+        have := hSome; simp [verifiedGenInstr, hRC, hII] at this; exact this.symm
+    obtain ⟨rest, hInstrs⟩ := hPrefix
+    rw [hInstrs] at hCodeInstr
+    have hCodeA := hCodeInstr.append_left
+    have hCodeBcDE := hCodeInstr.append_right
+    have hCodeB := hCodeBcDE.append_left
+    have hCodecDE := hCodeBcDE.append_right
+    obtain ⟨s1, k1, hSteps1N, _, hLV_1, hRel1, _, hPC1, hAM1, hRegs1⟩ :=
+      vLoadVar_eff_exec prog layout y σ s (pcMap pc) .x1 hStateRel hRegConv hPcRel
+        hNotFregY (Or.inr (Or.inl rfl)) (hMapped y (by simp [TAC.vars])) hCodeA
+    obtain ⟨s2, k2, hSteps2N, _, hRV_2, hRel2, _, hPC2_, hAM2, hRegs2⟩ :=
+      vLoadVar_eff_exec prog layout z σ s1
+        (pcMap pc + (vLoadVar layout y lv_reg).length) .x2
+        hRel1 hRegConv hPC1 hNotFregZ (Or.inr (Or.inr rfl)) (hMapped z (by simp [TAC.vars])) hCodeB
+    have hPC2 : s2.pc = pcMap pc + (vLoadVar layout y lv_reg).length +
+        (vLoadVar layout z rv_reg).length := hPC2_
+    have hRV_eq : s2.regs rv_reg = b := by rw [hRV_2, hz]; simp [Value.encode]
+    have hRV_zero : s2.regs rv_reg = (0 : BitVec 64) := by rw [hRV_eq, hb_ne0]
+    have hCbz := hCodecDE.head; rw [← hPC2_] at hCbz
+    let s3 : ArmState := { s2 with pc := divLabel }
+    have hStepCbzN : ArmStepsN prog s2 s3 1 :=
+      ArmStepsN.single (.cbz_taken rv_reg divLabel hCbz hRV_zero)
+    have h12 : ArmStepsN prog s s2 (k1 + k2) := ArmStepsN_trans hSteps1N hSteps2N
+    have hChain : ArmStepsN prog s s3 (k1 + k2 + 1) := ArmStepsN_trans h12 hStepCbzN
+    refine ⟨s3, k1 + k2 + 1, hChain, ?_, ?_⟩
+    · intro pc' σ' am' h; cases h
+    · show s3.pc = divLabel; rfl
+  | binop_typeError _ _ =>
+    -- cfg' = .typeError σ am — length-claim vacuous; use k = 0 / .refl_zero.
+    refine ⟨s, 0, ArmStepsN.refl_zero, ?_, trivial⟩
+    intro pc' σ' am' h; cases h
+  | arrLoad_typeError _ _ =>
+    refine ⟨s, 0, ArmStepsN.refl_zero, ?_, trivial⟩
+    intro pc' σ' am' h; cases h
+  | arrStore_typeError _ _ =>
+    refine ⟨s, 0, ArmStepsN.refl_zero, ?_, trivial⟩
+    intro pc' σ' am' h; cases h
+  | fbinop_typeError _ _ =>
+    refine ⟨s, 0, ArmStepsN.refl_zero, ?_, trivial⟩
+    intro pc' σ' am' h; cases h
+  | intToFloat_typeError _ _ =>
+    refine ⟨s, 0, ArmStepsN.refl_zero, ?_, trivial⟩
+    intro pc' σ' am' h; cases h
+  | floatToInt_typeError _ _ =>
+    refine ⟨s, 0, ArmStepsN.refl_zero, ?_, trivial⟩
+    intro pc' σ' am' h; cases h
+  | floatUnary_typeError _ _ =>
+    refine ⟨s, 0, ArmStepsN.refl_zero, ?_, trivial⟩
+    intro pc' σ' am' h; cases h
+  | fternop_typeError _ _ =>
+    refine ⟨s, 0, ArmStepsN.refl_zero, ?_, trivial⟩
+    intro pc' σ' am' h; cases h
   | arrLoad_boundsError _ _ _ => sorry
   | arrStore_boundsError _ _ _ _ => sorry
   | print _ => sorry
