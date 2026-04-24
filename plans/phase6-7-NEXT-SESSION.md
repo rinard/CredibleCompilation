@@ -1,46 +1,147 @@
 # Phase 6/7 Next Session — Final Plan and Handoff
 
 **Read this first.**  Supersedes all earlier Phase 6/7 planning documents
-in this directory.  Last updated: 2026-04-24 after **session 11** —
-**Phases A–H all done, Phase 7 closed**. Sorry count 4 → **3**.
-Remaining 3 sorries are all Phase 6 exhaustion (out of scope for Phase 7).
-Branch `phase6-prep` at HEAD `58fad52` (push to origin pending).
+in this directory.  Last updated: 2026-04-24 after **session 12** — Phase 7
+closed (session 11) + Phase 6 partial progress (session 12 follow-on).
+Sorry count: **2**. Branch `phase6-prep` at HEAD `daa30d6` (pushed to origin).
 
-## TL;DR for next session (session 12)
+## TL;DR for next session (session 13)
 
-**Sorry count: 3.** All Phase 6 exhaustion, out of scope:
-- PipelineCorrectness.lean:770 (`bodyFlat_branch_target_bounded`)
-- PipelineCorrectness.lean:1022 (`arm_behavior_exhaustive`)
-- PipelineCorrectness.lean:2138 (`verifiedGenInstr_ifgoto_branch_bounded`)
+**Sorry count: 2.** Both Phase 6 exhaustion, out of scope for end-to-end
+correctness. (Verified: `arm_behavior_exhaustive` has no downstream
+consumers — closing these doesn't strengthen any top-level theorem.
+Phase 7's bidirectional While ↔ ARM correctness chain is sorry-free.)
 
-Build green. **Phase 7 is done.**
+Remaining sorries:
+- [PipelineCorrectness.lean:770](../CredibleCompilation/PipelineCorrectness.lean#L770)
+  `bodyFlat_branch_target_bounded` — the aggregator.
+- [PipelineCorrectness.lean:1022](../CredibleCompilation/PipelineCorrectness.lean#L1022)
+  `arm_behavior_exhaustive` — classical em + König.
 
-**Next work (session 12): Phase 6 exhaustion**, or whatever the user
-directs. The three remaining sorries form a coupled ~700 LOC
-deliverable per earlier planning. Starting points:
-- `bodyFlat_branch_target_bounded` at PipelineCorrectness.lean:770
-- `arm_behavior_exhaustive` at PipelineCorrectness.lean:1022
-- `verifiedGenInstr_ifgoto_branch_bounded` at PipelineCorrectness.lean:2138
+Build green with 2 sorries. Last commit `daa30d6`.
 
-These were left out of Phase 7's scope per the original Phase 7 planning
-(see CHANGELOG.md §Phase 6/7 session 5). They are independent of the
-length-tracked Flavor A chain that was just completed.
+### Session 11 outcome (Phase 7 completion)
 
-### Session 11 summary (Phase 7 completion)
-
-Landed commits:
-- `3745be1` — Phase D: step_simulation length-tracked (sig + 4 body refines).
-- `de509b3` — Phase E+F: tacToArm_refinement StepsN→ArmStepsN threading.
-- `58fad52` — Phase H: closed source_diverges_gives_ArmDiverges_init
-  via new tacToArm_correctness_N wrapper.
-
+Phases A–H landed; Phase H closed `source_diverges_gives_ArmDiverges_init`.
 Key additions:
-- `ArmSemantics.lean:ArmSteps_to_ArmStepsN_pos` — pc-distinctness bridge
-  for lifting ArmSteps to positive-length ArmStepsN.
-- `CodeGen.lean:tacToArm_correctness_N` — public length-tracked variant
-  of tacToArm_correctness for consumers needing the `n ≤ k` bound.
+- `ArmSemantics.lean:ArmSteps_to_ArmStepsN_pos` — pc-distinctness bridge.
+- `CodeGen.lean:tacToArm_correctness_N` — length-tracked correctness variant.
 
-See CHANGELOG.md §Phase 6/7 session 11 for details.
+Commits: `3745be1` (Phase D), `de509b3` (Phase E+F), `58fad52` (Phase H).
+
+### Session 12 outcome (Phase 6 partial)
+
+**Elaboration blocker closed**: `verifiedGenInstr_ifgoto_branch_bounded`
+(L2138) now has a complete proof via two match-in-type helpers
+(`match_var_lit_loadVar_no_branches`, `match_var_flit_loadFP_no_branches`)
+and inline analysis for the `.fcmp .flit` sub-cases. See CHANGELOG
+§Session 12 for the technique and gotchas.
+
+**Per-case branch-bounded helpers added** (8 of 19 TAC constructors):
+- `verifiedGenInstr_halt_branch_bounded`
+- `verifiedGenInstr_print_branch_bounded` (vacuous — `.print` returns none)
+- `verifiedGenInstr_printString_branch_bounded`
+- `verifiedGenInstr_printInt_branch_bounded`
+- `verifiedGenInstr_printBool_branch_bounded`
+- `verifiedGenInstr_printFloat_branch_bounded`
+- Plus `vStoreVarFP_no_branches` helper and `close_non_branch` closer.
+
+Pre-existing: `verifiedGenInstr_goto_branch_bounded` (probe 1),
+`verifiedGenInstr_binop_div_branch_bounded` (probe 2),
+`verifiedGenInstr_ifgoto_branch_bounded` (just done).
+
+Commits: `f689c8c` (ifgoto close), `daa30d6` (per-case helpers).
+
+## Remaining work (session 13 target)
+
+### Step 1: Finish per-case helpers (10 cases, ~250 LOC)
+
+Pattern fully understood — see CHANGELOG §Session 12 for template and
+gotchas. Remaining TAC constructors, ordered easiest-first:
+
+| Constructor | Output shape | LOC est |
+|---|---|---|
+| `.copy` | `vLoadVar ++ vStoreVar` (or FP variants, self-copy special) | ~30 |
+| `.boolop` | `verifiedGenBoolExpr ++ vStoreVar` | ~15 |
+| `.binop` non-div/mod | `vLoadVar ++ vLoadVar ++ [op] ++ vStoreVar` | ~40 (9 ops) |
+| `.fbinop` | `vLoadVarFP ++ vLoadVarFP ++ [op] ++ vStoreVarFP` | ~30 (7 ops) |
+| `.intToFloat` | `vLoadVar ++ [scvtf] ++ vStoreVarFP` | ~15 |
+| `.floatToInt` | `vLoadVarFP ++ [fcvtzs] ++ vStoreVar` | ~15 |
+| `.floatUnary` | `vLoadVarFP ++ [op] ++ vStoreVarFP` | ~15 |
+| `.fternop` | `vLoadVarFP×3 ++ [op] ++ vStoreVarFP` | ~20 |
+| `.arrLoad` | `vLoadVar ++ [boundsCheck ++] [.arrLd] ++ vStoreVar(FP)` | ~40 |
+| `.arrStore` | `vLoadVar ++ [boundsCheck ++] vLoadVar ++ [.arrSt]` | ~30 |
+| `.const` | complex: 3 value types × 2-3 layout cases | ~40 |
+
+Known gotcha: `.const` has nested `cases val with` × `split on layout`
+that hit `simp made no progress` and `dependent elimination failed`
+errors in session 12. Likely fix: different ordering (`split at hGen`
+first on outer match before `cases val`).
+
+### Step 2: Aggregator `verifiedGenInstr_branch_target_bounded` (~60 LOC)
+
+Case-split on TAC constructor, dispatch to per-case helper. Takes
+hypotheses:
+- `hPcBound : ∀ l, (instr = .goto l ∨ ∃ be, instr = .ifgoto be l) → pcMap l ≤ boundsS`
+- `hHaltBound : haltS ≤ boundsS`
+- `hDivBound : divS ≤ boundsS`
+
+### Step 3: `bodyFlat_branch_target_bounded` lift (~80 LOC)
+
+At L770 currently. Lifts per-PC claim to the flat bodyFlat. Case-split
+on whether `pc` lands in the bodyPerPC prefix or the haltSaveBlock
+suffix:
+- `haltSaveBlock`: just `genHaltSave`, no branches (str/fstr only).
+- `bodyPerPC[k]`: either (i) from `verifiedGenInstr` directly (via
+  `spec.instrGen`), (ii) wrapped via `spec.callSiteSaveRestore`
+  (saves/restores are str/ldr only), or (iii) the print wrapper
+  (saves + printCall + restores).
+
+Required feeder lemmas from spec:
+- `spec.pcMapLengths` — gives `∀ l, l < p.size → pcMap l ≤ haltS`
+- `spec.haltS_eq`, `spec.haltFinal_eq`, `spec.divS_eq`, `spec.boundsS_eq` — sentinel arithmetic
+- `checkBranchTargets_to_labels_in_bounds` (already landed at L708) — branch targets are in-bounds
+
+### Step 4: `arm_behavior_exhaustive` König proof (~100 LOC)
+
+At L1022. Route 1 (classical em + König, recommended in design doc):
+```lean
+theorem arm_behavior_exhaustive ... := by
+  classical
+  by_cases h1 : ∃ s', ArmSteps r.bodyFlat init s' ∧ s'.pc = r.haltFinal
+  · left; exact h1
+  -- similarly for divS, boundsS
+  right; right; right
+  -- ArmDiverges: ∀ n, ∃ s, ArmStepsN init s n.
+  -- Invariant: s.pc ≤ boundsS ∧ s.pc ∉ {haltFinal, divS, boundsS}.
+  -- Step via ArmStep_total_of_codeAt + bodyFlat_branch_target_bounded.
+  ...
+```
+
+All supporting helpers landed:
+- `sentinel_stuck` at L743 ✓
+- sentinel distinctness (`haltFinal_ne_divS` etc.) at L782-792 ✓
+- `ArmStep_total_of_codeAt` (in ArmSemantics.lean, referenced in design doc) ✓
+- `ArmStep_stuck_of_none` ✓
+- `ArmStepsN.single`, `ArmStepsN.refl_zero` ✓
+
+## Useful reference documents
+
+- [backward-jumping-octopus-phase6-design.md](backward-jumping-octopus-phase6-design.md) — original design for the full Phase 6 build-out.
+- CHANGELOG.md §Session 12 — technique for the per-case helpers (match-in-type with simple parameters).
+- CHANGELOG.md §Session 11 — Phase D–H walkthrough.
+
+## Don't
+
+- Don't re-attempt the `have loadA_nb` / `loadB_nb` inline helpers — they
+  hit the `False.var` elaboration bug. Use standalone `private theorem
+  match_*_no_branches` with simple-parameter types instead.
+- Don't over-simp in the `.fcmp .flit` case — the 2-component load
+  gets distributed past the match shape. Inline the analysis instead.
+- Don't use `rename_i op a b` when `split at hGen` on a match — guards
+  in scope shuffle the ordering. Use fresh names (e1, e2, cOp).
+- Don't attempt `arm_behavior_exhaustive` before `bodyFlat_branch_target_bounded`
+  — the König step NEEDS the branch bound for the step-induction.
 
 ### Reference commits for session 10 + refactors
 

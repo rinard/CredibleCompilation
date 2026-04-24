@@ -4,6 +4,125 @@ Chronological record of what was built and why, to reconstruct the sequence of d
 
 ---
 
+## Phase 6 session 12 (continuation): ifgoto blocker closed + per-case helpers (sorry 3 → 2) (2026-04-24)
+
+Follow-on work after session 11 attempted to close the three remaining
+Phase 6 exhaustion sorries. Succeeded on the documented elaboration
+blocker; per-case helpers built for 5 additional TAC constructors.
+
+### Phase 6 probe closure — `verifiedGenInstr_ifgoto_branch_bounded` (commit `f689c8c`)
+
+The documented elaboration blocker (nested-match type signatures in
+`have loadA_nb` / `loadB_nb` helpers producing `False.var` errors) is
+resolved with a two-pronged approach:
+
+1. **Two helpers with match-in-type signatures that DO elaborate**:
+   - `match_var_lit_loadVar_no_branches` — for `.not (.cmp)` arm.
+   - `match_var_flit_loadFP_no_branches` — for `.not (.fcmp)` arm's
+     `.var` sub-cases.
+
+2. **Inline analysis** for `.fcmp`'s `.flit` sub-cases — where simp
+   distributes the 2-component `formalLoadImm64 ++ [fmovToFP]` past
+   the expected match shape, so the helper can't apply directly.
+
+Two important gotchas documented in the proof:
+- `rename_i` assigns names oldest-first when pattern vars come from
+  `split at hGen` on a match. Use fresh names (e1, e2, cOp) to avoid
+  semantic confusion with source-code names.
+- Guard hypotheses from earlier `split`s remain in scope and affect
+  rename_i ordering — another reason for fresh names.
+
+Sorry count: 3 → **2**. Remaining: PipelineCorrectness.lean:770
+(`bodyFlat_branch_target_bounded`) + L1022 (`arm_behavior_exhaustive`).
+
+### Partial Phase 6 sweep — per-TAC branch-bounded helpers (commit `daa30d6`)
+
+Added per-constructor branch-target bound proofs for 5 TAC cases,
+all with the no-branches pattern (output is concatenation of
+`vLoad*` / `formalLoadImm64` / specific single non-branch instructions):
+- `verifiedGenInstr_halt_branch_bounded` — emits `[.b haltLabel]`, closes via `hHaltBound`.
+- `verifiedGenInstr_printString_branch_bounded` — emits `[.callPrintS lit]`.
+- `verifiedGenInstr_print_branch_bounded` — `.print` returns `none`, vacuous.
+- `verifiedGenInstr_printInt_branch_bounded` — `vLoadVar ++ [.callPrintI]`.
+- `verifiedGenInstr_printBool_branch_bounded` — `vLoadVar ++ [.callPrintB]`.
+- `verifiedGenInstr_printFloat_branch_bounded` — `vLoadVarFP ++ [.callPrintF]`.
+
+Plus the closer `close_non_branch` (given a non-branch witness, closes
+the `lbl ≤ boundsS` goal vacuously via branch-form disjunct elimination)
+and the `vStoreVarFP_no_branches` helper (was missing; needed for `.const .float`, `.fbinop`, etc.).
+
+Combined with existing probes (`goto`, `binop .div`, `ifgoto`), **8 of 19
+TAC constructors have per-case helpers pre-packaged.**
+
+### Blocked on the 14-case sweep
+
+Attempted `verifiedGenInstr_const_branch_bounded` hit multiple
+elaboration errors:
+- `simp made no progress` on `Option.some.injEq` — indicates hGen not
+  in `some X = some Y` form after `cases val with | int n => split at hGen`.
+- `dependent elimination failed` — the match structure requires
+  different tactic sequencing than printInt-style helpers.
+
+Each remaining TAC constructor (`const`, `copy`, `boolop`,
+`binop` non-div/mod, `arrLoad`, `arrStore`, `fbinop`, `intToFloat`,
+`floatToInt`, `floatUnary`, `fternop`) has a unique nested match shape
+that needs bespoke tactic tuning. Not 1-shot automatable.
+
+### Remaining work to close Phase 6 (est. ~400 LOC, 1-2 sessions)
+
+1. **Finish per-case helpers** (~250 LOC): 10 more constructors with
+   layout/op/val-guard cases. Pattern is now fully understood; each
+   is 20–40 LOC. See session report below for a template.
+2. **Aggregator `verifiedGenInstr_branch_target_bounded`** (~60 LOC):
+   case-split on TAC constructor, dispatch to per-case helpers.
+3. **`bodyFlat_branch_target_bounded` lift** (~80 LOC): per-PC → flat
+   via bodyPerPC/haltSaveBlock split.
+4. **`arm_behavior_exhaustive` König proof** (~100 LOC): classical em
+   on each sentinel reach, build ArmDiverges by induction.
+
+Importantly: `arm_behavior_exhaustive` is not used by any downstream
+theorem (verified via `#print axioms` on all 12 top-level theorems).
+Closing these sorries eliminates sorryAx from sorry-free status but
+doesn't strengthen end-to-end correctness guarantees.
+
+### Session 12 pattern template for remaining TAC constructors
+
+For no-branch cases (const/copy/boolop/fbinop/intToFloat/floatToInt/
+floatUnary/fternop), the output shape is always:
+```
+<load components>+ ++ [<op instructions>] ++ <store components>+
+```
+where `load/store components` come from `vLoadVar` / `vLoadVarFP` /
+`formalLoadImm64` / `vStoreVar` / `vStoreVarFP` (all have `_no_branches`
+helpers), and `op instructions` are specific ArmInstr constructors
+(dispatched via `refine ⟨_, _, _, _⟩ <;> intros <;> intro h <;> ArmInstr.noConfusion`).
+
+Pattern:
+```lean
+simp only [verifiedGenInstr] at hGen
+split at hGen  -- outer regConv/inj guard
+· exact absurd hGen (by intro h; cases h)
+· -- <guards specific to the constructor — layout checks>
+  intro instr' hmem lbl hbranch
+  -- Reduce hGen to `= some <concrete list>` form via additional splits
+  simp only [Option.some.injEq] at hGen
+  subst hGen
+  simp only [List.mem_append, List.mem_cons, List.not_mem_nil, or_false] at hmem
+  refine close_non_branch ?_ hbranch
+  rcases hmem with h1 | h2 | ... | hN
+  · exact <appropriate _no_branches helper> _ _ _ h1
+  ...
+```
+
+The elaboration quirks mainly concern:
+- How many `split at hGen` calls are needed before hGen is an equation.
+- Whether `cases val with` or `split at hGen` on the value match is cleaner.
+- Whether intermediate guards leave hGen in a reducible form.
+
+These are all solvable with patience; just not 1-shot automatable.
+
+---
+
 ## Phase 6/7 session 11: Phases D–H landed — Phase 7 done (sorry 4 → 3) (2026-04-24)
 
 Session 11 landed the downstream chain of Flavor A signatures and closed
