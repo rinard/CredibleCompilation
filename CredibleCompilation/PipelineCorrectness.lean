@@ -1989,6 +1989,29 @@ private theorem formalLoadImm64_no_branches (rd : ArmReg) (n : BitVec 64) :
         refine ⟨?_, ?_, ?_, ?_⟩ <;> intros <;> intro heq <;> exact ArmInstr.noConfusion heq
       · simp at hK3
 
+/-- Helper: `vStoreVarFP` emits only non-branch instructions. -/
+private theorem vStoreVarFP_no_branches (layout : VarLayout) (v : Var) (tmp : ArmFReg) :
+    ∀ instr' ∈ vStoreVarFP layout v tmp,
+      (∀ lbl, instr' ≠ ArmInstr.b lbl) ∧
+      (∀ rn lbl, instr' ≠ ArmInstr.cbz rn lbl) ∧
+      (∀ rn lbl, instr' ≠ ArmInstr.cbnz rn lbl) ∧
+      (∀ c lbl, instr' ≠ ArmInstr.bCond c lbl) := by
+  intro instr' hmem
+  unfold vStoreVarFP at hmem
+  rcases hl : layout v with _ | loc
+  · rw [hl] at hmem; simp at hmem
+  · rw [hl] at hmem
+    cases loc with
+    | stack _ =>
+      simp at hmem; subst hmem
+      refine ⟨?_, ?_, ?_, ?_⟩ <;> intros <;> intro h <;> exact ArmInstr.noConfusion h
+    | ireg _ => simp at hmem
+    | freg r =>
+      by_cases heq : r == tmp
+      · simp [heq] at hmem
+      · simp [heq] at hmem; subst hmem
+        refine ⟨?_, ?_, ?_, ?_⟩ <;> intros <;> intro h <;> exact ArmInstr.noConfusion h
+
 /-- Helper: `vLoadVarFP` emits only non-branch instructions. -/
 private theorem vLoadVarFP_no_branches (layout : VarLayout) (v : Var) (tmp : ArmFReg) :
     ∀ instr' ∈ vLoadVarFP layout v tmp,
@@ -2561,5 +2584,190 @@ private theorem verifiedGenInstr_ifgoto_branch_bounded
           · cases h; exact hPcMapBound
           · exact ArmInstr.noConfusion h
 -/
+
+/-! ### Per-TAC-constructor branch-target bounds
+
+    Each theorem handles one TAC constructor's output. The aggregator
+    `verifiedGenInstr_branch_target_bounded` below dispatches to these.
+    Proofs are mechanical: unfold `verifiedGenInstr`, split on layout/op guards,
+    and for each emitted instruction either invoke a `_no_branches` helper or
+    directly dismiss via `ArmInstr.noConfusion`. -/
+
+/-- Closer: given a non-branch witness for instr', close the `lbl ≤ boundsS` goal
+    vacuously (all four branch-form disjuncts are false). -/
+private theorem close_non_branch {instr' : ArmInstr} {lbl boundsS : Nat}
+    (hnb : (∀ l, instr' ≠ ArmInstr.b l) ∧
+           (∀ rn l, instr' ≠ ArmInstr.cbz rn l) ∧
+           (∀ rn l, instr' ≠ ArmInstr.cbnz rn l) ∧
+           (∀ c l, instr' ≠ ArmInstr.bCond c l))
+    (hbranch : instr' = ArmInstr.b lbl ∨
+               (∃ rn, instr' = ArmInstr.cbz rn lbl) ∨
+               (∃ rn, instr' = ArmInstr.cbnz rn lbl) ∨
+               (∃ c, instr' = ArmInstr.bCond c lbl)) :
+    lbl ≤ boundsS := by
+  obtain ⟨nb, nz, nnz, nbc⟩ := hnb
+  rcases hbranch with h | ⟨rn, h⟩ | ⟨rn, h⟩ | ⟨c, h⟩
+  · exact absurd h (nb _)
+  · exact absurd h (nz rn _)
+  · exact absurd h (nnz rn _)
+  · exact absurd h (nbc c _)
+
+/-- `.halt` emits `[.b haltLabel]`. The branch targets `haltS ≤ boundsS`. -/
+private theorem verifiedGenInstr_halt_branch_bounded
+    (layout : VarLayout) (pcMap : Nat → Nat)
+    (haltS divS boundsS : Nat) (arrayDecls : List (ArrayName × Nat × VarTy))
+    (safe : Bool) {instrs : List ArmInstr}
+    (hGen : verifiedGenInstr layout pcMap TAC.halt
+      haltS divS boundsS arrayDecls safe = some instrs)
+    (hHaltBound : haltS ≤ boundsS) :
+    ∀ instr' ∈ instrs, ∀ lbl,
+      (instr' = ArmInstr.b lbl ∨
+       (∃ rn, instr' = ArmInstr.cbz rn lbl) ∨
+       (∃ rn, instr' = ArmInstr.cbnz rn lbl) ∨
+       (∃ c, instr' = ArmInstr.bCond c lbl)) →
+      lbl ≤ boundsS := by
+  simp only [verifiedGenInstr] at hGen
+  split at hGen
+  · exact absurd hGen (by intro h; cases h)
+  · simp only [Option.some.injEq] at hGen
+    subst hGen
+    intro instr' hmem lbl hbranch
+    simp only [List.mem_cons, List.not_mem_nil, or_false] at hmem
+    subst hmem
+    rcases hbranch with h | ⟨rn, h⟩ | ⟨rn, h⟩ | ⟨c, h⟩
+    · cases h; exact hHaltBound
+    · exact ArmInstr.noConfusion h
+    · exact ArmInstr.noConfusion h
+    · exact ArmInstr.noConfusion h
+
+/-- `.printString` emits `[.callPrintS lit]`. No branches. -/
+private theorem verifiedGenInstr_printString_branch_bounded
+    (layout : VarLayout) (pcMap : Nat → Nat) (lit : String)
+    (haltS divS boundsS : Nat) (arrayDecls : List (ArrayName × Nat × VarTy))
+    (safe : Bool) {instrs : List ArmInstr}
+    (hGen : verifiedGenInstr layout pcMap (TAC.printString lit)
+      haltS divS boundsS arrayDecls safe = some instrs) :
+    ∀ instr' ∈ instrs, ∀ lbl,
+      (instr' = ArmInstr.b lbl ∨
+       (∃ rn, instr' = ArmInstr.cbz rn lbl) ∨
+       (∃ rn, instr' = ArmInstr.cbnz rn lbl) ∨
+       (∃ c, instr' = ArmInstr.bCond c lbl)) →
+      lbl ≤ boundsS := by
+  simp only [verifiedGenInstr] at hGen
+  split at hGen
+  · exact absurd hGen (by intro h; cases h)
+  · simp only [Option.some.injEq] at hGen
+    subst hGen
+    intro instr' hmem lbl hbranch
+    simp only [List.mem_cons, List.not_mem_nil, or_false] at hmem
+    subst hmem
+    refine close_non_branch ⟨?_, ?_, ?_, ?_⟩ hbranch <;> intros <;> intro h <;>
+      exact ArmInstr.noConfusion h
+
+/-- `.printInt v` emits `vLoadVar ++ [.callPrintI]`. No branches. -/
+private theorem verifiedGenInstr_printInt_branch_bounded
+    (layout : VarLayout) (pcMap : Nat → Nat) (v : Var)
+    (haltS divS boundsS : Nat) (arrayDecls : List (ArrayName × Nat × VarTy))
+    (safe : Bool) {instrs : List ArmInstr}
+    (hGen : verifiedGenInstr layout pcMap (TAC.printInt v)
+      haltS divS boundsS arrayDecls safe = some instrs) :
+    ∀ instr' ∈ instrs, ∀ lbl,
+      (instr' = ArmInstr.b lbl ∨
+       (∃ rn, instr' = ArmInstr.cbz rn lbl) ∨
+       (∃ rn, instr' = ArmInstr.cbnz rn lbl) ∨
+       (∃ c, instr' = ArmInstr.bCond c lbl)) →
+      lbl ≤ boundsS := by
+  simp only [verifiedGenInstr] at hGen
+  split at hGen
+  · exact absurd hGen (by intro h; cases h)
+  · split at hGen
+    · exact absurd hGen (by intro h; cases h)
+    · simp only [Option.some.injEq] at hGen
+      subst hGen
+      intro instr' hmem lbl hbranch
+      simp only [List.mem_append, List.mem_cons, List.not_mem_nil, or_false] at hmem
+      refine close_non_branch ?_ hbranch
+      rcases hmem with hLd | hCall
+      · exact vLoadVar_no_branches _ _ _ _ hLd
+      · subst hCall
+        refine ⟨?_, ?_, ?_, ?_⟩ <;> intros <;> intro heq <;>
+          exact ArmInstr.noConfusion heq
+
+/-- `.printBool v` emits `vLoadVar ++ [.callPrintB]`. No branches. -/
+private theorem verifiedGenInstr_printBool_branch_bounded
+    (layout : VarLayout) (pcMap : Nat → Nat) (v : Var)
+    (haltS divS boundsS : Nat) (arrayDecls : List (ArrayName × Nat × VarTy))
+    (safe : Bool) {instrs : List ArmInstr}
+    (hGen : verifiedGenInstr layout pcMap (TAC.printBool v)
+      haltS divS boundsS arrayDecls safe = some instrs) :
+    ∀ instr' ∈ instrs, ∀ lbl,
+      (instr' = ArmInstr.b lbl ∨
+       (∃ rn, instr' = ArmInstr.cbz rn lbl) ∨
+       (∃ rn, instr' = ArmInstr.cbnz rn lbl) ∨
+       (∃ c, instr' = ArmInstr.bCond c lbl)) →
+      lbl ≤ boundsS := by
+  simp only [verifiedGenInstr] at hGen
+  split at hGen
+  · exact absurd hGen (by intro h; cases h)
+  · split at hGen
+    · exact absurd hGen (by intro h; cases h)
+    · simp only [Option.some.injEq] at hGen
+      subst hGen
+      intro instr' hmem lbl hbranch
+      simp only [List.mem_append, List.mem_cons, List.not_mem_nil, or_false] at hmem
+      refine close_non_branch ?_ hbranch
+      rcases hmem with hLd | hCall
+      · exact vLoadVar_no_branches _ _ _ _ hLd
+      · subst hCall
+        refine ⟨?_, ?_, ?_, ?_⟩ <;> intros <;> intro heq <;>
+          exact ArmInstr.noConfusion heq
+
+/-- `.printFloat v` emits `vLoadVarFP ++ [.callPrintF]`. No branches. -/
+private theorem verifiedGenInstr_printFloat_branch_bounded
+    (layout : VarLayout) (pcMap : Nat → Nat) (v : Var)
+    (haltS divS boundsS : Nat) (arrayDecls : List (ArrayName × Nat × VarTy))
+    (safe : Bool) {instrs : List ArmInstr}
+    (hGen : verifiedGenInstr layout pcMap (TAC.printFloat v)
+      haltS divS boundsS arrayDecls safe = some instrs) :
+    ∀ instr' ∈ instrs, ∀ lbl,
+      (instr' = ArmInstr.b lbl ∨
+       (∃ rn, instr' = ArmInstr.cbz rn lbl) ∨
+       (∃ rn, instr' = ArmInstr.cbnz rn lbl) ∨
+       (∃ c, instr' = ArmInstr.bCond c lbl)) →
+      lbl ≤ boundsS := by
+  simp only [verifiedGenInstr] at hGen
+  split at hGen
+  · exact absurd hGen (by intro h; cases h)
+  · split at hGen
+    · exact absurd hGen (by intro h; cases h)
+    · simp only [Option.some.injEq] at hGen
+      subst hGen
+      intro instr' hmem lbl hbranch
+      simp only [List.mem_append, List.mem_cons, List.not_mem_nil, or_false] at hmem
+      refine close_non_branch ?_ hbranch
+      rcases hmem with hLd | hCall
+      · exact vLoadVarFP_no_branches _ _ _ _ hLd
+      · subst hCall
+        refine ⟨?_, ?_, ?_, ?_⟩ <;> intros <;> intro heq <;>
+          exact ArmInstr.noConfusion heq
+
+/-- `.print fmt args` always returns `none` (verifiedGenInstr doesn't handle print);
+    so the hypothesis `= some instrs` is vacuous. -/
+private theorem verifiedGenInstr_print_branch_bounded
+    (layout : VarLayout) (pcMap : Nat → Nat) (fmt : String) (args : List Var)
+    (haltS divS boundsS : Nat) (arrayDecls : List (ArrayName × Nat × VarTy))
+    (safe : Bool) {instrs : List ArmInstr}
+    (hGen : verifiedGenInstr layout pcMap (TAC.print fmt args)
+      haltS divS boundsS arrayDecls safe = some instrs) :
+    ∀ instr' ∈ instrs, ∀ lbl,
+      (instr' = ArmInstr.b lbl ∨
+       (∃ rn, instr' = ArmInstr.cbz rn lbl) ∨
+       (∃ rn, instr' = ArmInstr.cbnz rn lbl) ∨
+       (∃ c, instr' = ArmInstr.bCond c lbl)) →
+      lbl ≤ boundsS := by
+  simp only [verifiedGenInstr] at hGen
+  split at hGen
+  · exact absurd hGen (by intro h; cases h)
+  · exact absurd hGen (by intro h; cases h)
 
 end Phase6Probes2
