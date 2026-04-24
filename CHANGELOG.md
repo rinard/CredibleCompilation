@@ -4,6 +4,89 @@ Chronological record of what was built and why, to reconstruct the sequence of d
 
 ---
 
+## Phase 6 session 13: remaining per-case helpers + aggregator (2026-04-24)
+
+Follow-on after session 12. Goal was to close the 2 remaining Phase 6 sorries
+(bodyFlat_branch_target_bounded and arm_behavior_exhaustive). Completed Steps
+1 and 2 of the session-12 handoff roadmap; Steps 3 and 4 deferred.
+
+### Step 1 — All remaining per-TAC branch-bounded helpers (~550 LOC)
+
+Added 12 new per-case helpers covering the remaining TAC constructors:
+`.copy`, `.boolop`, `.binop_mod`, `.binop_std`, `.fbinop`, `.intToFloat`,
+`.floatToInt`, `.floatUnary`, `.fternop`, `.arrLoad`, `.arrStore`, `.const`.
+
+Combined with session-12's 8 helpers (goto, binop_div, ifgoto, halt, print,
+printString, printInt, printBool, printFloat) and the close_non_branch /
+bc_nb / vStoreVarFP_no_branches helpers, **all 19 TAC constructors now
+have per-case branch-target bounds proofs.**
+
+### Step 2 — Aggregator `verifiedGenInstr_branch_target_bounded` (~90 LOC)
+
+Case-splits on TAC constructor and dispatches to per-case helpers. Takes
+hypotheses `hRC`, `hII` (regConventionSafe, isInjective), plus
+`hPcBound : ∀ l, (instr = .goto l ∨ ∃ be, instr = .ifgoto be l) → pcMap l ≤ boundsS`,
+`hHaltBound : haltS ≤ boundsS`, `hDivBound : divS ≤ boundsS`. For `.binop`,
+three-way by_cases on `op = .div`, `op = .mod`, else to dispatch to
+binop_div / binop_mod / binop_std.
+
+Commits: `33bb2cb` (per-case helpers), `edd5aaa` (aggregator).
+
+### Technique insights from session 13
+
+Multiple elaboration-level gotchas encountered and resolved:
+
+1. **Multi-discriminant matches compile to ONE split producing N branches**,
+   not N nested splits. Use `split at hGen; all_goals try (exact absurd hGen ...)`
+   rather than chained `split at hGen` expecting 2 branches each.
+
+2. **`split at hGen` on `let notFreg := ...; if notFreg then none else some (...)`
+   fails** with "failed to generalize discriminant". Workaround: use
+   `by_cases hF : ∃ r, List.lookup dst layout.entries = some (VarLoc.freg r)`
+   plus an explicit `have hNF : (match ...) = false` followed by
+   `simp [hNF] at hGen; obtain ⟨_, hGen⟩ := hGen` to handle the conjunction
+   that simp produces.
+
+3. **`cases val with | int n => ...` can fail with 19+ spurious TAC cases**
+   when the outer TAC match wasn't fully iota-reduced. Putting `cases val`
+   BEFORE `simp only [verifiedGenInstr]` avoids this.
+
+4. **`rcases hmem with ... | hX | ...` where `hX` sits adjacent to a
+   non-literal-list membership** (e.g. `∈ formalLoadImm64 x n`) causes rcases
+   to attempt List.Mem destructuring, failing with "Dependent elimination
+   failed". Fix: apply `rw [List.mem_append]` / `rw [List.mem_cons]` manually
+   and rcases on the resulting flat disjunction in multiple steps.
+
+5. **`all_goals (subst hGen; intro ...; ...)` is needed** when the split
+   produces multiple success goals (e.g. `| some (.stack _) | some (.ireg _)`
+   in a single match arm produces 2 branches with the same body).
+
+6. **`try (exact absurd hGen (by intro h; cases h))` can leave goals open**
+   when hGen is `some X = some Y` with identical X, Y (reflexive). The
+   `by intro h; cases h` block produces `rfl` and leaves `⊢ False`. Prefer
+   `split at hGen <;> first | simp at hGen | skip` which closes `none = some`
+   absurd cases via simp.
+
+### Remaining work (Steps 3 and 4)
+
+2 sorries remain at PipelineCorrectness.lean:779 and :1032.
+
+**Step 3** (~320 LOC): `bodyFlat_branch_target_bounded` lift. Given branch at
+pc in bodyFlat, split on pc < haltS vs haltSaveBlock suffix. For bodyPerPC:
+find tac_pc via codeAt_of_bodyFlat' + pcMap inverse; dispatch to instrGen /
+callSiteSaveRestore / printSaveRestore; apply
+verifiedGenInstr_branch_target_bounded. For haltSaveBlock: genHaltSave only
+emits str/fstr (non-branch), absurd.
+
+**Step 4** (~100 LOC): `arm_behavior_exhaustive` König proof. classical em
+on each sentinel reach; fall-through builds ArmDiverges by induction on n
+with invariant `s.pc ≤ boundsS ∧ s.pc ∉ {haltFinal, divS, boundsS}`. Uses
+Step 3's bound for PC-progression.
+
+Sorry count: **2** (unchanged from session 12 end). Build green throughout.
+
+---
+
 ## Phase 6 session 12 (continuation): ifgoto blocker closed + per-case helpers (sorry 3 → 2) (2026-04-24)
 
 Follow-on work after session 11 attempted to close the three remaining

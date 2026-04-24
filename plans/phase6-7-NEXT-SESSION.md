@@ -1,11 +1,11 @@
 # Phase 6/7 Next Session — Final Plan and Handoff
 
 **Read this first.**  Supersedes all earlier Phase 6/7 planning documents
-in this directory.  Last updated: 2026-04-24 after **session 12** — Phase 7
-closed (session 11) + Phase 6 partial progress (session 12 follow-on).
-Sorry count: **2**. Branch `phase6-prep` at HEAD `daa30d6` (pushed to origin).
+in this directory.  Last updated: 2026-04-24 after **session 13** — Phase 7
+closed (session 11), Phase 6 helpers + aggregator done (sessions 12–13).
+Sorry count: **2**. Branch `phase6-prep` at HEAD `edd5aaa` (to be pushed).
 
-## TL;DR for next session (session 13)
+## TL;DR for next session (session 14)
 
 **Sorry count: 2.** Both Phase 6 exhaustion, out of scope for end-to-end
 correctness. (Verified: `arm_behavior_exhaustive` has no downstream
@@ -13,12 +13,28 @@ consumers — closing these doesn't strengthen any top-level theorem.
 Phase 7's bidirectional While ↔ ARM correctness chain is sorry-free.)
 
 Remaining sorries:
-- [PipelineCorrectness.lean:770](../CredibleCompilation/PipelineCorrectness.lean#L770)
-  `bodyFlat_branch_target_bounded` — the aggregator.
-- [PipelineCorrectness.lean:1022](../CredibleCompilation/PipelineCorrectness.lean#L1022)
+- [PipelineCorrectness.lean:779](../CredibleCompilation/PipelineCorrectness.lean#L779)
+  `bodyFlat_branch_target_bounded` — lift the aggregator to bodyFlat indexing.
+- [PipelineCorrectness.lean:1032](../CredibleCompilation/PipelineCorrectness.lean#L1032)
   `arm_behavior_exhaustive` — classical em + König.
 
-Build green with 2 sorries. Last commit `daa30d6`.
+Build green with 2 sorries.
+
+**Session 13 completed Steps 1 and 2 of the session-12 roadmap:** all 19
+TAC per-case branch-bounded helpers landed, and the aggregator
+`verifiedGenInstr_branch_target_bounded` (that dispatches per TAC
+constructor) is in place at the end of `section Phase6Probes2`. Step 3
+(lifting per-PC to flat bodyFlat) and Step 4 (König proof for divergence)
+remain.
+
+### Session 13 outcome
+
+Added helpers for: `.copy`, `.boolop`, `.binop_mod`, `.binop_std`, `.fbinop`,
+`.intToFloat`, `.floatToInt`, `.floatUnary`, `.fternop`, `.arrLoad`,
+`.arrStore`, `.const`. Plus the aggregator. See CHANGELOG §Phase 6 session 13
+for technique notes and the 6 elaboration gotchas encountered+resolved.
+
+Commits: `33bb2cb` (per-case helpers), `edd5aaa` (aggregator).
 
 ### Session 11 outcome (Phase 7 completion)
 
