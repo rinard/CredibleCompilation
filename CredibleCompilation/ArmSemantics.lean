@@ -838,41 +838,6 @@ def NoCallerSavedLayout (layout : VarLayout) : Prop :=
   (∀ v r, layout v = some (.ireg r) → r.isCallerSaved = false) ∧
   (∀ v r, layout v = some (.freg r) → r.isCallerSaved = false)
 
-/-- Decidable checker for `NoCallerSavedLayout`. -/
-def checkNoCallerSavedLayout (layout : VarLayout) : Bool :=
-  layout.entries.all fun (_, loc) =>
-    match loc with
-    | .ireg r => !r.isCallerSaved
-    | .freg r => !r.isCallerSaved
-    | .stack _ => true
-
-private theorem checkNoCallerSavedLayout_ireg {entries : List (String × VarLoc)}
-    (h : entries.all (fun (_, loc) => match loc with
-      | .ireg r => !r.isCallerSaved | .freg r => !r.isCallerSaved | .stack _ => true) = true)
-    {v : String} {r : ArmReg} (hlookup : entries.lookup v = some (.ireg r)) :
-    r.isCallerSaved = false := by
-  rw [List.all_eq_true] at h
-  obtain ⟨k, hk_mem, hk_eq⟩ := List.lookup_mem_of_some hlookup
-  have := h ⟨k, .ireg r⟩ hk_mem
-  simp at this; exact this
-
-private theorem checkNoCallerSavedLayout_freg {entries : List (String × VarLoc)}
-    (h : entries.all (fun (_, loc) => match loc with
-      | .ireg r => !r.isCallerSaved | .freg r => !r.isCallerSaved | .stack _ => true) = true)
-    {v : String} {r : ArmFReg} (hlookup : entries.lookup v = some (.freg r)) :
-    r.isCallerSaved = false := by
-  rw [List.all_eq_true] at h
-  obtain ⟨k, hk_mem, hk_eq⟩ := List.lookup_mem_of_some hlookup
-  have := h ⟨k, .freg r⟩ hk_mem
-  simp at this; exact this
-
-theorem checkNoCallerSavedLayout_spec (layout : VarLayout)
-    (h : checkNoCallerSavedLayout layout = true) :
-    NoCallerSavedLayout layout := by
-  unfold checkNoCallerSavedLayout at h
-  exact ⟨fun v r hloc => checkNoCallerSavedLayout_ireg h hloc,
-         fun v r hloc => checkNoCallerSavedLayout_freg h hloc⟩
-
 /-- `havocCallerSaved` preserves `ExtStateRel` when no mapped variable is
     in a caller-saved register (for any choice of replacement values). -/
 theorem ExtStateRel.havocCallerSaved_preserved
@@ -890,40 +855,6 @@ theorem ExtStateRel.havocCallerSaved_preserved
   | .freg r =>
     have hcs := hNCS.2 v r hloc
     simp [ArmState.havocCallerSaved, hcs]; exact hRel v (.freg r) hloc
-
-/-- Caller-save round-trip for integer registers:
-    str r off → havocCallerSaved → ldr r off restores the original value.
-    The final state's register `r` equals `(σ v).encode`. -/
-theorem callerSave_str_havoc_ldr_ireg
-    {layout : VarLayout} {σ : Store} {s : ArmState}
-    {v : Var} {r : ArmReg} {off : Nat}
-    {newRegs : ArmReg → BitVec 64} {newFregs : ArmFReg → BitVec 64}
-    (hRel : ExtStateRel layout σ s)
-    (hLoc : layout v = some (.ireg r))
-    (_hCS : r.isCallerSaved = true) :
-    let s₁ := s.setStack off (s.regs r)
-    let s₂ := s₁.havocCallerSaved newRegs newFregs
-    let s₃ := s₂.setReg r (s₂.stack off)
-    s₃.regs r = (σ v).encode := by
-  simp [ArmState.setReg, ArmState.setStack, ArmState.havocCallerSaved]
-  exact hRel v (.ireg r) hLoc
-
-/-- Caller-save round-trip for float registers:
-    fstr fr off → havocCallerSaved → fldr fr off restores the original value.
-    The final state's float register `fr` equals `(σ v).encode`. -/
-theorem callerSave_fstr_havoc_fldr_freg
-    {layout : VarLayout} {σ : Store} {s : ArmState}
-    {v : Var} {fr : ArmFReg} {off : Nat}
-    {newRegs : ArmReg → BitVec 64} {newFregs : ArmFReg → BitVec 64}
-    (hRel : ExtStateRel layout σ s)
-    (hLoc : layout v = some (.freg fr))
-    (_hCS : fr.isCallerSaved = true) :
-    let s₁ := s.setStack off (s.fregs fr)
-    let s₂ := s₁.havocCallerSaved newRegs newFregs
-    let s₃ := s₂.setFReg fr (s₂.stack off)
-    s₃.fregs fr = (σ v).encode := by
-  simp [ArmState.setFReg, ArmState.setStack, ArmState.havocCallerSaved]
-  exact hRel v (.freg fr) hLoc
 
 /-- Writing to a stack offset not used by any variable preserves ExtStateRel. -/
 theorem ExtStateRel.setStack_fresh {layout : VarLayout} {σ : Store} {arm : ArmState}

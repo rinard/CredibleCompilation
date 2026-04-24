@@ -195,9 +195,6 @@ def execPath (orig : Prog) (ss : SymStore) (sam : SymArrayMem) (pc : Label) :
 -- § 4. Instruction helpers
 -- ============================================================
 
-def canReach (instr : TAC) (pc next : Label) : Bool :=
-  (instr.successors pc).contains next
-
 /-- Check whether an expression is a non-zero literal. -/
 def Expr.isNonZeroLit : Expr → Bool
   | .lit 0 => false
@@ -250,18 +247,6 @@ def BoolExpr.symEval (ss : SymStore) (inv : EInv) : BoolExpr → Option Bool
     match (e.substSym' ss).simplifyDeep (sdFuel inv) inv with
     | .blit b => some b
     | _ => none
-
-/-- Like `canReach`, but for `ifgoto` also verifies the branch direction
-    via symbolic evaluation of the boolean condition under the invariant.
-    Non-ifgoto instructions fall back to plain `canReach`. -/
-def canReachSym (ss : SymStore) (inv : EInv) (instr : TAC) (pc next : Label) : Bool :=
-  match instr with
-  | .ifgoto b l =>
-    match b.symEval ss inv with
-    | some true  => next == l
-    | some false => next == pc + 1
-    | none       => canReach instr pc next
-  | _ => canReach instr pc next
 
 /-- Collect all variable names from both programs. -/
 def collectAllVars (p1 p2 : Prog) : List Var :=
@@ -793,27 +778,6 @@ def computeNextPC (instr : TAC) (pc : Label) (ss : SymStore) (inv : EInv) : Opti
     | none       => none
   | .halt => none
 
-/-- Check that a binop instruction is safe to execute: for `div`, the
-    symbolic denominator must simplify to a non-zero literal under the invariant.
-    All other operations are unconditionally safe. -/
-def checkBinopSafe (instr : TAC) (ss : SymStore) (inv : EInv) : Bool :=
-  match instr with
-  | .binop _ .div _ z | .binop _ .mod _ z =>
-    match (ssGet ss z).simplifyDeep (sdFuel inv) inv with
-    | .lit n => n != 0
-    | _ => true  -- runtime variable: safety proven by div-preservation check
-  | _ => true
-
-
-/-- Returns `true` if the instruction is a div/mod by literal zero — an error exit. -/
-def isDivByZero (instr : TAC) (ss : SymStore) (inv : EInv) : Bool :=
-  match instr with
-  | .binop _ .div _ z | .binop _ .mod _ z =>
-    match (ssGet ss z).simplifyDeep (sdFuel inv) inv with
-    | .lit n => n == 0
-    | _ => false
-  | _ => false
-
 /-- Check that an arrLoad/arrStore instruction's index doesn't alias any existing SAM entry
     for the same array.  Uses simplification under the invariant to compare indices. -/
 def checkInstrAliasOk (instr : TAC) (ss : SymStore) (sam : SymArrayMem) (inv : EInv) : Bool :=
@@ -1055,10 +1019,6 @@ def checkOrigPathBoundsOk (cert : ECertificate) : Bool :=
 def checkArraySizesExec (cert : ECertificate) : Bool :=
   cert.orig.arrayDecls == cert.trans.arrayDecls
 
-/-- Check that a program contains no array instructions (arrLoad/arrStore). -/
-def checkNoArrayInstrs (p : Prog) : Bool :=
-  p.code.all TAC.isScalar
-
 /-- Check that all invariant expressions are arrRead-free. -/
 def checkNoArrReadInInvs (invs : Array EInv) : Bool :=
   invs.all fun inv => inv.all fun (_, e) => !e.hasArrRead
@@ -1158,56 +1118,6 @@ def checkNoRegisterCollisions (p : Prog) : Bool :=
       !(vars.any fun w => w == ("__br" ++ n))
     else true
 
-/-- All arrLoad/arrStore instructions in a program use element type `.int`. -/
-def AllArrayOpsInt (p : Prog) : Prop :=
-  ∀ i (h : i < p.size), match p[i] with
-    | .arrLoad _ _ _ ty => ty = .int
-    | .arrStore _ _ _ ty => ty = .int
-    | _ => True
-
-/-- Decidable check for `AllArrayOpsInt`.
-    Rejects `.bool` and `.float` element types on array ops. -/
-def checkAllArrayOpsInt (p : Prog) : Bool :=
-  p.code.all fun instr =>
-    match instr with
-    | .arrLoad _ _ _ ty | .arrStore _ _ _ ty => ty == .int
-    | _ => true
-
-/-- Lenient version of `checkAllArrayOpsInt` that accepts both `.int` and `.float`
-    element types.  Used in `checkCertificateExec` so that float-array programs
-    pass the executable checker (their soundness is handled separately). -/
-def checkAllArrayOpsNotBool (p : Prog) : Bool :=
-  p.code.all fun instr =>
-    match instr with
-    | .arrLoad _ _ _ .bool | .arrStore _ _ _ .bool => false
-    | _ => true
-
-theorem checkAllArrayOpsInt_sound (p : Prog) (h : checkAllArrayOpsInt p = true) :
-    AllArrayOpsInt p := by
-  intro i hi
-  unfold checkAllArrayOpsInt at h
-  have hall := (Array.all_eq_true.mp h) i hi
-  revert hall
-  cases p.code[i] <;> simp [beq_iff_eq]
-
-theorem AllArrayOpsInt.arrLoad_int {p : Prog} {pc : Nat} {x : Var} {arr : ArrayName}
-    {idx : Var} {ty : VarTy} (h : AllArrayOpsInt p)
-    (hinstr : p[pc]? = some (.arrLoad x arr idx ty)) :
-    ty = .int := by
-  have hlt : pc < p.size := bound_of_getElem? hinstr
-  have hmatch := h pc hlt
-  have heq := Option.some.inj ((Prog.getElem?_eq_getElem hlt).symm.trans hinstr)
-  simp [heq] at hmatch; exact hmatch
-
-theorem AllArrayOpsInt.arrStore_int {p : Prog} {pc : Nat} {arr : ArrayName}
-    {idx val : Var} {ty : VarTy} (h : AllArrayOpsInt p)
-    (hinstr : p[pc]? = some (.arrStore arr idx val ty)) :
-    ty = .int := by
-  have hlt : pc < p.size := bound_of_getElem? hinstr
-  have hmatch := h pc hlt
-  have heq := Option.some.inj ((Prog.getElem?_eq_getElem hlt).symm.trans hinstr)
-  simp [heq] at hmatch; exact hmatch
-
 /-- Check all certificate conditions. Returns `true` iff the certificate is valid. -/
 def checkCertificateExec (cert : ECertificate) : Bool :=
   checkWellTypedProg cert.tyCtx cert.orig &&
@@ -1273,21 +1183,4 @@ def checkCertificateVerboseExec (cert : ECertificate) : List (String × Bool) :=
     ("bool_vars_covered",     checkBoolVarsCoveredExec cert),
     ("codegen_prereqs_orig",  checkCodegenPrereqs cert.tyCtx cert.orig),
     ("codegen_prereqs_trans", checkCodegenPrereqs cert.tyCtx cert.trans) ]
-
-/-- Observable output of a configuration with respect to an executable certificate.
-    - If the current instruction is `halt`, returns `halt` with observable variable–value pairs.
-    - If the configuration is an error, returns `error`.
-    - If the PC is out of bounds, returns `error`.
-    - Otherwise returns `nothing`. -/
-def observeExec (cert : ECertificate) (c : Cfg) : Observation :=
-  match c with
-  | .halt σ _        => Observation.halt (cert.observable.map fun v => (v, σ v))
-  | .errorDiv _ _    => Observation.error
-  | .errorBounds _ _ => Observation.error
-  | .typeError _ _   => Observation.typeError
-  | .run pc σ _      =>
-    match cert.trans[pc]? with
-    | some .halt => Observation.halt (cert.observable.map fun v => (v, σ v))
-    | some _     => Observation.nothing
-    | none       => Observation.error
 

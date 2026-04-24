@@ -54,24 +54,9 @@ def looseCap : Int := 4611686018427387904  -- 2^62
 def validIntervalLoose (r : IRange) : Bool :=
   decide (0 ≤ r.lo) && decide (r.lo ≤ r.hi) && decide (r.hi ≤ looseCap)
 
-theorem validInterval_iff (r : IRange) :
-    validInterval r = true ↔ 0 ≤ r.lo ∧ r.lo ≤ r.hi ∧ r.hi ≤ intervalCap := by
-  simp [validInterval, Bool.and_eq_true, decide_eq_true_eq, and_assoc]
-
 theorem validIntervalLoose_iff (r : IRange) :
     validIntervalLoose r = true ↔ 0 ≤ r.lo ∧ r.lo ≤ r.hi ∧ r.hi ≤ looseCap := by
   simp [validIntervalLoose, Bool.and_eq_true, decide_eq_true_eq, and_assoc]
-
-theorem intervalCap_pos : (0 : Int) < intervalCap := by decide
-
-/-- `validInterval r ⇒ validIntervalLoose r`: the tight cap is stricter. -/
-theorem validInterval_imp_loose {r : IRange} (h : validInterval r = true) :
-    validIntervalLoose r = true := by
-  obtain ⟨h1, h2, h3⟩ := (validInterval_iff _).mp h
-  rw [validIntervalLoose_iff]
-  refine ⟨h1, h2, ?_⟩
-  have : intervalCap ≤ looseCap := by decide
-  omega
 
 -- ============================================================
 -- § 2. Concretization
@@ -305,15 +290,6 @@ def checkLocalPreservation (p : Prog) (inv : Array (Option IMap)) : Bool :=
 -- ============================================================
 -- § 8. Soundness bridge lemmas (Phase 3)
 -- ============================================================
-
-/-- If a `BitVec 64` fits under `intervalCap = 2³¹`, its signed and unsigned
-    interpretations agree — needed to bridge between signed `slt`/`sle`
-    (TAC/Step level) and unsigned `toNat` (our interval domain). -/
-theorem toInt_eq_toNat_of_lt_cap {bv : BitVec 64}
-    (h : bv.toNat < intervalCap.toNat) : bv.toInt = bv.toNat := by
-  have : intervalCap.toNat = 2 ^ 31 := by decide
-  have : bv.toNat < 2 ^ 63 := by omega
-  simp only [BitVec.toInt_eq_toNat_cond]; omega
 
 /-- `Int.toNat` is monotone on nonnegative ints (no wrap-at-zero). -/
 theorem Int.toNat_mono_of_nonneg {a b : Int} (h : a ≤ b) : a.toNat ≤ b.toNat :=

@@ -234,10 +234,6 @@ def simplifyKnownBranches (prog : Prog)
 -- § 5. Expression relation computation
 -- ============================================================
 
-/-- An expression relation entry: (.lit c, .var x) means orig-side
-    expression `.lit c` equals trans-side variable `x`. -/
-abbrev RelEntry := Expr × Expr
-
 /-- Forward analysis to compute expression relations at each PC.
     At a dead assignment to `x`, add `(.lit c, .var x)` where `c` is the
     trans-side constant. Drop entries when `x` is reassigned by a live instr.

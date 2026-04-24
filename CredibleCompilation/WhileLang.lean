@@ -1342,25 +1342,6 @@ theorem lookup_none_of_isFTmp_wt {decls : List (Var × VarTy)}
     simp only [hne]
     exact ih hnt_rest
 
--- If noTmpDecls and x.isBTmp, then lookup returns none
-theorem lookup_none_of_isBTmp_wt {decls : List (Var × VarTy)}
-    (hnt : Program.noTmpDecls decls = true) {x : Var} (hx : x.isBTmp = true) :
-    decls.lookup x = none := by
-  induction decls with
-  | nil => rfl
-  | cons hd rest ih =>
-    obtain ⟨y, ty⟩ := hd
-    simp only [Program.noTmpDecls, List.all_cons, Bool.and_eq_true] at hnt
-    obtain ⟨⟨_, hny⟩, hnt_rest⟩ := hnt
-    simp only [List.lookup_cons]
-    have hne : (x == y) = false := by
-      simp only [beq_eq_false_iff_ne, ne_eq]
-      intro heq; subst heq
-      simp only [Bool.not_eq_true'] at hny
-      rw [hx] at hny; exact Bool.noConfusion hny
-    simp only [hne]
-    exact ih hnt_rest
-
 -- tmpName k is a temporary variable
 theorem tmpName_isTmp_wt (k : Nat) : (tmpName k).isTmp = true := by
   simp only [String.isTmp, tmpName, String.toList_append]
@@ -1406,33 +1387,6 @@ theorem tyCtx_ftmp_wt (prog : Program)
   rw [lookup_none_of_isFTmp_wt hnt (ftmpName_isFTmp_wt k)]
   simp only [Option.getD]
   exact Program.defaultVarTy_of_isFTmp _ (ftmpName_isFTmp_wt k)
-
--- btmpName k is a bool temporary
-theorem btmpName_isBTmp_wt (k : Nat) : (btmpName k).isBTmp = true := by
-  simp only [String.isBTmp, btmpName, String.toList_append]
-  show (match '_' :: '_' :: 'b' :: 't' :: (toString k).toList with
-    | '_' :: '_' :: 'b' :: 't' :: _ => true | _ => false) = true
-  rfl
-
--- defaultVarTy maps bool temporaries to .bool (via __b prefix)
-theorem defaultVarTy_of_isBTmp (x : Var) (h : x.isBTmp = true) :
-    Program.defaultVarTy x = .bool := by
-  unfold Program.defaultVarTy
-  split
-  · next heq => unfold String.isBTmp at h; rw [heq] at h; simp at h
-  · next heq => rfl
-  · next heq =>
-    unfold String.isBTmp at h
-    rcases hl : x.toList with _ | ⟨a, _ | ⟨b, _ | ⟨c, t⟩⟩⟩ <;> simp_all
-
--- tyCtx maps bool temporaries to .bool
-theorem tyCtx_btmp_wt (prog : Program)
-    (hnt : Program.noTmpDecls prog.decls = true) (k : Nat) :
-    prog.tyCtx (btmpName k) = .bool := by
-  unfold Program.tyCtx Program.lookupTy
-  rw [lookup_none_of_isBTmp_wt hnt (btmpName_isBTmp_wt k)]
-  simp only [Option.getD]
-  exact defaultVarTy_of_isBTmp _ (btmpName_isBTmp_wt k)
 
 -- If lookupTy x = some ty, then tyCtx x = ty
 theorem tyCtx_of_lookup_wt (prog : Program) (x : Var) (ty : VarTy)

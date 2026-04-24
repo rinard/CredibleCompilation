@@ -113,9 +113,6 @@ theorem tmpName_ne {k j : Nat} (h : k ≠ j) : tmpName k ≠ tmpName j :=
 theorem tmpName_isTmp (k : Nat) : (tmpName k).isTmp = true :=
   tmpName_isTmp_wt k
 
-theorem isTmp_false_ne_tmpName {v : Var} {k : Nat} (h : v.isTmp = false) : v ≠ tmpName k := by
-  intro heq; have := tmpName_isTmp k; rw [← heq] at this; simp [h] at this
-
 private theorem ftmpName_injective : Function.Injective ftmpName := by
   intro k j h
   have h2 := String.ext_iff.mp h
@@ -130,9 +127,6 @@ theorem ftmpName_isFTmp (k : Nat) : (ftmpName k).isFTmp = true :=
   ftmpName_isFTmp_wt k
 
 -- ftmpName_not_isTmp and tmpName_not_isFTmp are imported from WhileLang
-
-theorem isFTmp_false_ne_ftmpName {v : Var} {k : Nat} (h : v.isFTmp = false) : v ≠ ftmpName k := by
-  intro heq; have := ftmpName_isFTmp k; rw [← heq] at this; simp [h] at this
 
 /-- tmpName and ftmpName never collide (different prefixes). -/
 theorem tmpName_ne_ftmpName {k j : Nat} : tmpName k ≠ ftmpName j := by

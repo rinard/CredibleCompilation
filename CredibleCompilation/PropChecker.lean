@@ -1124,19 +1124,3 @@ theorem credible_compilation_total (cert : PCertificate) (hvalid : PCertificateV
   | diverges =>
     obtain ⟨f, hinf, hf0⟩ := hb
     exact soundness_diverge cert hvalid f σ₀ hts₀ hinf hf0
-
--- ============================================================
--- § Observable output helper
--- ============================================================
-
-def observeProp (cert : PCertificate) (c : Cfg) : Observation :=
-  match c with
-  | .halt σ _        => Observation.halt (cert.observable.map fun v => (v, σ v))
-  | .errorDiv _ _    => Observation.error
-  | .errorBounds _ _ => Observation.error
-  | .typeError _ _   => Observation.typeError
-  | .run pc σ _ =>
-    match cert.trans[pc]? with
-    | some .halt => Observation.halt (cert.observable.map fun v => (v, σ v))
-    | some _     => Observation.nothing
-    | none       => Observation.error

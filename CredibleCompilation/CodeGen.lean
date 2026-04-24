@@ -6447,15 +6447,6 @@ def optimizePipeline (tyCtx : TyCtx) (p : Prog) : Except String Prog := do
   applyPass "RegAlloc" tyCtx (RegAllocOpt.optimize tyCtx) p
 
 
-/-- Try to apply a single optimization pass. If the certificate check fails,
-    print a warning and return the input program unchanged. -/
-def tryPass (name : String) (tyCtx : TyCtx) (pass : Prog → ECertificate) (p : Prog) : IO Prog := do
-  match applyPass name tyCtx pass p with
-  | .ok p' => return p'
-  | .error msg =>
-    IO.eprintln s!"warning: skipping {name} optimization ({msg})"
-    return p
-
 /-- Apply a list of certificate-checked optimization passes resiliently.
     Each pass is checked by the executable certificate checker; if a check
     fails, that pass is skipped and the pipeline continues with the
@@ -6481,10 +6472,6 @@ def standardPasses (tyCtx : TyCtx) : List (String × (Prog → ECertificate)) :=
     ("Peephole", PeepholeOpt.optimize tyCtx),
     ("DCE", DCEOpt.optimize tyCtx),
     ("RegAlloc", RegAllocOpt.optimize tyCtx) ]
-
-/-- IO version of applyPasses with warning messages on failures. -/
-def applyPassesIO (tyCtx : TyCtx) (passes : List (String × (Prog → ECertificate))) (p : Prog) : IO Prog :=
-  passes.foldlM (fun p (name, pass) => tryPass name tyCtx pass p) p
 
 def compileToAsmWith (input : String) (noOpt : Bool) : Except String String := do
   let prog ← parseProgram input

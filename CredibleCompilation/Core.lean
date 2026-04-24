@@ -168,14 +168,6 @@ theorem update_self (σ : Store) (x : Var) (v : Value) :
 theorem update_other (σ : Store) (x y : Var) (v : Value) (h : y ≠ x) :
     σ.update x v y = σ y := by simp only [update, beq_iff_eq, if_neg h]
 
-theorem update_shadow (σ : Store) (x : Var) (u v : Value) :
-    (σ.update x u).update x v = σ.update x v := by
-  funext y; simp [update]; split <;> simp_all
-
-theorem update_comm (σ : Store) (x y : Var) (u v : Value) (h : x ≠ y) :
-    (σ.update x u).update y v = (σ.update y v).update x u := by
-  funext z; simp [update]; split <;> split <;> simp_all [Ne.symm]
-
 /-- Updating a variable with its current value is a no-op. -/
 theorem update_of_eq (σ : Store) (x : Var) (v : Value) (h : σ x = v) :
     σ.update x v = σ := by

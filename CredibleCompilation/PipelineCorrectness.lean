@@ -3004,7 +3004,7 @@ private theorem verifiedGenInstr_fbinop_branch_bounded
   simp only [verifiedGenInstr] at hGen
   split at hGen
   · exact absurd hGen (by intro h; cases h)
-  · split at hGen <;> first | simp at hGen | skip
+  · split at hGen <;> simp at hGen
     -- survivors: only the `_, _, _` fall-through case (with `some (...) = some instrs`)
     subst hGen
     intro instr' hmem lbl hbranch
@@ -3035,7 +3035,7 @@ private theorem verifiedGenInstr_intToFloat_branch_bounded
   simp only [verifiedGenInstr] at hGen
   split at hGen
   · exact absurd hGen (by intro h; cases h)
-  · split at hGen <;> first | simp at hGen | skip
+  · split at hGen <;> simp at hGen
     subst hGen
     intro instr' hmem lbl hbranch
     refine close_non_branch ?_ hbranch
@@ -3063,7 +3063,7 @@ private theorem verifiedGenInstr_floatToInt_branch_bounded
   simp only [verifiedGenInstr] at hGen
   split at hGen
   · exact absurd hGen (by intro h; cases h)
-  · split at hGen <;> first | simp at hGen | skip
+  · split at hGen <;> simp at hGen
     subst hGen
     intro instr' hmem lbl hbranch
     refine close_non_branch ?_ hbranch
@@ -3092,7 +3092,7 @@ private theorem verifiedGenInstr_floatUnary_branch_bounded
   simp only [verifiedGenInstr] at hGen
   split at hGen
   · exact absurd hGen (by intro h; cases h)
-  · split at hGen <;> first | simp at hGen | skip
+  · split at hGen <;> simp at hGen
     subst hGen
     intro instr' hmem lbl hbranch
     refine close_non_branch ?_ hbranch
@@ -3120,7 +3120,7 @@ private theorem verifiedGenInstr_fternop_branch_bounded
   simp only [verifiedGenInstr] at hGen
   split at hGen
   · exact absurd hGen (by intro h; cases h)
-  · split at hGen <;> first | simp at hGen | skip
+  · split at hGen <;> simp at hGen
     subst hGen
     intro instr' hmem lbl hbranch
     refine close_non_branch ?_ hbranch
@@ -3323,7 +3323,7 @@ private theorem verifiedGenInstr_const_branch_bounded
     simp only [verifiedGenInstr] at hGen
     split at hGen
     · exact absurd hGen (by intro h; cases h)
-    · split at hGen <;> first | simp at hGen | skip
+    · split at hGen <;> simp at hGen
       all_goals (
         subst hGen
         intro instr' hmem lbl hbranch
@@ -3336,12 +3336,12 @@ private theorem verifiedGenInstr_const_branch_bounded
     simp only [verifiedGenInstr] at hGen
     split at hGen
     · exact absurd hGen (by intro h; cases h)
-    · split at hGen <;> first | simp at hGen | skip
+    · split at hGen <;> simp at hGen
       all_goals (
         subst hGen
         intro instr' hmem lbl hbranch
         refine close_non_branch ?_ hbranch
-        simp only [List.mem_append, List.mem_cons, List.not_mem_nil, or_false] at hmem
+        simp only [List.mem_cons] at hmem
         rcases hmem with hMov | hSt
         · subst hMov
           refine ⟨?_, ?_, ?_, ?_⟩ <;> intros <;> intro heq <;>
@@ -3351,7 +3351,7 @@ private theorem verifiedGenInstr_const_branch_bounded
     simp only [verifiedGenInstr] at hGen
     split at hGen
     · exact absurd hGen (by intro h; cases h)
-    · split at hGen <;> first | simp at hGen | skip
+    · split at hGen <;> simp at hGen
       all_goals (
         subst hGen
         intro instr' hmem lbl hbranch

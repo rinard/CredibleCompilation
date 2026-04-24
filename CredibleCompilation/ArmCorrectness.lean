@@ -458,12 +458,6 @@ theorem vStoreVar_stack (layout : VarLayout) (v : Var) (tmp : ArmReg) (off : Nat
     vStoreVar layout v tmp = [.str tmp off] := by
   simp [vStoreVar, hv]
 
-/-- vStoreVar to an ireg that equals tmp. -/
-theorem vStoreVar_ireg_same (layout : VarLayout) (v : Var) (r : ArmReg)
-    (hv : layout v = some (.ireg r)) :
-    vStoreVar layout v r = [] := by
-  simp [vStoreVar, hv]
-
 /-- vStoreVar to an ireg different from tmp. -/
 theorem vStoreVar_ireg_diff (layout : VarLayout) (v : Var) (tmp r : ArmReg)
     (hv : layout v = some (.ireg r)) (hne : (r == tmp) = false) :
@@ -527,50 +521,6 @@ theorem loadImm64_preserves_ExtStateRel (_prog : ArmProg) (layout : VarLayout)
   · exact h1
   · exact h2
 
-/-- After executing `vStoreVar layout v .x0` when `s.regs .x0 = val.encode`,
-    `ExtStateRel layout (σ[v ↦ val]) s'` holds.
-    Requires: v is at a stack or ireg (not freg) location.
-    Length-tracked variant (Flavor A Phase A.5): `k = 1`. -/
-theorem vStoreVar_x0_correct (prog : ArmProg) (layout : VarLayout) (v : Var)
-    (val : Value) (σ : Store) (s : ArmState) (startPC : Nat)
-    (hRel : ExtStateRel layout σ s) (hInj : VarLayoutInjective layout)
-    (_hRegConv : RegConventionSafe layout)
-    (hPC : s.pc = startPC) (hX0 : s.regs .x0 = val.encode)
-    (off : Nat) (hLoc : layout v = some (.stack off))
-    (hCode : CodeAt prog startPC (ArmInstr.str .x0 off :: [])) :
-    ∃ s' k, ArmStepsN prog s s' k ∧
-        k = 1 ∧
-        ExtStateRel layout (σ[v ↦ val]) s' ∧
-        s'.pc = startPC + 1 ∧
-        s'.arrayMem = s.arrayMem := by
-  have hStr := hCode.head; rw [← hPC] at hStr
-  refine ⟨s.setStack off (s.regs .x0) |>.nextPC, 1,
-    ArmStepsN.single (.str .x0 off hStr), rfl, ?_, ?_, ?_⟩
-  · rw [hX0]; exact ExtStateRel.update_stack hRel hInj hLoc
-  · simp [hPC]
-  · simp
-
-/-- After executing `vStoreVar layout v .x0` when v is in ireg r (r ≠ x0),
-    `ExtStateRel layout (σ[v ↦ val]) s'` holds.
-    Length-tracked variant (Flavor A Phase A.6): `k = 1`. -/
-theorem vStoreVar_x0_ireg_correct (prog : ArmProg) (layout : VarLayout) (v : Var)
-    (val : Value) (σ : Store) (s : ArmState) (startPC : Nat)
-    (hRel : ExtStateRel layout σ s) (hInj : VarLayoutInjective layout)
-    (_hRegConv : RegConventionSafe layout)
-    (hPC : s.pc = startPC) (hX0 : s.regs .x0 = val.encode)
-    (r : ArmReg) (hLoc : layout v = some (.ireg r)) (_hne : (r == ArmReg.x0) = false)
-    (hCode : CodeAt prog startPC (ArmInstr.movR r .x0 :: [])) :
-    ∃ s' k, ArmStepsN prog s s' k ∧
-        k = 1 ∧
-        ExtStateRel layout (σ[v ↦ val]) s' ∧
-        s'.pc = startPC + 1 ∧
-        s'.arrayMem = s.arrayMem := by
-  have hMovR := hCode.head; rw [← hPC] at hMovR
-  refine ⟨s.setReg r (s.regs .x0) |>.nextPC, 1,
-    ArmStepsN.single (.movR r .x0 hMovR), rfl, ?_, ?_, ?_⟩
-  · rw [hX0]; exact ExtStateRel.update_ireg hRel hInj hLoc
-  · simp [hPC]
-  · simp
 
 /-- Execute vLoadVar: loads v into scratch register tmp, preserving ExtStateRel.
     Case-splits on layout to determine instruction sequence.
