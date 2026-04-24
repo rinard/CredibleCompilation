@@ -4,6 +4,78 @@ Chronological record of what was built and why, to reconstruct the sequence of d
 
 ---
 
+## Phase 6/7 session 11: Phases D–H landed — Phase 7 done (sorry 4 → 3) (2026-04-24)
+
+Session 11 landed the downstream chain of Flavor A signatures and closed
+the target sorry `source_diverges_gives_ArmDiverges_init` at
+PipelineCorrectness.lean:1324.
+
+### Phase D — `step_simulation` (commit `3745be1`)
+
+Signature changed to `∃ s' k, ArmStepsN r.bodyFlat s s' k ∧ (∀ pc' σ' am',
+cfg' = .run pc' σ' am' → 1 ≤ k) ∧ ExtSimRel ... ∧ halt_pc`.
+
+Added `ArmSteps_to_ArmStepsN_pos` bridge in ArmSemantics.lean that takes
+an ArmSteps + pc-distinctness and returns a positive-length ArmStepsN
+existential. The four step_simulation sub-cases use this:
+- **Lib-call**: s.pc = pcMap pc, s_final.pc = pcMap (pc+1), block ≥ 1.
+- **Print**: same argument on printCall save/restore block.
+- **Halt**: .run claim vacuous (cfg' = .halt); direct ArmSteps_to_ArmStepsN.
+- **Normal**: kEBS = bodyPerPC[pc].length ≥ 1 directly from ext_backward_simulation.
+
+tacToArm_refinement's call site bridges back via ArmStepsN_to_ArmSteps.
+
+### Phase E+F — `tacToArm_refinement` + `tacToArm_correctness` (commit `de509b3`)
+
+tacToArm_refinement now takes StepsN of length n (not Steps) and returns
+ArmStepsN with `n ≤ k` on .run endings. Induction switches from Steps
+induction to nat induction on the StepsN count.
+
+The `n ≤ k` bound follows from: step_simulation gives `1 ≤ k1` on .run,
+ih gives `n ≤ k2`, so `k1 + k2 ≥ 1 + n` by omega.
+
+tacToArm_correctness kept at the old Steps/ArmSteps interface for the
+three while_to_arm_* callers (Phase G is a no-op). Delegates via
+Steps_to_StepsN + ArmStepsN_to_ArmSteps.
+
+### Phase H — close `source_diverges_gives_ArmDiverges_init` (commit `58fad52`)
+
+Added `tacToArm_correctness_N` in CodeGen.lean:6206 — a length-tracked
+wrapper over tacToArm_refinement, taking StepsN and returning ArmStepsN
+with the `n ≤ k` bound. Public for PipelineCorrectness consumers.
+
+source_diverges_gives_ArmDiverges_init now closes in ~20 LOC:
+1. Extract StepsN of length N+1 from IsInfiniteExec via StepsN_extend
+   induction on k.
+2. Rewrite f 0 = .run 0 prog.initStore ArrayMem.init into the
+   Store.typedInit form via Program.typedInit_eq_initStore.
+3. Observe f (N+1) is .run via inf_exec_is_run.
+4. Call tacToArm_correctness_N to get ArmStepsN of length k with N+1 ≤ k.
+5. Truncate to length N via ArmStepsN_prefix.
+
+### Sorry count
+
+Session 11 start: 4 (Phase 6 exhaustion × 3 + Phase 7 target × 1).
+Session 11 end: **3** — Phase 7 target closed. Remaining three all
+Phase 6 exhaustion out of scope:
+- PipelineCorrectness.lean:770 (bodyFlat_branch_target_bounded)
+- PipelineCorrectness.lean:1022 (arm_behavior_exhaustive)
+- PipelineCorrectness.lean:2138 (verifiedGenInstr_ifgoto_branch_bounded)
+
+### Observations for future sessions
+
+1. The Flavor A threading was straightforward once Phase D's body fills
+   were in place. Total session 11 time ≈ 3 hours including docs,
+   well under the 4–6 hour estimate.
+2. The pc-distinctness approach (`ArmSteps_to_ArmStepsN_pos`) avoided
+   needing to thread ArmStepsN through every ArmSteps `.trans` call in
+   step_simulation's ~1800 LOC body. Much cheaper than per-step tracking.
+3. `tacToArm_correctness` was kept backward-compatible (Steps/ArmSteps
+   in/out) — the new `tacToArm_correctness_N` is additive. This sidestepped
+   Phase G entirely.
+
+---
+
 ## Post-session-10 refactors: cbnz + loadFlit helper extraction (2026-04-24)
 
 After session 10 closed Phase B with `verifiedGenInstr_correct` at

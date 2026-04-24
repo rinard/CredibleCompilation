@@ -1,41 +1,46 @@
 # Phase 6/7 Next Session — Final Plan and Handoff
 
 **Read this first.**  Supersedes all earlier Phase 6/7 planning documents
-in this directory.  Last updated: 2026-04-24 after **session 10 + post-
-session refactors + Phase C verified** — **Phases A, B, C done**.
-`verifiedGenInstr_correct` + `ext_backward_simulation` have zero sorries.
-Branch `phase6-prep` at HEAD (pushed to origin).
+in this directory.  Last updated: 2026-04-24 after **session 11** —
+**Phases A–H all done, Phase 7 closed**. Sorry count 4 → **3**.
+Remaining 3 sorries are all Phase 6 exhaustion (out of scope for Phase 7).
+Branch `phase6-prep` at HEAD `58fad52` (push to origin pending).
 
-## TL;DR for next session (session 11)
+## TL;DR for next session (session 12)
 
-**Sorry count: 4.** All 4 pre-existing in PipelineCorrectness.lean:
-- L770 (Phase 6 out-of-scope `bodyFlat_branch_target_bounded` etc.)
-- L1022 (Phase 6 out-of-scope `arm_behavior_exhaustive`)
-- L1324 (Phase 7 target `source_diverges_gives_ArmDiverges_init`)
-- L2115 (Phase 6 out-of-scope `verifiedGenInstr_ifgoto_branch_bounded`)
+**Sorry count: 3.** All Phase 6 exhaustion, out of scope:
+- PipelineCorrectness.lean:770 (`bodyFlat_branch_target_bounded`)
+- PipelineCorrectness.lean:1022 (`arm_behavior_exhaustive`)
+- PipelineCorrectness.lean:2138 (`verifiedGenInstr_ifgoto_branch_bounded`)
 
-Build green. Phases A + B + C all done.
+Build green. **Phase 7 is done.**
 
-**Start with `lake build` — should finish green with 4 sorry warnings
-in ~25s.** Build green is the invariant throughout this session.
+**Next work (session 12): Phase 6 exhaustion**, or whatever the user
+directs. The three remaining sorries form a coupled ~700 LOC
+deliverable per earlier planning. Starting points:
+- `bodyFlat_branch_target_bounded` at PipelineCorrectness.lean:770
+- `arm_behavior_exhaustive` at PipelineCorrectness.lean:1022
+- `verifiedGenInstr_ifgoto_branch_bounded` at PipelineCorrectness.lean:2138
 
-**Phase C note (already done).** `ext_backward_simulation` at
-[ArmCorrectness.lean:6032](../CredibleCompilation/ArmCorrectness.lean#L6032)
-already has the Flavor A signature — returns the length-tracked
-`∃ s' k, ArmStepsN armProg s s' k ∧ (∀ pc' σ' am', cfg' = .run pc' σ' am' → k = instrs.length) ∧ ExtSimRel`
-tuple and directly delegates via term-mode to `verifiedGenInstr_correct`.
-Verified clean at the close of the refactor sub-session. No touch needed.
+These were left out of Phase 7's scope per the original Phase 7 planning
+(see CHANGELOG.md §Phase 6/7 session 5). They are independent of the
+length-tracked Flavor A chain that was just completed.
 
-**Session 11 starts Phase D: `step_simulation` in CodeGen.lean.**
-Find with `grep -n "^theorem step_simulation\|^private theorem step_simulation"
-CredibleCompilation/CodeGen.lean` (spec says ~line 4182, may have shifted).
-Per spec the body is already cascaded with the `ArmStepsN_to_ArmSteps`
-bridge at the one call site (CodeGen.lean ~5942) — minimal touch
-needed unless threading ArmStepsN through `step_simulation`'s signature
-itself (~80–120 LOC per spec).  **Full threading is the Flavor A target.**
+### Session 11 summary (Phase 7 completion)
 
-Phases E–H follow per spec. Phase H closes the target sorry at
-PipelineCorrectness.lean:1324.
+Landed commits:
+- `3745be1` — Phase D: step_simulation length-tracked (sig + 4 body refines).
+- `de509b3` — Phase E+F: tacToArm_refinement StepsN→ArmStepsN threading.
+- `58fad52` — Phase H: closed source_diverges_gives_ArmDiverges_init
+  via new tacToArm_correctness_N wrapper.
+
+Key additions:
+- `ArmSemantics.lean:ArmSteps_to_ArmStepsN_pos` — pc-distinctness bridge
+  for lifting ArmSteps to positive-length ArmStepsN.
+- `CodeGen.lean:tacToArm_correctness_N` — public length-tracked variant
+  of tacToArm_correctness for consumers needing the `n ≤ k` bound.
+
+See CHANGELOG.md §Phase 6/7 session 11 for details.
 
 ### Reference commits for session 10 + refactors
 
