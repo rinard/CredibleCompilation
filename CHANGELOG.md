@@ -55,7 +55,7 @@ a `Cfg.noConfusion` contradiction.
 PipelineCorrectness.lean):
 add cause-faithful pipeline-preservation helpers
 (`applyPass_preserves_errorDiv`/`Bounds`,
-`applyPassesPure_preserves_errorDiv`/`Bounds`).  Split
+`applyPasses_preserves_errorDiv`/`Bounds`).  Split
 `while_to_arm_error_source_side` into
 `while_to_arm_errorDiv_source_side` and `..._errorBounds_source_side`,
 each chaining cause-faithful preservation through the tightened
@@ -200,7 +200,7 @@ carries only the `RegConventionSafe` Prop form).
 
 Takes `hBranch : checkBranchTargets p.code = none` as an explicit hypothesis,
 not a spec field. Derived at the caller (next step) via
-`applyPassesPure_preserves_invariants`.
+`applyPasses_preserves_invariants`.
 
 Supporting helpers (new, in `Phase6Main` section):
 - `entriesToSaves_no_branches`, `entriesToRestores_no_branches` — induction
@@ -231,7 +231,7 @@ by induction on n with strengthened invariant `s.pc ≤ boundsS`:
   (≤ haltFinal ≤ boundsS) or a branch target bounded by
   `bodyFlat_branch_target_bounded`.
 
-`hBranch` derived via `applyPassesPure_preserves_invariants` starting from
+`hBranch` derived via `applyPasses_preserves_invariants` starting from
 `compileToTAC_checkBranchTargets`, mirroring `generateAsm_total_with_passes`.
 
 `ArmStep_pc_analysis` (new, ~20 LOC): every `ArmStep` either sets
@@ -262,7 +262,7 @@ other state updates (`setReg`, `setStack`, `setFReg`, `havocCallerSaved`,
 
 4. **Extracting `checkBranchTargets` from `hGen`**: instead of deriving via
    `hGen`'s split cascade, re-derive from scratch via
-   `compileToTAC_checkBranchTargets` + `applyPassesPure_preserves_invariants`.
+   `compileToTAC_checkBranchTargets` + `applyPasses_preserves_invariants`.
    Same proof `generateAsm_total_with_passes` uses.
 
 ### Verification
@@ -1645,8 +1645,8 @@ Next session picks up with Phase A (pivot) per NEXT-SESSION.md.
 - **`checkBranchTargets_to_labels_in_bounds`** (§ 8): bridge from `checkBranchTargets p.code = none` to `∀ pc < p.size, ∀ l, p[pc] = .goto l ∨ ∃ be, p[pc] = .ifgoto be l → l < p.size`.
 - **`haltFinal_ne_divS`, `haltFinal_ne_boundsS`, `divS_ne_boundsS`** (§ 8): sentinel distinctness, trivial by `omega` over spec equalities.
 - **`stepClosed_of_checkCertificateExec`** (§ 9): extracts `checkStepClosed cert.trans = true` from `checkCertificateExec cert = true` (condition 6).
-- **`applyPass_preserves_stepClosedInBounds`, `applyPassesPure_preserves_stepClosedInBounds`** (§ 9): Prop-form `StepClosedInBounds` preservation through certificate-checked passes. Parallel to the existing 4-invariant preservation.
-- **`pipelined_has_behavior`** (§ 9): `has_behavior` at the pipelined TAC level. Thin wrapper over `applyPassesPure_preserves_stepClosedInBounds` + existing `has_behavior`.
+- **`applyPass_preserves_stepClosedInBounds`, `applyPasses_preserves_stepClosedInBounds`** (§ 9): Prop-form `StepClosedInBounds` preservation through certificate-checked passes. Parallel to the existing 4-invariant preservation.
+- **`pipelined_has_behavior`** (§ 9): `has_behavior` at the pipelined TAC level. Thin wrapper over `applyPasses_preserves_stepClosedInBounds` + existing `has_behavior`.
 - **`pipelined_no_typeError`** (§ 9): pipelined TAC never reaches `Cfg.typeError`. Uses existing `type_safety` in TypeSystem.lean (confirmed shape via P3 probe).
 
 **Probe P2 — validated** (§ 10b Phase6Probes2):
@@ -2221,7 +2221,7 @@ Hence `ExtStateRel.setStack_fresh` applies and each individual save preserves `E
 - `RefCompiler/Correctness.lean`: `error_run_no_halt` generalized to take a `c_err : Cfg` with `c_err.isError` witness; `unsafe_binop_errors` now produces `.errorDiv`.
 - `RefCompiler/ErrorHandling.lean`: `compileExpr_stuck`, `compileBool_stuck`, `compileStmt_stuck`, `compileStmt_unsafe`, `compileExprs_unsafe` conclusions updated to `∃ ... c_err, ... Step ... c_err ∧ c_err.isError ∧ ...`. ~40 call sites mechanically updated to destructure/construct the extra `c_err` and `hisErr` fields.
 - `RefCompiler/Refinement.lean`: `program_behavior_init` errors clause switched to disjunction; `whileToTAC_reaches_error` returns `∃ c_err, c_err.isError ∧ reach`; `RefStepsN.no_step_error` generalized to `isError`; backward refinement's errors/typeErrors/diverges cases now destructure the disjunction/isError witness.
-- `PipelineCorrectness.lean`: `Step_of_code_arrayDecls_eq` renamed `error` arm; `applyPass_preserves_error_am`, `applyPassesPure_preserves_error_am`, `while_to_arm_error_preservation` all use the disjunction form (cause preserved across passes and compilation).
+- `PipelineCorrectness.lean`: `Step_of_code_arrayDecls_eq` renamed `error` arm; `applyPass_preserves_error_am`, `applyPasses_preserves_error_am`, `while_to_arm_error_preservation` all use the disjunction form (cause preserved across passes and compilation).
 - `ArmSemantics.lean`: `ExtSimRel` pattern-matches `.errorDiv` and `.errorBounds` distinctly (both currently `True`; Phase 4 tightens to `arm.pc = divS` / `arm.pc = boundsS`).
 - `ArmCorrectness.lean`: `verifiedGenInstr_correct`'s error arm renamed `error` → `binop_divByZero`.
 - `CodeGen.lean` + `ExecChecker.lean`: `step_run_or_terminal` and `observeExec` handle both new constructors.
@@ -2493,7 +2493,7 @@ The original variadic `print` constructor is still alive in TAC for backwards co
 
 ## Totality over the optimization pipeline (2026-04-19)
 
-**Goal:** Extend `generateAsm_total` to cover `applyPassesPure`, so we have a logical totality theorem for the full optimized codegen pipeline, not just the direct `compileToTAC` path.
+**Goal:** Extend `generateAsm_total` to cover `applyPasses`, so we have a logical totality theorem for the full optimized codegen pipeline, not just the direct `compileToTAC` path.
 
 **Key insight:** `checkCertificateExec` already verifies every codegen prerequisite on `cert.trans` — `checkWellTypedProg`, `checkCodegenPrereqs`, `checkSuccessorsInBounds`, `checkBoolExprSimpleOps`. And `applyPass_sound` gives `checkCertificateExec = true` whenever `applyPass` returns `.ok`. So invariants transfer across every successful pass; failed passes fall back to the input program, preserving the previous invariants.
 
@@ -2503,7 +2503,7 @@ The original variadic `print` constructor is still alive in TAC for backwards co
   - `checkSuccessorsInBounds_prog_of_exec`: bridge from the stricter exec-side check (verifies every successor of every instruction) to the codegen-facing prog-side check (goto/ifgoto targets only).
   - `invariants_of_checkCertificateExec`: right-to-left peel through 30 `Bool.and` conjuncts to extract the four needed invariants on `cert.trans`.
   - `applyPass_preserves_invariants`: invariants on `p'` after a successful pass, via `applyPass_sound`.
-  - `applyPassesPure_preserves_invariants`: list induction; `.error` branch is identity.
+  - `applyPasses_preserves_invariants`: list induction; `.error` branch is identity.
   - `generateAsm_total_with_passes`: main theorem, reuses `compileToTAC_*` lemmas as the induction base, then invokes `verifiedGenerateAsm_total`.
 
 **Result:** Logical totality over the full pipeline. 0 sorrys. ~110 lines in PipelineCorrectness, ~8-line refactor in CodeGen. Operational termination (partial defs in pass internals → fuel-bounded versions) remains a separate task.

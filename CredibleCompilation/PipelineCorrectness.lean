@@ -13,8 +13,8 @@ optimization passes. Each pass either succeeds (certificate validates) and
 transforms the program, or fails and leaves the program unchanged.
 
 ## Key theorems
-- `applyPassesPure_preserves_halt_am`: pipeline preserves halting behavior with AM
-- `applyPassesPure_preserves_error_am`: pipeline preserves error behavior with AM
+- `applyPasses_preserves_halt_am`: pipeline preserves halting behavior with AM
+- `applyPasses_preserves_error_am`: pipeline preserves error behavior with AM
 - `while_to_arm_correctness`: full While→ARM for halting programs
 - `while_to_arm_error_preservation`: full While→ARM for error programs
 - `while_to_arm_divergence_preservation`: full While→ARM for diverging programs
@@ -218,39 +218,39 @@ private theorem obs_preserved_by_pass (n : String) (tyCtx : TyCtx)
   rw [← hSameObs, hOrigObs]
 
 -- ============================================================
--- § 3. applyPassesPure: inductive soundness
+-- § 3. applyPasses: inductive soundness
 -- ============================================================
 
-/-- `applyPassesPure` preserves observable variables across all passes. -/
-theorem applyPassesPure_obs_eq (tyCtx : TyCtx)
+/-- `applyPasses` preserves observable variables across all passes. -/
+theorem applyPasses_obs_eq (tyCtx : TyCtx)
     (passes : List (String × (Prog → ECertificate)))
     (p : Prog) :
-    (applyPassesPure tyCtx passes p).observable = p.observable := by
+    (applyPasses tyCtx passes p).observable = p.observable := by
   induction passes generalizing p with
   | nil => rfl
   | cons np rest ih =>
-    simp only [applyPassesPure]
+    simp only [applyPasses]
     obtain ⟨name, pass⟩ := np
     split
     · rename_i p' hap; rw [ih _, obs_preserved_by_pass name tyCtx pass p p' hap]
     · exact ih _
 
-/-- `applyPassesPure` preserves halting behavior with fixed initial AM.
+/-- `applyPasses` preserves halting behavior with fixed initial AM.
     `applyPass` enforces tyCtx on each certificate, so TypedStore is preserved
     without requiring any assumption on the passes. -/
-theorem applyPassesPure_preserves_halt_am (tyCtx : TyCtx)
+theorem applyPasses_preserves_halt_am (tyCtx : TyCtx)
     (passes : List (String × (Prog → ECertificate)))
     (σ₀ : Store) (hts : TypedStore tyCtx σ₀)
     {σ' : Store} {am₀ am' : ArrayMem}
-    (hHalt : haltsWithResult (applyPassesPure tyCtx passes p) 0 σ₀ σ' am₀ am') :
+    (hHalt : haltsWithResult (applyPasses tyCtx passes p) 0 σ₀ σ' am₀ am') :
     ∃ σ_orig, haltsWithResult p 0 σ₀ σ_orig am₀ am' ∧
       ∀ v ∈ p.observable, σ' v = σ_orig v := by
   induction passes generalizing p σ' am' with
   | nil =>
-    simp [applyPassesPure] at hHalt
+    simp [applyPasses] at hHalt
     exact ⟨σ', hHalt, fun _ _ => rfl⟩
   | cons np rest ih =>
-    simp only [applyPassesPure] at hHalt
+    simp only [applyPasses] at hHalt
     obtain ⟨name, pass⟩ := np
     split at hHalt
     · -- Pass succeeded
@@ -264,24 +264,24 @@ theorem applyPassesPure_preserves_halt_am (tyCtx : TyCtx)
     · -- Pass failed: identity
       exact ih hHalt
 
-/-- `applyPassesPure` preserves error behavior with fixed initial AM.
+/-- `applyPasses` preserves error behavior with fixed initial AM.
     Cause is preserved: div-by-zero stays div-by-zero, bounds stays bounds. -/
-theorem applyPassesPure_preserves_error_am (tyCtx : TyCtx)
+theorem applyPasses_preserves_error_am (tyCtx : TyCtx)
     (passes : List (String × (Prog → ECertificate)))
     (σ₀ : Store) (hts : TypedStore tyCtx σ₀)
     {σ' : Store} {am₀ am' : ArrayMem}
-    (hErr : ((applyPassesPure tyCtx passes p) ⊩ Cfg.run 0 σ₀ am₀ ⟶* Cfg.errorDiv σ' am') ∨
-            ((applyPassesPure tyCtx passes p) ⊩ Cfg.run 0 σ₀ am₀ ⟶* Cfg.errorBounds σ' am')) :
+    (hErr : ((applyPasses tyCtx passes p) ⊩ Cfg.run 0 σ₀ am₀ ⟶* Cfg.errorDiv σ' am') ∨
+            ((applyPasses tyCtx passes p) ⊩ Cfg.run 0 σ₀ am₀ ⟶* Cfg.errorBounds σ' am')) :
     ∃ σ_o am_o', (p ⊩ Cfg.run 0 σ₀ am₀ ⟶* Cfg.errorDiv σ_o am_o') ∨
                  (p ⊩ Cfg.run 0 σ₀ am₀ ⟶* Cfg.errorBounds σ_o am_o') := by
   induction passes generalizing p σ' am' with
   | nil =>
-    simp [applyPassesPure] at hErr
+    simp [applyPasses] at hErr
     rcases hErr with hd | hb
     · exact ⟨σ', am', .inl hd⟩
     · exact ⟨σ', am', .inr hb⟩
   | cons np rest ih =>
-    simp only [applyPassesPure] at hErr
+    simp only [applyPasses] at hErr
     obtain ⟨name, pass⟩ := np
     split at hErr
     · rename_i p' hap
@@ -331,19 +331,19 @@ private theorem applyPass_preserves_errorBounds {name : String} {tyCtx : TyCtx}
   have hOA : (toPCertificate cert).orig.arrayDecls = p.arrayDecls := by simp [toPCertificate]; exact hOrigArr
   exact ⟨σ_o, am_f, Steps_of_code_arrayDecls_eq hOC hOA herr_orig⟩
 
-/-- Cause-faithful version: `applyPassesPure` preserves `errorDiv` specifically. -/
-theorem applyPassesPure_preserves_errorDiv (tyCtx : TyCtx)
+/-- Cause-faithful version: `applyPasses` preserves `errorDiv` specifically. -/
+theorem applyPasses_preserves_errorDiv (tyCtx : TyCtx)
     (passes : List (String × (Prog → ECertificate)))
     (σ₀ : Store) (hts : TypedStore tyCtx σ₀)
     {σ' : Store} {am₀ am' : ArrayMem}
-    (hErr : (applyPassesPure tyCtx passes p) ⊩ Cfg.run 0 σ₀ am₀ ⟶* Cfg.errorDiv σ' am') :
+    (hErr : (applyPasses tyCtx passes p) ⊩ Cfg.run 0 σ₀ am₀ ⟶* Cfg.errorDiv σ' am') :
     ∃ σ_o am_o', p ⊩ Cfg.run 0 σ₀ am₀ ⟶* Cfg.errorDiv σ_o am_o' := by
   induction passes generalizing p σ' am' with
   | nil =>
-    simp [applyPassesPure] at hErr
+    simp [applyPasses] at hErr
     exact ⟨σ', am', hErr⟩
   | cons np rest ih =>
-    simp only [applyPassesPure] at hErr
+    simp only [applyPasses] at hErr
     obtain ⟨name, pass⟩ := np
     split at hErr
     · rename_i p' hap
@@ -351,19 +351,19 @@ theorem applyPassesPure_preserves_errorDiv (tyCtx : TyCtx)
       exact applyPass_preserves_errorDiv hap σ₀ hts hErr_mid
     · exact ih hErr
 
-/-- Cause-faithful version: `applyPassesPure` preserves `errorBounds` specifically. -/
-theorem applyPassesPure_preserves_errorBounds (tyCtx : TyCtx)
+/-- Cause-faithful version: `applyPasses` preserves `errorBounds` specifically. -/
+theorem applyPasses_preserves_errorBounds (tyCtx : TyCtx)
     (passes : List (String × (Prog → ECertificate)))
     (σ₀ : Store) (hts : TypedStore tyCtx σ₀)
     {σ' : Store} {am₀ am' : ArrayMem}
-    (hErr : (applyPassesPure tyCtx passes p) ⊩ Cfg.run 0 σ₀ am₀ ⟶* Cfg.errorBounds σ' am') :
+    (hErr : (applyPasses tyCtx passes p) ⊩ Cfg.run 0 σ₀ am₀ ⟶* Cfg.errorBounds σ' am') :
     ∃ σ_o am_o', p ⊩ Cfg.run 0 σ₀ am₀ ⟶* Cfg.errorBounds σ_o am_o' := by
   induction passes generalizing p σ' am' with
   | nil =>
-    simp [applyPassesPure] at hErr
+    simp [applyPasses] at hErr
     exact ⟨σ', am', hErr⟩
   | cons np rest ih =>
-    simp only [applyPassesPure] at hErr
+    simp only [applyPasses] at hErr
     obtain ⟨name, pass⟩ := np
     split at hErr
     · rename_i p' hap
@@ -371,20 +371,20 @@ theorem applyPassesPure_preserves_errorBounds (tyCtx : TyCtx)
       exact applyPass_preserves_errorBounds hap σ₀ hts hErr_mid
     · exact ih hErr
 
-/-- `applyPassesPure` preserves divergence. -/
-theorem applyPassesPure_preserves_diverge (tyCtx : TyCtx)
+/-- `applyPasses` preserves divergence. -/
+theorem applyPasses_preserves_diverge (tyCtx : TyCtx)
     (passes : List (String × (Prog → ECertificate)))
     (σ₀ : Store) (hts : TypedStore tyCtx σ₀)
     {f : Nat → Cfg}
-    (hinf : IsInfiniteExec (applyPassesPure tyCtx passes p) f)
+    (hinf : IsInfiniteExec (applyPasses tyCtx passes p) f)
     (hf0 : f 0 = Cfg.run 0 σ₀ ArrayMem.init) :
     ∃ g, IsInfiniteExec p g ∧ g 0 = Cfg.run 0 σ₀ ArrayMem.init := by
   induction passes generalizing p f with
   | nil =>
-    simp [applyPassesPure] at hinf
+    simp [applyPasses] at hinf
     exact ⟨f, hinf, hf0⟩
   | cons np rest ih =>
-    simp only [applyPassesPure] at hinf
+    simp only [applyPasses] at hinf
     obtain ⟨name, pass⟩ := np
     split at hinf
     · rename_i p' hap
@@ -420,9 +420,9 @@ theorem while_to_arm_correctness
     (prog : Program) (htcs : prog.wellFormed = true)
     (passes : List (String × (Prog → ECertificate)))
     {r : VerifiedAsmResult}
-    (hGen : verifiedGenerateAsm prog.tyCtx (applyPassesPure prog.tyCtx passes prog.compileToTAC) = .ok r)
+    (hGen : verifiedGenerateAsm prog.tyCtx (applyPasses prog.tyCtx passes prog.compileToTAC) = .ok r)
     {σ_opt : Store} {am_opt : ArrayMem}
-    (hHalt : haltsWithResult (applyPassesPure prog.tyCtx passes prog.compileToTAC) 0
+    (hHalt : haltsWithResult (applyPasses prog.tyCtx passes prog.compileToTAC) 0
       (Store.typedInit prog.tyCtx) σ_opt ArrayMem.init am_opt) :
     ∃ fuel σ_src am_src s',
       prog.interp fuel = some (σ_src, am_src) ∧
@@ -441,7 +441,7 @@ theorem while_to_arm_correctness
   have hAmRel : s'.arrayMem = am_opt := hSimRel.2
   -- Pipeline → original TAC halts with same final AM
   obtain ⟨σ_tac, hHalt_tac, hobs_tac⟩ :=
-    applyPassesPure_preserves_halt_am prog.tyCtx passes _ hts hHalt
+    applyPasses_preserves_halt_am prog.tyCtx passes _ hts hHalt
   have hHalt_init : haltsWithResult prog.compileToTAC 0 prog.initStore σ_tac ArrayMem.init am_opt :=
     hInitEq ▸ hHalt_tac
   have hbeh_tac : program_behavior_init prog.compileToTAC prog.initStore (.halts σ_tac) :=
@@ -452,7 +452,7 @@ theorem while_to_arm_correctness
   have ham_opt : am_h = am_opt := (haltsWithResult_unique hHalt_tac2 hHalt_init).2
   have hnt : Program.noTmpDecls prog.decls = true := by
     unfold Program.typeCheck at htc; simp only [Bool.and_eq_true] at htc; exact htc.1.2
-  have hobs_eq := applyPassesPure_obs_eq prog.tyCtx passes prog.compileToTAC
+  have hobs_eq := applyPasses_obs_eq prog.tyCtx passes prog.compileToTAC
   have hobs_match : ∀ v ∈ prog.compileToTAC.observable, σ_opt v = σ_src v := by
     intro v hv
     rw [hobs_tac v (hobs_eq ▸ hv)]
@@ -483,7 +483,7 @@ private theorem while_to_arm_errorDiv_source_side
     (prog : Program) (htcs : prog.wellFormed = true)
     (passes : List (String × (Prog → ECertificate)))
     {σ_err : Store} {am_err : ArrayMem}
-    (hErr : (applyPassesPure prog.tyCtx passes prog.compileToTAC) ⊩
+    (hErr : (applyPasses prog.tyCtx passes prog.compileToTAC) ⊩
         Cfg.run 0 (Store.typedInit prog.tyCtx) ArrayMem.init ⟶* Cfg.errorDiv σ_err am_err) :
     ∃ fuel, prog.body.unsafeDiv fuel prog.initStore ArrayMem.init prog.arrayDecls := by
   have htc := Program.wellFormed_typeCheck prog htcs
@@ -491,7 +491,7 @@ private theorem while_to_arm_errorDiv_source_side
     Program.typedInit_eq_initStore prog htc
   have hts : TypedStore prog.tyCtx (Store.typedInit prog.tyCtx) := TypedStore.typedInit _
   obtain ⟨σ_o, am_o', hErr_tac⟩ :=
-    applyPassesPure_preserves_errorDiv prog.tyCtx passes _ hts hErr
+    applyPasses_preserves_errorDiv prog.tyCtx passes _ hts hErr
   have hErr_init : program_behavior_init prog.compileToTAC prog.initStore (.errorDiv σ_o) :=
     ⟨am_o', hInitEq ▸ hErr_tac⟩
   exact whileToTAC_refinement prog htcs (.errorDiv σ_o) hErr_init
@@ -501,7 +501,7 @@ private theorem while_to_arm_errorBounds_source_side
     (prog : Program) (htcs : prog.wellFormed = true)
     (passes : List (String × (Prog → ECertificate)))
     {σ_err : Store} {am_err : ArrayMem}
-    (hErr : (applyPassesPure prog.tyCtx passes prog.compileToTAC) ⊩
+    (hErr : (applyPasses prog.tyCtx passes prog.compileToTAC) ⊩
         Cfg.run 0 (Store.typedInit prog.tyCtx) ArrayMem.init ⟶* Cfg.errorBounds σ_err am_err) :
     ∃ fuel, prog.body.unsafeBounds fuel prog.initStore ArrayMem.init prog.arrayDecls := by
   have htc := Program.wellFormed_typeCheck prog htcs
@@ -509,7 +509,7 @@ private theorem while_to_arm_errorBounds_source_side
     Program.typedInit_eq_initStore prog htc
   have hts : TypedStore prog.tyCtx (Store.typedInit prog.tyCtx) := TypedStore.typedInit _
   obtain ⟨σ_o, am_o', hErr_tac⟩ :=
-    applyPassesPure_preserves_errorBounds prog.tyCtx passes _ hts hErr
+    applyPasses_preserves_errorBounds prog.tyCtx passes _ hts hErr
   have hErr_init : program_behavior_init prog.compileToTAC prog.initStore (.errorBounds σ_o) :=
     ⟨am_o', hInitEq ▸ hErr_tac⟩
   exact whileToTAC_refinement prog htcs (.errorBounds σ_o) hErr_init
@@ -524,9 +524,9 @@ theorem while_to_arm_div_preservation
     (prog : Program) (htcs : prog.wellFormed = true)
     (passes : List (String × (Prog → ECertificate)))
     {r : VerifiedAsmResult}
-    (hGen : verifiedGenerateAsm prog.tyCtx (applyPassesPure prog.tyCtx passes prog.compileToTAC) = .ok r)
+    (hGen : verifiedGenerateAsm prog.tyCtx (applyPasses prog.tyCtx passes prog.compileToTAC) = .ok r)
     {σ_err : Store} {am_err : ArrayMem}
-    (hErr : (applyPassesPure prog.tyCtx passes prog.compileToTAC) ⊩
+    (hErr : (applyPasses prog.tyCtx passes prog.compileToTAC) ⊩
       Cfg.run 0 (Store.typedInit prog.tyCtx)
         ArrayMem.init ⟶* Cfg.errorDiv σ_err am_err) :
     (∃ fuel, prog.body.unsafeDiv fuel prog.initStore ArrayMem.init prog.arrayDecls) ∧
@@ -543,9 +543,9 @@ theorem while_to_arm_bounds_preservation
     (prog : Program) (htcs : prog.wellFormed = true)
     (passes : List (String × (Prog → ECertificate)))
     {r : VerifiedAsmResult}
-    (hGen : verifiedGenerateAsm prog.tyCtx (applyPassesPure prog.tyCtx passes prog.compileToTAC) = .ok r)
+    (hGen : verifiedGenerateAsm prog.tyCtx (applyPasses prog.tyCtx passes prog.compileToTAC) = .ok r)
     {σ_err : Store} {am_err : ArrayMem}
-    (hErr : (applyPassesPure prog.tyCtx passes prog.compileToTAC) ⊩
+    (hErr : (applyPasses prog.tyCtx passes prog.compileToTAC) ⊩
       Cfg.run 0 (Store.typedInit prog.tyCtx)
         ArrayMem.init ⟶* Cfg.errorBounds σ_err am_err) :
     (∃ fuel, prog.body.unsafeBounds fuel prog.initStore ArrayMem.init prog.arrayDecls) ∧
@@ -569,7 +569,7 @@ theorem while_to_arm_divergence_preservation
     (prog : Program) (htcs : prog.wellFormed = true)
     (passes : List (String × (Prog → ECertificate)))
     {f : Nat → Cfg}
-    (hDiv : IsInfiniteExec (applyPassesPure prog.tyCtx passes prog.compileToTAC) f)
+    (hDiv : IsInfiniteExec (applyPasses prog.tyCtx passes prog.compileToTAC) f)
     (hf0 : f 0 = Cfg.run 0 (Store.typedInit prog.tyCtx) ArrayMem.init) :
     ∀ fuel, prog.interp fuel = none := by
   have htc := Program.wellFormed_typeCheck prog htcs
@@ -577,7 +577,7 @@ theorem while_to_arm_divergence_preservation
     Program.typedInit_eq_initStore prog htc
   have hts : TypedStore prog.tyCtx (Store.typedInit prog.tyCtx) := TypedStore.typedInit _
   obtain ⟨g, hg, hg0⟩ :=
-    applyPassesPure_preserves_diverge prog.tyCtx passes _ hts hDiv hf0
+    applyPasses_preserves_diverge prog.tyCtx passes _ hts hDiv hf0
   have hdiv_init : program_behavior_init prog.compileToTAC prog.initStore .diverges :=
     ⟨g, hg, hInitEq ▸ hg0⟩
   exact whileToTAC_refinement prog htcs .diverges hdiv_init
@@ -676,24 +676,24 @@ theorem applyPass_preserves_invariants {name : String} {tyCtx : TyCtx}
   simp only [hTrans] at hWT hPrereqs hBranch hSimple
   exact ⟨hWT, hPrereqs, hBranch, hSimple⟩
 
-/-- `applyPassesPure` preserves the four codegen invariants. Either a pass
+/-- `applyPasses` preserves the four codegen invariants. Either a pass
     succeeds (and `applyPass_preserves_invariants` transfers them to the new
     program) or fails (and the program is unchanged). -/
-theorem applyPassesPure_preserves_invariants (tyCtx : TyCtx)
+theorem applyPasses_preserves_invariants (tyCtx : TyCtx)
     (passes : List (String × (Prog → ECertificate)))
     (p : Prog)
     (hWT : checkWellTypedProg tyCtx p = true)
     (hPrereqs : checkCodegenPrereqs tyCtx p = true)
     (hBranch : checkBranchTargets p.code = none)
     (hSimple : checkBoolExprSimpleOps p = true) :
-    checkWellTypedProg tyCtx (applyPassesPure tyCtx passes p) = true ∧
-    checkCodegenPrereqs tyCtx (applyPassesPure tyCtx passes p) = true ∧
-    checkBranchTargets (applyPassesPure tyCtx passes p).code = none ∧
-    checkBoolExprSimpleOps (applyPassesPure tyCtx passes p) = true := by
+    checkWellTypedProg tyCtx (applyPasses tyCtx passes p) = true ∧
+    checkCodegenPrereqs tyCtx (applyPasses tyCtx passes p) = true ∧
+    checkBranchTargets (applyPasses tyCtx passes p).code = none ∧
+    checkBoolExprSimpleOps (applyPasses tyCtx passes p) = true := by
   induction passes generalizing p with
-  | nil => simp [applyPassesPure]; exact ⟨hWT, hPrereqs, hBranch, hSimple⟩
+  | nil => simp [applyPasses]; exact ⟨hWT, hPrereqs, hBranch, hSimple⟩
   | cons np rest ih =>
-    simp only [applyPassesPure]
+    simp only [applyPasses]
     obtain ⟨name, pass⟩ := np
     split
     · rename_i p' hap
@@ -709,7 +709,7 @@ theorem applyPassesPure_preserves_invariants (tyCtx : TyCtx)
 theorem generateAsm_total_with_passes (prog : Program) (htcs : prog.wellFormed = true)
     (passes : List (String × (Prog → ECertificate))) :
     ∃ asm, verifiedGenerateAsm prog.tyCtx
-      (applyPassesPure prog.tyCtx passes prog.compileToTAC) = .ok asm := by
+      (applyPasses prog.tyCtx passes prog.compileToTAC) = .ok asm := by
   have htc := prog.wellFormed_typeCheck htcs
   have hWT0 : checkWellTypedProg prog.tyCtx prog.compileToTAC = true :=
     checkWellTypedProg_complete (prog.compileToTAC_wellTyped htc)
@@ -717,12 +717,12 @@ theorem generateAsm_total_with_passes (prog : Program) (htcs : prog.wellFormed =
   have hBranch0 := compileToTAC_checkBranchTargets prog
   have hSimple0 := compileToTAC_checkBoolExprSimpleOps prog
   obtain ⟨hWT, hPrereqs, hBranch, hSimple⟩ :=
-    applyPassesPure_preserves_invariants prog.tyCtx passes prog.compileToTAC
+    applyPasses_preserves_invariants prog.tyCtx passes prog.compileToTAC
       hWT0 hPrereqs0 hBranch0 hSimple0
   exact verifiedGenerateAsm_total prog.tyCtx _ hWT hPrereqs hBranch hSimple
 
 /-- End-to-end totality on the no-optimization path. Corollary of
-    `generateAsm_total_with_passes` at `passes = []`, where `applyPassesPure`
+    `generateAsm_total_with_passes` at `passes = []`, where `applyPasses`
     is the identity definitionally. -/
 theorem generateAsm_total (prog : Program) (htcs : prog.wellFormed = true) :
     ∃ asm, verifiedGenerateAsm prog.tyCtx prog.compileToTAC = .ok asm :=
@@ -1134,15 +1134,15 @@ theorem applyPass_preserves_stepClosedInBounds {name : String} {tyCtx : TyCtx}
   simp only [hTrans] at hSC
   exact checkStepClosed_sound hSC
 
-/-- `applyPassesPure` preserves `StepClosedInBounds` (Prop form). -/
-theorem applyPassesPure_preserves_stepClosedInBounds (tyCtx : TyCtx)
+/-- `applyPasses` preserves `StepClosedInBounds` (Prop form). -/
+theorem applyPasses_preserves_stepClosedInBounds (tyCtx : TyCtx)
     (passes : List (String × (Prog → ECertificate)))
     (p : Prog) (hSC : StepClosedInBounds p) :
-    StepClosedInBounds (applyPassesPure tyCtx passes p) := by
+    StepClosedInBounds (applyPasses tyCtx passes p) := by
   induction passes generalizing p with
-  | nil => simp [applyPassesPure]; exact hSC
+  | nil => simp [applyPasses]; exact hSC
   | cons np rest ih =>
-    simp only [applyPassesPure]
+    simp only [applyPasses]
     obtain ⟨name, pass⟩ := np
     split
     · rename_i p' hap
@@ -1151,30 +1151,30 @@ theorem applyPassesPure_preserves_stepClosedInBounds (tyCtx : TyCtx)
 
 /-- **Phase 7 helper: pipelined TAC has a well-defined behavior.**
     Pushes `compileToTAC_stepClosed` through the passes via
-    `applyPassesPure_preserves_stepClosedInBounds`, then appeals to
+    `applyPasses_preserves_stepClosedInBounds`, then appeals to
     `has_behavior`. -/
 theorem pipelined_has_behavior
     (prog : Program) (htcs : prog.wellFormed = true)
     (passes : List (String × (Prog → ECertificate)))
     (σ₀ : Store) :
     ∃ b, program_behavior
-      (applyPassesPure prog.tyCtx passes prog.compileToTAC) σ₀ b := by
+      (applyPasses prog.tyCtx passes prog.compileToTAC) σ₀ b := by
   have htc := prog.wellFormed_typeCheck htcs
   have hSC0 : StepClosedInBounds prog.compileToTAC :=
     prog.compileToTAC_stepClosed htc
-  have hSC := applyPassesPure_preserves_stepClosedInBounds prog.tyCtx passes _ hSC0
+  have hSC := applyPasses_preserves_stepClosedInBounds prog.tyCtx passes _ hSC0
   exact has_behavior _ σ₀ hSC
 
 /-- **Phase 7 helper: pipelined TAC does not reach `typeError`.**
     Well-typedness is preserved through passes (from
-    `applyPassesPure_preserves_invariants`), `StepClosedInBounds`
-    through `applyPassesPure_preserves_stepClosedInBounds`, and
+    `applyPasses_preserves_invariants`), `StepClosedInBounds`
+    through `applyPasses_preserves_stepClosedInBounds`, and
     `type_safety` in TypeSystem.lean excludes `typeError` at runtime. -/
 theorem pipelined_no_typeError
     (prog : Program) (htcs : prog.wellFormed = true)
     (passes : List (String × (Prog → ECertificate)))
     (σ' : Store) (am' : ArrayMem) :
-    ¬ ((applyPassesPure prog.tyCtx passes prog.compileToTAC) ⊩
+    ¬ ((applyPasses prog.tyCtx passes prog.compileToTAC) ⊩
         Cfg.run 0 (Store.typedInit prog.tyCtx) ArrayMem.init ⟶* Cfg.typeError σ' am') := by
   have htc := prog.wellFormed_typeCheck htcs
   have hWT0 : checkWellTypedProg prog.tyCtx prog.compileToTAC = true :=
@@ -1183,12 +1183,12 @@ theorem pipelined_no_typeError
   have hBranch0 := compileToTAC_checkBranchTargets prog
   have hSimple0 := compileToTAC_checkBoolExprSimpleOps prog
   obtain ⟨hWT, _, _, _⟩ :=
-    applyPassesPure_preserves_invariants prog.tyCtx passes prog.compileToTAC
+    applyPasses_preserves_invariants prog.tyCtx passes prog.compileToTAC
       hWT0 hPrereqs0 hBranch0 hSimple0
-  have hWTP : WellTypedProg prog.tyCtx (applyPassesPure prog.tyCtx passes prog.compileToTAC) :=
+  have hWTP : WellTypedProg prog.tyCtx (applyPasses prog.tyCtx passes prog.compileToTAC) :=
     checkWellTypedProg_sound hWT
-  have hSC : StepClosedInBounds (applyPassesPure prog.tyCtx passes prog.compileToTAC) :=
-    applyPassesPure_preserves_stepClosedInBounds prog.tyCtx passes _
+  have hSC : StepClosedInBounds (applyPasses prog.tyCtx passes prog.compileToTAC) :=
+    applyPasses_preserves_stepClosedInBounds prog.tyCtx passes _
       (prog.compileToTAC_stepClosed htc)
   have hts : TypedStore prog.tyCtx (Store.typedInit prog.tyCtx) := TypedStore.typedInit _
   exact type_safety hWTP hts hSC
@@ -1369,14 +1369,14 @@ private theorem source_diverges_gives_ArmDiverges_init
     (passes : List (String × (Prog → ECertificate)))
     {r : VerifiedAsmResult}
     (hGen : verifiedGenerateAsm prog.tyCtx
-      (applyPassesPure prog.tyCtx passes prog.compileToTAC) = .ok r)
+      (applyPasses prog.tyCtx passes prog.compileToTAC) = .ok r)
     {f : Nat → Cfg}
-    (hinf : IsInfiniteExec (applyPassesPure prog.tyCtx passes prog.compileToTAC) f)
+    (hinf : IsInfiniteExec (applyPasses prog.tyCtx passes prog.compileToTAC) f)
     (hf0 : f 0 = Cfg.run 0 prog.initStore ArrayMem.init) :
     ArmDiverges r.bodyFlat (Phase6.initArmState r) := by
   intro N
   -- StepsN of any length extracted from IsInfiniteExec by induction
-  have hStepsN_any : ∀ k, StepsN (applyPassesPure prog.tyCtx passes prog.compileToTAC)
+  have hStepsN_any : ∀ k, StepsN (applyPasses prog.tyCtx passes prog.compileToTAC)
       (f 0) (f k) k := by
     intro k
     induction k with
@@ -1410,7 +1410,7 @@ theorem halt_state_observables_deterministic
     (passes : List (String × (Prog → ECertificate)))
     {r : VerifiedAsmResult}
     (hGen : verifiedGenerateAsm prog.tyCtx
-      (applyPassesPure prog.tyCtx passes prog.compileToTAC) = .ok r)
+      (applyPasses prog.tyCtx passes prog.compileToTAC) = .ok r)
     {s₁ s₂ : ArmState}
     (h₁ : ArmSteps r.bodyFlat (Phase6.initArmState r) s₁) (hPC₁ : s₁.pc = r.haltFinal)
     (h₂ : ArmSteps r.bodyFlat (Phase6.initArmState r) s₂) (hPC₂ : s₂.pc = r.haltFinal) :
@@ -1468,7 +1468,7 @@ theorem arm_halts_implies_while_halts
     (passes : List (String × (Prog → ECertificate)))
     {r : VerifiedAsmResult}
     (hGen : verifiedGenerateAsm prog.tyCtx
-      (applyPassesPure prog.tyCtx passes prog.compileToTAC) = .ok r)
+      (applyPasses prog.tyCtx passes prog.compileToTAC) = .ok r)
     {s : ArmState}
     (hArm : ArmSteps r.bodyFlat (Phase6.initArmState r) s)
     (hPC : s.pc = r.haltFinal) :
@@ -1476,8 +1476,8 @@ theorem arm_halts_implies_while_halts
       prog.interp fuel = some (σ_src, am_src) ∧
       ArmMatchesWhile r.layout prog.compileToTAC.observable σ_src am_src s := by
   have htc := prog.wellFormed_typeCheck htcs
-  have hSC : StepClosedInBounds (applyPassesPure prog.tyCtx passes prog.compileToTAC) :=
-    applyPassesPure_preserves_stepClosedInBounds prog.tyCtx passes _
+  have hSC : StepClosedInBounds (applyPasses prog.tyCtx passes prog.compileToTAC) :=
+    applyPasses_preserves_stepClosedInBounds prog.tyCtx passes _
       (prog.compileToTAC_stepClosed htc)
   have spec := verifiedGenerateAsm_spec hGen
   obtain ⟨b, hbeh⟩ := has_behavior_init _ (Store.typedInit prog.tyCtx) hSC
@@ -1538,14 +1538,14 @@ theorem arm_div_implies_while_unsafe_div
     (passes : List (String × (Prog → ECertificate)))
     {r : VerifiedAsmResult}
     (hGen : verifiedGenerateAsm prog.tyCtx
-      (applyPassesPure prog.tyCtx passes prog.compileToTAC) = .ok r)
+      (applyPasses prog.tyCtx passes prog.compileToTAC) = .ok r)
     {s : ArmState}
     (hArm : ArmSteps r.bodyFlat (Phase6.initArmState r) s)
     (hPC : s.pc = r.divS) :
     ∃ fuel, prog.body.unsafeDiv fuel prog.initStore ArrayMem.init prog.arrayDecls := by
   have htc := prog.wellFormed_typeCheck htcs
-  have hSC : StepClosedInBounds (applyPassesPure prog.tyCtx passes prog.compileToTAC) :=
-    applyPassesPure_preserves_stepClosedInBounds prog.tyCtx passes _
+  have hSC : StepClosedInBounds (applyPasses prog.tyCtx passes prog.compileToTAC) :=
+    applyPasses_preserves_stepClosedInBounds prog.tyCtx passes _
       (prog.compileToTAC_stepClosed htc)
   have spec := verifiedGenerateAsm_spec hGen
   obtain ⟨b, hbeh⟩ := has_behavior_init _ (Store.typedInit prog.tyCtx) hSC
@@ -1599,14 +1599,14 @@ theorem arm_bounds_implies_while_unsafe_bounds
     (passes : List (String × (Prog → ECertificate)))
     {r : VerifiedAsmResult}
     (hGen : verifiedGenerateAsm prog.tyCtx
-      (applyPassesPure prog.tyCtx passes prog.compileToTAC) = .ok r)
+      (applyPasses prog.tyCtx passes prog.compileToTAC) = .ok r)
     {s : ArmState}
     (hArm : ArmSteps r.bodyFlat (Phase6.initArmState r) s)
     (hPC : s.pc = r.boundsS) :
     ∃ fuel, prog.body.unsafeBounds fuel prog.initStore ArrayMem.init prog.arrayDecls := by
   have htc := prog.wellFormed_typeCheck htcs
-  have hSC : StepClosedInBounds (applyPassesPure prog.tyCtx passes prog.compileToTAC) :=
-    applyPassesPure_preserves_stepClosedInBounds prog.tyCtx passes _
+  have hSC : StepClosedInBounds (applyPasses prog.tyCtx passes prog.compileToTAC) :=
+    applyPasses_preserves_stepClosedInBounds prog.tyCtx passes _
       (prog.compileToTAC_stepClosed htc)
   have spec := verifiedGenerateAsm_spec hGen
   obtain ⟨b, hbeh⟩ := has_behavior_init _ (Store.typedInit prog.tyCtx) hSC
@@ -1669,14 +1669,14 @@ theorem arm_diverges_implies_while_diverges
     (passes : List (String × (Prog → ECertificate)))
     {r : VerifiedAsmResult}
     (hGen : verifiedGenerateAsm prog.tyCtx
-      (applyPassesPure prog.tyCtx passes prog.compileToTAC) = .ok r)
+      (applyPasses prog.tyCtx passes prog.compileToTAC) = .ok r)
     (hDiv : ArmDiverges r.bodyFlat (Phase6.initArmState r)) :
     ∀ fuel, prog.interp fuel = none := by
   have htc := prog.wellFormed_typeCheck htcs
   have hInitEq : Store.typedInit prog.tyCtx = prog.initStore :=
     Program.typedInit_eq_initStore prog htc
-  have hSC : StepClosedInBounds (applyPassesPure prog.tyCtx passes prog.compileToTAC) :=
-    applyPassesPure_preserves_stepClosedInBounds prog.tyCtx passes _
+  have hSC : StepClosedInBounds (applyPasses prog.tyCtx passes prog.compileToTAC) :=
+    applyPasses_preserves_stepClosedInBounds prog.tyCtx passes _
       (prog.compileToTAC_stepClosed htc)
   have spec := verifiedGenerateAsm_spec hGen
   -- Helper: contradict any `ArmSteps init s_sent` ending at a sentinel PC via
@@ -3767,13 +3767,13 @@ theorem arm_behavior_exhaustive
     (passes : List (String × (Prog → ECertificate)))
     {r : VerifiedAsmResult}
     (hGen : verifiedGenerateAsm prog.tyCtx
-      (applyPassesPure prog.tyCtx passes prog.compileToTAC) = .ok r) :
+      (applyPasses prog.tyCtx passes prog.compileToTAC) = .ok r) :
     (∃ s', ArmSteps r.bodyFlat (Phase6.initArmState r) s' ∧ s'.pc = r.haltFinal) ∨
     (∃ s', ArmSteps r.bodyFlat (Phase6.initArmState r) s' ∧ s'.pc = r.divS) ∨
     (∃ s', ArmSteps r.bodyFlat (Phase6.initArmState r) s' ∧ s'.pc = r.boundsS) ∨
     ArmDiverges r.bodyFlat (Phase6.initArmState r) := by
   classical
-  set p := applyPassesPure prog.tyCtx passes prog.compileToTAC with hp_def
+  set p := applyPasses prog.tyCtx passes prog.compileToTAC with hp_def
   -- Extract GenAsmSpec
   have spec : GenAsmSpec prog.tyCtx p r := verifiedGenerateAsm_spec hGen
   -- Extract `checkBranchTargets p.code = none` via pipeline invariant preservation
@@ -3784,7 +3784,7 @@ theorem arm_behavior_exhaustive
   have hBranch0 := compileToTAC_checkBranchTargets prog
   have hSimple0 := compileToTAC_checkBoolExprSimpleOps prog
   obtain ⟨_, _, hBranch, _⟩ :=
-    applyPassesPure_preserves_invariants prog.tyCtx passes prog.compileToTAC
+    applyPasses_preserves_invariants prog.tyCtx passes prog.compileToTAC
       hWT0 hPrereqs0 hBranch0 hSimple0
   -- Shorthand
   set init := Phase6.initArmState r with hinit_def

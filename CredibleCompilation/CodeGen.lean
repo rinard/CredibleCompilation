@@ -3363,7 +3363,7 @@ theorem compileToTAC_codegenPrereqs (prog : Program) (htcs : prog.wellFormed = t
 
 -- `generateAsm_total` (no-optimization path) is a corollary of
 -- `generateAsm_total_with_passes` in PipelineCorrectness.lean — defined there
--- because it needs `applyPassesPure` which is declared later in this file.
+-- because it needs `applyPasses` which is declared later in this file.
 
 -- ──────────────────────────────────────────────────────────────
 -- buildPcMap prefix-sum lemmas
@@ -6445,13 +6445,13 @@ def tryPass (name : String) (tyCtx : TyCtx) (pass : Prog → ECertificate) (p : 
     Each pass is checked by the executable certificate checker; if a check
     fails, that pass is skipped and the pipeline continues with the
     unoptimized program. Always succeeds. -/
-def applyPassesPure (tyCtx : TyCtx) : List (String × (Prog → ECertificate)) → Prog → Prog
+def applyPasses (tyCtx : TyCtx) : List (String × (Prog → ECertificate)) → Prog → Prog
   | [], p => p
   | (name, pass) :: rest, p =>
     let p' := match applyPass name tyCtx pass p with
       | .ok p' => p'
       | .error _ => p
-    applyPassesPure tyCtx rest p'
+    applyPasses tyCtx rest p'
 
 /-- The standard optimization pass list. -/
 def standardPasses (tyCtx : TyCtx) : List (String × (Prog → ECertificate)) :=
@@ -6467,7 +6467,7 @@ def standardPasses (tyCtx : TyCtx) : List (String × (Prog → ECertificate)) :=
     ("DCE", DCEOpt.optimize tyCtx),
     ("RegAlloc", RegAllocOpt.optimize tyCtx) ]
 
-/-- IO version of applyPassesPure with warning messages on failures. -/
+/-- IO version of applyPasses with warning messages on failures. -/
 def applyPassesIO (tyCtx : TyCtx) (passes : List (String × (Prog → ECertificate))) (p : Prog) : IO Prog :=
   passes.foldlM (fun p (name, pass) => tryPass name tyCtx pass p) p
 
@@ -6477,7 +6477,7 @@ def compileToAsmWith (input : String) (noOpt : Bool) : Except String String := d
   let tac := prog.compileToTAC
   let tyCtx := prog.tyCtx
   let passes := if noOpt then [] else standardPasses tyCtx
-  let opt := applyPassesPure tyCtx passes tac
+  let opt := applyPasses tyCtx passes tac
   generateAsm tyCtx opt
 
 def compileToAsm (input : String) : Except String String :=
