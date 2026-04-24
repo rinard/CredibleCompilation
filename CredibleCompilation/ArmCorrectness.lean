@@ -3302,7 +3302,94 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
               simp [s_fin, s3, hAM2, hAM1, hArrayMem]
           | _ => rcases hSimpleB with ⟨_, h⟩ | ⟨_, h⟩ <;> simp at h
         | _ => rcases hSimpleA with ⟨_, h⟩ | ⟨_, h⟩ <;> simp at h
-      | fcmp fop a b => sorry
+      | fcmp fop a b =>
+        have hSimpleFcmp : (BoolExpr.fcmp fop a b).hasSimpleOps = true := hSimpleBV
+        obtain ⟨hSimpleA, hSimpleB⟩ := BoolExpr.hasSimpleOps_fcmp hSimpleFcmp
+        have hWTfcmp : WellTypedBoolExpr tyCtx (.fcmp fop a b) := by
+          cases hWTbe with | not h => exact h
+        obtain ⟨ha_ty, hb_ty⟩ : ExprHasTy tyCtx a .float ∧ ExprHasTy tyCtx b .float := by
+          cases hWTfcmp with | fcmp ha hb => exact ⟨ha, hb⟩
+        have hfcmp_false : BoolExpr.eval σ am (.fcmp fop a b) = false := by
+          simp [BoolExpr.eval] at hcond; exact hcond
+        let cond : Cond := (fun f : FloatCmpOp => match f with
+          | .feq => Cond.eq | .fne => .ne | .flt => .lt | .fle => .le) fop
+        cases a with
+        | var va => cases b with
+          | var vb =>
+            have hNotIregA : ∀ r, layout va ≠ some (.ireg r) := hWTL.float_not_ireg ha_ty
+            have hNotIregB : ∀ r, layout vb ≠ some (.ireg r) := hWTL.float_not_ireg hb_ty
+            have hTyA := hTS va; rw [ha_ty] at hTyA
+            have hTyB := hTS vb; rw [hb_ty] at hTyB
+            obtain ⟨fA, hfA⟩ := Value.float_of_typeOf_float hTyA
+            obtain ⟨fB, hfB⟩ := Value.float_of_typeOf_float hTyB
+            let a_freg : ArmFReg :=
+              match List.lookup va layout.entries with | some (.freg r) => r | _ => .d1
+            let b_freg : ArmFReg :=
+              match List.lookup vb layout.entries with | some (.freg r) => r | _ => .d2
+            have hInstrs : instrs = vLoadVarFP layout va a_freg ++ vLoadVarFP layout vb b_freg ++
+                [.fcmpR a_freg b_freg, .bCond cond.negate (pcMap l_var)] := by
+              have := hSome; simp [verifiedGenInstr, hRC, hII, hSimpleBV] at this
+              rw [← List.append_assoc] at this
+              exact this.symm
+            rw [hInstrs] at hCodeInstr hPcNext
+            have hCodeA := hCodeInstr.append_left.append_left
+            have hCodeB := hCodeInstr.append_left.append_right
+            have hCodeFcmpBCond := hCodeInstr.append_right
+            obtain ⟨s1, k1, hSteps1N, hk1, hVal1, hRel1, _, hPC1, hAM1, hFregs1, _⟩ :=
+              vLoadVarFP_eff_exec prog layout va σ s (pcMap pc) .d1 hStateRel hRegConv hPcRel
+                hNotIregA (Or.inr (Or.inl rfl))
+                (hMapped va (by simp [TAC.vars, BoolExpr.vars, Expr.freeVars])) hCodeA
+            have hk1' : k1 = (vLoadVarFP layout va a_freg).length := hk1
+            obtain ⟨s2, k2, hSteps2N, hk2, hVal2, hRel2, _, hPC2_, hAM2, hFregs2, _⟩ :=
+              vLoadVarFP_eff_exec prog layout vb σ s1
+                (pcMap pc + (vLoadVarFP layout va a_freg).length) .d2
+                hRel1 hRegConv hPC1 hNotIregB (Or.inr (Or.inr rfl))
+                (hMapped vb (by simp [TAC.vars, BoolExpr.vars, Expr.freeVars])) hCodeB
+            have hk2' : k2 = (vLoadVarFP layout vb b_freg).length := hk2
+            have hPC2 : s2.pc = pcMap pc + (vLoadVarFP layout va a_freg ++
+                vLoadVarFP layout vb b_freg).length := by
+              rw [List.length_append, ← Nat.add_assoc]; exact hPC2_
+            have hA_s2 : s2.fregs a_freg = fA := by
+              have := eff_freg_val_preserved layout va σ s2 .d1 b_freg hRel2 hNotIregA
+                hFregs2 hVal1 (d1_ne_eff_d2 layout vb hRegConv hNotIregB)
+              rw [this, hfA]; rfl
+            have hB_s2 : s2.fregs b_freg = fB := by rw [hVal2, hfB]; rfl
+            have hFcmpI := hCodeFcmpBCond.head; rw [← hPC2] at hFcmpI
+            let s3 : ArmState :=
+              { s2 with flags := Flags.mk (s2.fregs a_freg) (s2.fregs b_freg), pc := s2.pc + 1 }
+            have hStepFcmpN : ArmStepsN prog s2 s3 1 :=
+              ArmStepsN.single (.fcmpRR a_freg b_freg hFcmpI)
+            have hPC3 : s3.pc = pcMap pc + (vLoadVarFP layout va a_freg ++
+                vLoadVarFP layout vb b_freg).length + 1 := by
+              show s2.pc + 1 = _; rw [hPC2]
+            have hBCond := hCodeFcmpBCond.tail.head; rw [← hPC3] at hBCond
+            simp only [BoolExpr.eval, Expr.eval, Value.toFloat, hfA, hfB] at hfcmp_false
+            have hCondTrue : s3.flags.condHolds cond.negate = true := by
+              show ({ lhs := s2.fregs a_freg, rhs := s2.fregs b_freg } : Flags).condHolds
+                cond.negate = true
+              rw [hA_s2, hB_s2, Cond.negate_correct]
+              cases fop <;>
+                exact congrArg (!·) ((Flags.condHolds_float_correct _ fA fB).trans hfcmp_false)
+            let s_fin : ArmState := { s3 with pc := pcMap l_var }
+            have hStepBCondN : ArmStepsN prog s3 s_fin 1 :=
+              ArmStepsN.single (.bCond_taken cond.negate (pcMap l_var) hBCond hCondTrue)
+            have h12 : ArmStepsN prog s s2 (k1 + k2) := ArmStepsN_trans hSteps1N hSteps2N
+            have h123 : ArmStepsN prog s s3 (k1 + k2 + 1) := ArmStepsN_trans h12 hStepFcmpN
+            have hChain : ArmStepsN prog s s_fin (k1 + k2 + 1 + 1) :=
+              ArmStepsN_trans h123 hStepBCondN
+            refine ⟨s_fin, k1 + k2 + 1 + 1, hChain, ?_, ?_, rfl, ?_⟩
+            · intro pc' σ' am' _hCfg
+              rw [hInstrs, hk1', hk2']; simp [List.length_append]; omega
+            · exact fun v loc hv => hRel2 v loc hv
+            · show s_fin.arrayMem = am
+              simp [s_fin, s3, hAM2, hAM1, hArrayMem]
+          | flit _ => sorry
+          | _ => rcases hSimpleB with ⟨_, h⟩ | ⟨_, h⟩ <;> simp at h
+        | flit _ => cases b with
+          | var _ => sorry
+          | flit _ => sorry
+          | _ => rcases hSimpleB with ⟨_, h⟩ | ⟨_, h⟩ <;> simp at h
+        | _ => rcases hSimpleA with ⟨_, h⟩ | ⟨_, h⟩ <;> simp at h
       | _ => sorry
     | _ => sorry
   | iffall _ _ => sorry
