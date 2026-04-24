@@ -4,6 +4,84 @@ Chronological record of what was built and why, to reconstruct the sequence of d
 
 ---
 
+## Disjunction elimination — Stages 2–5: cause-faithful forward compilation (2026-04-24)
+
+Completes the disjunction-elimination refactor begun in Stage 1.  All 4
+top-level cause-specific theorems now conclude their **specific** cause
+rather than the cause-agnostic disjunction:
+
+- `while_to_arm_div_preservation` → `∃ fuel, unsafeDiv fuel`
+- `while_to_arm_bounds_preservation` → `∃ fuel, unsafeBounds fuel`
+- `arm_div_implies_while_unsafe_div` → `∃ fuel, unsafeDiv fuel`
+- `arm_bounds_implies_while_unsafe_bounds` → `∃ fuel, unsafeBounds fuel`
+
+### Changes
+
+**Stage 2 — `compileExpr_stuck`** (commit `46797e1`, ErrorHandling.lean:19):
+strengthened the SExpr stuck theorem with two cause-faithful clauses:
+
+```
+(e.unsafeDiv σ am decls → ∃ σ' am', c_err = Cfg.errorDiv σ' am') ∧
+(e.unsafeBounds σ am decls → ∃ σ' am', c_err = Cfg.errorBounds σ' am')
+```
+
+Each emission point provides the matching clause (rfl) and discharges
+the other vacuously via `SExpr.safe_iff_not_unsafe` on safe siblings.
+
+**Stage 3 — `compileBool_stuck`** (commit `4a38249`):
+parallel strengthening for SBool, including the `and`/`or` cases whose
+unsafeDiv/Bounds definitions carry a third `b.eval = true/false` element.
+
+**Stage 4 — `compileExprs_unsafe`** (commit `474eddd`):
+strengthening the variadic-print helper using
+`SExpr.listUnsafeDiv` / `SExpr.listUnsafeBounds`.
+
+**Stage 5a — `compileStmt_unsafe`** (commit `365f0ed`):
+the largest stage (~400 LOC additions across 20 exit points).
+arrWrite/barrWrite/farrWrite emission cases fire the bounds clause via
+rfl; the loop case uses `Stmt.{unsafeDiv,unsafeBounds}.eq_9` to unfold
+the `fuel = succ fuel'` pattern.
+
+**Stage 5b — `whileToTAC_refinement`** (commit `acb9c6c`,
+RefCompiler/Refinement.lean:313):
+tighten the `errorDiv`/`errorBounds` cases to specific causes.  Adds
+helpers `whileToTAC_reaches_errorDiv` / `whileToTAC_reaches_errorBounds`
+(extract the cause clause from `compileStmt_unsafe`).  Each case adds an
+outer case-split on the OPPOSITE cause: if both causes can fire,
+determinism (`Steps.stuck_det`) on the cause-faithful Cfg states yields
+a `Cfg.noConfusion` contradiction.
+
+**Stage 5c — top-level theorems** (commit `5d73467`,
+PipelineCorrectness.lean):
+add cause-faithful pipeline-preservation helpers
+(`applyPass_preserves_errorDiv`/`Bounds`,
+`applyPassesPure_preserves_errorDiv`/`Bounds`).  Split
+`while_to_arm_error_source_side` into
+`while_to_arm_errorDiv_source_side` and `..._errorBounds_source_side`,
+each chaining cause-faithful preservation through the tightened
+`whileToTAC_refinement`.  4 top-level theorems updated; 2 backward
+theorems simplified (the cross-sentinel case argument already narrowed
+to one cause).
+
+### Why strengthen in-place rather than duplicate
+
+Strengthening adds ~550 LOC total; duplicating into
+`_unsafeDiv`/`_unsafeBounds` theorem pairs would have ~doubled the LOC
+with no structural benefit.  Disjointness
+(`SExpr/SBool/Stmt.unsafeDiv_unsafeBounds_disjoint`) closes the
+"other cause" clauses vacuously at every emission point.
+
+### Verification
+
+- `lake build` green, 0 sorries
+- `#print axioms while_to_arm_div_preservation` (and the 3 others)
+  show only standard axioms (`propext`, `Classical.choice`, `Quot.sound`,
+  `Lean.ofReduceBool`, `Lean.trustCompiler`) plus the 2 pre-existing
+  IEEE-754 axioms (`FloatBinOp.fadd_comm`, `Flags.condHolds_float_correct`).
+  No `sorryAx`.
+
+---
+
 ## Disjunction elimination — Stage 1: Behavior type split (2026-04-24)
 
 First of 5 stages toward eliminating the `unsafeDiv ∨ unsafeBounds`

@@ -1,9 +1,34 @@
-# Disjunction Elimination — Next Session Handoff
+# Disjunction Elimination — DONE (Stages 1–5)
 
-**Read this first.**  Follow-up to session-14's disjunction-elimination
-refactor.  Last updated: 2026-04-24 after Stage 1 landed on `main`.
+**Status: COMPLETE.**  Last updated: 2026-04-24 after Stages 2–5 landed
+on `phase6-prep`.
 
-## Goal
+## Final state
+
+All 4 top-level cause-specific theorems now conclude their **specific**
+cause:
+
+- `while_to_arm_div_preservation` concludes `∃ fuel, unsafeDiv fuel` ✅
+- `while_to_arm_bounds_preservation` concludes `∃ fuel, unsafeBounds fuel` ✅
+- `arm_div_implies_while_unsafe_div` concludes `∃ fuel, unsafeDiv fuel` ✅
+- `arm_bounds_implies_while_unsafe_bounds` concludes `∃ fuel, unsafeBounds fuel` ✅
+
+Build green, 0 sorries, no new axioms (verified via `#print axioms`).
+
+## Commits (in order, on `phase6-prep`)
+
+- `46797e1` — Stage 2: Strengthen `compileExpr_stuck`
+- `4a38249` — Stage 3: Strengthen `compileBool_stuck`
+- `474eddd` — Stage 4: Strengthen `compileExprs_unsafe`
+- `365f0ed` — Stage 5a: Strengthen `compileStmt_unsafe`
+- `acb9c6c` — Stage 5b: Tighten `whileToTAC_refinement`
+- `5d73467` — Stage 5c: Tighten top-level theorems
+
+See CHANGELOG.md § "Disjunction elimination — Stages 2–5" for details.
+
+---
+
+## Original goal (now achieved)
 
 Eliminate the `unsafeDiv ∨ unsafeBounds` disjunction from the conclusions
 of the top-level cause-specific theorems, so that:
@@ -14,9 +39,9 @@ of the top-level cause-specific theorems, so that:
 - `arm_div_implies_while_unsafe_div` concludes `∃ fuel, unsafeDiv fuel`.
 - `arm_bounds_implies_while_unsafe_bounds` concludes `∃ fuel, unsafeBounds fuel`.
 
-Currently all four return `∃ fuel, unsafeDiv fuel ∨ unsafeBounds fuel`.
+Originally all four returned `∃ fuel, unsafeDiv fuel ∨ unsafeBounds fuel`.
 
-## TL;DR — state at end of previous session
+## Historical TL;DR — state at end of previous session
 
 **Stage 1 DONE and merged to main** (commit `c7d9b80`):
 - `Behavior` type split: `.errors Store` replaced by `.errorDiv Store` +
