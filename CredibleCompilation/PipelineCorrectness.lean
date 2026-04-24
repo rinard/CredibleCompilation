@@ -289,6 +289,88 @@ theorem applyPassesPure_preserves_error_am (tyCtx : TyCtx)
       exact applyPass_preserves_error_am hap σ₀ hts hErr_mid
     · exact ih hErr
 
+/-- Cause-faithful version: a single optimization pass preserves `errorDiv`. -/
+private theorem applyPass_preserves_errorDiv {name : String} {tyCtx : TyCtx}
+    {pass : Prog → ECertificate} {p p' : Prog}
+    (h : applyPass name tyCtx pass p = .ok p')
+    (σ₀ : Store) (hts : TypedStore tyCtx σ₀)
+    {σ' : Store} {am₀ am' : ArrayMem}
+    (hbeh : p' ⊩ Cfg.run 0 σ₀ am₀ ⟶* Cfg.errorDiv σ' am') :
+    ∃ σ_o am_o', p ⊩ Cfg.run 0 σ₀ am₀ ⟶* Cfg.errorDiv σ_o am_o' := by
+  obtain ⟨hcheck, hTrans, hOrigCode, _, hOrigArr⟩ := applyPass_sound h
+  let cert := { pass p with tyCtx := tyCtx }
+  have hvalid := soundness_bridge cert hcheck
+  have hTransP : (toPCertificate cert).trans = p' := by simp [toPCertificate]; exact hTrans
+  have hts' : TypedStore (toPCertificate cert).tyCtx σ₀ := by
+    simp [toPCertificate]; exact hts
+  have herr_cert : (toPCertificate cert).trans ⊩ Cfg.run 0 σ₀ am₀ ⟶* Cfg.errorDiv σ' am' :=
+    hTransP ▸ hbeh
+  obtain ⟨σ_o, am_f, herr_orig⟩ := errorDiv_preservation _ hvalid σ₀ hts' herr_cert
+  have hOC : (toPCertificate cert).orig.code = p.code := by simp [toPCertificate]; exact hOrigCode
+  have hOA : (toPCertificate cert).orig.arrayDecls = p.arrayDecls := by simp [toPCertificate]; exact hOrigArr
+  exact ⟨σ_o, am_f, Steps_of_code_arrayDecls_eq hOC hOA herr_orig⟩
+
+/-- Cause-faithful version: a single optimization pass preserves `errorBounds`. -/
+private theorem applyPass_preserves_errorBounds {name : String} {tyCtx : TyCtx}
+    {pass : Prog → ECertificate} {p p' : Prog}
+    (h : applyPass name tyCtx pass p = .ok p')
+    (σ₀ : Store) (hts : TypedStore tyCtx σ₀)
+    {σ' : Store} {am₀ am' : ArrayMem}
+    (hbeh : p' ⊩ Cfg.run 0 σ₀ am₀ ⟶* Cfg.errorBounds σ' am') :
+    ∃ σ_o am_o', p ⊩ Cfg.run 0 σ₀ am₀ ⟶* Cfg.errorBounds σ_o am_o' := by
+  obtain ⟨hcheck, hTrans, hOrigCode, _, hOrigArr⟩ := applyPass_sound h
+  let cert := { pass p with tyCtx := tyCtx }
+  have hvalid := soundness_bridge cert hcheck
+  have hTransP : (toPCertificate cert).trans = p' := by simp [toPCertificate]; exact hTrans
+  have hts' : TypedStore (toPCertificate cert).tyCtx σ₀ := by
+    simp [toPCertificate]; exact hts
+  have herr_cert : (toPCertificate cert).trans ⊩ Cfg.run 0 σ₀ am₀ ⟶* Cfg.errorBounds σ' am' :=
+    hTransP ▸ hbeh
+  obtain ⟨σ_o, am_f, herr_orig⟩ := errorBounds_preservation _ hvalid σ₀ hts' herr_cert
+  have hOC : (toPCertificate cert).orig.code = p.code := by simp [toPCertificate]; exact hOrigCode
+  have hOA : (toPCertificate cert).orig.arrayDecls = p.arrayDecls := by simp [toPCertificate]; exact hOrigArr
+  exact ⟨σ_o, am_f, Steps_of_code_arrayDecls_eq hOC hOA herr_orig⟩
+
+/-- Cause-faithful version: `applyPassesPure` preserves `errorDiv` specifically. -/
+theorem applyPassesPure_preserves_errorDiv (tyCtx : TyCtx)
+    (passes : List (String × (Prog → ECertificate)))
+    (σ₀ : Store) (hts : TypedStore tyCtx σ₀)
+    {σ' : Store} {am₀ am' : ArrayMem}
+    (hErr : (applyPassesPure tyCtx passes p) ⊩ Cfg.run 0 σ₀ am₀ ⟶* Cfg.errorDiv σ' am') :
+    ∃ σ_o am_o', p ⊩ Cfg.run 0 σ₀ am₀ ⟶* Cfg.errorDiv σ_o am_o' := by
+  induction passes generalizing p σ' am' with
+  | nil =>
+    simp [applyPassesPure] at hErr
+    exact ⟨σ', am', hErr⟩
+  | cons np rest ih =>
+    simp only [applyPassesPure] at hErr
+    obtain ⟨name, pass⟩ := np
+    split at hErr
+    · rename_i p' hap
+      obtain ⟨σ_mid, am_mid, hErr_mid⟩ := ih hErr
+      exact applyPass_preserves_errorDiv hap σ₀ hts hErr_mid
+    · exact ih hErr
+
+/-- Cause-faithful version: `applyPassesPure` preserves `errorBounds` specifically. -/
+theorem applyPassesPure_preserves_errorBounds (tyCtx : TyCtx)
+    (passes : List (String × (Prog → ECertificate)))
+    (σ₀ : Store) (hts : TypedStore tyCtx σ₀)
+    {σ' : Store} {am₀ am' : ArrayMem}
+    (hErr : (applyPassesPure tyCtx passes p) ⊩ Cfg.run 0 σ₀ am₀ ⟶* Cfg.errorBounds σ' am') :
+    ∃ σ_o am_o', p ⊩ Cfg.run 0 σ₀ am₀ ⟶* Cfg.errorBounds σ_o am_o' := by
+  induction passes generalizing p σ' am' with
+  | nil =>
+    simp [applyPassesPure] at hErr
+    exact ⟨σ', am', hErr⟩
+  | cons np rest ih =>
+    simp only [applyPassesPure] at hErr
+    obtain ⟨name, pass⟩ := np
+    split at hErr
+    · rename_i p' hap
+      obtain ⟨σ_mid, am_mid, hErr_mid⟩ := ih hErr
+      exact applyPass_preserves_errorBounds hap σ₀ hts hErr_mid
+    · exact ih hErr
+
 /-- `applyPassesPure` preserves divergence. -/
 theorem applyPassesPure_preserves_diverge (tyCtx : TyCtx)
     (passes : List (String × (Prog → ECertificate)))
@@ -396,33 +478,41 @@ theorem while_to_arm_correctness
 -- § 5. Full end-to-end: While source → ARM (errors)
 -- ============================================================
 
-/-- Shared helper for the two split Phase 4 error theorems.  Factors out the
-    pipeline-preservation chain from the input `TAC ⟶* Cfg.errorDiv/Bounds` to
-    the source-side `∃ fuel, unsafeDiv ∨ unsafeBounds`. -/
-private theorem while_to_arm_error_source_side
+/-- Cause-faithful source-side helper for `while_to_arm_div_preservation`. -/
+private theorem while_to_arm_errorDiv_source_side
     (prog : Program) (htcs : prog.typeCheckStrict = true)
     (passes : List (String × (Prog → ECertificate)))
     {σ_err : Store} {am_err : ArrayMem}
-    (hErr_or : ((applyPassesPure prog.tyCtx passes prog.compileToTAC) ⊩
-        Cfg.run 0 (Store.typedInit prog.tyCtx) ArrayMem.init ⟶* Cfg.errorDiv σ_err am_err) ∨
-        ((applyPassesPure prog.tyCtx passes prog.compileToTAC) ⊩
-        Cfg.run 0 (Store.typedInit prog.tyCtx) ArrayMem.init ⟶* Cfg.errorBounds σ_err am_err)) :
-    ∃ fuel,
-      prog.body.unsafeDiv fuel prog.initStore ArrayMem.init prog.arrayDecls ∨
-      prog.body.unsafeBounds fuel prog.initStore ArrayMem.init prog.arrayDecls := by
+    (hErr : (applyPassesPure prog.tyCtx passes prog.compileToTAC) ⊩
+        Cfg.run 0 (Store.typedInit prog.tyCtx) ArrayMem.init ⟶* Cfg.errorDiv σ_err am_err) :
+    ∃ fuel, prog.body.unsafeDiv fuel prog.initStore ArrayMem.init prog.arrayDecls := by
   have htc := Program.typeCheckStrict_typeCheck prog htcs
   have hInitEq : Store.typedInit prog.tyCtx = prog.initStore :=
     Program.typedInit_eq_initStore prog htc
   have hts : TypedStore prog.tyCtx (Store.typedInit prog.tyCtx) := TypedStore.typedInit _
   obtain ⟨σ_o, am_o', hErr_tac⟩ :=
-    applyPassesPure_preserves_error_am prog.tyCtx passes _ hts hErr_or
-  rcases hErr_tac with hd | hb
-  · have hErr_init : program_behavior_init prog.compileToTAC prog.initStore (.errorDiv σ_o) :=
-      ⟨am_o', hInitEq ▸ hd⟩
-    exact whileToTAC_refinement prog htcs (.errorDiv σ_o) hErr_init
-  · have hErr_init : program_behavior_init prog.compileToTAC prog.initStore (.errorBounds σ_o) :=
-      ⟨am_o', hInitEq ▸ hb⟩
-    exact whileToTAC_refinement prog htcs (.errorBounds σ_o) hErr_init
+    applyPassesPure_preserves_errorDiv prog.tyCtx passes _ hts hErr
+  have hErr_init : program_behavior_init prog.compileToTAC prog.initStore (.errorDiv σ_o) :=
+    ⟨am_o', hInitEq ▸ hErr_tac⟩
+  exact whileToTAC_refinement prog htcs (.errorDiv σ_o) hErr_init
+
+/-- Cause-faithful source-side helper for `while_to_arm_bounds_preservation`. -/
+private theorem while_to_arm_errorBounds_source_side
+    (prog : Program) (htcs : prog.typeCheckStrict = true)
+    (passes : List (String × (Prog → ECertificate)))
+    {σ_err : Store} {am_err : ArrayMem}
+    (hErr : (applyPassesPure prog.tyCtx passes prog.compileToTAC) ⊩
+        Cfg.run 0 (Store.typedInit prog.tyCtx) ArrayMem.init ⟶* Cfg.errorBounds σ_err am_err) :
+    ∃ fuel, prog.body.unsafeBounds fuel prog.initStore ArrayMem.init prog.arrayDecls := by
+  have htc := Program.typeCheckStrict_typeCheck prog htcs
+  have hInitEq : Store.typedInit prog.tyCtx = prog.initStore :=
+    Program.typedInit_eq_initStore prog htc
+  have hts : TypedStore prog.tyCtx (Store.typedInit prog.tyCtx) := TypedStore.typedInit _
+  obtain ⟨σ_o, am_o', hErr_tac⟩ :=
+    applyPassesPure_preserves_errorBounds prog.tyCtx passes _ hts hErr
+  have hErr_init : program_behavior_init prog.compileToTAC prog.initStore (.errorBounds σ_o) :=
+    ⟨am_o', hInitEq ▸ hErr_tac⟩
+  exact whileToTAC_refinement prog htcs (.errorBounds σ_o) hErr_init
 
 /-- **While→ARM: division-by-zero cause.**
 
@@ -439,14 +529,12 @@ theorem while_to_arm_div_preservation
     (hErr : (applyPassesPure prog.tyCtx passes prog.compileToTAC) ⊩
       Cfg.run 0 (Store.typedInit prog.tyCtx)
         ArrayMem.init ⟶* Cfg.errorDiv σ_err am_err) :
-    (∃ fuel,
-      prog.body.unsafeDiv fuel prog.initStore ArrayMem.init prog.arrayDecls ∨
-      prog.body.unsafeBounds fuel prog.initStore ArrayMem.init prog.arrayDecls) ∧
+    (∃ fuel, prog.body.unsafeDiv fuel prog.initStore ArrayMem.init prog.arrayDecls) ∧
     (∃ s', ArmSteps r.bodyFlat
       { regs := fun _ => 0, fregs := fun _ => 0, stack := fun _ => 0,
         pc := r.pcMap 0, flags := ⟨0, 0⟩ } s' ∧
       s'.pc = r.divS) := by
-  refine ⟨while_to_arm_error_source_side prog htcs passes (.inl hErr), ?_⟩
+  refine ⟨while_to_arm_errorDiv_source_side prog htcs passes hErr, ?_⟩
   obtain ⟨s', hArm, hRel, _⟩ := tacToArm_correctness hGen hErr
   exact ⟨s', hArm, hRel⟩
 
@@ -460,14 +548,12 @@ theorem while_to_arm_bounds_preservation
     (hErr : (applyPassesPure prog.tyCtx passes prog.compileToTAC) ⊩
       Cfg.run 0 (Store.typedInit prog.tyCtx)
         ArrayMem.init ⟶* Cfg.errorBounds σ_err am_err) :
-    (∃ fuel,
-      prog.body.unsafeDiv fuel prog.initStore ArrayMem.init prog.arrayDecls ∨
-      prog.body.unsafeBounds fuel prog.initStore ArrayMem.init prog.arrayDecls) ∧
+    (∃ fuel, prog.body.unsafeBounds fuel prog.initStore ArrayMem.init prog.arrayDecls) ∧
     (∃ s', ArmSteps r.bodyFlat
       { regs := fun _ => 0, fregs := fun _ => 0, stack := fun _ => 0,
         pc := r.pcMap 0, flags := ⟨0, 0⟩ } s' ∧
       s'.pc = r.boundsS) := by
-  refine ⟨while_to_arm_error_source_side prog htcs passes (.inr hErr), ?_⟩
+  refine ⟨while_to_arm_errorBounds_source_side prog htcs passes hErr, ?_⟩
   obtain ⟨s', hArm, hRel, _⟩ := tacToArm_correctness hGen hErr
   exact ⟨s', hArm, hRel⟩
 
@@ -1446,13 +1532,6 @@ theorem arm_halts_implies_while_halts
     trace ending at `divS`, the source program is unsafe at some fuel with
     cause = division by zero.
 
-    NOTE (Phase 4 caveat, design doc § Phase 4): the cause-specific
-    backward theorem currently concludes the cause-agnostic disjunction
-    `unsafeDiv ∨ unsafeBounds`.  Cause-specific matching (div → unsafeDiv
-    only) requires the `compileStmt_unsafe` refactor also deferred to
-    Phase 7.  Matching the existing forward theorem's conclusion for
-    consistency.
-
     Proof size: ~60 LOC. -/
 theorem arm_div_implies_while_unsafe_div
     (prog : Program) (htcs : prog.typeCheckStrict = true)
@@ -1463,9 +1542,7 @@ theorem arm_div_implies_while_unsafe_div
     {s : ArmState}
     (hArm : ArmSteps r.bodyFlat (Phase6.initArmState r) s)
     (hPC : s.pc = r.divS) :
-    ∃ fuel,
-      prog.body.unsafeDiv fuel prog.initStore ArrayMem.init prog.arrayDecls ∨
-      prog.body.unsafeBounds fuel prog.initStore ArrayMem.init prog.arrayDecls := by
+    ∃ fuel, prog.body.unsafeDiv fuel prog.initStore ArrayMem.init prog.arrayDecls := by
   have htc := prog.typeCheckStrict_typeCheck htcs
   have hSC : StepClosedInBounds (applyPassesPure prog.tyCtx passes prog.compileToTAC) :=
     applyPassesPure_preserves_stepClosedInBounds prog.tyCtx passes _
@@ -1484,7 +1561,7 @@ theorem arm_div_implies_while_unsafe_div
     exact (haltFinal_ne_divS spec) this.symm
   | errorDiv σ_opt =>
     obtain ⟨am_opt, hErrDiv⟩ := hbeh
-    exact while_to_arm_error_source_side prog htcs passes (.inl hErrDiv)
+    exact while_to_arm_errorDiv_source_side prog htcs passes hErrDiv
   | errorBounds σ_opt =>
     exfalso
     obtain ⟨am_opt, hErrBounds⟩ := hbeh
@@ -1526,9 +1603,7 @@ theorem arm_bounds_implies_while_unsafe_bounds
     {s : ArmState}
     (hArm : ArmSteps r.bodyFlat (Phase6.initArmState r) s)
     (hPC : s.pc = r.boundsS) :
-    ∃ fuel,
-      prog.body.unsafeDiv fuel prog.initStore ArrayMem.init prog.arrayDecls ∨
-      prog.body.unsafeBounds fuel prog.initStore ArrayMem.init prog.arrayDecls := by
+    ∃ fuel, prog.body.unsafeBounds fuel prog.initStore ArrayMem.init prog.arrayDecls := by
   have htc := prog.typeCheckStrict_typeCheck htcs
   have hSC : StepClosedInBounds (applyPassesPure prog.tyCtx passes prog.compileToTAC) :=
     applyPassesPure_preserves_stepClosedInBounds prog.tyCtx passes _
@@ -1556,7 +1631,7 @@ theorem arm_bounds_implies_while_unsafe_bounds
     exact (divS_ne_boundsS spec) this.symm
   | errorBounds σ_opt =>
     obtain ⟨am_opt, hErrBounds⟩ := hbeh
-    exact while_to_arm_error_source_side prog htcs passes (.inr hErrBounds)
+    exact while_to_arm_errorBounds_source_side prog htcs passes hErrBounds
   | typeErrors σ_opt =>
     obtain ⟨am_opt, hte⟩ := hbeh
     exact absurd hte (pipelined_no_typeError prog htcs passes σ_opt am_opt)
