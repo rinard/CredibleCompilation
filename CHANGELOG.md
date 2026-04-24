@@ -1320,7 +1320,7 @@ from an `IsInfiniteExec` TAC trace starting at init.  Deferred to a
 follow-up session (see § Remaining below).
 
 **Phase 7a (`arm_halts_implies_while_halts`)**: case on source bin;
-halts branch extracts the `ArmMatchesWhile` from
+halts branch extracts the `ArmStateMatchesProgramState` from
 `while_to_arm_correctness` after using `sentinel_state_unique` to
 identify the forward-sim's ARM state with the hypothesis's; errors /
 typeErrors / diverges branches contradict via sentinel distinctness /

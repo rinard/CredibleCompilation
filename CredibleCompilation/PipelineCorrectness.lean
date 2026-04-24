@@ -400,7 +400,7 @@ theorem applyPasses_preserves_diverge (tyCtx : TyCtx)
     For each observable variable with a layout entry, the ARM register or
     stack slot holds the encoded value from the source program's final store.
     Array memory also matches. -/
-def ArmMatchesWhile (layout : VarLayout) (observables : List Var)
+def ArmStateMatchesProgramState (layout : VarLayout) (observables : List Var)
     (σ_src : Store) (am : ArrayMem) (s : ArmState) : Prop :=
   (∀ v ∈ observables, ∀ loc, layout v = some loc →
     match loc with
@@ -429,7 +429,7 @@ theorem while_to_arm_correctness
       ArmSteps r.bodyFlat
         { regs := fun _ => 0, fregs := fun _ => 0, stack := fun _ => 0,
           pc := r.pcMap 0, flags := ⟨0, 0⟩ } s' ∧
-      ArmMatchesWhile r.layout prog.compileToTAC.observable σ_src am_src s' ∧
+      ArmStateMatchesProgramState r.layout prog.compileToTAC.observable σ_src am_src s' ∧
       s'.pc = r.haltFinal := by
   have htc := Program.wellFormed_typeCheck prog htcs
   have hInitEq : Store.typedInit prog.tyCtx = prog.initStore :=
@@ -1467,7 +1467,7 @@ theorem arm_halts_implies_while_halts
     (hPC : s.pc = r.haltFinal) :
     ∃ fuel σ_src am_src,
       prog.interp fuel = some (σ_src, am_src) ∧
-      ArmMatchesWhile r.layout prog.compileToTAC.observable σ_src am_src s := by
+      ArmStateMatchesProgramState r.layout prog.compileToTAC.observable σ_src am_src s := by
   have htc := prog.wellFormed_typeCheck htcs
   have hSC : StepClosedInBounds (applyPasses prog.tyCtx passes prog.compileToTAC) :=
     applyPasses_preserves_stepClosedInBounds prog.tyCtx passes _
