@@ -944,6 +944,14 @@ execution `p ⊩ Cfg.run pc σ am ⟶* cfg'` starting from an ARM state satisfyi
 def VerifiedAsmResult.bodyFlat (r : VerifiedAsmResult) : ArmProg :=
   ((r.bodyPerPC.toList.flatMap id) ++ r.haltSaveBlock.toList).toArray
 
+/-- The canonical zero-initialized ARM entry state: all registers and stack
+    cleared, PC at the start of the bodyFlat (`pcMap 0`), flags zeroed.
+    This is the state from which all backward correctness theorems begin
+    their ARM trace. -/
+def VerifiedAsmResult.initArmState (r : VerifiedAsmResult) : ArmState :=
+  { regs := fun _ => 0, fregs := fun _ => 0, stack := fun _ => 0,
+    pc := r.pcMap 0, flags := ⟨0, 0⟩ }
+
 /-- Properties extracted from a successful `verifiedGenerateAsm` call.
     These are the invariants that the main code-generation function establishes
     via its runtime checks (type check, layout check, branch target check). -/

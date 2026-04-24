@@ -757,13 +757,6 @@ cluster (committed on the `phase6-prep` branch alongside this skeleton).
 
 section Phase6Skeleton
 
-/-- Abbreviation for the zero-initialized ARM state used as the pipeline's
-    entry point.  Matches the state referenced by `while_to_arm_correctness`
-    et al. -/
-private def Phase6.initArmState (r : VerifiedAsmResult) : ArmState :=
-  { regs := fun _ => 0, fregs := fun _ => 0, stack := fun _ => 0,
-    pc := r.pcMap 0, flags := ⟨0, 0⟩ }
-
 /-- **Phase 6 feeder lemma: `pcMap l ≤ haltS`.**  Every live TAC PC maps to
     an ARM PC at or before `haltS` (the start of the halt-save block).
     Follows from `buildPcMap_eq_take_length` + `spec.pcMapLengths` +
@@ -1373,7 +1366,7 @@ private theorem source_diverges_gives_ArmDiverges_init
     {f : Nat → Cfg}
     (hinf : IsInfiniteExec (applyPasses prog.tyCtx passes prog.compileToTAC) f)
     (hf0 : f 0 = Cfg.run 0 prog.initStore ArrayMem.init) :
-    ArmDiverges r.bodyFlat (Phase6.initArmState r) := by
+    ArmDiverges r.bodyFlat (r.initArmState) := by
   intro N
   -- StepsN of any length extracted from IsInfiniteExec by induction
   have hStepsN_any : ∀ k, StepsN (applyPasses prog.tyCtx passes prog.compileToTAC)
@@ -1412,8 +1405,8 @@ theorem halt_state_observables_deterministic
     (hGen : verifiedGenerateAsm prog.tyCtx
       (applyPasses prog.tyCtx passes prog.compileToTAC) = .ok r)
     {s₁ s₂ : ArmState}
-    (h₁ : ArmSteps r.bodyFlat (Phase6.initArmState r) s₁) (hPC₁ : s₁.pc = r.haltFinal)
-    (h₂ : ArmSteps r.bodyFlat (Phase6.initArmState r) s₂) (hPC₂ : s₂.pc = r.haltFinal) :
+    (h₁ : ArmSteps r.bodyFlat (r.initArmState) s₁) (hPC₁ : s₁.pc = r.haltFinal)
+    (h₂ : ArmSteps r.bodyFlat (r.initArmState) s₂) (hPC₂ : s₂.pc = r.haltFinal) :
     (∀ v loc, r.layout v = some loc →
       (match loc with
        | .stack off => s₁.stack off = s₂.stack off
@@ -1470,7 +1463,7 @@ theorem arm_halts_implies_while_halts
     (hGen : verifiedGenerateAsm prog.tyCtx
       (applyPasses prog.tyCtx passes prog.compileToTAC) = .ok r)
     {s : ArmState}
-    (hArm : ArmSteps r.bodyFlat (Phase6.initArmState r) s)
+    (hArm : ArmSteps r.bodyFlat (r.initArmState) s)
     (hPC : s.pc = r.haltFinal) :
     ∃ fuel σ_src am_src,
       prog.interp fuel = some (σ_src, am_src) ∧
@@ -1516,7 +1509,7 @@ theorem arm_halts_implies_while_halts
     obtain ⟨f, hinf, hf0⟩ := hbeh
     have hInitEq : Store.typedInit prog.tyCtx = prog.initStore :=
       Program.typedInit_eq_initStore prog htc
-    have hDiv : ArmDiverges r.bodyFlat (Phase6.initArmState r) :=
+    have hDiv : ArmDiverges r.bodyFlat (r.initArmState) :=
       source_diverges_gives_ArmDiverges_init prog htcs passes hGen hinf (hInitEq ▸ hf0)
     obtain ⟨n_reach, hN_reach⟩ := ArmSteps_to_ArmStepsN hArm
     obtain ⟨s_ext, hN_ext⟩ := hDiv (n_reach + 1)
@@ -1540,7 +1533,7 @@ theorem arm_div_implies_while_unsafe_div
     (hGen : verifiedGenerateAsm prog.tyCtx
       (applyPasses prog.tyCtx passes prog.compileToTAC) = .ok r)
     {s : ArmState}
-    (hArm : ArmSteps r.bodyFlat (Phase6.initArmState r) s)
+    (hArm : ArmSteps r.bodyFlat (r.initArmState) s)
     (hPC : s.pc = r.divS) :
     ∃ fuel, prog.body.unsafeDiv fuel prog.initStore ArrayMem.init prog.arrayDecls := by
   have htc := prog.wellFormed_typeCheck htcs
@@ -1579,7 +1572,7 @@ theorem arm_div_implies_while_unsafe_div
     obtain ⟨f, hinf, hf0⟩ := hbeh
     have hInitEq : Store.typedInit prog.tyCtx = prog.initStore :=
       Program.typedInit_eq_initStore prog htc
-    have hDiv : ArmDiverges r.bodyFlat (Phase6.initArmState r) :=
+    have hDiv : ArmDiverges r.bodyFlat (r.initArmState) :=
       source_diverges_gives_ArmDiverges_init prog htcs passes hGen hinf (hInitEq ▸ hf0)
     obtain ⟨n_reach, hN_reach⟩ := ArmSteps_to_ArmStepsN hArm
     obtain ⟨s_ext, hN_ext⟩ := hDiv (n_reach + 1)
@@ -1601,7 +1594,7 @@ theorem arm_bounds_implies_while_unsafe_bounds
     (hGen : verifiedGenerateAsm prog.tyCtx
       (applyPasses prog.tyCtx passes prog.compileToTAC) = .ok r)
     {s : ArmState}
-    (hArm : ArmSteps r.bodyFlat (Phase6.initArmState r) s)
+    (hArm : ArmSteps r.bodyFlat (r.initArmState) s)
     (hPC : s.pc = r.boundsS) :
     ∃ fuel, prog.body.unsafeBounds fuel prog.initStore ArrayMem.init prog.arrayDecls := by
   have htc := prog.wellFormed_typeCheck htcs
@@ -1640,7 +1633,7 @@ theorem arm_bounds_implies_while_unsafe_bounds
     obtain ⟨f, hinf, hf0⟩ := hbeh
     have hInitEq : Store.typedInit prog.tyCtx = prog.initStore :=
       Program.typedInit_eq_initStore prog htc
-    have hDiv : ArmDiverges r.bodyFlat (Phase6.initArmState r) :=
+    have hDiv : ArmDiverges r.bodyFlat (r.initArmState) :=
       source_diverges_gives_ArmDiverges_init prog htcs passes hGen hinf (hInitEq ▸ hf0)
     obtain ⟨n_reach, hN_reach⟩ := ArmSteps_to_ArmStepsN hArm
     obtain ⟨s_ext, hN_ext⟩ := hDiv (n_reach + 1)
@@ -1670,7 +1663,7 @@ theorem arm_diverges_implies_while_diverges
     {r : VerifiedAsmResult}
     (hGen : verifiedGenerateAsm prog.tyCtx
       (applyPasses prog.tyCtx passes prog.compileToTAC) = .ok r)
-    (hDiv : ArmDiverges r.bodyFlat (Phase6.initArmState r)) :
+    (hDiv : ArmDiverges r.bodyFlat (r.initArmState)) :
     ∀ fuel, prog.interp fuel = none := by
   have htc := prog.wellFormed_typeCheck htcs
   have hInitEq : Store.typedInit prog.tyCtx = prog.initStore :=
@@ -1682,7 +1675,7 @@ theorem arm_diverges_implies_while_diverges
   -- Helper: contradict any `ArmSteps init s_sent` ending at a sentinel PC via
   -- ArmDiverges + state_uniqueness + sentinel_stuck.
   have sentinel_contradict : ∀ {s_sent : ArmState}
-      (_hReach : ArmSteps r.bodyFlat (Phase6.initArmState r) s_sent)
+      (_hReach : ArmSteps r.bodyFlat (r.initArmState) s_sent)
       (_hPC : s_sent.pc = r.haltFinal ∨ s_sent.pc = r.divS ∨ s_sent.pc = r.boundsS),
       False := by
     intro s_sent hReach hPC
@@ -3768,10 +3761,10 @@ theorem arm_behavior_exhaustive
     {r : VerifiedAsmResult}
     (hGen : verifiedGenerateAsm prog.tyCtx
       (applyPasses prog.tyCtx passes prog.compileToTAC) = .ok r) :
-    (∃ s', ArmSteps r.bodyFlat (Phase6.initArmState r) s' ∧ s'.pc = r.haltFinal) ∨
-    (∃ s', ArmSteps r.bodyFlat (Phase6.initArmState r) s' ∧ s'.pc = r.divS) ∨
-    (∃ s', ArmSteps r.bodyFlat (Phase6.initArmState r) s' ∧ s'.pc = r.boundsS) ∨
-    ArmDiverges r.bodyFlat (Phase6.initArmState r) := by
+    (∃ s', ArmSteps r.bodyFlat (r.initArmState) s' ∧ s'.pc = r.haltFinal) ∨
+    (∃ s', ArmSteps r.bodyFlat (r.initArmState) s' ∧ s'.pc = r.divS) ∨
+    (∃ s', ArmSteps r.bodyFlat (r.initArmState) s' ∧ s'.pc = r.boundsS) ∨
+    ArmDiverges r.bodyFlat (r.initArmState) := by
   classical
   set p := applyPasses prog.tyCtx passes prog.compileToTAC with hp_def
   -- Extract GenAsmSpec
@@ -3787,7 +3780,7 @@ theorem arm_behavior_exhaustive
     applyPasses_preserves_invariants prog.tyCtx passes prog.compileToTAC
       hWT0 hPrereqs0 hBranch0 hSimple0
   -- Shorthand
-  set init := Phase6.initArmState r with hinit_def
+  set init := r.initArmState with hinit_def
   -- By classical excluded middle, dispatch sentinel-reach cases
   by_cases h1 : ∃ s', ArmSteps r.bodyFlat init s' ∧ s'.pc = r.haltFinal
   · exact Or.inl h1
@@ -3814,8 +3807,8 @@ theorem arm_behavior_exhaustive
     refine ⟨init, ArmStepsN.refl_zero, ?_⟩
     show init.pc ≤ r.boundsS
     rw [hinit_def]
-    show (Phase6.initArmState r).pc ≤ r.boundsS
-    simp only [Phase6.initArmState]
+    show (r.initArmState).pc ≤ r.boundsS
+    simp only [VerifiedAsmResult.initArmState]
     have := pcMap_le_haltS spec 0 (by simp)
     have hle : r.haltS ≤ r.boundsS := by
       rw [spec.boundsS_eq, spec.haltFinal_eq]; omega
