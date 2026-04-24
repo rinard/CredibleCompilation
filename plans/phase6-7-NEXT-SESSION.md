@@ -2,9 +2,9 @@
 
 **Read this first.**  Supersedes all earlier Phase 6/7 planning documents
 in this directory.  Last updated: 2026-04-24 after **session 10 + post-
-session refactors** — **Phase B fully complete + cbnz/loadFlit helpers
-extracted**. `verifiedGenInstr_correct` has zero internal sorries.
-Branch `phase6-prep` at `48979bc` (pushed to origin).
+session refactors + Phase C verified** — **Phases A, B, C done**.
+`verifiedGenInstr_correct` + `ext_backward_simulation` have zero sorries.
+Branch `phase6-prep` at HEAD (pushed to origin).
 
 ## TL;DR for next session (session 11)
 
@@ -14,25 +14,25 @@ Branch `phase6-prep` at `48979bc` (pushed to origin).
 - L1324 (Phase 7 target `source_diverges_gives_ArmDiverges_init`)
 - L2115 (Phase 6 out-of-scope `verifiedGenInstr_ifgoto_branch_bounded`)
 
-Build green. Phase B locked. Phases A + B done.
+Build green. Phases A + B + C all done.
 
 **Start with `lake build` — should finish green with 4 sorry warnings
 in ~25s.** Build green is the invariant throughout this session.
 
-**Session 11 starts Phase C: `ext_backward_simulation`.**  Per the
-flavor-a-signatures.md spec, the signature was already updated in
-Phase B prep (it just threads the enhanced length-aware tuple through
-from `verifiedGenInstr_correct`). Body should be ~0 LOC — already
-delegates via term-mode. Find with
-`grep -n "^theorem ext_backward_simulation" CredibleCompilation/ArmCorrectness.lean`
-(~line 6032 in current file). Verify it compiles cleanly; no further
-work expected.
+**Phase C note (already done).** `ext_backward_simulation` at
+[ArmCorrectness.lean:6032](../CredibleCompilation/ArmCorrectness.lean#L6032)
+already has the Flavor A signature — returns the length-tracked
+`∃ s' k, ArmStepsN armProg s s' k ∧ (∀ pc' σ' am', cfg' = .run pc' σ' am' → k = instrs.length) ∧ ExtSimRel`
+tuple and directly delegates via term-mode to `verifiedGenInstr_correct`.
+Verified clean at the close of the refactor sub-session. No touch needed.
 
-After Phase C, proceed to Phase D (`step_simulation` in CodeGen.lean).
-The body is already cascaded with the `ArmStepsN_to_ArmSteps` bridge at
-the one call site (CodeGen.lean ~5942) — minimal touch needed unless
-threading ArmStepsN through `step_simulation`'s signature itself
-(~80–120 LOC per spec).
+**Session 11 starts Phase D: `step_simulation` in CodeGen.lean.**
+Find with `grep -n "^theorem step_simulation\|^private theorem step_simulation"
+CredibleCompilation/CodeGen.lean` (spec says ~line 4182, may have shifted).
+Per spec the body is already cascaded with the `ArmStepsN_to_ArmSteps`
+bridge at the one call site (CodeGen.lean ~5942) — minimal touch
+needed unless threading ArmStepsN through `step_simulation`'s signature
+itself (~80–120 LOC per spec).  **Full threading is the Flavor A target.**
 
 Phases E–H follow per spec. Phase H closes the target sorry at
 PipelineCorrectness.lean:1324.
