@@ -3856,4 +3856,33 @@ theorem arm_behavior_exhaustive
       rw [hPc_eq]
       exact bodyFlat_branch_target_bounded spec hBranch s.pc lbl hBrForm
 
+/-- **Source-side exhaustion**, derived from `arm_behavior_exhaustive` plus the
+    four backward theorems.  For any well-formed source program that compiles
+    successfully, `prog.run` lands in one of four bins: clean halt, div-by-zero,
+    out-of-bounds, or fuel-exhausted at every fuel.  This is the source dual
+    of `arm_behavior_exhaustive`. -/
+theorem program_run_exhaustive
+    (prog : Program) (htcs : prog.wellFormed = true)
+    (passes : List (String × (Prog → ECertificate)))
+    {r : VerifiedAsmResult}
+    (hGen : verifiedGenerateAsm prog.tyCtx
+      (applyPasses prog.tyCtx passes prog.compileToTAC) = .ok r) :
+    (∃ fuel σ_src am_src, prog.run fuel = .halts σ_src am_src) ∨
+    (∃ fuel, prog.run fuel = .divByZero) ∨
+    (∃ fuel, prog.run fuel = .outOfBounds) ∨
+    (∀ fuel, prog.run fuel = .outOfFuel) := by
+  rcases arm_behavior_exhaustive prog htcs passes hGen with
+    ⟨s, hArm, hPC⟩ | ⟨s, hArm, hPC⟩ | ⟨s, hArm, hPC⟩ | hDiv
+  · obtain ⟨fuel, σ_src, am_src, hrun, _⟩ :=
+      arm_halts_implies_program_halts prog htcs passes hGen hArm hPC
+    exact Or.inl ⟨fuel, σ_src, am_src, hrun⟩
+  · obtain ⟨fuel, hrun⟩ :=
+      arm_div_implies_program_unsafe_div prog htcs passes hGen hArm hPC
+    exact Or.inr (Or.inl ⟨fuel, hrun⟩)
+  · obtain ⟨fuel, hrun⟩ :=
+      arm_bounds_implies_program_unsafe_bounds prog htcs passes hGen hArm hPC
+    exact Or.inr (Or.inr (Or.inl ⟨fuel, hrun⟩))
+  · exact Or.inr (Or.inr (Or.inr
+      (arm_diverges_implies_program_diverges prog htcs passes hGen hDiv)))
+
 end Phase6Main
