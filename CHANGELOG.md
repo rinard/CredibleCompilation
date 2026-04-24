@@ -4,6 +4,78 @@ Chronological record of what was built and why, to reconstruct the sequence of d
 
 ---
 
+## Disjunction elimination — Stage 1: Behavior type split (2026-04-24)
+
+First of 5 stages toward eliminating the `unsafeDiv ∨ unsafeBounds`
+disjunction in the top-level cause-specific correctness theorems
+(`while_to_arm_div_preservation`, `while_to_arm_bounds_preservation`,
+`arm_div_implies_while_unsafe_div`, `arm_bounds_implies_while_unsafe_bounds`).
+
+**This stage landed** (commit `c7d9b80`, merged to main): clean type-level
+split with the disjunction retained per-case.  Stages 2–5 deferred — see
+[plans/disjunction-elimination-NEXT-SESSION.md](plans/disjunction-elimination-NEXT-SESSION.md)
+for the detailed handoff.
+
+### Changes
+
+- **`Behavior` type** (`PropChecker.lean:560`): `.errors Store` replaced
+  by two constructors `.errorDiv Store` + `.errorBounds Store`.  Cause
+  now exposed at the type level.
+- **Downstream definitions / theorems** updated to case-split on the new
+  constructors separately (4 files, 11 theorem signatures):
+  - `program_behavior`, `has_behavior`, `credible_compilation_soundness`,
+    `credible_compilation_total` in PropChecker.lean.
+  - `program_behavior_init`, `program_behavior_of_init`,
+    `has_behavior_init`, `whileToTAC_refinement` in
+    RefCompiler/Refinement.lean.
+  - `trans_has_behavior`, `exec_checker_correct`, `exec_checker_total`
+    in SoundnessBridge.lean.
+  - `while_to_arm_error_source_side` and the 3 Phase 7 backward
+    theorems (`arm_halts_implies_*`, `arm_div_implies_*`,
+    `arm_bounds_implies_*`) in PipelineCorrectness.lean.
+- **Cert-level cause-preservation** (`errorDiv_preservation`,
+  `errorBounds_preservation` at PropChecker.lean:1008,1020) now used
+  directly instead of via the cause-agnostic `error_preservation`
+  wrapper.  These theorems already existed; we're just using them more
+  specifically.
+
+### Not yet eliminated
+
+The 4 top-level theorems still conclude the disjunction `∃ fuel,
+unsafeDiv fuel ∨ unsafeBounds fuel`.  The disjunction is now confined to
+one layer (`whileToTAC_refinement`'s errorDiv/errorBounds cases, via
+`compileStmt_unsafe`), but that layer needs cause-faithful forward
+compilation to close — deferred to Stages 2–5 (~550 LOC, 1 session).
+
+### Why split `Behavior` rather than add dedicated theorems alongside
+
+Cleanest structurally — cause is exposed at every layer, not bolted on
+only at the top.  Future consumers of `program_behavior` get cause
+information for free.  The two alternatives (dedicated cause-specific
+theorems; or `Behavior.errors` with a cause field) had comparable LOC
+but offered weaker composability.
+
+### Critical helper already in place
+
+`SExpr.unsafeDiv_unsafeBounds_disjoint`
+([CompilerCorrectness.lean:975](CredibleCompilation/CompilerCorrectness.lean#L975)),
+and parallel `SBool` and `Stmt` theorems (lines 1047, 1203): prove that
+`unsafeDiv` and `unsafeBounds` are mutually exclusive at every layer.
+This means the cause-faithful clauses in Stage 2 onward don't need
+extra exclusion hypotheses — disjointness closes the "other cause"
+clauses vacuously.
+
+### Verification
+
+- `lake build` green: 3137 jobs, 0 errors, 0 sorries.
+- `grep -rE "axiom\s" CredibleCompilation/`: unchanged — only the two
+  pre-existing IEEE-754 axioms.
+- End-to-end correctness chain preserved (all 12 top-level theorems
+  still build, though top-level cause-specific ones retain their
+  disjunction conclusion for now).
+
+---
+
 ## Phase 6 session 14: zero sorries — Steps 3 + 4 closed (2026-04-24)
 
 Closed the 2 remaining Phase 6 sorries via a new `Phase6Main` section after
