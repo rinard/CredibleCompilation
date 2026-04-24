@@ -3028,17 +3028,17 @@ private theorem compileStmt_noRegVar (s : Stmt) (offset nextTmp : Nat)
 -- § 5b-pre5. compileToTAC output has noRegVar on all vars
 -- ──────────────────────────────────────────────────────────────
 
-/-- Extract `checkNoReservedNames` from `typeCheckStrict`. -/
-private theorem typeCheckStrict_checkNoReservedNames (prog : Program)
-    (h : prog.typeCheckStrict = true) : prog.checkNoReservedNames = true := by
-  unfold Program.typeCheckStrict at h
+/-- Extract `checkNoReservedNames` from `wellFormed`. -/
+private theorem wellFormed_checkNoReservedNames (prog : Program)
+    (h : prog.wellFormed = true) : prog.checkNoReservedNames = true := by
+  unfold Program.wellFormed at h
   simp only [Bool.and_eq_true] at h
   exact h.1.2
 
-/-- Extract `Stmt.noReservedVars prog.body` from `typeCheckStrict`. -/
-private theorem typeCheckStrict_body_noReservedVars (prog : Program)
-    (h : prog.typeCheckStrict = true) : Program.Stmt.noReservedVars prog.body = true := by
-  unfold Program.typeCheckStrict at h
+/-- Extract `Stmt.noReservedVars prog.body` from `wellFormed`. -/
+private theorem wellFormed_body_noReservedVars (prog : Program)
+    (h : prog.wellFormed = true) : Program.Stmt.noReservedVars prog.body = true := by
+  unfold Program.wellFormed at h
   simp only [Bool.and_eq_true] at h
   exact h.2
 
@@ -3060,10 +3060,10 @@ private theorem initCode_noRegVar {decls : List (Var × VarTy)}
   exact noRegVar_of_not_dunder _ hx
 
 /-- Every var in `(compileToTAC prog).code` satisfies `noRegVar`. -/
-private theorem compileToTAC_code_noRegVar (prog : Program) (htcs : prog.typeCheckStrict = true) :
+private theorem compileToTAC_code_noRegVar (prog : Program) (htcs : prog.wellFormed = true) :
     ∀ instr ∈ prog.compileToTAC.code.toList, ∀ v ∈ instr.vars, noRegVar v := by
-  have hBody := typeCheckStrict_body_noReservedVars prog htcs
-  have hDecls := typeCheckStrict_checkNoReservedNames prog htcs
+  have hBody := wellFormed_body_noReservedVars prog htcs
+  have hDecls := wellFormed_checkNoReservedNames prog htcs
   unfold Program.checkNoReservedNames at hDecls
   intro instr hmem v hv
   -- code.toList = initCode decls ++ body ++ [halt]
@@ -3080,9 +3080,9 @@ private theorem compileToTAC_code_noRegVar (prog : Program) (htcs : prog.typeChe
 
 /-- Every var in `(compileToTAC prog).observable` satisfies `noRegVar`. -/
 private theorem compileToTAC_observable_noRegVar (prog : Program)
-    (htcs : prog.typeCheckStrict = true) :
+    (htcs : prog.wellFormed = true) :
     ∀ v ∈ prog.compileToTAC.observable, noRegVar v := by
-  have hDecls := typeCheckStrict_checkNoReservedNames prog htcs
+  have hDecls := wellFormed_checkNoReservedNames prog htcs
   unfold Program.checkNoReservedNames at hDecls
   simp only [List.all_eq_true] at hDecls
   intro v hv
@@ -3096,7 +3096,7 @@ private theorem compileToTAC_observable_noRegVar (prog : Program)
 
 /-- Every var in `collectVars (compileToTAC prog)` satisfies `noRegVar`. -/
 private theorem collectVars_compileToTAC_noRegVar (prog : Program)
-    (htcs : prog.typeCheckStrict = true) :
+    (htcs : prog.wellFormed = true) :
     ∀ v ∈ collectVars prog.compileToTAC, noRegVar v := by
   intro v hv
   -- collectVars = observable-fold (code-fold [] p.code) p.observable
@@ -3254,7 +3254,7 @@ private theorem buildVarLayout_entries_stack_of_noRegVar
 /-- `compileToTAC` output satisfies `checkCodegenPrereqs`: its variable layout
     is regConventionSafe, injective, has empty caller-save spec, and is well-typed.
     Follows from the all-stack layout produced by `compileToTAC`'s output. -/
-theorem compileToTAC_codegenPrereqs (prog : Program) (htcs : prog.typeCheckStrict = true) :
+theorem compileToTAC_codegenPrereqs (prog : Program) (htcs : prog.wellFormed = true) :
     checkCodegenPrereqs prog.tyCtx prog.compileToTAC = true := by
   have hNoRegVar : ∀ v ∈ collectVars prog.compileToTAC, noRegVar v :=
     collectVars_compileToTAC_noRegVar prog htcs
@@ -6473,7 +6473,7 @@ def applyPassesIO (tyCtx : TyCtx) (passes : List (String × (Prog → ECertifica
 
 def compileToAsmWith (input : String) (noOpt : Bool) : Except String String := do
   let prog ← parseProgram input
-  if !prog.typeCheckStrict then .error "program failed type check (frontend)"
+  if !prog.wellFormed then .error "program failed type check (frontend)"
   let tac := prog.compileToTAC
   let tyCtx := prog.tyCtx
   let passes := if noOpt then [] else standardPasses tyCtx

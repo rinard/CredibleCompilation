@@ -110,12 +110,12 @@ private theorem whileToTAC_body_codeAt (prog : Program) :
 /-- **Forward halt** for `prog.compileToTAC`: if the source terminates safely,
     `prog.compileToTAC` halts with a matching store. -/
 theorem whileToTAC_halt (prog : Program) (fuel : Nat) (σ' : Store) (am' : ArrayMem)
-    (htcs : prog.typeCheckStrict = true)
+    (htcs : prog.wellFormed = true)
     (hinterp : prog.body.interp fuel prog.initStore ArrayMem.init prog.arrayDecls = some (σ', am'))
     (hsafe : prog.body.safe fuel prog.initStore ArrayMem.init prog.arrayDecls) :
     ∃ σ_tac, haltsWithResult prog.compileToTAC 0 prog.initStore σ_tac ArrayMem.init am' ∧
       (∀ v, v.isTmp = false → v.isFTmp = false → σ_tac v = σ' v) := by
-  have htc := Program.typeCheckStrict_typeCheck prog htcs
+  have htc := Program.wellFormed_typeCheck prog htcs
   let labels := collectLabels prog.body prog.decls.length
   have htmpfree := Program.typeCheck_tmpFree prog htc
   have hftmpfree : prog.body.ftmpFree := Program.typeCheck_ftmpFree prog htc
@@ -139,10 +139,10 @@ theorem whileToTAC_halt (prog : Program) (fuel : Nat) (σ' : Store) (am' : Array
 /-- **Forward error** for `prog.compileToTAC`: if `¬safe`, the compiled program
     cannot halt (it reaches an error). -/
 theorem whileToTAC_error (prog : Program) (fuel : Nat)
-    (htcs : prog.typeCheckStrict = true)
+    (htcs : prog.wellFormed = true)
     (hunsafe : ¬ prog.body.safe fuel prog.initStore ArrayMem.init prog.arrayDecls) :
     ¬ ∃ σ_tac am_h, haltsWithResult prog.compileToTAC 0 prog.initStore σ_tac ArrayMem.init am_h := by
-  have htc := Program.typeCheckStrict_typeCheck prog htcs
+  have htc := Program.wellFormed_typeCheck prog htcs
   intro ⟨σ_tac, am_h, hhalt⟩
   let labels := collectLabels prog.body prog.decls.length
   have htmpfree := Program.typeCheck_tmpFree prog htc
@@ -159,11 +159,11 @@ theorem whileToTAC_error (prog : Program) (fuel : Nat)
 /-- **Forward error reachability** for `prog.compileToTAC`: if `¬safe`, the
     compiled program reaches some runtime-error state (div or bounds). -/
 theorem whileToTAC_reaches_error (prog : Program) (fuel : Nat)
-    (htcs : prog.typeCheckStrict = true)
+    (htcs : prog.wellFormed = true)
     (hunsafe : ¬ prog.body.safe fuel prog.initStore ArrayMem.init prog.arrayDecls) :
     ∃ c_err, c_err.isError ∧
       (prog.compileToTAC ⊩ Cfg.run 0 prog.initStore ArrayMem.init ⟶* c_err) := by
-  have htc := Program.typeCheckStrict_typeCheck prog htcs
+  have htc := Program.wellFormed_typeCheck prog htcs
   let labels := collectLabels prog.body prog.decls.length
   have htmpfree := Program.typeCheck_tmpFree prog htc
   have hftmpfree : prog.body.ftmpFree := Program.typeCheck_ftmpFree prog htc
@@ -181,11 +181,11 @@ theorem whileToTAC_reaches_error (prog : Program) (fuel : Nat)
 /-- Cause-faithful version: if the source has `unsafeDiv` at some fuel, the
     compiled program reaches a specific `Cfg.errorDiv` state. -/
 theorem whileToTAC_reaches_errorDiv (prog : Program) (fuel : Nat)
-    (htcs : prog.typeCheckStrict = true)
+    (htcs : prog.wellFormed = true)
     (hud : prog.body.unsafeDiv fuel prog.initStore ArrayMem.init prog.arrayDecls) :
     ∃ σ' am', prog.compileToTAC ⊩ Cfg.run 0 prog.initStore ArrayMem.init ⟶*
       Cfg.errorDiv σ' am' := by
-  have htc := Program.typeCheckStrict_typeCheck prog htcs
+  have htc := Program.wellFormed_typeCheck prog htcs
   let labels := collectLabels prog.body prog.decls.length
   have htmpfree := Program.typeCheck_tmpFree prog htc
   have hftmpfree : prog.body.ftmpFree := Program.typeCheck_ftmpFree prog htc
@@ -210,11 +210,11 @@ theorem whileToTAC_reaches_errorDiv (prog : Program) (fuel : Nat)
 /-- Cause-faithful version: if the source has `unsafeBounds` at some fuel, the
     compiled program reaches a specific `Cfg.errorBounds` state. -/
 theorem whileToTAC_reaches_errorBounds (prog : Program) (fuel : Nat)
-    (htcs : prog.typeCheckStrict = true)
+    (htcs : prog.wellFormed = true)
     (hub : prog.body.unsafeBounds fuel prog.initStore ArrayMem.init prog.arrayDecls) :
     ∃ σ' am', prog.compileToTAC ⊩ Cfg.run 0 prog.initStore ArrayMem.init ⟶*
       Cfg.errorBounds σ' am' := by
-  have htc := Program.typeCheckStrict_typeCheck prog htcs
+  have htc := Program.wellFormed_typeCheck prog htcs
   let labels := collectLabels prog.body prog.decls.length
   have htmpfree := Program.typeCheck_tmpFree prog htc
   have hftmpfree : prog.body.ftmpFree := Program.typeCheck_ftmpFree prog htc
@@ -238,11 +238,11 @@ theorem whileToTAC_reaches_errorBounds (prog : Program) (fuel : Nat)
 /-- **Forward no-halt for safe divergence** in `prog.compileToTAC`: if the source
     diverges safely, the compiled program doesn't halt. -/
 theorem whileToTAC_diverge (prog : Program)
-    (htcs : prog.typeCheckStrict = true)
+    (htcs : prog.wellFormed = true)
     (hdiv : ∀ fuel, prog.body.interp fuel prog.initStore ArrayMem.init prog.arrayDecls = none)
     (hsafe : ∀ fuel, prog.body.safe fuel prog.initStore ArrayMem.init prog.arrayDecls) :
     ¬ ∃ σ_tac am_h, haltsWithResult prog.compileToTAC 0 prog.initStore σ_tac ArrayMem.init am_h := by
-  have htc := Program.typeCheckStrict_typeCheck prog htcs
+  have htc := Program.wellFormed_typeCheck prog htcs
   intro ⟨σ_tac, am_h, hhalt⟩
   let labels := collectLabels prog.body prog.decls.length
   have htmpfree := Program.typeCheck_tmpFree prog htc
@@ -265,7 +265,7 @@ theorem whileToTAC_diverge (prog : Program)
   exact no_halt_of_unbounded_am hunbounded' σ_tac am_h hhalt
 /-- **Forward no-halt for unsafe divergence** in `prog.compileToTAC`. -/
 private theorem whileToTAC_no_halt_diverge_unsafe (prog : Program)
-    (htcs : prog.typeCheckStrict = true)
+    (htcs : prog.wellFormed = true)
     (hdiv : ∀ fuel, prog.body.interp fuel prog.initStore ArrayMem.init prog.arrayDecls = none) :
     ¬ ∃ σ_tac am_h, haltsWithResult prog.compileToTAC 0 prog.initStore σ_tac ArrayMem.init am_h := by
   by_cases hsafe : ∀ fuel, prog.body.safe fuel prog.initStore ArrayMem.init prog.arrayDecls
@@ -368,7 +368,7 @@ private theorem Option.some_of_ne_none {o : Option α} (h : o ≠ none) : ∃ a,
 /-- Backward refinement: any observable behavior of `prog.compileToTAC` starting from
     `ArrayMem.init` corresponds to a behavior of the source program.
     For halting programs, both store (on non-temporary variables) and array memory match. -/
-theorem whileToTAC_refinement (prog : Program) (htcs : prog.typeCheckStrict = true)
+theorem whileToTAC_refinement (prog : Program) (htcs : prog.wellFormed = true)
     (b : Behavior)
     (hbeh : program_behavior_init prog.compileToTAC prog.initStore b) :
     match b with
@@ -382,7 +382,7 @@ theorem whileToTAC_refinement (prog : Program) (htcs : prog.typeCheckStrict = tr
         prog.body.unsafeBounds fuel prog.initStore ArrayMem.init prog.arrayDecls
     | .typeErrors _ => False
     | .diverges => ∀ fuel, prog.interp fuel = none := by
-  have htc := Program.typeCheckStrict_typeCheck prog htcs
+  have htc := Program.wellFormed_typeCheck prog htcs
   cases b with
   | halts σ_tac =>
     simp only [program_behavior_init] at hbeh

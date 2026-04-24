@@ -1743,9 +1743,9 @@ private theorem checkNoGoto_sound {s : Stmt}
   | _ => exact trivial
 
 /-- A strictly type-checked program's body has no goto/ifgoto. -/
-theorem Program.typeCheck_noGoto (prog : Program) (h : prog.typeCheckStrict = true) :
+theorem Program.typeCheck_noGoto (prog : Program) (h : prog.wellFormed = true) :
     prog.body.noGoto := by
-  unfold Program.typeCheckStrict at h; simp only [Bool.and_eq_true] at h
+  unfold Program.wellFormed at h; simp only [Bool.and_eq_true] at h
   exact checkNoGoto_sound h.1.1.2
 
 -- ============================================================

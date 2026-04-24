@@ -943,10 +943,10 @@ def Stmt.noReservedVars : Stmt → Bool
   | .printFloat e => SExpr.noReservedVars e
   | .printString _ => true
 
-/-- Strict type check: typeCheck + no goto/ifgoto + no reserved names (in decls and body).
+/-- Well-formedness check: typeCheck + no goto/ifgoto + no reserved names (in decls and body).
     Used by compiler correctness proofs which require structured control flow
     and guarantee that `__ir`/`__br`/`__fr` register names are compiler-generated. -/
-def typeCheckStrict (prog : Program) : Bool :=
+def wellFormed (prog : Program) : Bool :=
   prog.typeCheck && prog.body.checkNoGoto && prog.checkNoReservedNames &&
   Stmt.noReservedVars prog.body
 
@@ -1088,10 +1088,10 @@ theorem initStore_typedStore (prog : Program)
   simp only [initStoreBase, defaultVarTy]
   split <;> simp [Value.typeOf]
 
-/-- typeCheckStrict implies typeCheck. -/
-theorem typeCheckStrict_typeCheck (prog : Program) (h : prog.typeCheckStrict = true) :
+/-- wellFormed implies typeCheck. -/
+theorem wellFormed_typeCheck (prog : Program) (h : prog.wellFormed = true) :
     prog.typeCheck = true := by
-  unfold typeCheckStrict at h; simp only [Bool.and_eq_true] at h; exact h.1.1.1
+  unfold wellFormed at h; simp only [Bool.and_eq_true] at h; exact h.1.1.1
 
 /-- Extract noDups from typeCheck (public, so other files can use it). -/
 theorem typeCheck_noDups (prog : Program) (h : prog.typeCheck = true) :

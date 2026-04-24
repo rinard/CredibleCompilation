@@ -417,7 +417,7 @@ def ArmMatchesWhile (layout : VarLayout) (observables : List Var)
     2. The ARM program reaches a final state whose observable registers/stack
        slots hold the source program's output values -/
 theorem while_to_arm_correctness
-    (prog : Program) (htcs : prog.typeCheckStrict = true)
+    (prog : Program) (htcs : prog.wellFormed = true)
     (passes : List (String × (Prog → ECertificate)))
     {r : VerifiedAsmResult}
     (hGen : verifiedGenerateAsm prog.tyCtx (applyPassesPure prog.tyCtx passes prog.compileToTAC) = .ok r)
@@ -431,7 +431,7 @@ theorem while_to_arm_correctness
           pc := r.pcMap 0, flags := ⟨0, 0⟩ } s' ∧
       ArmMatchesWhile r.layout prog.compileToTAC.observable σ_src am_src s' ∧
       s'.pc = r.haltFinal := by
-  have htc := Program.typeCheckStrict_typeCheck prog htcs
+  have htc := Program.wellFormed_typeCheck prog htcs
   have hInitEq : Store.typedInit prog.tyCtx = prog.initStore :=
     Program.typedInit_eq_initStore prog htc
   have hts : TypedStore prog.tyCtx (Store.typedInit prog.tyCtx) := TypedStore.typedInit _
@@ -480,13 +480,13 @@ theorem while_to_arm_correctness
 
 /-- Cause-faithful source-side helper for `while_to_arm_div_preservation`. -/
 private theorem while_to_arm_errorDiv_source_side
-    (prog : Program) (htcs : prog.typeCheckStrict = true)
+    (prog : Program) (htcs : prog.wellFormed = true)
     (passes : List (String × (Prog → ECertificate)))
     {σ_err : Store} {am_err : ArrayMem}
     (hErr : (applyPassesPure prog.tyCtx passes prog.compileToTAC) ⊩
         Cfg.run 0 (Store.typedInit prog.tyCtx) ArrayMem.init ⟶* Cfg.errorDiv σ_err am_err) :
     ∃ fuel, prog.body.unsafeDiv fuel prog.initStore ArrayMem.init prog.arrayDecls := by
-  have htc := Program.typeCheckStrict_typeCheck prog htcs
+  have htc := Program.wellFormed_typeCheck prog htcs
   have hInitEq : Store.typedInit prog.tyCtx = prog.initStore :=
     Program.typedInit_eq_initStore prog htc
   have hts : TypedStore prog.tyCtx (Store.typedInit prog.tyCtx) := TypedStore.typedInit _
@@ -498,13 +498,13 @@ private theorem while_to_arm_errorDiv_source_side
 
 /-- Cause-faithful source-side helper for `while_to_arm_bounds_preservation`. -/
 private theorem while_to_arm_errorBounds_source_side
-    (prog : Program) (htcs : prog.typeCheckStrict = true)
+    (prog : Program) (htcs : prog.wellFormed = true)
     (passes : List (String × (Prog → ECertificate)))
     {σ_err : Store} {am_err : ArrayMem}
     (hErr : (applyPassesPure prog.tyCtx passes prog.compileToTAC) ⊩
         Cfg.run 0 (Store.typedInit prog.tyCtx) ArrayMem.init ⟶* Cfg.errorBounds σ_err am_err) :
     ∃ fuel, prog.body.unsafeBounds fuel prog.initStore ArrayMem.init prog.arrayDecls := by
-  have htc := Program.typeCheckStrict_typeCheck prog htcs
+  have htc := Program.wellFormed_typeCheck prog htcs
   have hInitEq : Store.typedInit prog.tyCtx = prog.initStore :=
     Program.typedInit_eq_initStore prog htc
   have hts : TypedStore prog.tyCtx (Store.typedInit prog.tyCtx) := TypedStore.typedInit _
@@ -521,7 +521,7 @@ private theorem while_to_arm_errorBounds_source_side
     work), and (b) the ARM program steps to a state whose PC is the verified
     `divS` sentinel. -/
 theorem while_to_arm_div_preservation
-    (prog : Program) (htcs : prog.typeCheckStrict = true)
+    (prog : Program) (htcs : prog.wellFormed = true)
     (passes : List (String × (Prog → ECertificate)))
     {r : VerifiedAsmResult}
     (hGen : verifiedGenerateAsm prog.tyCtx (applyPassesPure prog.tyCtx passes prog.compileToTAC) = .ok r)
@@ -540,7 +540,7 @@ theorem while_to_arm_div_preservation
 
 /-- **While→ARM: array-bounds-error cause.** -/
 theorem while_to_arm_bounds_preservation
-    (prog : Program) (htcs : prog.typeCheckStrict = true)
+    (prog : Program) (htcs : prog.wellFormed = true)
     (passes : List (String × (Prog → ECertificate)))
     {r : VerifiedAsmResult}
     (hGen : verifiedGenerateAsm prog.tyCtx (applyPassesPure prog.tyCtx passes prog.compileToTAC) = .ok r)
@@ -566,13 +566,13 @@ theorem while_to_arm_bounds_preservation
     If the optimized TAC diverges, then the source While program diverges
     (does not terminate at any fuel). -/
 theorem while_to_arm_divergence_preservation
-    (prog : Program) (htcs : prog.typeCheckStrict = true)
+    (prog : Program) (htcs : prog.wellFormed = true)
     (passes : List (String × (Prog → ECertificate)))
     {f : Nat → Cfg}
     (hDiv : IsInfiniteExec (applyPassesPure prog.tyCtx passes prog.compileToTAC) f)
     (hf0 : f 0 = Cfg.run 0 (Store.typedInit prog.tyCtx) ArrayMem.init) :
     ∀ fuel, prog.interp fuel = none := by
-  have htc := Program.typeCheckStrict_typeCheck prog htcs
+  have htc := Program.wellFormed_typeCheck prog htcs
   have hInitEq : Store.typedInit prog.tyCtx = prog.initStore :=
     Program.typedInit_eq_initStore prog htc
   have hts : TypedStore prog.tyCtx (Store.typedInit prog.tyCtx) := TypedStore.typedInit _
@@ -706,11 +706,11 @@ theorem applyPassesPure_preserves_invariants (tyCtx : TyCtx)
     for any well-typed source program after an arbitrary list of certificate-checked
     optimization passes. Each pass either validates (refining the program) or is
     skipped; the codegen invariants are preserved either way. -/
-theorem generateAsm_total_with_passes (prog : Program) (htcs : prog.typeCheckStrict = true)
+theorem generateAsm_total_with_passes (prog : Program) (htcs : prog.wellFormed = true)
     (passes : List (String × (Prog → ECertificate))) :
     ∃ asm, verifiedGenerateAsm prog.tyCtx
       (applyPassesPure prog.tyCtx passes prog.compileToTAC) = .ok asm := by
-  have htc := prog.typeCheckStrict_typeCheck htcs
+  have htc := prog.wellFormed_typeCheck htcs
   have hWT0 : checkWellTypedProg prog.tyCtx prog.compileToTAC = true :=
     checkWellTypedProg_complete (prog.compileToTAC_wellTyped htc)
   have hPrereqs0 := compileToTAC_codegenPrereqs prog htcs
@@ -724,7 +724,7 @@ theorem generateAsm_total_with_passes (prog : Program) (htcs : prog.typeCheckStr
 /-- End-to-end totality on the no-optimization path. Corollary of
     `generateAsm_total_with_passes` at `passes = []`, where `applyPassesPure`
     is the identity definitionally. -/
-theorem generateAsm_total (prog : Program) (htcs : prog.typeCheckStrict = true) :
+theorem generateAsm_total (prog : Program) (htcs : prog.wellFormed = true) :
     ∃ asm, verifiedGenerateAsm prog.tyCtx prog.compileToTAC = .ok asm :=
   generateAsm_total_with_passes prog htcs ([] : List (String × (Prog → ECertificate)))
 
@@ -1154,12 +1154,12 @@ theorem applyPassesPure_preserves_stepClosedInBounds (tyCtx : TyCtx)
     `applyPassesPure_preserves_stepClosedInBounds`, then appeals to
     `has_behavior`. -/
 theorem pipelined_has_behavior
-    (prog : Program) (htcs : prog.typeCheckStrict = true)
+    (prog : Program) (htcs : prog.wellFormed = true)
     (passes : List (String × (Prog → ECertificate)))
     (σ₀ : Store) :
     ∃ b, program_behavior
       (applyPassesPure prog.tyCtx passes prog.compileToTAC) σ₀ b := by
-  have htc := prog.typeCheckStrict_typeCheck htcs
+  have htc := prog.wellFormed_typeCheck htcs
   have hSC0 : StepClosedInBounds prog.compileToTAC :=
     prog.compileToTAC_stepClosed htc
   have hSC := applyPassesPure_preserves_stepClosedInBounds prog.tyCtx passes _ hSC0
@@ -1171,12 +1171,12 @@ theorem pipelined_has_behavior
     through `applyPassesPure_preserves_stepClosedInBounds`, and
     `type_safety` in TypeSystem.lean excludes `typeError` at runtime. -/
 theorem pipelined_no_typeError
-    (prog : Program) (htcs : prog.typeCheckStrict = true)
+    (prog : Program) (htcs : prog.wellFormed = true)
     (passes : List (String × (Prog → ECertificate)))
     (σ' : Store) (am' : ArrayMem) :
     ¬ ((applyPassesPure prog.tyCtx passes prog.compileToTAC) ⊩
         Cfg.run 0 (Store.typedInit prog.tyCtx) ArrayMem.init ⟶* Cfg.typeError σ' am') := by
-  have htc := prog.typeCheckStrict_typeCheck htcs
+  have htc := prog.wellFormed_typeCheck htcs
   have hWT0 : checkWellTypedProg prog.tyCtx prog.compileToTAC = true :=
     checkWellTypedProg_complete (prog.compileToTAC_wellTyped htc)
   have hPrereqs0 := compileToTAC_codegenPrereqs prog htcs
@@ -1365,7 +1365,7 @@ private theorem sentinel_state_unique
     Landed as a stated hypothesis so Phase 7a/b/c can close their
     `.diverges` branches.  See session 4 report in CHANGELOG. -/
 private theorem source_diverges_gives_ArmDiverges_init
-    (prog : Program) (htcs : prog.typeCheckStrict = true)
+    (prog : Program) (htcs : prog.wellFormed = true)
     (passes : List (String × (Prog → ECertificate)))
     {r : VerifiedAsmResult}
     (hGen : verifiedGenerateAsm prog.tyCtx
@@ -1384,7 +1384,7 @@ private theorem source_diverges_gives_ArmDiverges_init
     | succ k ih => exact StepsN_extend ih (hinf.2 k)
   have hStepsN := hStepsN_any (N + 1)
   -- Connect f 0 = .run 0 prog.initStore ArrayMem.init to Store.typedInit form
-  have htc := Program.typeCheckStrict_typeCheck prog htcs
+  have htc := Program.wellFormed_typeCheck prog htcs
   have hInitEq : Store.typedInit prog.tyCtx = prog.initStore :=
     Program.typedInit_eq_initStore prog htc
   rw [hf0, ← hInitEq, show ArrayMem.init = (fun _ _ => 0) from rfl] at hStepsN
@@ -1406,7 +1406,7 @@ private theorem source_diverges_gives_ArmDiverges_init
     shorter length; any surplus steps from a `haltFinal` state contradict
     `sentinel_stuck`. -/
 theorem halt_state_observables_deterministic
-    (prog : Program) (htcs : prog.typeCheckStrict = true)
+    (prog : Program) (htcs : prog.wellFormed = true)
     (passes : List (String × (Prog → ECertificate)))
     {r : VerifiedAsmResult}
     (hGen : verifiedGenerateAsm prog.tyCtx
@@ -1464,7 +1464,7 @@ theorem halt_state_observables_deterministic
     `typeErrors` excluded via `pipelined_no_typeError`; `diverges` excluded
     via `ArmDiverges` reaching-vs-stuck argument (design doc § 7a). -/
 theorem arm_halts_implies_while_halts
-    (prog : Program) (htcs : prog.typeCheckStrict = true)
+    (prog : Program) (htcs : prog.wellFormed = true)
     (passes : List (String × (Prog → ECertificate)))
     {r : VerifiedAsmResult}
     (hGen : verifiedGenerateAsm prog.tyCtx
@@ -1475,7 +1475,7 @@ theorem arm_halts_implies_while_halts
     ∃ fuel σ_src am_src,
       prog.interp fuel = some (σ_src, am_src) ∧
       ArmMatchesWhile r.layout prog.compileToTAC.observable σ_src am_src s := by
-  have htc := prog.typeCheckStrict_typeCheck htcs
+  have htc := prog.wellFormed_typeCheck htcs
   have hSC : StepClosedInBounds (applyPassesPure prog.tyCtx passes prog.compileToTAC) :=
     applyPassesPure_preserves_stepClosedInBounds prog.tyCtx passes _
       (prog.compileToTAC_stepClosed htc)
@@ -1534,7 +1534,7 @@ theorem arm_halts_implies_while_halts
 
     Proof size: ~60 LOC. -/
 theorem arm_div_implies_while_unsafe_div
-    (prog : Program) (htcs : prog.typeCheckStrict = true)
+    (prog : Program) (htcs : prog.wellFormed = true)
     (passes : List (String × (Prog → ECertificate)))
     {r : VerifiedAsmResult}
     (hGen : verifiedGenerateAsm prog.tyCtx
@@ -1543,7 +1543,7 @@ theorem arm_div_implies_while_unsafe_div
     (hArm : ArmSteps r.bodyFlat (Phase6.initArmState r) s)
     (hPC : s.pc = r.divS) :
     ∃ fuel, prog.body.unsafeDiv fuel prog.initStore ArrayMem.init prog.arrayDecls := by
-  have htc := prog.typeCheckStrict_typeCheck htcs
+  have htc := prog.wellFormed_typeCheck htcs
   have hSC : StepClosedInBounds (applyPassesPure prog.tyCtx passes prog.compileToTAC) :=
     applyPassesPure_preserves_stepClosedInBounds prog.tyCtx passes _
       (prog.compileToTAC_stepClosed htc)
@@ -1595,7 +1595,7 @@ theorem arm_div_implies_while_unsafe_div
 
     Proof size: ~60 LOC. -/
 theorem arm_bounds_implies_while_unsafe_bounds
-    (prog : Program) (htcs : prog.typeCheckStrict = true)
+    (prog : Program) (htcs : prog.wellFormed = true)
     (passes : List (String × (Prog → ECertificate)))
     {r : VerifiedAsmResult}
     (hGen : verifiedGenerateAsm prog.tyCtx
@@ -1604,7 +1604,7 @@ theorem arm_bounds_implies_while_unsafe_bounds
     (hArm : ArmSteps r.bodyFlat (Phase6.initArmState r) s)
     (hPC : s.pc = r.boundsS) :
     ∃ fuel, prog.body.unsafeBounds fuel prog.initStore ArrayMem.init prog.arrayDecls := by
-  have htc := prog.typeCheckStrict_typeCheck htcs
+  have htc := prog.wellFormed_typeCheck htcs
   have hSC : StepClosedInBounds (applyPassesPure prog.tyCtx passes prog.compileToTAC) :=
     applyPassesPure_preserves_stepClosedInBounds prog.tyCtx passes _
       (prog.compileToTAC_stepClosed htc)
@@ -1665,14 +1665,14 @@ theorem arm_bounds_implies_while_unsafe_bounds
 
     Proof size: ~40 LOC. -/
 theorem arm_diverges_implies_while_diverges
-    (prog : Program) (htcs : prog.typeCheckStrict = true)
+    (prog : Program) (htcs : prog.wellFormed = true)
     (passes : List (String × (Prog → ECertificate)))
     {r : VerifiedAsmResult}
     (hGen : verifiedGenerateAsm prog.tyCtx
       (applyPassesPure prog.tyCtx passes prog.compileToTAC) = .ok r)
     (hDiv : ArmDiverges r.bodyFlat (Phase6.initArmState r)) :
     ∀ fuel, prog.interp fuel = none := by
-  have htc := prog.typeCheckStrict_typeCheck htcs
+  have htc := prog.wellFormed_typeCheck htcs
   have hInitEq : Store.typedInit prog.tyCtx = prog.initStore :=
     Program.typedInit_eq_initStore prog htc
   have hSC : StepClosedInBounds (applyPassesPure prog.tyCtx passes prog.compileToTAC) :=
@@ -3763,7 +3763,7 @@ private theorem ArmStep_pc_analysis {prog : ArmProg} {s s' : ArmState}
     (s.pc ≠ haltFinal ∧ s.pc ≠ divS ∧ s.pc ≠ boundsS, derived from the
     negated sentinel hypotheses). -/
 theorem arm_behavior_exhaustive
-    (prog : Program) (htcs : prog.typeCheckStrict = true)
+    (prog : Program) (htcs : prog.wellFormed = true)
     (passes : List (String × (Prog → ECertificate)))
     {r : VerifiedAsmResult}
     (hGen : verifiedGenerateAsm prog.tyCtx
@@ -3777,7 +3777,7 @@ theorem arm_behavior_exhaustive
   -- Extract GenAsmSpec
   have spec : GenAsmSpec prog.tyCtx p r := verifiedGenerateAsm_spec hGen
   -- Extract `checkBranchTargets p.code = none` via pipeline invariant preservation
-  have htc := prog.typeCheckStrict_typeCheck htcs
+  have htc := prog.wellFormed_typeCheck htcs
   have hWT0 : checkWellTypedProg prog.tyCtx prog.compileToTAC = true :=
     checkWellTypedProg_complete (prog.compileToTAC_wellTyped htc)
   have hPrereqs0 := compileToTAC_codegenPrereqs prog htcs
