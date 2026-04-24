@@ -4,6 +4,140 @@ Chronological record of what was built and why, to reconstruct the sequence of d
 
 ---
 
+## Phase 6 session 14: zero sorries — Steps 3 + 4 closed (2026-04-24)
+
+Closed the 2 remaining Phase 6 sorries via a new `Phase6Main` section after
+`Phase6Probes2`. **Sorry count: 2 → 0.** No new axioms; both theorems depend
+only on standard Lean axioms (`propext`, `Classical.choice`, `Quot.sound`).
+
+Branch `phase6-prep`, atop `3a03099` via commits a9f0af7 (helpers), 188e558
+(Step 3), 568b5fe (Step 4).
+
+### Step 3 — `bodyFlat_branch_target_bounded` (~155 LOC)
+
+Lifts the per-TAC aggregator `verifiedGenInstr_branch_target_bounded`
+(session 13) from per-PC indexing to flat bodyFlat indexing. Proof:
+
+1. Package the branch-form hypothesis as `⟨X, bodyFlat[pc]? = some X, X is a
+   branch-form⟩` via rcases.
+2. `X ∈ bodyFlat.toList` via `Array.mem_toList_iff` + `Array.mem_iff_getElem?`.
+3. Split `bodyFlat.toList = bodyPerPC.toList.flatMap id ++
+   haltSaveBlock.toList` via `List.toList_toArray` on the definitional
+   expansion of `bodyFlat`.
+4. Case on which chunk contains X:
+   - `bodyPerPC` prefix: `List.mem_flatMap` → X ∈ some block;
+     `Array.mem_iff_getElem` → block = `bodyPerPC[tac_pc]` for some tac_pc
+     < p.size. Dispatch on TAC type at tac_pc:
+       * print: `spec.printSaveRestore` → saves ++ [printCall lines] ++
+         restores; each piece non-branch via `entriesToSaves_no_branches`,
+         `printCall_no_branches`, `entriesToRestores_no_branches` (all new).
+       * lib-call: `spec.callSiteSaveRestore` → saves ++ baseInstrs ++
+         restores; save/restore non-branch via helpers, baseInstrs via
+         aggregator.
+       * normal: `spec.instrGen` → baseInstrs is `verifiedGenInstr` output;
+         apply aggregator directly.
+   - `haltSaveBlock` suffix: `spec.haltSaveBlock_eq` + `genHaltSave_no_branches`
+     (new) contradict the branch form.
+
+`hPcBound` for the aggregator chain: `pcMap l ≤ haltS` via `pcMap_le_haltS`
++ `checkBranchTargets_to_labels_in_bounds`, then `≤ boundsS` via
+`spec.haltFinal_eq` + `spec.boundsS_eq`.
+
+`hRC` / `hII` booleans derived from `hGenInstr` via `cases h : ... ; simp
+[verifiedGenInstr, h] at hGenInstr` — standard pattern from
+CodeGen.lean:4340. Avoids adding bool-form fields to `GenAsmSpec` (which
+carries only the `RegConventionSafe` Prop form).
+
+Takes `hBranch : checkBranchTargets p.code = none` as an explicit hypothesis,
+not a spec field. Derived at the caller (next step) via
+`applyPassesPure_preserves_invariants`.
+
+Supporting helpers (new, in `Phase6Main` section):
+- `entriesToSaves_no_branches`, `entriesToRestores_no_branches` — induction
+  on entries, case on `.ireg` vs `.freg`; each emits only `str`/`fstr` or
+  `ldr`/`fldr`.
+- `printCall_no_branches` — single non-branch instruction in a list.
+- `genHaltSaveOne_no_branches`, `genHaltSave_no_branches` — the latter via
+  `List.mem_flatMap` over the per-observable `genHaltSaveOne` output.
+
+`genHaltSave` and `genHaltSaveOne` had `private` removed in CodeGen.lean so
+these helpers can reference them; they were already exposed via
+`spec.haltSaveBlock_eq`.
+
+### Step 4 — `arm_behavior_exhaustive` (~85 LOC + 20 LOC helper)
+
+Classical em + König proof. Dispatch via `by_cases` on each sentinel-reach
+predicate; fall-through builds `ArmDiverges = ∀ n, ∃ s, ArmStepsN init s n`
+by induction on n with strengthened invariant `s.pc ≤ boundsS`:
+
+- Base (n=0): `init.pc = pcMap 0 ≤ haltS ≤ boundsS` via `pcMap_le_haltS`
+  (l=0 trivially ≤ p.size).
+- Step (n → n+1): IH gives s with `ArmStepsN init s n ∧ s.pc ≤ boundsS`.
+  The negated sentinel hypotheses plus the invariant force
+  `s.pc < haltFinal` (`s.pc ≠ haltFinal, haltFinal+1, haltFinal+2` and
+  `s.pc ≤ haltFinal+2` → omega). `haltFinal = bodyFlat.size` gives
+  `bodyFlat[s.pc]? = some i`; `ArmStep_total_of_codeAt` produces a step to
+  s'. By `ArmStep_pc_analysis` (new), `s'.pc` is either `s.pc + 1`
+  (≤ haltFinal ≤ boundsS) or a branch target bounded by
+  `bodyFlat_branch_target_bounded`.
+
+`hBranch` derived via `applyPassesPure_preserves_invariants` starting from
+`compileToTAC_checkBranchTargets`, mirroring `generateAsm_total_with_passes`.
+
+`ArmStep_pc_analysis` (new, ~20 LOC): every `ArmStep` either sets
+`s'.pc = s.pc + 1` or `s'.pc = lbl` where the instruction at `s.pc` is one
+of `.b lbl`, `.cbz _ lbl`, `.cbnz _ lbl`, `.bCond _ lbl`. The four
+branching rules (`cbz_taken`, `cbnz_taken`, `bCond_taken`, `branch`) yield
+the second disjunct; a single `| _ => Or.inl rfl` catch-all handles all
+remaining ~50 non-branching rules (including `cbz_fall`, `cbnz_fall`,
+`bCond_fall`) because `.nextPC` advances pc by 1 definitionally, and all
+other state updates (`setReg`, `setStack`, `setFReg`, `havocCallerSaved`,
+`setArrayMem`) preserve pc via `{ s with ... }`-pattern.
+
+### Technique insights
+
+1. **`List.toList_toArray` is in the `List` namespace**, not `Array`. Usage:
+   `simp only [VerifiedAsmResult.bodyFlat, List.toList_toArray]` to reduce
+   `((list).toArray).toList` to `list`.
+
+2. **`private def` from CodeGen is not accessible via qualified name from
+   PipelineCorrectness**. Removed `private` from `genHaltSave` /
+   `genHaltSaveOne`; already effectively public via `spec.haltSaveBlock_eq`
+   which uses `genHaltSave` in the equation's RHS.
+
+3. **`ArmStep_pc_analysis` catch-all works**: Lean's `cases h with | _ =>`
+   after explicit branching patterns reduces all remaining ~50 cases to
+   `Or.inl rfl` because their state-update chain ends in `.nextPC` or an
+   explicit `{ s with pc := s.pc + 1 }`.
+
+4. **Extracting `checkBranchTargets` from `hGen`**: instead of deriving via
+   `hGen`'s split cascade, re-derive from scratch via
+   `compileToTAC_checkBranchTargets` + `applyPassesPure_preserves_invariants`.
+   Same proof `generateAsm_total_with_passes` uses.
+
+### Verification
+
+- `lake build` green: 3137 jobs, 0 errors, 0 sorries.
+- `#print axioms arm_behavior_exhaustive` → `[propext, Classical.choice,
+  Quot.sound]`. No `sorryAx`. Same for `bodyFlat_branch_target_bounded`.
+- `grep -rE "axiom\s" CredibleCompilation/`: only the two pre-existing
+  IEEE-754 axioms (`FloatBinOp.fadd_comm`, `Flags.condHolds_float_correct`),
+  unchanged.
+
+### Session meta
+
+Sessions 3–10 landed Flavor A scaffolding through Phase B. Session 11
+closed Phases D–H (Phase 7 done, sorry 4→3). Session 12 closed the
+Phase 6 elaboration blocker + 5 per-TAC helpers (sorry 3→2). Session 13
+landed all 12 remaining per-case helpers + the aggregator (~640 LOC; sorry
+unchanged, but Steps 1+2 of the roadmap complete). Session 14 landed
+Steps 3+4 (~260 LOC). **Phase 6 and Phase 7 both closed; sorry count reaches
+0.** End-to-end correctness chain was already sorry-free pre-session-14
+(these two theorems had no downstream consumers); session 14 is an
+independent Phase 6 finish.
+
+---
+
 ## Phase 6 session 13: remaining per-case helpers + aggregator (2026-04-24)
 
 Follow-on after session 12. Goal was to close the 2 remaining Phase 6 sorries

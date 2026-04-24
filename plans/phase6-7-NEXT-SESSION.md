@@ -1,31 +1,38 @@
 # Phase 6/7 Next Session — Final Plan and Handoff
 
 **Read this first.**  Supersedes all earlier Phase 6/7 planning documents
-in this directory.  Last updated: 2026-04-24 after **session 13** — Phase 7
-closed (session 11), Phase 6 helpers + aggregator done (sessions 12–13).
-Sorry count: **2**. Branch `phase6-prep` at HEAD `edd5aaa` (to be pushed).
+in this directory.  Last updated: 2026-04-24 after **session 14** — Phase 6
+and Phase 7 both closed. Sorry count: **0**. Branch `phase6-prep`.
 
-## TL;DR for next session (session 14)
+## TL;DR (session 14 complete — Phase 6/7 DONE, 0 sorries)
 
-**Sorry count: 2.** Both Phase 6 exhaustion, out of scope for end-to-end
-correctness. (Verified: `arm_behavior_exhaustive` has no downstream
-consumers — closing these doesn't strengthen any top-level theorem.
-Phase 7's bidirectional While ↔ ARM correctness chain is sorry-free.)
+**Sorry count: 0.** Both remaining Phase 6 sorries closed:
 
-Remaining sorries:
-- [PipelineCorrectness.lean:779](../CredibleCompilation/PipelineCorrectness.lean#L779)
-  `bodyFlat_branch_target_bounded` — lift the aggregator to bodyFlat indexing.
-- [PipelineCorrectness.lean:1032](../CredibleCompilation/PipelineCorrectness.lean#L1032)
-  `arm_behavior_exhaustive` — classical em + König.
+- `bodyFlat_branch_target_bounded` (Step 3) — full proof in new
+  `Phase6Main` section of PipelineCorrectness.lean (after Phase6Probes2).
+- `arm_behavior_exhaustive` (Step 4) — classical em + König, same section.
 
-Build green with 2 sorries.
+Both theorems verified via `#print axioms` to depend only on
+`[propext, Classical.choice, Quot.sound]`. No `sorryAx`. No new IEEE-754
+axioms (the two pre-existing ones in ArmCorrectness.lean and Core.lean
+are unchanged).
+
+See [CHANGELOG.md §Phase 6 session 14](../CHANGELOG.md#phase-6-session-14-zero-sorries--steps-3--4-closed-2026-04-24)
+for the detailed walk-through, proof techniques, and new helper inventory.
+
+**Nothing remaining.** Both Phase 6 and Phase 7 end-to-end chains are
+now sorry-free.
+
+---
+
+## Historical context (sessions 11–13)
 
 **Session 13 completed Steps 1 and 2 of the session-12 roadmap:** all 19
 TAC per-case branch-bounded helpers landed, and the aggregator
 `verifiedGenInstr_branch_target_bounded` (that dispatches per TAC
 constructor) is in place at the end of `section Phase6Probes2`. Step 3
 (lifting per-PC to flat bodyFlat) and Step 4 (König proof for divergence)
-remain.
+— DONE in session 14.
 
 ### Session 13 outcome
 
