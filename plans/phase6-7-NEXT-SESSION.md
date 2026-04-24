@@ -1,29 +1,75 @@
 # Phase 6/7 Next Session — Final Plan and Handoff
 
 **Read this first.**  Supersedes all earlier Phase 6/7 planning documents
-in this directory.  Last updated: 2026-04-24 after **session 9** —
-**Phase B.0 + 29 of 31 top-level cases complete + 5 of 10 internal
-sub-cases of .iftrue filled**. .iftrue still has 5 internal sub-sorries,
-.iffall entirely sorried.
+in this directory.  Last updated: 2026-04-24 after **session 10** —
+**Phase B fully complete**. `verifiedGenInstr_correct` has zero internal
+sorries; declaration warning gone.
 
-## TL;DR for next session (session 10)
+## TL;DR for next session (session 11)
 
-Sorry count stands at **5** (unchanged from sessions 7/8/9) — 4
-pre-existing in PipelineCorrectness.lean (3 Phase 6 out-of-scope + 1
-Phase 7 target), and 1 on `verifiedGenInstr_correct` with 2 internal
-per-case sorries remaining (`.iftrue`, `.iffall`). Build green. Phase B
-signature is locked.
+**Sorry count: 4.** All 4 pre-existing in PipelineCorrectness.lean:
+- L770 (Phase 6 out-of-scope `bodyFlat_branch_target_bounded` etc.)
+- L1022 (Phase 6 out-of-scope `arm_behavior_exhaustive`)
+- L1324 (Phase 7 target `source_diverges_gives_ArmDiverges_init`)
+- L2115 (Phase 6 out-of-scope `verifiedGenInstr_ifgoto_branch_bounded`)
 
-**Session 10 continues .iftrue from session 9's partial progress.**
-Session 9 filled cmp {var/var, var/lit, lit/var, lit/lit} and fcmp
-var/var. Remaining for .iftrue: fcmp {var/flit, flit/var, flit/flit}
-+ inner catch-all + outer catch-all. Then mirror all 10 sub-cases for
-.iffall (polarity flipped: hcond is be.eval = false, bCond takes
-.bCond_fall instead of .bCond_taken, final PC is pcMap (pc+1) not
-pcMap l_var).
+Build green. Phase B locked.  Phases A + B done.
 
-Reference commits for session 9's working sub-cases:
-`6ce9b4a` (cmp 4-variant), `7b5955c` (fcmp var/var).
+**Session 11 starts Phase C: `ext_backward_simulation`.**  Per the
+flavor-a-signatures.md spec, the signature was already updated in
+Phase B prep (it just threads the enhanced length-aware tuple through
+from `verifiedGenInstr_correct`). Body should be ~0 LOC — already
+delegates via term-mode. Verify with `grep -n "^theorem ext_backward_simulation"`.
+
+After Phase C, proceed to Phase D (`step_simulation` in CodeGen.lean).
+The body is already cascaded with the `ArmStepsN_to_ArmSteps` bridge at
+the one call site (CodeGen.lean ~5942) — minimal touch needed unless
+threading ArmStepsN through `step_simulation`'s signature itself
+(~80–120 LOC per spec).
+
+Phases E–H follow per spec. Phase H closes the target sorry at
+PipelineCorrectness.lean:1324.
+
+Reference commits for session 10's Phase B completions:
+- `4d056b1` — fcmp var/flit
+- `a5d705a` — fcmp flit/var
+- `30d43e7` — fcmp flit/flit
+- `3466c72` — inner catch-all
+- `b56a67b` — outer catch-all
+- `5dd0d5d` — full .iffall mirror (Phase B done)
+
+### Patterns proven this session — REUSE for downstream phases
+
+1. **simp output for fcmp flit cases**. simp aggressively flattens:
+   - `var/flit` and `flit/var`: `loadVar ++ loadImm ++ [fmov, fcmp, bCond]`.
+   - `flit/flit`: `loadImmA ++ (fmov_d1 :: (loadImmB ++ trailing))`
+     with mixed cons/append. Use CodeAt's `.head`/`.tail` for cons
+     forms, `.append_left`/`.append_right` for ++.
+2. **Manual fmov step**. When simp puts `[fmov]` in the trailing list,
+   use `loadImm64_fregs_preserved` for the loadImm, then construct
+   `s_next = (s.setFReg dst (s.regs .x0)).nextPC` and step via
+   `ArmStepsN.single (ArmStep.fmovToFP dst .x0 hFmovI)`. Preserve
+   ExtStateRel via `(ExtStateRel.setFReg_preserved hRel hRegConv.not_dN).nextPC`.
+3. **`if r == .dN` motive in `s.setFReg.fregs r`**. Don't try to
+   `show` past it; instead prove the bridge as
+   `s_next.fregs r = s.fregs r` via `simp [s_next, ArmState.setFReg,
+   ArmState.nextPC]` (which discharges the if via decide), then use
+   the chain.
+4. **PcRel for fall-through cases**. When `cfg' = .run (pc + 1) σ am`,
+   PcRel is NOT rfl. Use:
+   ```lean
+   show s_fin.pc = pcMap (pc + 1)
+   have hLen := hPcNext σ am rfl
+   show s_prev.pc + 1 = pcMap (pc + 1)
+   rw [hPC_prev, hLen]; simp [List.length_append]; omega
+   ```
+   IMPORTANT: do NOT include `hInstrs` in this rw — it's already gone
+   from `hPcNext` after the prior `rw [hInstrs] at hPcNext`.
+5. **`rename_i` order for iffall vs iftrue**. iftrue uses
+   `rename_i l_var be_var`; iffall uses `rename_i be_var l_var`
+   (REVERSE). Constructor binder order differs.
+6. **maxHeartbeats budget**. `verifiedGenInstr_correct` now needs
+   `set_option maxHeartbeats 800000` (was 400000) due to body size.
 
 ### Three blockers now documented (key patterns)
 

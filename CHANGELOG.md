@@ -4,6 +4,100 @@ Chronological record of what was built and why, to reconstruct the sequence of d
 
 ---
 
+## Phase 6/7 session 10: Flavor A Phase B complete — .iftrue + .iffall fully closed (2026-04-24)
+
+**Planned goal**: close the remaining 5 .iftrue internal sub-cases
+(fcmp {var/flit, flit/var, flit/flit} + inner + outer catch-all),
+then mirror all 10 sub-cases to .iffall via the polarity-flip diff.
+Drop declaration sorry count 5 → 4. Phase B done.
+
+**Actual outcome**: **achieved**. Build green at **4 declaration
+sorries** (4 pre-existing in PipelineCorrectness, all pre-existing
+Phase 6/7 obligations; the 5th sorry on `verifiedGenInstr_correct` is
+now fully eliminated). All 10 .iftrue sub-cases filled; all 10 .iffall
+sub-cases filled by mirror with polarity flip per spec. Phase B locked.
+
+### Sub-cases filled in this session
+
+**.iftrue completions** (commits 4d056b1 → b56a67b):
+1. `fcmp var/flit` — manual loadImm64 + fmovToFP step matching simp's
+   flattened form `loadA ++ loadImm ++ [fmov, fcmp, bCond]`. The
+   `eff_freg_val_preserved` chain extracts a_freg's value through s3
+   with `.d2` as clobber.
+2. `fcmp flit/var` — symmetric (codegen swap loadB ++ loadA + clobber .d1).
+   `d1_ne_eff_d2` helper applies via `.d2` fallback for b_freg.
+3. `fcmp flit/flit` — match simp's mixed cons/append form
+   `loadImmA ++ (fmov_d1 :: rest)` directly via CodeAt.head/tail.
+   Six-step chain: loadImm_a + fmov_d1 + loadImm_b + fmov_d2 + fcmp + bCond.
+4. **Inner catch-all** (.lit, .bvar, .not inner', .bexpr): cbnz fallback
+   via `verifiedGenBoolExpr_correct` + `cbnz_taken`. .bexpr contradicts.
+5. **Outer catch-all** (.lit, .bvar, .cmp, .fcmp, .bexpr): cbnz fallback
+   for the 4 valid; .bexpr contradicts.
+
+**.iffall mirror** (commit 5dd0d5d) — polarity flip applied to all 10
+sub-cases per spec table:
+- hcond : be.eval = false (was true)
+- bCond_fall / cbnz_fall (was _taken)
+- hCondFalse : condHolds cond.negate = false (was true)
+- s_fin = previous.nextPC (was {... with pc := pcMap l_var})
+- PcRel proven via `hPcNext σ am rfl` rather than `rfl` (we don't land
+  on the label `l_var`; we fall through to `pcMap (pc + 1)`)
+
+The `cases hStep with | iffall hinstr hcond` requires
+`rename_i be_var l_var` (REVERSE of iftrue's `rename_i l_var be_var`)
+because of constructor binder order in iffall vs iftrue.
+
+### Solved blockers from session 9 — patterns proven generally
+
+1. **simp flattens [fmov] into trailing list**. For `var/flit` and
+   `flit/var` cases, simp produces `loadA ++ loadImm ++ [fmov, fcmp, bCond]`
+   (left-assoc, single trailing 3-element list). For `flit/flit`, simp
+   produces `loadImmA ++ (fmov_d1 :: (loadImmB ++ trailing))` (mixed
+   cons/append). Solution: write hInstrs to match simp's natural form,
+   use `loadImm64_fregs_preserved` + manual fmov step, and use CodeAt's
+   `.head`/`.tail` to navigate cons forms directly.
+
+2. **The `if .d1 == .d2` motive**. After manual fmov, the goal
+   `s3.fregs .d1 = ...` reduces to an `if .d1 == .d2 then _ else _`
+   that Lean cannot synthesize the `_` placeholder for via `show`.
+   Solution: prove `s3.fregs .d1 = s2.fregs .d1` via simp on
+   `[s3, ArmState.setFReg, ArmState.nextPC]` (which discharges the
+   if via `decide` on `.d1 == .d2`), then use the `s2 = s1` chain.
+
+3. **PcRel for .iffall**. The `hPcNext σ am rfl` instantiation gives
+   `pcMap (pc + 1) = pcMap pc + instrs.length` (with instrs already
+   substituted by the prior `rw [hInstrs] at hPcNext`). The proof
+   form is:
+   ```
+   show s_fin.pc = pcMap (pc + 1)
+   have hLen := hPcNext σ am rfl
+   show s_prev.pc + 1 = pcMap (pc + 1)
+   rw [hPC_prev, hLen]; simp [List.length_append]; omega
+   ```
+   Note: do NOT include `hInstrs` in the rw — it's already gone.
+
+### Heartbeat budget
+
+Bumped `set_option maxHeartbeats 400000` → `800000` on
+`verifiedGenInstr_correct`. The body now has ~60 case fills with
+deep nested structure and the 400k budget timed out elaboration.
+
+### Final state
+
+- **Sorry count: 4** (down from 5, target met).
+  - PipelineCorrectness.lean:770 (Phase 6 — pre-existing, OOS).
+  - PipelineCorrectness.lean:1022 (Phase 6 — pre-existing, OOS).
+  - PipelineCorrectness.lean:1324 (Phase 7 target — `source_diverges_gives_ArmDiverges_init`).
+  - PipelineCorrectness.lean:2115 (Phase 6 `verifiedGenInstr_ifgoto_branch_bounded` — pre-existing, OOS).
+- **Phase B (verifiedGenInstr_correct) declaration warning gone.**
+- Phase A (15 helpers) + Phase B (60 cases including .iftrue and
+  .iffall) complete.
+- **Next**: Phase C (`ext_backward_simulation` — sig already
+  threading-aware, body delegates via term-mode; ~0 LOC). Then
+  Phases D–H per spec.
+
+---
+
 ## Phase 6/7 session 9: Flavor A Phase B — .iftrue partial (2026-04-24)
 
 **Planned goal**: close the last 2 Phase B.1 case sorries (`.iftrue`,
