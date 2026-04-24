@@ -68,57 +68,109 @@ Pre-existing: `verifiedGenInstr_goto_branch_bounded` (probe 1),
 
 Commits: `f689c8c` (ifgoto close), `daa30d6` (per-case helpers).
 
-## Remaining work (session 13 target)
+## Remaining work (session 14 target)
 
-### Step 1: Finish per-case helpers (10 cases, ~250 LOC)
+### Step 1: Per-case helpers ✓ DONE (session 13)
 
-Pattern fully understood — see CHANGELOG §Session 12 for template and
-gotchas. Remaining TAC constructors, ordered easiest-first:
+All 19 TAC constructors now have `verifiedGenInstr_<tac>_branch_bounded`
+helpers in `section Phase6Probes2` of `CredibleCompilation/PipelineCorrectness.lean`.
+Session 13 added 12 (copy, boolop, binop_mod, binop_std, fbinop,
+intToFloat, floatToInt, floatUnary, fternop, arrLoad, arrStore, const)
+to complement session 12's 8.
 
-| Constructor | Output shape | LOC est |
-|---|---|---|
-| `.copy` | `vLoadVar ++ vStoreVar` (or FP variants, self-copy special) | ~30 |
-| `.boolop` | `verifiedGenBoolExpr ++ vStoreVar` | ~15 |
-| `.binop` non-div/mod | `vLoadVar ++ vLoadVar ++ [op] ++ vStoreVar` | ~40 (9 ops) |
-| `.fbinop` | `vLoadVarFP ++ vLoadVarFP ++ [op] ++ vStoreVarFP` | ~30 (7 ops) |
-| `.intToFloat` | `vLoadVar ++ [scvtf] ++ vStoreVarFP` | ~15 |
-| `.floatToInt` | `vLoadVarFP ++ [fcvtzs] ++ vStoreVar` | ~15 |
-| `.floatUnary` | `vLoadVarFP ++ [op] ++ vStoreVarFP` | ~15 |
-| `.fternop` | `vLoadVarFP×3 ++ [op] ++ vStoreVarFP` | ~20 |
-| `.arrLoad` | `vLoadVar ++ [boundsCheck ++] [.arrLd] ++ vStoreVar(FP)` | ~40 |
-| `.arrStore` | `vLoadVar ++ [boundsCheck ++] vLoadVar ++ [.arrSt]` | ~30 |
-| `.const` | complex: 3 value types × 2-3 layout cases | ~40 |
+See CHANGELOG §Phase 6 session 13 for the 6 elaboration gotchas and
+the techniques used to work around them (split-vs-cases ordering,
+`by_cases hF : ∃ r, ...` + manual hNF + obtain for boolop's let+if,
+`cases val` BEFORE `simp only [verifiedGenInstr]` for const, rcases
+depth on non-literal-list membership, `all_goals` for multi-success
+goals from `| some (.stack _) | some (.ireg _) => ...` patterns, and
+avoiding `try (exact absurd ...)` for reflexive equalities).
 
-Known gotcha: `.const` has nested `cases val with` × `split on layout`
-that hit `simp made no progress` and `dependent elimination failed`
-errors in session 12. Likely fix: different ordering (`split at hGen`
-first on outer match before `cases val`).
+### Step 2: Aggregator ✓ DONE (session 13)
 
-### Step 2: Aggregator `verifiedGenInstr_branch_target_bounded` (~60 LOC)
+`verifiedGenInstr_branch_target_bounded` at the end of Phase6Probes2
+section (just before `end Phase6Probes2`). Signature:
 
-Case-split on TAC constructor, dispatch to per-case helper. Takes
-hypotheses:
-- `hPcBound : ∀ l, (instr = .goto l ∨ ∃ be, instr = .ifgoto be l) → pcMap l ≤ boundsS`
-- `hHaltBound : haltS ≤ boundsS`
-- `hDivBound : divS ≤ boundsS`
+```lean
+private theorem verifiedGenInstr_branch_target_bounded
+    (layout : VarLayout) (pcMap : Nat → Nat) (instr : TAC)
+    (haltS divS boundsS : Nat) (arrayDecls : ...)
+    (safe : Bool) {instrs : List ArmInstr}
+    (hGen : verifiedGenInstr layout pcMap instr ... = some instrs)
+    (hRC : layout.regConventionSafe = true)
+    (hII : layout.isInjective = true)
+    (hPcBound : ∀ l, (instr = .goto l ∨ ∃ be, instr = .ifgoto be l) →
+                pcMap l ≤ boundsS)
+    (hHaltBound : haltS ≤ boundsS)
+    (hDivBound : divS ≤ boundsS) :
+    ∀ instr' ∈ instrs, ∀ lbl, <branch-forms> → lbl ≤ boundsS
+```
 
-### Step 3: `bodyFlat_branch_target_bounded` lift (~80 LOC)
+Dispatches via `cases instr with | const | copy | binop | boolop | goto |
+ifgoto | halt | arrLoad | arrStore | fbinop | intToFloat | floatToInt |
+floatUnary | fternop | print | printInt | printBool | printFloat | printString`.
+For `.binop`: 3-way `by_cases` on `op = .div`, `op = .mod`, else.
 
-At L770 currently. Lifts per-PC claim to the flat bodyFlat. Case-split
-on whether `pc` lands in the bodyPerPC prefix or the haltSaveBlock
-suffix:
-- `haltSaveBlock`: just `genHaltSave`, no branches (str/fstr only).
-- `bodyPerPC[k]`: either (i) from `verifiedGenInstr` directly (via
-  `spec.instrGen`), (ii) wrapped via `spec.callSiteSaveRestore`
-  (saves/restores are str/ldr only), or (iii) the print wrapper
-  (saves + printCall + restores).
+### Step 3: `bodyFlat_branch_target_bounded` lift (~300 LOC) — PENDING
 
-Required feeder lemmas from spec:
-- `spec.pcMapLengths` — gives `∀ l, l < p.size → pcMap l ≤ haltS`
-- `spec.haltS_eq`, `spec.haltFinal_eq`, `spec.divS_eq`, `spec.boundsS_eq` — sentinel arithmetic
-- `checkBranchTargets_to_labels_in_bounds` (already landed at L708) — branch targets are in-bounds
+At [PipelineCorrectness.lean:779](../CredibleCompilation/PipelineCorrectness.lean#L779)
+currently `sorry`. Lifts per-PC claim to the flat bodyFlat.
 
-### Step 4: `arm_behavior_exhaustive` König proof (~100 LOC)
+**Proof skeleton**:
+
+```lean
+intro pc lbl hbranch
+-- Step 1: Extract `instr' = some X` where X is the branch instruction.
+--   Use Array.getElem?_eq_some_iff on the disjunct.
+-- Step 2: Case-split on `pc < r.haltS` vs `pc ≥ r.haltS`.
+by_cases hpc : pc < r.haltS
+· -- In bodyPerPC prefix.
+  -- Use spec.pcMapLengths + codeAt_of_bodyFlat' to find tac_pc such that
+  -- bodyFlat[pc] is in bodyPerPC[tac_pc] at offset (pc - pcMap tac_pc).
+  -- Dispatch on TAC type:
+  by_cases hPrint : ∃ fmt vs, p[tac_pc] = .print fmt vs
+  · -- print: via spec.printSaveRestore, bodyPerPC[tac_pc] =
+    --   entriesToSaves ++ [.printCall lines] ++ entriesToRestores
+    -- Need: entriesToSaves/Restores emit only str/ldr (non-branch),
+    --   and [.printCall lines] is non-branch.
+    -- → hbranch contradicts.
+  · by_cases hLib : isLibCallTAC p[tac_pc] = true
+    · -- lib-call: via spec.callSiteSaveRestore, bodyPerPC[tac_pc] =
+      --   entriesToSaves ++ baseInstrs ++ entriesToRestores
+      -- where baseInstrs comes from verifiedGenInstr.
+      -- If pc is in saves/restores, non-branch. If in baseInstrs,
+      --   apply verifiedGenInstr_branch_target_bounded.
+    · -- normal: via spec.instrGen, bodyPerPC[tac_pc] = verifiedGenInstr output.
+      --   Apply verifiedGenInstr_branch_target_bounded directly.
+      -- Provide hPcBound via pcMap_le_haltS + checkBranchTargets_to_labels_in_bounds
+      --   + spec.haltS_eq + spec.boundsS_eq.
+      -- Provide hHaltBound: haltS ≤ boundsS via spec.boundsS_eq + haltFinal_eq.
+      -- Provide hDivBound: divS ≤ boundsS via spec.divS_eq + boundsS_eq.
+· -- In haltSaveBlock.
+  -- By spec.haltSaveBlock_eq, haltSaveBlock = genHaltSave p.observable layout varMap.
+  -- genHaltSave emits only str/fstr (never branches).
+  -- → hbranch contradicts. Write a `genHaltSave_no_branches` helper.
+```
+
+**Required helpers** (some may need to be written):
+- `entriesToSaves_no_branches`, `entriesToRestores_no_branches` — str/ldr only.
+- `genHaltSave_no_branches` — str/fstr only.
+- `printCall_no_branches` — [.printCall lines] is non-branch.
+
+**Required feeder lemmas from spec** (all landed):
+- `spec.pcMapLengths` — for pc → tac_pc inverse.
+- `spec.haltS_eq`, `spec.haltFinal_eq`, `spec.divS_eq`, `spec.boundsS_eq`.
+- `checkBranchTargets_to_labels_in_bounds` at L708.
+- `pcMap_le_haltS` at L685.
+- `codeAt_of_bodyFlat'` in CodeGen.lean:3579.
+
+**Key bridge**: for hPcBound, given a live TAC `.goto l` or `.ifgoto be l`
+at tac_pc, we need `pcMap l ≤ boundsS`. Chain:
+  `pcMap l ≤ haltS` (via `pcMap_le_haltS` + `checkBranchTargets_to_labels_in_bounds` + spec.wellTypedProg → l < p.size)
+  ≤ haltFinal (via `haltFinal_eq` = haltS + haltSaveBlock.size)
+  ≤ boundsS (via `boundsS_eq` = haltFinal + 2).
+
+### Step 4: `arm_behavior_exhaustive` König proof (~100 LOC) — PENDING
 
 At L1022. Route 1 (classical em + König, recommended in design doc):
 ```lean
