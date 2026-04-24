@@ -733,7 +733,7 @@ private def genInitCode (vars : List Var) (layout : VarLayout) : List ArmInstr :
     - Stack-resident: no-op (value is already at its output offset).
     - Missing layout or varMap entry: no-op (should be ruled out by a completeness
       invariant on `VerifiedAsmResult`; only reachable if invariants are violated). -/
-private def genHaltSaveOne (v : Var) (layout : VarLayout)
+def genHaltSaveOne (v : Var) (layout : VarLayout)
     (varMap : List (Var × Nat)) : List ArmInstr :=
   match layout v with
   | some (.ireg r) =>
@@ -749,7 +749,7 @@ private def genHaltSaveOne (v : Var) (layout : VarLayout)
 
 /-- Generate instructions to save observable values to their halt-output stack slots.
     Iterates per-observable via `genHaltSaveOne`; see that function for per-case behavior. -/
-private def genHaltSave (observable : List Var) (layout : VarLayout)
+def genHaltSave (observable : List Var) (layout : VarLayout)
     (varMap : List (Var × Nat)) : List ArmInstr :=
   observable.flatMap (genHaltSaveOne · layout varMap)
 
