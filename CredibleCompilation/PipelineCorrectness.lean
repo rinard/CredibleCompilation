@@ -1535,7 +1535,7 @@ theorem arm_div_implies_while_unsafe_div
     {s : ArmState}
     (hArm : ArmSteps r.bodyFlat (r.initArmState) s)
     (hPC : s.pc = r.divS) :
-    ∃ fuel, prog.body.unsafeDiv fuel prog.initStore ArrayMem.init prog.arrayDecls := by
+    ∃ fuel, prog.run fuel = .divByZero := by
   have htc := prog.wellFormed_typeCheck htcs
   have hSC : StepClosedInBounds (applyPasses prog.tyCtx passes prog.compileToTAC) :=
     applyPasses_preserves_stepClosedInBounds prog.tyCtx passes _
@@ -1554,7 +1554,8 @@ theorem arm_div_implies_while_unsafe_div
     exact (haltFinal_ne_divS spec) this.symm
   | errorDiv σ_opt =>
     obtain ⟨am_opt, hErrDiv⟩ := hbeh
-    exact while_to_arm_errorDiv_source_side prog htcs passes hErrDiv
+    obtain ⟨fuel, hud⟩ := while_to_arm_errorDiv_source_side prog htcs passes hErrDiv
+    exact ⟨fuel, (Program.run_divByZero_iff prog fuel).mpr hud⟩
   | errorBounds σ_opt =>
     exfalso
     obtain ⟨am_opt, hErrBounds⟩ := hbeh
@@ -1596,7 +1597,7 @@ theorem arm_bounds_implies_while_unsafe_bounds
     {s : ArmState}
     (hArm : ArmSteps r.bodyFlat (r.initArmState) s)
     (hPC : s.pc = r.boundsS) :
-    ∃ fuel, prog.body.unsafeBounds fuel prog.initStore ArrayMem.init prog.arrayDecls := by
+    ∃ fuel, prog.run fuel = .outOfBounds := by
   have htc := prog.wellFormed_typeCheck htcs
   have hSC : StepClosedInBounds (applyPasses prog.tyCtx passes prog.compileToTAC) :=
     applyPasses_preserves_stepClosedInBounds prog.tyCtx passes _
@@ -1624,7 +1625,8 @@ theorem arm_bounds_implies_while_unsafe_bounds
     exact (divS_ne_boundsS spec) this.symm
   | errorBounds σ_opt =>
     obtain ⟨am_opt, hErrBounds⟩ := hbeh
-    exact while_to_arm_errorBounds_source_side prog htcs passes hErrBounds
+    obtain ⟨fuel, hub⟩ := while_to_arm_errorBounds_source_side prog htcs passes hErrBounds
+    exact ⟨fuel, (Program.run_outOfBounds_iff prog fuel).mpr hub⟩
   | typeErrors σ_opt =>
     obtain ⟨am_opt, hte⟩ := hbeh
     exact absurd hte (pipelined_no_typeError prog htcs passes σ_opt am_opt)

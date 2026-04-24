@@ -1306,6 +1306,88 @@ theorem Stmt.unsafeDiv_unsafeBounds_disjoint (s : Stmt) (fuel : Nat) (σ : Store
 end UnsafeSplit
 
 -- ============================================================
+-- § 4a'. Cause-aware program runner
+-- ============================================================
+
+namespace Program
+
+/-- Cause-tagged result of running a `Program` with bounded fuel.
+    Distinguishes safe halt, the two runtime errors, and fuel exhaustion. -/
+inductive RunResult where
+  | halts (σ : Store) (am : ArrayMem) : RunResult
+  | divByZero : RunResult
+  | outOfBounds : RunResult
+  | outOfFuel : RunResult
+
+/-- Cause-aware program run.  Returns:
+- `.halts σ am`     if the program terminates safely.
+- `.divByZero`      if a div-by-zero error is reached within `fuel` steps.
+- `.outOfBounds`    if an out-of-bounds array access is reached within `fuel` steps.
+- `.outOfFuel`      if `fuel` is exhausted before any of the above resolve.
+
+Spec-level wrapper around `interp` plus the `unsafeDiv`/`unsafeBounds`
+predicates from § 4a.  `noncomputable` because cause classification uses
+classical decidability on `Prop`-level predicates; for actual execution
+use `prog.interp`. -/
+noncomputable def run (prog : Program) (fuel : Nat)
+    (inputs : List (Var × Value) := []) : RunResult :=
+  open Classical in
+  let σ₀ := inputs.foldl (fun σ (x, v) => σ[x ↦ v]) prog.initStore
+  if prog.body.unsafeDiv fuel σ₀ ArrayMem.init prog.arrayDecls then .divByZero
+  else if prog.body.unsafeBounds fuel σ₀ ArrayMem.init prog.arrayDecls then .outOfBounds
+  else match prog.body.interp fuel σ₀ ArrayMem.init prog.arrayDecls with
+       | some (σ, am) => .halts σ am
+       | none => .outOfFuel
+
+/-- With default (empty) inputs, `prog.run fuel = .divByZero` iff the body's
+    `unsafeDiv` predicate fires at this fuel from the declaration-default store. -/
+theorem run_divByZero_iff (prog : Program) (fuel : Nat) :
+    prog.run fuel = .divByZero ↔
+      prog.body.unsafeDiv fuel prog.initStore ArrayMem.init prog.arrayDecls := by
+  classical
+  constructor
+  · intro h
+    by_cases hd : prog.body.unsafeDiv fuel prog.initStore ArrayMem.init prog.arrayDecls
+    · exact hd
+    · exfalso
+      unfold run at h
+      simp only [List.foldl_nil, hd, if_false] at h
+      by_cases hb : prog.body.unsafeBounds fuel prog.initStore ArrayMem.init prog.arrayDecls
+      · simp [hb] at h
+      · simp only [hb, if_false] at h
+        split at h <;> cases h
+  · intro hd
+    unfold run
+    simp [List.foldl_nil, hd]
+
+/-- With default (empty) inputs, `prog.run fuel = .outOfBounds` iff the body's
+    `unsafeBounds` predicate fires at this fuel from the declaration-default store.
+    Disjointness rules out the cross-cause case. -/
+theorem run_outOfBounds_iff (prog : Program) (fuel : Nat) :
+    prog.run fuel = .outOfBounds ↔
+      prog.body.unsafeBounds fuel prog.initStore ArrayMem.init prog.arrayDecls := by
+  classical
+  constructor
+  · intro h
+    unfold run at h
+    simp only [List.foldl_nil] at h
+    by_cases hd : prog.body.unsafeDiv fuel prog.initStore ArrayMem.init prog.arrayDecls
+    · simp [hd] at h
+    · simp only [hd, if_false] at h
+      by_cases hb : prog.body.unsafeBounds fuel prog.initStore ArrayMem.init prog.arrayDecls
+      · exact hb
+      · simp only [hb, if_false] at h
+        split at h <;> cases h
+  · intro hb
+    have hd : ¬ prog.body.unsafeDiv fuel prog.initStore ArrayMem.init prog.arrayDecls :=
+      fun hd => Stmt.unsafeDiv_unsafeBounds_disjoint prog.body fuel prog.initStore
+        ArrayMem.init prog.arrayDecls ⟨hd, hb⟩
+    unfold run
+    simp [List.foldl_nil, hd, hb]
+
+end Program
+
+-- ============================================================
 -- § 4b. Integer typing (all arithmetic-position variables have int values)
 -- ============================================================
 
