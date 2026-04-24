@@ -223,19 +223,19 @@ private theorem whileToTAC_no_halt_diverge_unsafe (prog : Program)
     `ArrayMem.init` (which is what `has_behavior` always produces). -/
 def program_behavior_init (p : Prog) (σ₀ : Store) (b : Behavior) : Prop :=
   match b with
-  | .halts σ'      => ∃ am', haltsWithResult p 0 σ₀ σ' ArrayMem.init am'
-  | .errors σ'     => ∃ am',
-      (p ⊩ Cfg.run 0 σ₀ ArrayMem.init ⟶* Cfg.errorDiv σ' am') ∨
-      (p ⊩ Cfg.run 0 σ₀ ArrayMem.init ⟶* Cfg.errorBounds σ' am')
-  | .typeErrors σ' => ∃ am', p ⊩ Cfg.run 0 σ₀ ArrayMem.init ⟶* Cfg.typeError σ' am'
-  | .diverges      => ∃ f : Nat → Cfg, IsInfiniteExec p f ∧ f 0 = Cfg.run 0 σ₀ ArrayMem.init
+  | .halts σ'       => ∃ am', haltsWithResult p 0 σ₀ σ' ArrayMem.init am'
+  | .errorDiv σ'    => ∃ am', p ⊩ Cfg.run 0 σ₀ ArrayMem.init ⟶* Cfg.errorDiv σ' am'
+  | .errorBounds σ' => ∃ am', p ⊩ Cfg.run 0 σ₀ ArrayMem.init ⟶* Cfg.errorBounds σ' am'
+  | .typeErrors σ'  => ∃ am', p ⊩ Cfg.run 0 σ₀ ArrayMem.init ⟶* Cfg.typeError σ' am'
+  | .diverges       => ∃ f : Nat → Cfg, IsInfiniteExec p f ∧ f 0 = Cfg.run 0 σ₀ ArrayMem.init
 
 /-- `program_behavior_init` implies `program_behavior`. -/
 theorem program_behavior_of_init {p : Prog} {σ₀ : Store} {b : Behavior}
     (h : program_behavior_init p σ₀ b) : program_behavior p σ₀ b := by
   cases b with
   | halts _ => obtain ⟨am', hh⟩ := h; exact ⟨ArrayMem.init, am', hh⟩
-  | errors _ => obtain ⟨am', hh⟩ := h; exact ⟨ArrayMem.init, am', hh⟩
+  | errorDiv _ => obtain ⟨am', hh⟩ := h; exact ⟨ArrayMem.init, am', hh⟩
+  | errorBounds _ => obtain ⟨am', hh⟩ := h; exact ⟨ArrayMem.init, am', hh⟩
   | typeErrors _ => obtain ⟨am', hh⟩ := h; exact ⟨ArrayMem.init, am', hh⟩
   | diverges => exact h
 
@@ -259,10 +259,10 @@ theorem has_behavior_init (p : Prog) (σ₀ : Store) (hclosed : StepClosedInBoun
     exact ⟨.halts σ', am', stepsN_to_steps hn⟩
   · by_cases hed : ∃ n σ' am', StepsN p (Cfg.run 0 σ₀ ArrayMem.init) (Cfg.errorDiv σ' am') n
     · obtain ⟨_, σ', am', hn⟩ := hed
-      exact ⟨.errors σ', am', .inl (stepsN_to_steps hn)⟩
+      exact ⟨.errorDiv σ', am', stepsN_to_steps hn⟩
     · by_cases heb : ∃ n σ' am', StepsN p (Cfg.run 0 σ₀ ArrayMem.init) (Cfg.errorBounds σ' am') n
       · obtain ⟨_, σ', am', hn⟩ := heb
-        exact ⟨.errors σ', am', .inr (stepsN_to_steps hn)⟩
+        exact ⟨.errorBounds σ', am', stepsN_to_steps hn⟩
       · by_cases hte : ∃ n σ' am', StepsN p (Cfg.run 0 σ₀ ArrayMem.init) (Cfg.typeError σ' am') n
         · obtain ⟨_, σ', am', hn⟩ := hte
           exact ⟨.typeErrors σ', am', stepsN_to_steps hn⟩
@@ -318,7 +318,10 @@ theorem whileToTAC_refinement (prog : Program) (htcs : prog.typeCheckStrict = tr
         haltsWithResult prog.compileToTAC 0 prog.initStore σ_tac ArrayMem.init am_h ∧
         am_h = am' ∧
         ∀ v, v.isTmp = false → v.isFTmp = false → σ_tac v = σ' v
-    | .errors _ => ∃ fuel,
+    | .errorDiv _ => ∃ fuel,
+        prog.body.unsafeDiv fuel prog.initStore ArrayMem.init prog.arrayDecls ∨
+        prog.body.unsafeBounds fuel prog.initStore ArrayMem.init prog.arrayDecls
+    | .errorBounds _ => ∃ fuel,
         prog.body.unsafeDiv fuel prog.initStore ArrayMem.init prog.arrayDecls ∨
         prog.body.unsafeBounds fuel prog.initStore ArrayMem.init prog.arrayDecls
     | .typeErrors _ => False
@@ -346,28 +349,20 @@ theorem whileToTAC_refinement (prog : Program) (htcs : prog.typeCheckStrict = tr
         exact ⟨fuel, σ', am_h, am', hinterp, hhalt, heq_am, hagree⟩
       · -- not safe → compiled cannot halt → contradiction
         exact absurd ⟨σ_tac, am_h, hhalt⟩ (whileToTAC_error prog fuel htcs hsafe)
-  | errors σ_e =>
+  | errorDiv σ_e =>
     simp only [program_behavior_init] at hbeh
-    obtain ⟨am_e, herr_or⟩ := hbeh
-    -- Extract a cause-agnostic error reach with an `isError` witness.
+    obtain ⟨am_e, herr_d⟩ := hbeh
     have ⟨c_err, hisErr, herr⟩ : ∃ c, c.isError ∧
-        (prog.compileToTAC ⊩ Cfg.run 0 prog.initStore ArrayMem.init ⟶* c) := by
-      rcases herr_or with h | h
-      · exact ⟨_, by simp [Cfg.isError], h⟩
-      · exact ⟨_, by simp [Cfg.isError], h⟩
+        (prog.compileToTAC ⊩ Cfg.run 0 prog.initStore ArrayMem.init ⟶* c) :=
+      ⟨_, by simp [Cfg.isError], herr_d⟩
     by_contra hall
     push_neg at hall
-    -- Phase 4: convert `∀ fuel, ¬unsafeDiv ∧ ¬unsafeBounds` into `∀ fuel, safe`
-    -- via the Phase 1 iff.  Rebind under the original name `hall` so the rest
-    -- of the proof needs no further edits.
     replace hall : ∀ fuel, prog.body.safe fuel prog.initStore ArrayMem.init prog.arrayDecls := by
       intro fuel
       exact (Stmt.safe_iff_not_unsafe prog.body fuel prog.initStore ArrayMem.init
         prog.arrayDecls).mpr (hall fuel)
-    -- hall : ∀ fuel, prog.body.safe fuel prog.initStore ArrayMem.init prog.arrayDecls
     by_cases hdiv : ∀ fuel, prog.body.interp fuel prog.initStore ArrayMem.init prog.arrayDecls = none
-    · -- Source diverges safely → unbounded execution → error contradicts unbounded
-      have htmpfree := Program.typeCheck_tmpFree prog htc
+    · have htmpfree := Program.typeCheck_tmpFree prog htc
       have hftmpfree : prog.body.ftmpFree := Program.typeCheck_ftmpFree prog htc
       have hts := Program.typeCheck_initStore_typedStore prog htc
       have htypedv : ∀ fuel, prog.body.typedVars fuel prog.initStore ArrayMem.init prog.arrayDecls :=
@@ -390,8 +385,55 @@ theorem whileToTAC_refinement (prog : Program) (htcs : prog.typeCheckStrict = tr
       have hsuffix := RefStepsN.det_prefix hk_err hrun (by omega)
       have hmk : m - k_err = (m - k_err - 1) + 1 := by omega
       exact RefStepsN.no_step_error hisErr (hmk ▸ hsuffix)
-    · -- Source terminates at some fuel
-      push_neg at hdiv
+    · push_neg at hdiv
+      obtain ⟨fuel, hfuel⟩ := hdiv
+      obtain ⟨r, hinterp⟩ := Option.some_of_ne_none hfuel
+      obtain ⟨σ', am'⟩ := r
+      obtain ⟨σ_fwd, hhalt_fwd, _⟩ :=
+        whileToTAC_halt prog fuel σ' am' htcs hinterp (hall fuel)
+      have halt_terminal : ∀ d, ¬ Step prog.compileToTAC (Cfg.halt σ_fwd am') d :=
+        fun _ h => Step.no_step_from_halt h
+      have err_terminal : ∀ d, ¬ Step prog.compileToTAC c_err d :=
+        fun _ h => Step.no_step_from_isError hisErr h
+      have heq := Steps.stuck_det hhalt_fwd herr halt_terminal err_terminal
+      cases c_err <;> simp [Cfg.isError] at hisErr <;> exact Cfg.noConfusion heq
+  | errorBounds σ_e =>
+    simp only [program_behavior_init] at hbeh
+    obtain ⟨am_e, herr_b⟩ := hbeh
+    have ⟨c_err, hisErr, herr⟩ : ∃ c, c.isError ∧
+        (prog.compileToTAC ⊩ Cfg.run 0 prog.initStore ArrayMem.init ⟶* c) :=
+      ⟨_, by simp [Cfg.isError], herr_b⟩
+    by_contra hall
+    push_neg at hall
+    replace hall : ∀ fuel, prog.body.safe fuel prog.initStore ArrayMem.init prog.arrayDecls := by
+      intro fuel
+      exact (Stmt.safe_iff_not_unsafe prog.body fuel prog.initStore ArrayMem.init
+        prog.arrayDecls).mpr (hall fuel)
+    by_cases hdiv : ∀ fuel, prog.body.interp fuel prog.initStore ArrayMem.init prog.arrayDecls = none
+    · have htmpfree := Program.typeCheck_tmpFree prog htc
+      have hftmpfree : prog.body.ftmpFree := Program.typeCheck_ftmpFree prog htc
+      have hts := Program.typeCheck_initStore_typedStore prog htc
+      have htypedv : ∀ fuel, prog.body.typedVars fuel prog.initStore ArrayMem.init prog.arrayDecls :=
+        fun fuel => Program.typeCheck_typedVars prog htc prog.initStore ArrayMem.init hts fuel
+      let labels := collectLabels prog.body prog.decls.length
+      have hcode := whileToTAC_body_codeAt prog
+      have hinit := Program.compileToTAC_initExec prog (Program.typeCheck_noDups prog htc)
+      have hunbounded := compileStmt_diverges prog.body prog.initStore ArrayMem.init
+        prog.decls.length 0 prog.compileToTAC prog.initStore
+        htmpfree hftmpfree (Program.typeCheck_noGoto prog htcs) hdiv hall htypedv (fun _ _ _ => rfl) (labels := labels) hcode
+      have hunbounded' : ∀ N, ∃ n, n ≥ N ∧ ∃ pc' σ' am',
+          RefStepsN prog.compileToTAC n (Cfg.run 0 prog.initStore ArrayMem.init)
+            (Cfg.run pc' σ' am') := by
+        obtain ⟨k_init, hk_init⟩ := hinit.to_RefStepsN
+        intro N
+        obtain ⟨n, hn, pc', σ', am', hsteps⟩ := hunbounded (N)
+        exact ⟨k_init + n, by omega, pc', σ', am', RefStepsN.trans hk_init hsteps⟩
+      obtain ⟨k_err, hk_err⟩ := herr.to_RefStepsN
+      obtain ⟨m, hm, _pc', _σ'', _am'', hrun⟩ := hunbounded' (k_err + 1)
+      have hsuffix := RefStepsN.det_prefix hk_err hrun (by omega)
+      have hmk : m - k_err = (m - k_err - 1) + 1 := by omega
+      exact RefStepsN.no_step_error hisErr (hmk ▸ hsuffix)
+    · push_neg at hdiv
       obtain ⟨fuel, hfuel⟩ := hdiv
       obtain ⟨r, hinterp⟩ := Option.some_of_ne_none hfuel
       obtain ⟨σ', am'⟩ := r

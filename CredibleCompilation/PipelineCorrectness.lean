@@ -416,12 +416,13 @@ private theorem while_to_arm_error_source_side
   have hts : TypedStore prog.tyCtx (Store.typedInit prog.tyCtx) := TypedStore.typedInit _
   obtain ⟨σ_o, am_o', hErr_tac⟩ :=
     applyPassesPure_preserves_error_am prog.tyCtx passes _ hts hErr_or
-  have hErr_init : program_behavior_init prog.compileToTAC prog.initStore (.errors σ_o) := by
-    refine ⟨am_o', ?_⟩
-    rcases hErr_tac with hd | hb
-    · exact .inl (hInitEq ▸ hd)
-    · exact .inr (hInitEq ▸ hb)
-  exact whileToTAC_refinement prog htcs (.errors σ_o) hErr_init
+  rcases hErr_tac with hd | hb
+  · have hErr_init : program_behavior_init prog.compileToTAC prog.initStore (.errorDiv σ_o) :=
+      ⟨am_o', hInitEq ▸ hd⟩
+    exact whileToTAC_refinement prog htcs (.errorDiv σ_o) hErr_init
+  · have hErr_init : program_behavior_init prog.compileToTAC prog.initStore (.errorBounds σ_o) :=
+      ⟨am_o', hInitEq ▸ hb⟩
+    exact whileToTAC_refinement prog htcs (.errorBounds σ_o) hErr_init
 
 /-- **While→ARM: division-by-zero cause.**
 
@@ -1402,22 +1403,24 @@ theorem arm_halts_implies_while_halts
     have heq := sentinel_state_unique spec hArm (.inl hPC) hArm' (.inl hPC')
     subst heq
     exact ⟨fuel, σ_src, am_src, hinterp, hMatch⟩
-  | errors σ_opt =>
+  | errorDiv σ_opt =>
     exfalso
-    obtain ⟨am_opt, hErr⟩ := hbeh
-    rcases hErr with hErrDiv | hErrBounds
-    · obtain ⟨s', hArm', hPC'⟩ :=
-        (while_to_arm_div_preservation prog htcs passes hGen hErrDiv).2
-      have heq := sentinel_state_unique spec hArm (.inl hPC) hArm' (.inr (.inl hPC'))
-      have : s.pc = s'.pc := congrArg ArmState.pc heq
-      rw [hPC, hPC'] at this
-      exact (haltFinal_ne_divS spec) this
-    · obtain ⟨s', hArm', hPC'⟩ :=
-        (while_to_arm_bounds_preservation prog htcs passes hGen hErrBounds).2
-      have heq := sentinel_state_unique spec hArm (.inl hPC) hArm' (.inr (.inr hPC'))
-      have : s.pc = s'.pc := congrArg ArmState.pc heq
-      rw [hPC, hPC'] at this
-      exact (haltFinal_ne_boundsS spec) this
+    obtain ⟨am_opt, hErrDiv⟩ := hbeh
+    obtain ⟨s', hArm', hPC'⟩ :=
+      (while_to_arm_div_preservation prog htcs passes hGen hErrDiv).2
+    have heq := sentinel_state_unique spec hArm (.inl hPC) hArm' (.inr (.inl hPC'))
+    have : s.pc = s'.pc := congrArg ArmState.pc heq
+    rw [hPC, hPC'] at this
+    exact (haltFinal_ne_divS spec) this
+  | errorBounds σ_opt =>
+    exfalso
+    obtain ⟨am_opt, hErrBounds⟩ := hbeh
+    obtain ⟨s', hArm', hPC'⟩ :=
+      (while_to_arm_bounds_preservation prog htcs passes hGen hErrBounds).2
+    have heq := sentinel_state_unique spec hArm (.inl hPC) hArm' (.inr (.inr hPC'))
+    have : s.pc = s'.pc := congrArg ArmState.pc heq
+    rw [hPC, hPC'] at this
+    exact (haltFinal_ne_boundsS spec) this
   | typeErrors σ_opt =>
     exfalso
     obtain ⟨am_opt, hte⟩ := hbeh
@@ -1479,17 +1482,18 @@ theorem arm_div_implies_while_unsafe_div
     have : s.pc = s'.pc := congrArg ArmState.pc heq
     rw [hPC, hPC'] at this
     exact (haltFinal_ne_divS spec) this.symm
-  | errors σ_opt =>
-    obtain ⟨am_opt, hErr⟩ := hbeh
-    rcases hErr with hErrDiv | hErrBounds
-    · exact while_to_arm_error_source_side prog htcs passes (.inl hErrDiv)
-    · exfalso
-      obtain ⟨s', hArm', hPC'⟩ :=
-        (while_to_arm_bounds_preservation prog htcs passes hGen hErrBounds).2
-      have heq := sentinel_state_unique spec hArm (.inr (.inl hPC)) hArm' (.inr (.inr hPC'))
-      have : s.pc = s'.pc := congrArg ArmState.pc heq
-      rw [hPC, hPC'] at this
-      exact (divS_ne_boundsS spec) this
+  | errorDiv σ_opt =>
+    obtain ⟨am_opt, hErrDiv⟩ := hbeh
+    exact while_to_arm_error_source_side prog htcs passes (.inl hErrDiv)
+  | errorBounds σ_opt =>
+    exfalso
+    obtain ⟨am_opt, hErrBounds⟩ := hbeh
+    obtain ⟨s', hArm', hPC'⟩ :=
+      (while_to_arm_bounds_preservation prog htcs passes hGen hErrBounds).2
+    have heq := sentinel_state_unique spec hArm (.inr (.inl hPC)) hArm' (.inr (.inr hPC'))
+    have : s.pc = s'.pc := congrArg ArmState.pc heq
+    rw [hPC, hPC'] at this
+    exact (divS_ne_boundsS spec) this
   | typeErrors σ_opt =>
     obtain ⟨am_opt, hte⟩ := hbeh
     exact absurd hte (pipelined_no_typeError prog htcs passes σ_opt am_opt)
@@ -1541,17 +1545,18 @@ theorem arm_bounds_implies_while_unsafe_bounds
     have : s.pc = s'.pc := congrArg ArmState.pc heq
     rw [hPC, hPC'] at this
     exact (haltFinal_ne_boundsS spec) this.symm
-  | errors σ_opt =>
-    obtain ⟨am_opt, hErr⟩ := hbeh
-    rcases hErr with hErrDiv | hErrBounds
-    · exfalso
-      obtain ⟨s', hArm', hPC'⟩ :=
-        (while_to_arm_div_preservation prog htcs passes hGen hErrDiv).2
-      have heq := sentinel_state_unique spec hArm (.inr (.inr hPC)) hArm' (.inr (.inl hPC'))
-      have : s.pc = s'.pc := congrArg ArmState.pc heq
-      rw [hPC, hPC'] at this
-      exact (divS_ne_boundsS spec) this.symm
-    · exact while_to_arm_error_source_side prog htcs passes (.inr hErrBounds)
+  | errorDiv σ_opt =>
+    exfalso
+    obtain ⟨am_opt, hErrDiv⟩ := hbeh
+    obtain ⟨s', hArm', hPC'⟩ :=
+      (while_to_arm_div_preservation prog htcs passes hGen hErrDiv).2
+    have heq := sentinel_state_unique spec hArm (.inr (.inr hPC)) hArm' (.inr (.inl hPC'))
+    have : s.pc = s'.pc := congrArg ArmState.pc heq
+    rw [hPC, hPC'] at this
+    exact (divS_ne_boundsS spec) this.symm
+  | errorBounds σ_opt =>
+    obtain ⟨am_opt, hErrBounds⟩ := hbeh
+    exact while_to_arm_error_source_side prog htcs passes (.inr hErrBounds)
   | typeErrors σ_opt =>
     obtain ⟨am_opt, hte⟩ := hbeh
     exact absurd hte (pipelined_no_typeError prog htcs passes σ_opt am_opt)
@@ -1620,15 +1625,16 @@ theorem arm_diverges_implies_while_diverges
     obtain ⟨_, _, _, s', _, hArm, _, hPC⟩ :=
       while_to_arm_correctness prog htcs passes hGen hhalt
     exact (sentinel_contradict hArm (.inl hPC)).elim
-  | errors σ_opt =>
-    obtain ⟨am_opt, hErr⟩ := hbeh
-    rcases hErr with hErrDiv | hErrBounds
-    · obtain ⟨s', hArm, hPC⟩ :=
-        (while_to_arm_div_preservation prog htcs passes hGen hErrDiv).2
-      exact (sentinel_contradict hArm (.inr (.inl hPC))).elim
-    · obtain ⟨s', hArm, hPC⟩ :=
-        (while_to_arm_bounds_preservation prog htcs passes hGen hErrBounds).2
-      exact (sentinel_contradict hArm (.inr (.inr hPC))).elim
+  | errorDiv σ_opt =>
+    obtain ⟨am_opt, hErrDiv⟩ := hbeh
+    obtain ⟨s', hArm, hPC⟩ :=
+      (while_to_arm_div_preservation prog htcs passes hGen hErrDiv).2
+    exact (sentinel_contradict hArm (.inr (.inl hPC))).elim
+  | errorBounds σ_opt =>
+    obtain ⟨am_opt, hErrBounds⟩ := hbeh
+    obtain ⟨s', hArm, hPC⟩ :=
+      (while_to_arm_bounds_preservation prog htcs passes hGen hErrBounds).2
+    exact (sentinel_contradict hArm (.inr (.inr hPC))).elim
   | typeErrors σ_opt =>
     obtain ⟨am', hte⟩ := hbeh
     exact absurd hte (pipelined_no_typeError prog htcs passes σ_opt am')

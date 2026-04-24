@@ -3878,7 +3878,8 @@ theorem exec_checker_correct
           (∃ am_f, (∃ am, haltsWithResult dc.orig 0 σ₀ σ_o am am_f) ∧
             (∃ am, haltsWithResult dc.trans 0 σ₀ σ_t am am_f)) ∧
           ∀ v ∈ dc.observable, σ_t v = σ_o v
-      | .errors _, .errors _ => True
+      | .errorDiv _, .errorDiv _ => True
+      | .errorBounds _, .errorBounds _ => True
       | .typeErrors _, _ => True
       | .diverges, .diverges => True
       | _, _ => False := by
@@ -3893,11 +3894,16 @@ theorem exec_checker_correct
     have ht := hconj.2.1
     have hobs := hconj.2.2
     exact ⟨.halts σ_o', ⟨am₀, am_f, ho⟩, ⟨am_f, ⟨am₀, ho⟩, am₀, ht⟩, hobs⟩
-  | errors σ_e =>
+  | errorDiv σ_e =>
     obtain ⟨am₀, am_e, hreach⟩ := htrans
-    obtain ⟨σ_o, am_o', ho⟩ := error_preservation
+    obtain ⟨σ_o, am_o', ho⟩ := errorDiv_preservation
       (toPCertificate dc) hvalid σ₀ hts₀ hreach
-    exact ⟨.errors σ_o, ⟨am₀, am_o', ho⟩, trivial⟩
+    exact ⟨.errorDiv σ_o, ⟨am₀, am_o', ho⟩, trivial⟩
+  | errorBounds σ_e =>
+    obtain ⟨am₀, am_e, hreach⟩ := htrans
+    obtain ⟨σ_o, am_o', ho⟩ := errorBounds_preservation
+      (toPCertificate dc) hvalid σ₀ hts₀ hreach
+    exact ⟨.errorBounds σ_o, ⟨am₀, am_o', ho⟩, trivial⟩
   | typeErrors σ_e =>
     obtain ⟨am₀, am_e, hreach⟩ := htrans
     exact absurd hreach (type_safety hvalid.well_typed_trans hts₀ hvalid.step_closed)
@@ -3919,7 +3925,8 @@ theorem exec_checker_total
             (∃ am_f, (∃ am, haltsWithResult dc.orig 0 σ₀ σ_o am am_f) ∧
               (∃ am, haltsWithResult dc.trans 0 σ₀ σ_t am am_f)) ∧
             ∀ v ∈ dc.observable, σ_t v = σ_o v
-        | .errors _, .errors _ => True
+        | .errorDiv _, .errorDiv _ => True
+        | .errorBounds _, .errorBounds _ => True
         | .typeErrors _, _ => True
         | .diverges, .diverges => True
         | _, _ => False := by
@@ -3932,11 +3939,16 @@ theorem exec_checker_total
     obtain ⟨σ_o', am_f, hconj⟩ := hsound
     have ho := hconj.1; have ht := hconj.2.1; have hobs := hconj.2.2
     exact ⟨.halts σ_t, ⟨am₀, am', hb'⟩, .halts σ_o', ⟨am₀, am_f, ho⟩, ⟨am_f, ⟨am₀, ho⟩, am₀, ht⟩, hobs⟩
-  | errors σ_e =>
+  | errorDiv σ_e =>
     obtain ⟨am₀, am_e, hreach⟩ := hb
-    obtain ⟨σ_o, am_o', ho⟩ := error_preservation
+    obtain ⟨σ_o, am_o', ho⟩ := errorDiv_preservation
       (toPCertificate dc) hvalid σ₀ hts₀ hreach
-    exact ⟨.errors σ_e, ⟨am₀, am_e, hreach⟩, .errors σ_o, ⟨am₀, am_o', ho⟩, trivial⟩
+    exact ⟨.errorDiv σ_e, ⟨am₀, am_e, hreach⟩, .errorDiv σ_o, ⟨am₀, am_o', ho⟩, trivial⟩
+  | errorBounds σ_e =>
+    obtain ⟨am₀, am_e, hreach⟩ := hb
+    obtain ⟨σ_o, am_o', ho⟩ := errorBounds_preservation
+      (toPCertificate dc) hvalid σ₀ hts₀ hreach
+    exact ⟨.errorBounds σ_e, ⟨am₀, am_e, hreach⟩, .errorBounds σ_o, ⟨am₀, am_o', ho⟩, trivial⟩
   | typeErrors σ_e =>
     obtain ⟨am₀, am_e, hreach⟩ := hb
     exact absurd hreach (type_safety hvalid.well_typed_trans hts₀ hvalid.step_closed)

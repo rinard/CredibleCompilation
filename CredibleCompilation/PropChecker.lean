@@ -558,19 +558,19 @@ theorem soundness_diverge (cert : PCertificate) (hvalid : PCertificateValid cert
 -- ============================================================
 
 inductive Behavior where
-  | halts      : Store → Behavior
-  | errors     : Store → Behavior
-  | typeErrors : Store → Behavior
-  | diverges   : Behavior
+  | halts       : Store → Behavior
+  | errorDiv    : Store → Behavior
+  | errorBounds : Store → Behavior
+  | typeErrors  : Store → Behavior
+  | diverges    : Behavior
 
 def program_behavior (p : Prog) (σ₀ : Store) (b : Behavior) : Prop :=
   match b with
-  | .halts σ'      => ∃ am am', haltsWithResult p 0 σ₀ σ' am am'
-  | .errors σ'     => ∃ am am',
-      (p ⊩ Cfg.run 0 σ₀ am ⟶* Cfg.errorDiv σ' am') ∨
-      (p ⊩ Cfg.run 0 σ₀ am ⟶* Cfg.errorBounds σ' am')
-  | .typeErrors σ' => ∃ am am', p ⊩ Cfg.run 0 σ₀ am ⟶* Cfg.typeError σ' am'
-  | .diverges      => ∃ f : Nat → Cfg, IsInfiniteExec p f ∧ f 0 = Cfg.run 0 σ₀ ArrayMem.init
+  | .halts σ'       => ∃ am am', haltsWithResult p 0 σ₀ σ' am am'
+  | .errorDiv σ'    => ∃ am am', p ⊩ Cfg.run 0 σ₀ am ⟶* Cfg.errorDiv σ' am'
+  | .errorBounds σ' => ∃ am am', p ⊩ Cfg.run 0 σ₀ am ⟶* Cfg.errorBounds σ' am'
+  | .typeErrors σ'  => ∃ am am', p ⊩ Cfg.run 0 σ₀ am ⟶* Cfg.typeError σ' am'
+  | .diverges       => ∃ f : Nat → Cfg, IsInfiniteExec p f ∧ f 0 = Cfg.run 0 σ₀ ArrayMem.init
 
 private theorem StepsN_to_Steps' {p : Prog} {c c' : Cfg} {n : Nat}
     (h : StepsN p c c' n) : p ⊩ c ⟶* c' := by
@@ -585,10 +585,10 @@ theorem has_behavior (p : Prog) (σ₀ : Store) (hclosed : StepClosedInBounds p)
     exact ⟨.halts σ', ArrayMem.init, am', StepsN_to_Steps' hn⟩
   · by_cases hed : ∃ n σ' am', StepsN p (Cfg.run 0 σ₀ ArrayMem.init) (Cfg.errorDiv σ' am') n
     · obtain ⟨_, σ', am', hn⟩ := hed
-      exact ⟨.errors σ', ArrayMem.init, am', .inl (StepsN_to_Steps' hn)⟩
+      exact ⟨.errorDiv σ', ArrayMem.init, am', StepsN_to_Steps' hn⟩
     · by_cases heb : ∃ n σ' am', StepsN p (Cfg.run 0 σ₀ ArrayMem.init) (Cfg.errorBounds σ' am') n
       · obtain ⟨_, σ', am', hn⟩ := heb
-        exact ⟨.errors σ', ArrayMem.init, am', .inr (StepsN_to_Steps' hn)⟩
+        exact ⟨.errorBounds σ', ArrayMem.init, am', StepsN_to_Steps' hn⟩
       · by_cases hte : ∃ n σ' am', StepsN p (Cfg.run 0 σ₀ ArrayMem.init) (Cfg.typeError σ' am') n
         · obtain ⟨_, σ', am', hn⟩ := hte
           exact ⟨.typeErrors σ', ArrayMem.init, am', StepsN_to_Steps' hn⟩
@@ -1063,9 +1063,10 @@ theorem credible_compilation_soundness (cert : PCertificate) (hvalid : PCertific
     match b with
     | .halts σ_t => ∃ σ_o am_o am_f, haltsWithResult cert.orig 0 σ₀ σ_o am_o am_f ∧
         ∀ v ∈ cert.observable, σ_t v = σ_o v
-    | .errors _ => ∃ σ_o am_o am_o',
-        (cert.orig ⊩ Cfg.run 0 σ₀ am_o ⟶* Cfg.errorDiv σ_o am_o') ∨
-        (cert.orig ⊩ Cfg.run 0 σ₀ am_o ⟶* Cfg.errorBounds σ_o am_o')
+    | .errorDiv _ => ∃ σ_o am_o am_o',
+        cert.orig ⊩ Cfg.run 0 σ₀ am_o ⟶* Cfg.errorDiv σ_o am_o'
+    | .errorBounds _ => ∃ σ_o am_o am_o',
+        cert.orig ⊩ Cfg.run 0 σ₀ am_o ⟶* Cfg.errorBounds σ_o am_o'
     | .typeErrors _ => False
     | .diverges => ∃ f, IsInfiniteExec cert.orig f ∧ f 0 = Cfg.run 0 σ₀ ArrayMem.init := by
   cases b with
@@ -1073,9 +1074,13 @@ theorem credible_compilation_soundness (cert : PCertificate) (hvalid : PCertific
     obtain ⟨am, am', h⟩ := htrans
     obtain ⟨σ_o, am_f, hhalt, _, hobs⟩ := soundness_halt cert hvalid σ₀ σ_t' hts₀ (am₀ := am) ⟨am', h⟩
     exact ⟨σ_o, am, am_f, hhalt, hobs⟩
-  | errors σ_e =>
+  | errorDiv σ_e =>
     obtain ⟨am, am', h⟩ := htrans
-    obtain ⟨σ_o, am_o', ho⟩ := error_preservation cert hvalid σ₀ hts₀ h
+    obtain ⟨σ_o, am_o', ho⟩ := errorDiv_preservation cert hvalid σ₀ hts₀ h
+    exact ⟨σ_o, am, am_o', ho⟩
+  | errorBounds σ_e =>
+    obtain ⟨am, am', h⟩ := htrans
+    obtain ⟨σ_o, am_o', ho⟩ := errorBounds_preservation cert hvalid σ₀ hts₀ h
     exact ⟨σ_o, am, am_o', ho⟩
   | typeErrors σ_e =>
     obtain ⟨am, am', h⟩ := htrans
@@ -1090,9 +1095,10 @@ theorem credible_compilation_total (cert : PCertificate) (hvalid : PCertificateV
       match b with
       | .halts σ_t => ∃ σ_o am_o am_f, haltsWithResult cert.orig 0 σ₀ σ_o am_o am_f ∧
           ∀ v ∈ cert.observable, σ_t v = σ_o v
-      | .errors _ => ∃ σ_o am_o am_o',
-          (cert.orig ⊩ Cfg.run 0 σ₀ am_o ⟶* Cfg.errorDiv σ_o am_o') ∨
-          (cert.orig ⊩ Cfg.run 0 σ₀ am_o ⟶* Cfg.errorBounds σ_o am_o')
+      | .errorDiv _ => ∃ σ_o am_o am_o',
+          cert.orig ⊩ Cfg.run 0 σ₀ am_o ⟶* Cfg.errorDiv σ_o am_o'
+      | .errorBounds _ => ∃ σ_o am_o am_o',
+          cert.orig ⊩ Cfg.run 0 σ₀ am_o ⟶* Cfg.errorBounds σ_o am_o'
       | .typeErrors _ => False
       | .diverges => ∃ f, IsInfiniteExec cert.orig f ∧ f 0 = Cfg.run 0 σ₀ ArrayMem.init := by
   obtain ⟨b, hb⟩ := has_behavior cert.trans σ₀ hvalid.step_closed
@@ -1102,9 +1108,13 @@ theorem credible_compilation_total (cert : PCertificate) (hvalid : PCertificateV
     obtain ⟨am, am', h⟩ := hb
     obtain ⟨σ_o, am_f, hhalt, _, hobs⟩ := soundness_halt cert hvalid σ₀ σ_t hts₀ (am₀ := am) ⟨am', h⟩
     exact ⟨σ_o, am, am_f, hhalt, hobs⟩
-  | errors σ_e =>
+  | errorDiv σ_e =>
     obtain ⟨am, am', h⟩ := hb
-    obtain ⟨σ_o, am_o', ho⟩ := error_preservation cert hvalid σ₀ hts₀ h
+    obtain ⟨σ_o, am_o', ho⟩ := errorDiv_preservation cert hvalid σ₀ hts₀ h
+    exact ⟨σ_o, am, am_o', ho⟩
+  | errorBounds σ_e =>
+    obtain ⟨am, am', h⟩ := hb
+    obtain ⟨σ_o, am_o', ho⟩ := errorBounds_preservation cert hvalid σ₀ hts₀ h
     exact ⟨σ_o, am, am_o', ho⟩
   | typeErrors σ_e =>
     obtain ⟨am, am', h⟩ := hb
