@@ -4,6 +4,79 @@ Chronological record of what was built and why, to reconstruct the sequence of d
 
 ---
 
+## Post-session-10 refactors: cbnz + loadFlit helper extraction (2026-04-24)
+
+After session 10 closed Phase B with `verifiedGenInstr_correct` at
+~4310 LOC and `maxHeartbeats 800000`, two helper extractions were
+done to reduce build time and DRY up the body.
+
+### Helper 1: cbnz_taken_chain / cbnz_fall_chain (commit `df3498b`)
+
+The cbnz fallback (`verifiedGenBoolExpr_correct` + `cbnz_taken|fall`)
+appeared in 14 sub-cases across `.iftrue` and `.iffall` catch-alls
+(.lit, .bvar, .cmp, .fcmp, .not (.lit), .not (.bvar), .not (.not _)
+× both polarities, plus the .bexpr contradiction).  Each was ~25 LOC
+of identical glue.
+
+Extracted into two helpers near `loadFloatExpr_exec`:
+- `cbnz_taken_chain` — for `.iftrue`, `s_fin.pc = pcMap l_var`, taken.
+- `cbnz_fall_chain` — for `.iffall`, `s_fin = s1.nextPC`, fallthrough.
+
+Each call site now ~13 LOC: build `hInstrs`, `rw` it, `obtain` the
+helper's 7-tuple, refine into the per-case `ExtSimRel` shape.
+
+Wins: 187 insertions / 253 deletions = **net 66 LOC saved**.
+`maxHeartbeats` dropped 800K → 600K (25%).
+
+### Helper 2: loadFlit_chain (commit `48979bc`)
+
+The `loadImm64_fregs_preserved + setFReg + ArmStep.fmovToFP + nextPC`
+pattern (loading a float literal into an fp register via x0) appeared
+in 8 places across the 6 fcmp flit sub-cases (var/flit and flit/var
+each have 1 use; flit/flit has 2; mirrored across .iftrue and .iffall).
+Each was ~22 LOC of identical glue: load to x0, ExtStateRel preservation,
+fmov step, fregs preservation bridge.
+
+Extracted into `loadFlit_chain` (~30 LOC).  Takes `hCodeImm` and `hFmov`
+as separate hypotheses (since simp aggressively flattens `[fmov]` into
+the trailing list, the combined `formalLoadImm64 ++ [fmov]` CodeAt isn't
+naturally available — the helper bridges).  Returns 7-tuple: state, k,
+ArmStepsN, hk, fregs-set, ExtStateRel, fregs-preservation.
+
+Wins: 156 insertions / 271 deletions = **net 115 LOC saved**.
+`maxHeartbeats` dropped 600K → 500K (another 17%).
+
+### Cumulative impact of both refactors
+
+- **`verifiedGenInstr_correct` body: ~325 LOC removed** (~7.5%).
+- **`maxHeartbeats` budget: 800K → 500K** (38% reduction from
+  post-session-10 baseline).
+- **File total: 6182 → 6067** (115 LOC net, after adding ~70 LOC of
+  helpers).
+- **Sorry count: unchanged at 4.**
+- **Build green throughout.**
+
+### Attempted but reverted: file split
+
+Splitting `verifiedGenInstr_correct` into a new
+`VerifiedGenInstrCorrect.lean` file (importing `ArmCorrectness`) broke
+~10 `rw` sites that previously worked.  Root cause: `CoeFun VarLayout`'s
+unfolding (`layout v` ↔ `List.lookup v layout.entries`) is defeq within
+a single file but not transparent across the import boundary.  In one
+file, `let rv_reg := match layout z with ...` and the helper's
+`hVal : s.regs (match layout v with ...) = ...` matched defeq; across
+files, `rw [hVal]` couldn't find the `(match (fun v => List.lookup v ...) z with ...)`
+unfolded form against `rv_reg`.  Reverted; documented in
+plans/phase6-7-NEXT-SESSION.md as a known dead-end.
+
+If future sessions want the split, options are: (a) `@[reducible]`
+on `CoeFun VarLayout` in ArmSemantics.lean (broader effect; risky),
+or (b) globally rewrite `let _ := match layout v with ...` to
+`let _ := match List.lookup v layout.entries with ...` (mechanical;
+~50 sites).
+
+---
+
 ## Phase 6/7 session 10: Flavor A Phase B complete — .iftrue + .iffall fully closed (2026-04-24)
 
 **Planned goal**: close the remaining 5 .iftrue internal sub-cases

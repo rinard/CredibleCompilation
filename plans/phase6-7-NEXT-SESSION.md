@@ -1,9 +1,10 @@
 # Phase 6/7 Next Session — Final Plan and Handoff
 
 **Read this first.**  Supersedes all earlier Phase 6/7 planning documents
-in this directory.  Last updated: 2026-04-24 after **session 10** —
-**Phase B fully complete**. `verifiedGenInstr_correct` has zero internal
-sorries; declaration warning gone.
+in this directory.  Last updated: 2026-04-24 after **session 10 + post-
+session refactors** — **Phase B fully complete + cbnz/loadFlit helpers
+extracted**. `verifiedGenInstr_correct` has zero internal sorries.
+Branch `phase6-prep` at `48979bc` (pushed to origin).
 
 ## TL;DR for next session (session 11)
 
@@ -13,13 +14,19 @@ sorries; declaration warning gone.
 - L1324 (Phase 7 target `source_diverges_gives_ArmDiverges_init`)
 - L2115 (Phase 6 out-of-scope `verifiedGenInstr_ifgoto_branch_bounded`)
 
-Build green. Phase B locked.  Phases A + B done.
+Build green. Phase B locked. Phases A + B done.
+
+**Start with `lake build` — should finish green with 4 sorry warnings
+in ~25s.** Build green is the invariant throughout this session.
 
 **Session 11 starts Phase C: `ext_backward_simulation`.**  Per the
 flavor-a-signatures.md spec, the signature was already updated in
 Phase B prep (it just threads the enhanced length-aware tuple through
 from `verifiedGenInstr_correct`). Body should be ~0 LOC — already
-delegates via term-mode. Verify with `grep -n "^theorem ext_backward_simulation"`.
+delegates via term-mode. Find with
+`grep -n "^theorem ext_backward_simulation" CredibleCompilation/ArmCorrectness.lean`
+(~line 6032 in current file). Verify it compiles cleanly; no further
+work expected.
 
 After Phase C, proceed to Phase D (`step_simulation` in CodeGen.lean).
 The body is already cascaded with the `ArmStepsN_to_ArmSteps` bridge at
@@ -30,26 +37,49 @@ threading ArmStepsN through `step_simulation`'s signature itself
 Phases E–H follow per spec. Phase H closes the target sorry at
 PipelineCorrectness.lean:1324.
 
-Reference commits for session 10's Phase B completions:
-- `4d056b1` — fcmp var/flit
-- `a5d705a` — fcmp flit/var
-- `30d43e7` — fcmp flit/flit
-- `3466c72` — inner catch-all
-- `b56a67b` — outer catch-all
-- `5dd0d5d` — full .iffall mirror (Phase B done)
+### Reference commits for session 10 + refactors
 
-### Patterns proven this session — REUSE for downstream phases
+Phase B completions (session 10):
+- `4d056b1` — fcmp var/flit (.iftrue)
+- `a5d705a` — fcmp flit/var (.iftrue)
+- `30d43e7` — fcmp flit/flit (.iftrue)
+- `3466c72` — inner catch-all (.iftrue)
+- `b56a67b` — outer catch-all (.iftrue)
+- `5dd0d5d` — full .iffall mirror (Phase B done; sorry count 5 → 4)
+- `d73252c` — CHANGELOG + plan handoff
+
+Build-time refactors (post-session 10):
+- `df3498b` — `cbnz_taken_chain` / `cbnz_fall_chain` helpers
+  consolidating 14 cbnz fallback sites
+- `48979bc` — `loadFlit_chain` helper consolidating 8 loadImm64+fmov
+  chunks across 6 fcmp flit cases. Cumulative wins: ~325 LOC removed
+  from `verifiedGenInstr_correct` body, `maxHeartbeats` budget now
+  500K (down from 800K post-session-10).
+
+### Helper landscape after refactors
+
+| Helper | Location | Purpose |
+|---|---|---|
+| `cbnz_taken_chain` | ArmCorrectness.lean:1805 | `verifiedGenBoolExpr ++ [cbnz]` chain when `be.eval = true` (used by .iftrue catch-alls) |
+| `cbnz_fall_chain` | ArmCorrectness.lean:1836 | same but `be.eval = false` (used by .iffall catch-alls) |
+| `loadFlit_chain` | ArmCorrectness.lean:1872 | `formalLoadImm64 ++ [fmov]` chain via separate hCodeImm + hFmov (used by 6 fcmp flit cases) |
+| `verifiedGenBoolExpr_correct` | ArmCorrectness.lean:1005 | underlying boolean expression evaluator |
+
+### Patterns proven in session 10 — REUSE for downstream phases
 
 1. **simp output for fcmp flit cases**. simp aggressively flattens:
    - `var/flit` and `flit/var`: `loadVar ++ loadImm ++ [fmov, fcmp, bCond]`.
    - `flit/flit`: `loadImmA ++ (fmov_d1 :: (loadImmB ++ trailing))`
      with mixed cons/append. Use CodeAt's `.head`/`.tail` for cons
      forms, `.append_left`/`.append_right` for ++.
-2. **Manual fmov step**. When simp puts `[fmov]` in the trailing list,
-   use `loadImm64_fregs_preserved` for the loadImm, then construct
-   `s_next = (s.setFReg dst (s.regs .x0)).nextPC` and step via
-   `ArmStepsN.single (ArmStep.fmovToFP dst .x0 hFmovI)`. Preserve
-   ExtStateRel via `(ExtStateRel.setFReg_preserved hRel hRegConv.not_dN).nextPC`.
+2. **Manual fmov step (now bundled in `loadFlit_chain`)**. When simp puts
+   `[fmov]` in the trailing list, use `loadImm64_fregs_preserved` for the
+   loadImm, then construct `s_next = (s.setFReg dst (s.regs .x0)).nextPC`
+   and step via `ArmStepsN.single (ArmStep.fmovToFP dst .x0 hFmovI)`.
+   Preserve ExtStateRel via
+   `(ExtStateRel.setFReg_preserved hRel hRegConv.not_dN).nextPC`.
+   For Phase D and beyond, **prefer `loadFlit_chain` directly** —
+   pass `hCodeImm` and `hFmov` separately and unpack the 7-tuple result.
 3. **`if r == .dN` motive in `s.setFReg.fregs r`**. Don't try to
    `show` past it; instead prove the bridge as
    `s_next.fregs r = s.fregs r` via `simp [s_next, ArmState.setFReg,
@@ -68,8 +98,27 @@ Reference commits for session 10's Phase B completions:
 5. **`rename_i` order for iffall vs iftrue**. iftrue uses
    `rename_i l_var be_var`; iffall uses `rename_i be_var l_var`
    (REVERSE). Constructor binder order differs.
-6. **maxHeartbeats budget**. `verifiedGenInstr_correct` now needs
-   `set_option maxHeartbeats 800000` (was 400000) due to body size.
+6. **maxHeartbeats budget**. `verifiedGenInstr_correct` is now at
+   `set_option maxHeartbeats 500000` (post-refactor). If you add new
+   case bodies, may need to bump up; conversely, if you extract more
+   helpers, may be able to drop further.
+
+### File-split attempted but reverted
+
+Splitting `verifiedGenInstr_correct` into a new file (e.g.,
+`VerifiedGenInstrCorrect.lean`) failed due to a defeq-across-files
+quirk: `layout v` (via `CoeFun VarLayout`) and `List.lookup v layout.entries`
+were no longer defeq for `rw` purposes once moved to a separate file,
+breaking ~10 rw sites. Tried in this session and reverted (the
+`rw [hRV_2]` step inside `.binop_divByZero` failed). If a future
+session attempts this, would need to either:
+  (a) add `@[reducible]` to the `CoeFun VarLayout` instance in
+      ArmSemantics.lean (might affect other proofs), or
+  (b) globally replace `match layout v with ...` lets with explicit
+      `match List.lookup v layout.entries with ...` form (matches
+      what helpers return after CoeFun unfolds).
+
+Current single-file layout works fine; not blocking.
 
 ### Three blockers now documented (key patterns)
 
