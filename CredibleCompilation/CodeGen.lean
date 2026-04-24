@@ -6202,6 +6202,29 @@ theorem tacToArm_correctness {tyCtx : TyCtx} {p : Prog} {r : VerifiedAsmResult}
       cfg' hStepsN
   exact ⟨s', ArmStepsN_to_ArmSteps hArmN, hRel, hHalt⟩
 
+/-- Length-tracked variant of `tacToArm_correctness`. Takes `StepsN` of length `n`
+    and returns `ArmStepsN` of length `k` with `n ≤ k` on `.run` endings.
+    Used by `source_diverges_gives_ArmDiverges_init` in PipelineCorrectness.lean
+    to build `ArmDiverges` by truncating via `ArmStepsN_prefix`. -/
+theorem tacToArm_correctness_N {tyCtx : TyCtx} {p : Prog} {r : VerifiedAsmResult}
+    (hGen : verifiedGenerateAsm tyCtx p = .ok r)
+    {cfg' : Cfg} {n : Nat}
+    (hStepsN : StepsN p (Cfg.run 0 (Store.typedInit tyCtx) (fun _ _ => 0)) cfg' n) :
+    ∃ s' k, ArmStepsN r.bodyFlat
+      { regs := fun _ => 0, fregs := fun _ => 0, stack := fun _ => 0,
+        pc := r.pcMap 0, flags := ⟨0, 0⟩ } s' k ∧
+      (∀ pc' σ' am', cfg' = .run pc' σ' am' → n ≤ k) ∧
+      ExtSimRel r.layout r.pcMap r.divS r.boundsS cfg' s' ∧
+      (∀ σ' am', cfg' = .halt σ' am' → s'.pc = r.haltFinal) :=
+  tacToArm_refinement hGen _
+    (initial_extSimRel r.layout r.pcMap r.divS r.boundsS (Store.typedInit tyCtx) (fun _ _ => 0)
+      { regs := fun _ => 0, fregs := fun _ => 0, stack := fun _ => 0,
+        pc := r.pcMap 0, flags := ⟨0, 0⟩ }
+      (typedInit_encode tyCtx) rfl (fun _ => rfl) (fun _ => rfl) (fun _ => rfl) rfl)
+    (TypedStore.typedInit tyCtx)
+    (buildVerifiedInvMap_atStart p (Store.typedInit tyCtx) (fun _ _ => 0))
+    cfg' hStepsN
+
 /-- Caller-saved integer register numbers (x3-x8, x9-x15). -/
 private def callerSavedIntRegs : List Nat := [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
 

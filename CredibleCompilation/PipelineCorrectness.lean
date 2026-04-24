@@ -1328,10 +1328,33 @@ private theorem source_diverges_gives_ArmDiverges_init
     (hGen : verifiedGenerateAsm prog.tyCtx
       (applyPassesPure prog.tyCtx passes prog.compileToTAC) = .ok r)
     {f : Nat → Cfg}
-    (_hinf : IsInfiniteExec (applyPassesPure prog.tyCtx passes prog.compileToTAC) f)
-    (_hf0 : f 0 = Cfg.run 0 prog.initStore ArrayMem.init) :
+    (hinf : IsInfiniteExec (applyPassesPure prog.tyCtx passes prog.compileToTAC) f)
+    (hf0 : f 0 = Cfg.run 0 prog.initStore ArrayMem.init) :
     ArmDiverges r.bodyFlat (Phase6.initArmState r) := by
-  sorry
+  intro N
+  -- StepsN of any length extracted from IsInfiniteExec by induction
+  have hStepsN_any : ∀ k, StepsN (applyPassesPure prog.tyCtx passes prog.compileToTAC)
+      (f 0) (f k) k := by
+    intro k
+    induction k with
+    | zero => rfl
+    | succ k ih => exact StepsN_extend ih (hinf.2 k)
+  have hStepsN := hStepsN_any (N + 1)
+  -- Connect f 0 = .run 0 prog.initStore ArrayMem.init to Store.typedInit form
+  have htc := Program.typeCheckStrict_typeCheck prog htcs
+  have hInitEq : Store.typedInit prog.tyCtx = prog.initStore :=
+    Program.typedInit_eq_initStore prog htc
+  rw [hf0, ← hInitEq, show ArrayMem.init = (fun _ _ => 0) from rfl] at hStepsN
+  -- f (N+1) is a .run config
+  obtain ⟨pc_end, σ_end, am_end, hfend⟩ := inf_exec_is_run hinf (N + 1)
+  rw [hfend] at hStepsN
+  -- Apply length-tracked correctness
+  obtain ⟨s_fwd, k, hArmN, hk_bound, _, _⟩ := tacToArm_correctness_N hGen hStepsN
+  have hN1_le_k : N + 1 ≤ k := hk_bound pc_end σ_end am_end rfl
+  -- Truncate to length N via ArmStepsN_prefix
+  obtain ⟨d, hd⟩ : ∃ d, k = N + d := ⟨k - N, by omega⟩
+  rw [hd] at hArmN
+  exact ArmStepsN_prefix hArmN
 
 /-- **Phase 7 helper: observable determinism at `haltFinal`.**  Under the
     deterministic-havoc pivot, any two ARM states at `haltFinal` reached
