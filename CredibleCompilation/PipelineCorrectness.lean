@@ -3322,4 +3322,92 @@ private theorem verifiedGenInstr_const_branch_bounded
               exact ArmInstr.noConfusion heq
           · exact vStoreVarFP_no_branches _ _ _ _ hSt)
 
+/-- **Aggregator**: every branch instruction emitted by `verifiedGenInstr` for any
+    TAC constructor targets a label ≤ `boundsS`, assuming the standard bounds
+    hypotheses on branch/sentinel labels. Dispatches to per-case helpers. -/
+private theorem verifiedGenInstr_branch_target_bounded
+    (layout : VarLayout) (pcMap : Nat → Nat) (instr : TAC)
+    (haltS divS boundsS : Nat) (arrayDecls : List (ArrayName × Nat × VarTy))
+    (safe : Bool) {instrs : List ArmInstr}
+    (hGen : verifiedGenInstr layout pcMap instr
+      haltS divS boundsS arrayDecls safe = some instrs)
+    (hRC : layout.regConventionSafe = true)
+    (hII : layout.isInjective = true)
+    (hPcBound : ∀ l, (instr = TAC.goto l ∨ (∃ be, instr = TAC.ifgoto be l)) →
+                pcMap l ≤ boundsS)
+    (hHaltBound : haltS ≤ boundsS)
+    (hDivBound : divS ≤ boundsS) :
+    ∀ instr' ∈ instrs, ∀ lbl,
+      (instr' = ArmInstr.b lbl ∨
+       (∃ rn, instr' = ArmInstr.cbz rn lbl) ∨
+       (∃ rn, instr' = ArmInstr.cbnz rn lbl) ∨
+       (∃ c, instr' = ArmInstr.bCond c lbl)) →
+      lbl ≤ boundsS := by
+  cases instr with
+  | const v val =>
+    exact verifiedGenInstr_const_branch_bounded layout pcMap v val haltS divS boundsS
+      arrayDecls safe hGen
+  | copy dst src =>
+    exact verifiedGenInstr_copy_branch_bounded layout pcMap dst src haltS divS boundsS
+      arrayDecls safe hGen
+  | binop dst op lv rv =>
+    by_cases hDiv : op = BinOp.div
+    · subst hDiv
+      exact verifiedGenInstr_binop_div_branch_bounded layout pcMap dst lv rv haltS divS
+        boundsS arrayDecls safe hGen hRC hII hDivBound
+    · by_cases hMod : op = BinOp.mod
+      · subst hMod
+        exact verifiedGenInstr_binop_mod_branch_bounded layout pcMap dst lv rv haltS divS
+          boundsS arrayDecls safe hGen hRC hII hDivBound
+      · exact verifiedGenInstr_binop_std_branch_bounded layout pcMap dst op lv rv haltS
+          divS boundsS arrayDecls safe hGen hRC hII hDiv hMod
+  | boolop dst be =>
+    exact verifiedGenInstr_boolop_branch_bounded layout pcMap dst be haltS divS boundsS
+      arrayDecls safe hGen
+  | goto l =>
+    exact verifiedGenInstr_goto_branch_bounded layout pcMap l haltS divS boundsS
+      arrayDecls safe hGen (hPcBound l (Or.inl rfl))
+  | ifgoto be l =>
+    exact verifiedGenInstr_ifgoto_branch_bounded layout pcMap be l haltS divS boundsS
+      arrayDecls safe hGen (hPcBound l (Or.inr ⟨be, rfl⟩))
+  | halt =>
+    exact verifiedGenInstr_halt_branch_bounded layout pcMap haltS divS boundsS
+      arrayDecls safe hGen hHaltBound
+  | arrLoad x arr idx ty =>
+    exact verifiedGenInstr_arrLoad_branch_bounded layout pcMap x arr idx ty haltS divS
+      boundsS arrayDecls safe hGen
+  | arrStore arr idx val ty =>
+    exact verifiedGenInstr_arrStore_branch_bounded layout pcMap arr idx val ty haltS
+      divS boundsS arrayDecls safe hGen
+  | fbinop dst fop lv rv =>
+    exact verifiedGenInstr_fbinop_branch_bounded layout pcMap dst fop lv rv haltS divS
+      boundsS arrayDecls safe hGen
+  | intToFloat dst src =>
+    exact verifiedGenInstr_intToFloat_branch_bounded layout pcMap dst src haltS divS
+      boundsS arrayDecls safe hGen
+  | floatToInt dst src =>
+    exact verifiedGenInstr_floatToInt_branch_bounded layout pcMap dst src haltS divS
+      boundsS arrayDecls safe hGen
+  | floatUnary dst op src =>
+    exact verifiedGenInstr_floatUnary_branch_bounded layout pcMap dst op src haltS divS
+      boundsS arrayDecls safe hGen
+  | fternop dst op a b c =>
+    exact verifiedGenInstr_fternop_branch_bounded layout pcMap dst op a b c haltS divS
+      boundsS arrayDecls safe hGen
+  | print fmt args =>
+    exact verifiedGenInstr_print_branch_bounded layout pcMap fmt args haltS divS
+      boundsS arrayDecls safe hGen
+  | printInt v =>
+    exact verifiedGenInstr_printInt_branch_bounded layout pcMap v haltS divS
+      boundsS arrayDecls safe hGen
+  | printBool v =>
+    exact verifiedGenInstr_printBool_branch_bounded layout pcMap v haltS divS
+      boundsS arrayDecls safe hGen
+  | printFloat v =>
+    exact verifiedGenInstr_printFloat_branch_bounded layout pcMap v haltS divS
+      boundsS arrayDecls safe hGen
+  | printString lit =>
+    exact verifiedGenInstr_printString_branch_bounded layout pcMap lit haltS divS
+      boundsS arrayDecls safe hGen
+
 end Phase6Probes2
