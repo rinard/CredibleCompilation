@@ -6081,48 +6081,63 @@ theorem tacToArm_refinement {tyCtx : TyCtx} {p : Prog} {r : VerifiedAsmResult}
     (hRel : ExtSimRel r.layout r.pcMap r.divS r.boundsS (.run pc σ am) s)
     (hTS : TypedStore tyCtx σ)
     (hInv : buildVerifiedInvMap p pc σ am)
-    (cfg' : Cfg) (hSteps : p ⊩ Cfg.run pc σ am ⟶* cfg') :
-    ∃ s', ArmSteps r.bodyFlat s s' ∧
-          ExtSimRel r.layout r.pcMap r.divS r.boundsS cfg' s' ∧
-          (∀ σ' am', cfg' = .halt σ' am' → s'.pc = r.haltFinal) := by
+    {n : Nat} (cfg' : Cfg) (hStepsN : StepsN p (.run pc σ am) cfg' n) :
+    ∃ s' k, ArmStepsN r.bodyFlat s s' k ∧
+      (∀ pc' σ' am', cfg' = .run pc' σ' am' → n ≤ k) ∧
+      ExtSimRel r.layout r.pcMap r.divS r.boundsS cfg' s' ∧
+      (∀ σ' am', cfg' = .halt σ' am' → s'.pc = r.haltFinal) := by
   have spec := verifiedGenerateAsm_spec hGen
-  -- Generalize the start config for induction (pattern from type_preservation_steps)
-  suffices ∀ c c_end, Steps p c c_end →
-      ∀ pc σ am s,
-        c = Cfg.run pc σ am →
-        ExtSimRel r.layout r.pcMap r.divS r.boundsS (.run pc σ am) s →
-        TypedStore tyCtx σ →
-        buildVerifiedInvMap p pc σ am →
-        ∃ s', ArmSteps r.bodyFlat s s' ∧
-              ExtSimRel r.layout r.pcMap r.divS r.boundsS c_end s' ∧
-              (∀ σ' am', c_end = .halt σ' am' → s'.pc = r.haltFinal) from
-    this _ _ hSteps pc σ am s rfl hRel hTS hInv
-  intro c c_end hSteps
-  induction hSteps with
-  | refl =>
-    intro pc σ am s hc hRel _ _; subst hc
-    refine ⟨s, .refl, hRel, ?_⟩
-    intro σ' am' hEq; exact Cfg.noConfusion hEq
-  | step hStep rest ih =>
-    intro pc σ am s hc hRel hTS_cur hInv_cur; subst hc
-    have hPC := Step.pc_lt_of_step hStep
-    obtain ⟨s_mid, _kMid, hArmN1, _hKMid, hRel_mid, _hHaltMid⟩ :=
-      step_simulation spec hStep hRel hPC hTS_cur hInv_cur
-    have hArm1 : ArmSteps r.bodyFlat s s_mid := ArmStepsN_to_ArmSteps hArmN1
+  -- Induction on n: generalize over the start config (pattern from type_preservation_steps).
+  suffices ∀ n pc σ am (s : ArmState),
+      ExtSimRel r.layout r.pcMap r.divS r.boundsS (.run pc σ am) s →
+      TypedStore tyCtx σ →
+      buildVerifiedInvMap p pc σ am →
+      ∀ cfg', StepsN p (.run pc σ am) cfg' n →
+      ∃ s' k, ArmStepsN r.bodyFlat s s' k ∧
+        (∀ pc' σ' am', cfg' = .run pc' σ' am' → n ≤ k) ∧
+        ExtSimRel r.layout r.pcMap r.divS r.boundsS cfg' s' ∧
+        (∀ σ' am', cfg' = .halt σ' am' → s'.pc = r.haltFinal) from
+    this n pc σ am s hRel hTS hInv cfg' hStepsN
+  intro n
+  induction n with
+  | zero =>
+    intro pc σ am s hRel _ _ cfg' hStepsN
+    change Cfg.run pc σ am = cfg' at hStepsN
+    subst hStepsN
+    refine ⟨s, 0, rfl, ?_, hRel, ?_⟩
+    · intro _ _ _ _; omega
+    · intro σ' am' hEq; exact Cfg.noConfusion hEq
+  | succ n ih =>
+    intro pc σ am s hRel hTS_cur hInv_cur cfg' hStepsN
+    obtain ⟨c'', hStep1, hRest⟩ := hStepsN
+    have hPC := Step.pc_lt_of_step hStep1
+    obtain ⟨s_mid, k1, hArmN1, hK1, hRel_mid, hHaltMid⟩ :=
+      step_simulation spec hStep1 hRel hPC hTS_cur hInv_cur
     -- Classify the one-step successor
-    rcases step_run_or_terminal spec.wellTypedProg hTS_cur hPC hStep with
+    rcases step_run_or_terminal spec.wellTypedProg hTS_cur hPC hStep1 with
       ⟨pc', σ', am', hEq, hTS'⟩ | hTerminal
-    · -- Successor is .run: subst and apply IH. Transport the invariant
-      -- via spec.invPreserved at the TAC step.
+    · -- Successor is .run: subst and apply IH.
       subst hEq
       have hInv' : buildVerifiedInvMap p pc' σ' am' :=
-        spec.invPreserved pc σ am hInv_cur pc' σ' am' hStep
-      obtain ⟨s', hArm2, hRel', hHalt'⟩ := ih _ _ _ s_mid rfl hRel_mid hTS' hInv'
-      exact ⟨s', hArm1.trans hArm2, hRel', hHalt'⟩
-    · -- Successor is terminal: rest must be refl
-      cases rest with
-      | refl => exact ⟨s_mid, hArm1, hRel_mid, _hHaltMid⟩
-      | step h _ => exact absurd h (hTerminal _)
+        spec.invPreserved pc σ am hInv_cur pc' σ' am' hStep1
+      obtain ⟨s', k2, hArmN2, hK2, hRel', hHalt'⟩ :=
+        ih _ _ _ s_mid hRel_mid hTS' hInv' cfg' hRest
+      refine ⟨s', k1 + k2, ArmStepsN_trans hArmN1 hArmN2, ?_, hRel', hHalt'⟩
+      intro pc'' σ'' am'' hCfg
+      have hk1_ge : 1 ≤ k1 := hK1 pc' σ' am' rfl
+      have hk2_ge : n ≤ k2 := hK2 pc'' σ'' am'' hCfg
+      omega
+    · -- Successor is terminal: hRest's head step would contradict hTerminal.
+      cases n with
+      | zero =>
+        change c'' = cfg' at hRest
+        subst hRest
+        refine ⟨s_mid, k1, hArmN1, ?_, hRel_mid, hHaltMid⟩
+        intro pc'' σ'' am'' hCfg
+        exact hK1 pc'' σ'' am'' hCfg
+      | succ n' =>
+        obtain ⟨c3, hStep3, _⟩ := hRest
+        exact absurd hStep3 (hTerminal _)
 
 /-- Corollary: initial ExtSimRel establishment.
     For a zero-initialized store, if the layout maps every variable and
@@ -6174,15 +6189,18 @@ theorem tacToArm_correctness {tyCtx : TyCtx} {p : Prog} {r : VerifiedAsmResult}
       { regs := fun _ => 0, fregs := fun _ => 0, stack := fun _ => 0,
         pc := r.pcMap 0, flags := ⟨0, 0⟩ } s' ∧
       ExtSimRel r.layout r.pcMap r.divS r.boundsS cfg' s' ∧
-      (∀ σ' am', cfg' = .halt σ' am' → s'.pc = r.haltFinal) :=
-  tacToArm_refinement hGen _
-    (initial_extSimRel r.layout r.pcMap r.divS r.boundsS (Store.typedInit tyCtx) (fun _ _ => 0)
-      { regs := fun _ => 0, fregs := fun _ => 0, stack := fun _ => 0,
-        pc := r.pcMap 0, flags := ⟨0, 0⟩ }
-      (typedInit_encode tyCtx) rfl (fun _ => rfl) (fun _ => rfl) (fun _ => rfl) rfl)
-    (TypedStore.typedInit tyCtx)
-    (buildVerifiedInvMap_atStart p (Store.typedInit tyCtx) (fun _ _ => 0))
-    cfg' hSteps
+      (∀ σ' am', cfg' = .halt σ' am' → s'.pc = r.haltFinal) := by
+  obtain ⟨n, hStepsN⟩ := Steps_to_StepsN hSteps
+  obtain ⟨s', _k, hArmN, _hK, hRel, hHalt⟩ :=
+    tacToArm_refinement hGen _
+      (initial_extSimRel r.layout r.pcMap r.divS r.boundsS (Store.typedInit tyCtx) (fun _ _ => 0)
+        { regs := fun _ => 0, fregs := fun _ => 0, stack := fun _ => 0,
+          pc := r.pcMap 0, flags := ⟨0, 0⟩ }
+        (typedInit_encode tyCtx) rfl (fun _ => rfl) (fun _ => rfl) (fun _ => rfl) rfl)
+      (TypedStore.typedInit tyCtx)
+      (buildVerifiedInvMap_atStart p (Store.typedInit tyCtx) (fun _ _ => 0))
+      cfg' hStepsN
+  exact ⟨s', ArmStepsN_to_ArmSteps hArmN, hRel, hHalt⟩
 
 /-- Caller-saved integer register numbers (x3-x8, x9-x15). -/
 private def callerSavedIntRegs : List Nat := [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
