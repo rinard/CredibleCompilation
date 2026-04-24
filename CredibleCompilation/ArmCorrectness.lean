@@ -1795,10 +1795,77 @@ theorem eff_freg_val_preserved (layout : VarLayout) (v : Var) (σ : Store)
     simp only [hv] at hVal1 ⊢; rw [hFregs _ hFBneCl]; exact hVal1
   | some (.ireg r) => exact absurd hv (hNotIreg r)
 
+-- ============================================================
+-- § cbnz fallback helpers (used by .iftrue / .iffall catch-alls)
+-- ============================================================
+
+/-- Forward-sim chain for `verifiedGenBoolExpr ++ [.cbnz .x0 (pcMap l_var)]`
+    when `be.eval σ am = true` (cbnz taken: jumps to `pcMap l_var`).
+    Used by .iftrue catch-alls. -/
+theorem cbnz_taken_chain (prog : ArmProg) (layout : VarLayout) (pcMap : Nat → Nat)
+    (be : BoolExpr) (l_var pc : Nat)
+    (σ : Store) (am : ArrayMem) (s : ArmState)
+    (hStateRel : ExtStateRel layout σ s)
+    (hRegConv : RegConventionSafe layout)
+    (hPcRel : s.pc = pcMap pc)
+    (hCodeBE : CodeAt prog (pcMap pc) (verifiedGenBoolExpr layout be))
+    (hCodeCbnz : CodeAt prog (pcMap pc + (verifiedGenBoolExpr layout be).length)
+                  ([ArmInstr.cbnz .x0 (pcMap l_var)]))
+    (tyCtx : TyCtx) (hTS : TypedStore tyCtx σ)
+    (hWTbe : WellTypedBoolExpr tyCtx be) (hWTL : WellTypedLayout tyCtx layout)
+    (hMapped_be : ∀ v, v ∈ be.vars → layout v ≠ none)
+    (hSimple : be.hasSimpleOps = true)
+    (hcond : be.eval σ am = true) :
+    ∃ s' k, ArmStepsN prog s s' k ∧
+      k = (verifiedGenBoolExpr layout be).length + 1 ∧
+      ExtStateRel layout σ s' ∧
+      s'.pc = pcMap l_var ∧
+      s'.arrayMem = s.arrayMem := by
+  obtain ⟨s1, k1, hSteps1N, hk1, hX0_1, hRel1, hPC1, hAM1⟩ :=
+    verifiedGenBoolExpr_correct prog layout be σ s (pcMap pc)
+      hStateRel hRegConv hCodeBE hPcRel tyCtx hTS hWTbe hWTL hMapped_be hSimple am
+  have hCbnz := hCodeCbnz.head; rw [← hPC1] at hCbnz
+  have hx0_ne : s1.regs .x0 ≠ 0 := by rw [hX0_1, hcond]; simp
+  refine ⟨{ s1 with pc := pcMap l_var }, k1 + 1,
+    ArmStepsN_trans hSteps1N (ArmStepsN.single (.cbnz_taken .x0 _ hCbnz hx0_ne)),
+    by rw [hk1], hRel1, rfl, by simp [hAM1]⟩
+
+/-- Forward-sim chain for `verifiedGenBoolExpr ++ [.cbnz .x0 (pcMap l_var)]`
+    when `be.eval σ am = false` (cbnz falls through: PC advances by 1).
+    Used by .iffall catch-alls. -/
+theorem cbnz_fall_chain (prog : ArmProg) (layout : VarLayout) (pcMap : Nat → Nat)
+    (be : BoolExpr) (l_var pc : Nat)
+    (σ : Store) (am : ArrayMem) (s : ArmState)
+    (hStateRel : ExtStateRel layout σ s)
+    (hRegConv : RegConventionSafe layout)
+    (hPcRel : s.pc = pcMap pc)
+    (hCodeBE : CodeAt prog (pcMap pc) (verifiedGenBoolExpr layout be))
+    (hCodeCbnz : CodeAt prog (pcMap pc + (verifiedGenBoolExpr layout be).length)
+                  ([ArmInstr.cbnz .x0 (pcMap l_var)]))
+    (tyCtx : TyCtx) (hTS : TypedStore tyCtx σ)
+    (hWTbe : WellTypedBoolExpr tyCtx be) (hWTL : WellTypedLayout tyCtx layout)
+    (hMapped_be : ∀ v, v ∈ be.vars → layout v ≠ none)
+    (hSimple : be.hasSimpleOps = true)
+    (hcond : be.eval σ am = false) :
+    ∃ s' k, ArmStepsN prog s s' k ∧
+      k = (verifiedGenBoolExpr layout be).length + 1 ∧
+      ExtStateRel layout σ s' ∧
+      s'.pc = pcMap pc + (verifiedGenBoolExpr layout be).length + 1 ∧
+      s'.arrayMem = s.arrayMem := by
+  obtain ⟨s1, k1, hSteps1N, hk1, hX0_1, hRel1, hPC1, hAM1⟩ :=
+    verifiedGenBoolExpr_correct prog layout be σ s (pcMap pc)
+      hStateRel hRegConv hCodeBE hPcRel tyCtx hTS hWTbe hWTL hMapped_be hSimple am
+  have hCbnz := hCodeCbnz.head; rw [← hPC1] at hCbnz
+  have hx0_eq : s1.regs .x0 = 0 := by rw [hX0_1, hcond]; simp
+  refine ⟨s1.nextPC, k1 + 1,
+    ArmStepsN_trans hSteps1N (ArmStepsN.single (.cbnz_fall .x0 _ hCbnz hx0_eq)),
+    by rw [hk1], (ExtStateRel.nextPC hRel1), ?_, by simp [ArmState.nextPC, hAM1]⟩
+  show s1.pc + 1 = _; rw [hPC1]
+
 -- § verifiedGenInstr_correct
 -- ============================================================
 
-set_option maxHeartbeats 800000 in
+set_option maxHeartbeats 600000 in
 /-- Single TAC instruction backward simulation for the verified codegen.
     Analogous to `genInstr_correct` but uses `ExtStateRel`/`VarLayout`
     and supports register-allocated variables. -/
@@ -3672,72 +3739,45 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
           have := hSome; simp [verifiedGenInstr, hRC, hII, hSimpleBV] at this
           exact this.symm
         rw [hInstrs] at hCodeInstr hPcNext
-        have hCodeBE := hCodeInstr.append_left
-        have hCodeCbnz := hCodeInstr.append_right
-        obtain ⟨s1, k1, hSteps1N, hk1, hX0_1, hRel1, hPC1, hAM1⟩ :=
-          verifiedGenBoolExpr_correct prog layout (.not (.lit b)) σ s (pcMap pc)
-            hStateRel hRegConv hCodeBE hPcRel tyCtx hTS hWTbe hWTL
-            (fun v hv => hMapped v (by simp [TAC.vars]; exact hv)) hSimpleBV am
-        have hCbnz := hCodeCbnz.head; rw [← hPC1] at hCbnz
-        have hx0_ne : s1.regs .x0 ≠ 0 := by rw [hX0_1, hcond]; simp
-        let s_fin : ArmState := { s1 with pc := pcMap l_var }
-        have hStepCbnzN : ArmStepsN prog s1 s_fin 1 :=
-          ArmStepsN.single (.cbnz_taken .x0 _ hCbnz hx0_ne)
-        have hChain : ArmStepsN prog s s_fin (k1 + 1) := ArmStepsN_trans hSteps1N hStepCbnzN
-        refine ⟨s_fin, k1 + 1, hChain, ?_, ?_, rfl, ?_⟩
+        obtain ⟨s_fin, k_fin, hChain, hk_fin, hRel_fin, hPC_fin, hAM_fin⟩ :=
+          cbnz_taken_chain prog layout pcMap (.not (.lit b)) l_var pc σ am s
+            hStateRel hRegConv hPcRel hCodeInstr.append_left hCodeInstr.append_right
+            tyCtx hTS hWTbe hWTL (fun v hv => hMapped v (by simp [TAC.vars]; exact hv))
+            hSimpleBV hcond
+        refine ⟨s_fin, k_fin, hChain, ?_, hRel_fin, hPC_fin, ?_⟩
         · intro pc' σ' am' _hCfg
-          rw [hInstrs, hk1]; simp [List.length_append]
-        · exact fun v loc hv => hRel1 v loc hv
-        · show s_fin.arrayMem = am
-          simp [s_fin, hAM1, hArrayMem]
+          rw [hInstrs, hk_fin]; simp [List.length_append]
+        · rw [hAM_fin]; exact hArrayMem
       | bvar v =>
         have hInstrs : instrs = verifiedGenBoolExpr layout (.not (.bvar v)) ++
             [.cbnz .x0 (pcMap l_var)] := by
           have := hSome; simp [verifiedGenInstr, hRC, hII, hSimpleBV] at this
           exact this.symm
         rw [hInstrs] at hCodeInstr hPcNext
-        have hCodeBE := hCodeInstr.append_left
-        have hCodeCbnz := hCodeInstr.append_right
-        obtain ⟨s1, k1, hSteps1N, hk1, hX0_1, hRel1, hPC1, hAM1⟩ :=
-          verifiedGenBoolExpr_correct prog layout (.not (.bvar v)) σ s (pcMap pc)
-            hStateRel hRegConv hCodeBE hPcRel tyCtx hTS hWTbe hWTL
-            (fun v hv => hMapped v (by simp [TAC.vars]; exact hv)) hSimpleBV am
-        have hCbnz := hCodeCbnz.head; rw [← hPC1] at hCbnz
-        have hx0_ne : s1.regs .x0 ≠ 0 := by rw [hX0_1, hcond]; simp
-        let s_fin : ArmState := { s1 with pc := pcMap l_var }
-        have hStepCbnzN : ArmStepsN prog s1 s_fin 1 :=
-          ArmStepsN.single (.cbnz_taken .x0 _ hCbnz hx0_ne)
-        have hChain : ArmStepsN prog s s_fin (k1 + 1) := ArmStepsN_trans hSteps1N hStepCbnzN
-        refine ⟨s_fin, k1 + 1, hChain, ?_, ?_, rfl, ?_⟩
+        obtain ⟨s_fin, k_fin, hChain, hk_fin, hRel_fin, hPC_fin, hAM_fin⟩ :=
+          cbnz_taken_chain prog layout pcMap (.not (.bvar v)) l_var pc σ am s
+            hStateRel hRegConv hPcRel hCodeInstr.append_left hCodeInstr.append_right
+            tyCtx hTS hWTbe hWTL (fun v hv => hMapped v (by simp [TAC.vars]; exact hv))
+            hSimpleBV hcond
+        refine ⟨s_fin, k_fin, hChain, ?_, hRel_fin, hPC_fin, ?_⟩
         · intro pc' σ' am' _hCfg
-          rw [hInstrs, hk1]; simp [List.length_append]
-        · exact fun v loc hv => hRel1 v loc hv
-        · show s_fin.arrayMem = am
-          simp [s_fin, hAM1, hArrayMem]
+          rw [hInstrs, hk_fin]; simp [List.length_append]
+        · rw [hAM_fin]; exact hArrayMem
       | not inner' =>
         have hInstrs : instrs = verifiedGenBoolExpr layout (.not (.not inner')) ++
             [.cbnz .x0 (pcMap l_var)] := by
           have := hSome; simp [verifiedGenInstr, hRC, hII, hSimpleBV] at this
           exact this.symm
         rw [hInstrs] at hCodeInstr hPcNext
-        have hCodeBE := hCodeInstr.append_left
-        have hCodeCbnz := hCodeInstr.append_right
-        obtain ⟨s1, k1, hSteps1N, hk1, hX0_1, hRel1, hPC1, hAM1⟩ :=
-          verifiedGenBoolExpr_correct prog layout (.not (.not inner')) σ s (pcMap pc)
-            hStateRel hRegConv hCodeBE hPcRel tyCtx hTS hWTbe hWTL
-            (fun v hv => hMapped v (by simp [TAC.vars]; exact hv)) hSimpleBV am
-        have hCbnz := hCodeCbnz.head; rw [← hPC1] at hCbnz
-        have hx0_ne : s1.regs .x0 ≠ 0 := by rw [hX0_1, hcond]; simp
-        let s_fin : ArmState := { s1 with pc := pcMap l_var }
-        have hStepCbnzN : ArmStepsN prog s1 s_fin 1 :=
-          ArmStepsN.single (.cbnz_taken .x0 _ hCbnz hx0_ne)
-        have hChain : ArmStepsN prog s s_fin (k1 + 1) := ArmStepsN_trans hSteps1N hStepCbnzN
-        refine ⟨s_fin, k1 + 1, hChain, ?_, ?_, rfl, ?_⟩
+        obtain ⟨s_fin, k_fin, hChain, hk_fin, hRel_fin, hPC_fin, hAM_fin⟩ :=
+          cbnz_taken_chain prog layout pcMap (.not (.not inner')) l_var pc σ am s
+            hStateRel hRegConv hPcRel hCodeInstr.append_left hCodeInstr.append_right
+            tyCtx hTS hWTbe hWTL (fun v hv => hMapped v (by simp [TAC.vars]; exact hv))
+            hSimpleBV hcond
+        refine ⟨s_fin, k_fin, hChain, ?_, hRel_fin, hPC_fin, ?_⟩
         · intro pc' σ' am' _hCfg
-          rw [hInstrs, hk1]; simp [List.length_append]
-        · exact fun v loc hv => hRel1 v loc hv
-        · show s_fin.arrayMem = am
-          simp [s_fin, hAM1, hArrayMem]
+          rw [hInstrs, hk_fin]; simp [List.length_append]
+        · rw [hAM_fin]; exact hArrayMem
       | bexpr _ => simp [BoolExpr.hasSimpleOps] at hSimpleBV
     | lit b =>
       have hInstrs : instrs = verifiedGenBoolExpr layout (.lit b) ++
@@ -3745,96 +3785,60 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
         have := hSome; simp [verifiedGenInstr, hRC, hII, hSimpleBV] at this
         exact this.symm
       rw [hInstrs] at hCodeInstr hPcNext
-      have hCodeBE := hCodeInstr.append_left
-      have hCodeCbnz := hCodeInstr.append_right
-      obtain ⟨s1, k1, hSteps1N, hk1, hX0_1, hRel1, hPC1, hAM1⟩ :=
-        verifiedGenBoolExpr_correct prog layout (.lit b) σ s (pcMap pc)
-          hStateRel hRegConv hCodeBE hPcRel tyCtx hTS hWTbe hWTL
-          (fun v hv => hMapped v (by simp [TAC.vars]; exact hv)) hSimpleBV am
-      have hCbnz := hCodeCbnz.head; rw [← hPC1] at hCbnz
-      have hx0_ne : s1.regs .x0 ≠ 0 := by rw [hX0_1, hcond]; simp
-      let s_fin : ArmState := { s1 with pc := pcMap l_var }
-      have hStepCbnzN : ArmStepsN prog s1 s_fin 1 :=
-        ArmStepsN.single (.cbnz_taken .x0 _ hCbnz hx0_ne)
-      have hChain : ArmStepsN prog s s_fin (k1 + 1) := ArmStepsN_trans hSteps1N hStepCbnzN
-      refine ⟨s_fin, k1 + 1, hChain, ?_, ?_, rfl, ?_⟩
+      obtain ⟨s_fin, k_fin, hChain, hk_fin, hRel_fin, hPC_fin, hAM_fin⟩ :=
+        cbnz_taken_chain prog layout pcMap (.lit b) l_var pc σ am s
+          hStateRel hRegConv hPcRel hCodeInstr.append_left hCodeInstr.append_right
+          tyCtx hTS hWTbe hWTL (fun v hv => hMapped v (by simp [TAC.vars]; exact hv))
+          hSimpleBV hcond
+      refine ⟨s_fin, k_fin, hChain, ?_, hRel_fin, hPC_fin, ?_⟩
       · intro pc' σ' am' _hCfg
-        rw [hInstrs, hk1]; simp [List.length_append]
-      · exact fun v loc hv => hRel1 v loc hv
-      · show s_fin.arrayMem = am
-        simp [s_fin, hAM1, hArrayMem]
+        rw [hInstrs, hk_fin]; simp [List.length_append]
+      · rw [hAM_fin]; exact hArrayMem
     | bvar v =>
       have hInstrs : instrs = verifiedGenBoolExpr layout (.bvar v) ++
           [.cbnz .x0 (pcMap l_var)] := by
         have := hSome; simp [verifiedGenInstr, hRC, hII, hSimpleBV] at this
         exact this.symm
       rw [hInstrs] at hCodeInstr hPcNext
-      have hCodeBE := hCodeInstr.append_left
-      have hCodeCbnz := hCodeInstr.append_right
-      obtain ⟨s1, k1, hSteps1N, hk1, hX0_1, hRel1, hPC1, hAM1⟩ :=
-        verifiedGenBoolExpr_correct prog layout (.bvar v) σ s (pcMap pc)
-          hStateRel hRegConv hCodeBE hPcRel tyCtx hTS hWTbe hWTL
-          (fun v hv => hMapped v (by simp [TAC.vars]; exact hv)) hSimpleBV am
-      have hCbnz := hCodeCbnz.head; rw [← hPC1] at hCbnz
-      have hx0_ne : s1.regs .x0 ≠ 0 := by rw [hX0_1, hcond]; simp
-      let s_fin : ArmState := { s1 with pc := pcMap l_var }
-      have hStepCbnzN : ArmStepsN prog s1 s_fin 1 :=
-        ArmStepsN.single (.cbnz_taken .x0 _ hCbnz hx0_ne)
-      have hChain : ArmStepsN prog s s_fin (k1 + 1) := ArmStepsN_trans hSteps1N hStepCbnzN
-      refine ⟨s_fin, k1 + 1, hChain, ?_, ?_, rfl, ?_⟩
+      obtain ⟨s_fin, k_fin, hChain, hk_fin, hRel_fin, hPC_fin, hAM_fin⟩ :=
+        cbnz_taken_chain prog layout pcMap (.bvar v) l_var pc σ am s
+          hStateRel hRegConv hPcRel hCodeInstr.append_left hCodeInstr.append_right
+          tyCtx hTS hWTbe hWTL (fun v hv => hMapped v (by simp [TAC.vars]; exact hv))
+          hSimpleBV hcond
+      refine ⟨s_fin, k_fin, hChain, ?_, hRel_fin, hPC_fin, ?_⟩
       · intro pc' σ' am' _hCfg
-        rw [hInstrs, hk1]; simp [List.length_append]
-      · exact fun v loc hv => hRel1 v loc hv
-      · show s_fin.arrayMem = am
-        simp [s_fin, hAM1, hArrayMem]
+        rw [hInstrs, hk_fin]; simp [List.length_append]
+      · rw [hAM_fin]; exact hArrayMem
     | cmp op a b =>
       have hInstrs : instrs = verifiedGenBoolExpr layout (.cmp op a b) ++
           [.cbnz .x0 (pcMap l_var)] := by
         have := hSome; simp [verifiedGenInstr, hRC, hII, hSimpleBV] at this
         exact this.symm
       rw [hInstrs] at hCodeInstr hPcNext
-      have hCodeBE := hCodeInstr.append_left
-      have hCodeCbnz := hCodeInstr.append_right
-      obtain ⟨s1, k1, hSteps1N, hk1, hX0_1, hRel1, hPC1, hAM1⟩ :=
-        verifiedGenBoolExpr_correct prog layout (.cmp op a b) σ s (pcMap pc)
-          hStateRel hRegConv hCodeBE hPcRel tyCtx hTS hWTbe hWTL
-          (fun v hv => hMapped v (by simp [TAC.vars]; exact hv)) hSimpleBV am
-      have hCbnz := hCodeCbnz.head; rw [← hPC1] at hCbnz
-      have hx0_ne : s1.regs .x0 ≠ 0 := by rw [hX0_1, hcond]; simp
-      let s_fin : ArmState := { s1 with pc := pcMap l_var }
-      have hStepCbnzN : ArmStepsN prog s1 s_fin 1 :=
-        ArmStepsN.single (.cbnz_taken .x0 _ hCbnz hx0_ne)
-      have hChain : ArmStepsN prog s s_fin (k1 + 1) := ArmStepsN_trans hSteps1N hStepCbnzN
-      refine ⟨s_fin, k1 + 1, hChain, ?_, ?_, rfl, ?_⟩
+      obtain ⟨s_fin, k_fin, hChain, hk_fin, hRel_fin, hPC_fin, hAM_fin⟩ :=
+        cbnz_taken_chain prog layout pcMap (.cmp op a b) l_var pc σ am s
+          hStateRel hRegConv hPcRel hCodeInstr.append_left hCodeInstr.append_right
+          tyCtx hTS hWTbe hWTL (fun v hv => hMapped v (by simp [TAC.vars]; exact hv))
+          hSimpleBV hcond
+      refine ⟨s_fin, k_fin, hChain, ?_, hRel_fin, hPC_fin, ?_⟩
       · intro pc' σ' am' _hCfg
-        rw [hInstrs, hk1]; simp [List.length_append]
-      · exact fun v loc hv => hRel1 v loc hv
-      · show s_fin.arrayMem = am
-        simp [s_fin, hAM1, hArrayMem]
+        rw [hInstrs, hk_fin]; simp [List.length_append]
+      · rw [hAM_fin]; exact hArrayMem
     | fcmp fop a b =>
       have hInstrs : instrs = verifiedGenBoolExpr layout (.fcmp fop a b) ++
           [.cbnz .x0 (pcMap l_var)] := by
         have := hSome; simp [verifiedGenInstr, hRC, hII, hSimpleBV] at this
         exact this.symm
       rw [hInstrs] at hCodeInstr hPcNext
-      have hCodeBE := hCodeInstr.append_left
-      have hCodeCbnz := hCodeInstr.append_right
-      obtain ⟨s1, k1, hSteps1N, hk1, hX0_1, hRel1, hPC1, hAM1⟩ :=
-        verifiedGenBoolExpr_correct prog layout (.fcmp fop a b) σ s (pcMap pc)
-          hStateRel hRegConv hCodeBE hPcRel tyCtx hTS hWTbe hWTL
-          (fun v hv => hMapped v (by simp [TAC.vars]; exact hv)) hSimpleBV am
-      have hCbnz := hCodeCbnz.head; rw [← hPC1] at hCbnz
-      have hx0_ne : s1.regs .x0 ≠ 0 := by rw [hX0_1, hcond]; simp
-      let s_fin : ArmState := { s1 with pc := pcMap l_var }
-      have hStepCbnzN : ArmStepsN prog s1 s_fin 1 :=
-        ArmStepsN.single (.cbnz_taken .x0 _ hCbnz hx0_ne)
-      have hChain : ArmStepsN prog s s_fin (k1 + 1) := ArmStepsN_trans hSteps1N hStepCbnzN
-      refine ⟨s_fin, k1 + 1, hChain, ?_, ?_, rfl, ?_⟩
+      obtain ⟨s_fin, k_fin, hChain, hk_fin, hRel_fin, hPC_fin, hAM_fin⟩ :=
+        cbnz_taken_chain prog layout pcMap (.fcmp fop a b) l_var pc σ am s
+          hStateRel hRegConv hPcRel hCodeInstr.append_left hCodeInstr.append_right
+          tyCtx hTS hWTbe hWTL (fun v hv => hMapped v (by simp [TAC.vars]; exact hv))
+          hSimpleBV hcond
+      refine ⟨s_fin, k_fin, hChain, ?_, hRel_fin, hPC_fin, ?_⟩
       · intro pc' σ' am' _hCfg
-        rw [hInstrs, hk1]; simp [List.length_append]
-      · exact fun v loc hv => hRel1 v loc hv
-      · show s_fin.arrayMem = am
-        simp [s_fin, hAM1, hArrayMem]
+        rw [hInstrs, hk_fin]; simp [List.length_append]
+      · rw [hAM_fin]; exact hArrayMem
     | bexpr _ => simp [BoolExpr.hasSimpleOps] at hSimpleBV
   | iffall hinstr hcond =>
     rename_i be_var l_var
@@ -4500,84 +4504,54 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
           have := hSome; simp [verifiedGenInstr, hRC, hII, hSimpleBV] at this
           exact this.symm
         rw [hInstrs] at hCodeInstr hPcNext
-        have hCodeBE := hCodeInstr.append_left
-        have hCodeCbnz := hCodeInstr.append_right
-        obtain ⟨s1, k1, hSteps1N, hk1, hX0_1, hRel1, hPC1, hAM1⟩ :=
-          verifiedGenBoolExpr_correct prog layout (.not (.lit b)) σ s (pcMap pc)
-            hStateRel hRegConv hCodeBE hPcRel tyCtx hTS hWTbe hWTL
-            (fun v hv => hMapped v (by simp [TAC.vars]; exact hv)) hSimpleBV am
-        have hCbnz := hCodeCbnz.head; rw [← hPC1] at hCbnz
-        have hx0_eq : s1.regs .x0 = 0 := by rw [hX0_1, hcond]; simp
-        let s_fin : ArmState := s1.nextPC
-        have hStepCbnzN : ArmStepsN prog s1 s_fin 1 :=
-          ArmStepsN.single (.cbnz_fall .x0 _ hCbnz hx0_eq)
-        have hChain : ArmStepsN prog s s_fin (k1 + 1) := ArmStepsN_trans hSteps1N hStepCbnzN
-        refine ⟨s_fin, k1 + 1, hChain, ?_, ?_, ?_, ?_⟩
+        obtain ⟨s_fin, k_fin, hChain, hk_fin, hRel_fin, hPC_fin, hAM_fin⟩ :=
+          cbnz_fall_chain prog layout pcMap (.not (.lit b)) l_var pc σ am s
+            hStateRel hRegConv hPcRel hCodeInstr.append_left hCodeInstr.append_right
+            tyCtx hTS hWTbe hWTL (fun v hv => hMapped v (by simp [TAC.vars]; exact hv))
+            hSimpleBV hcond
+        refine ⟨s_fin, k_fin, hChain, ?_, hRel_fin, ?_, ?_⟩
         · intro pc' σ' am' _hCfg
-          rw [hInstrs, hk1]; simp [List.length_append]
-        · exact fun v loc hv => hRel1 v loc hv
+          rw [hInstrs, hk_fin]; simp [List.length_append]
         · show s_fin.pc = pcMap (pc + 1)
           have hLen := hPcNext σ am rfl
-          show s1.pc + 1 = pcMap (pc + 1)
-          rw [hPC1, hLen]; simp [List.length_append]; omega
-        · show s_fin.arrayMem = am
-          simp [s_fin, ArmState.nextPC, hAM1, hArrayMem]
+          rw [hPC_fin, hLen]; simp [List.length_append]; omega
+        · rw [hAM_fin]; exact hArrayMem
       | bvar v =>
         have hInstrs : instrs = verifiedGenBoolExpr layout (.not (.bvar v)) ++
             [.cbnz .x0 (pcMap l_var)] := by
           have := hSome; simp [verifiedGenInstr, hRC, hII, hSimpleBV] at this
           exact this.symm
         rw [hInstrs] at hCodeInstr hPcNext
-        have hCodeBE := hCodeInstr.append_left
-        have hCodeCbnz := hCodeInstr.append_right
-        obtain ⟨s1, k1, hSteps1N, hk1, hX0_1, hRel1, hPC1, hAM1⟩ :=
-          verifiedGenBoolExpr_correct prog layout (.not (.bvar v)) σ s (pcMap pc)
-            hStateRel hRegConv hCodeBE hPcRel tyCtx hTS hWTbe hWTL
-            (fun v hv => hMapped v (by simp [TAC.vars]; exact hv)) hSimpleBV am
-        have hCbnz := hCodeCbnz.head; rw [← hPC1] at hCbnz
-        have hx0_eq : s1.regs .x0 = 0 := by rw [hX0_1, hcond]; simp
-        let s_fin : ArmState := s1.nextPC
-        have hStepCbnzN : ArmStepsN prog s1 s_fin 1 :=
-          ArmStepsN.single (.cbnz_fall .x0 _ hCbnz hx0_eq)
-        have hChain : ArmStepsN prog s s_fin (k1 + 1) := ArmStepsN_trans hSteps1N hStepCbnzN
-        refine ⟨s_fin, k1 + 1, hChain, ?_, ?_, ?_, ?_⟩
+        obtain ⟨s_fin, k_fin, hChain, hk_fin, hRel_fin, hPC_fin, hAM_fin⟩ :=
+          cbnz_fall_chain prog layout pcMap (.not (.bvar v)) l_var pc σ am s
+            hStateRel hRegConv hPcRel hCodeInstr.append_left hCodeInstr.append_right
+            tyCtx hTS hWTbe hWTL (fun v hv => hMapped v (by simp [TAC.vars]; exact hv))
+            hSimpleBV hcond
+        refine ⟨s_fin, k_fin, hChain, ?_, hRel_fin, ?_, ?_⟩
         · intro pc' σ' am' _hCfg
-          rw [hInstrs, hk1]; simp [List.length_append]
-        · exact fun v loc hv => hRel1 v loc hv
+          rw [hInstrs, hk_fin]; simp [List.length_append]
         · show s_fin.pc = pcMap (pc + 1)
           have hLen := hPcNext σ am rfl
-          show s1.pc + 1 = pcMap (pc + 1)
-          rw [hPC1, hLen]; simp [List.length_append]; omega
-        · show s_fin.arrayMem = am
-          simp [s_fin, ArmState.nextPC, hAM1, hArrayMem]
+          rw [hPC_fin, hLen]; simp [List.length_append]; omega
+        · rw [hAM_fin]; exact hArrayMem
       | not inner' =>
         have hInstrs : instrs = verifiedGenBoolExpr layout (.not (.not inner')) ++
             [.cbnz .x0 (pcMap l_var)] := by
           have := hSome; simp [verifiedGenInstr, hRC, hII, hSimpleBV] at this
           exact this.symm
         rw [hInstrs] at hCodeInstr hPcNext
-        have hCodeBE := hCodeInstr.append_left
-        have hCodeCbnz := hCodeInstr.append_right
-        obtain ⟨s1, k1, hSteps1N, hk1, hX0_1, hRel1, hPC1, hAM1⟩ :=
-          verifiedGenBoolExpr_correct prog layout (.not (.not inner')) σ s (pcMap pc)
-            hStateRel hRegConv hCodeBE hPcRel tyCtx hTS hWTbe hWTL
-            (fun v hv => hMapped v (by simp [TAC.vars]; exact hv)) hSimpleBV am
-        have hCbnz := hCodeCbnz.head; rw [← hPC1] at hCbnz
-        have hx0_eq : s1.regs .x0 = 0 := by rw [hX0_1, hcond]; simp
-        let s_fin : ArmState := s1.nextPC
-        have hStepCbnzN : ArmStepsN prog s1 s_fin 1 :=
-          ArmStepsN.single (.cbnz_fall .x0 _ hCbnz hx0_eq)
-        have hChain : ArmStepsN prog s s_fin (k1 + 1) := ArmStepsN_trans hSteps1N hStepCbnzN
-        refine ⟨s_fin, k1 + 1, hChain, ?_, ?_, ?_, ?_⟩
+        obtain ⟨s_fin, k_fin, hChain, hk_fin, hRel_fin, hPC_fin, hAM_fin⟩ :=
+          cbnz_fall_chain prog layout pcMap (.not (.not inner')) l_var pc σ am s
+            hStateRel hRegConv hPcRel hCodeInstr.append_left hCodeInstr.append_right
+            tyCtx hTS hWTbe hWTL (fun v hv => hMapped v (by simp [TAC.vars]; exact hv))
+            hSimpleBV hcond
+        refine ⟨s_fin, k_fin, hChain, ?_, hRel_fin, ?_, ?_⟩
         · intro pc' σ' am' _hCfg
-          rw [hInstrs, hk1]; simp [List.length_append]
-        · exact fun v loc hv => hRel1 v loc hv
+          rw [hInstrs, hk_fin]; simp [List.length_append]
         · show s_fin.pc = pcMap (pc + 1)
           have hLen := hPcNext σ am rfl
-          show s1.pc + 1 = pcMap (pc + 1)
-          rw [hPC1, hLen]; simp [List.length_append]; omega
-        · show s_fin.arrayMem = am
-          simp [s_fin, ArmState.nextPC, hAM1, hArrayMem]
+          rw [hPC_fin, hLen]; simp [List.length_append]; omega
+        · rw [hAM_fin]; exact hArrayMem
       | bexpr _ => simp [BoolExpr.hasSimpleOps] at hSimpleBV
     | lit b =>
       have hInstrs : instrs = verifiedGenBoolExpr layout (.lit b) ++
@@ -4585,112 +4559,72 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
         have := hSome; simp [verifiedGenInstr, hRC, hII, hSimpleBV] at this
         exact this.symm
       rw [hInstrs] at hCodeInstr hPcNext
-      have hCodeBE := hCodeInstr.append_left
-      have hCodeCbnz := hCodeInstr.append_right
-      obtain ⟨s1, k1, hSteps1N, hk1, hX0_1, hRel1, hPC1, hAM1⟩ :=
-        verifiedGenBoolExpr_correct prog layout (.lit b) σ s (pcMap pc)
-          hStateRel hRegConv hCodeBE hPcRel tyCtx hTS hWTbe hWTL
-          (fun v hv => hMapped v (by simp [TAC.vars]; exact hv)) hSimpleBV am
-      have hCbnz := hCodeCbnz.head; rw [← hPC1] at hCbnz
-      have hx0_eq : s1.regs .x0 = 0 := by rw [hX0_1, hcond]; simp
-      let s_fin : ArmState := s1.nextPC
-      have hStepCbnzN : ArmStepsN prog s1 s_fin 1 :=
-        ArmStepsN.single (.cbnz_fall .x0 _ hCbnz hx0_eq)
-      have hChain : ArmStepsN prog s s_fin (k1 + 1) := ArmStepsN_trans hSteps1N hStepCbnzN
-      refine ⟨s_fin, k1 + 1, hChain, ?_, ?_, ?_, ?_⟩
+      obtain ⟨s_fin, k_fin, hChain, hk_fin, hRel_fin, hPC_fin, hAM_fin⟩ :=
+        cbnz_fall_chain prog layout pcMap (.lit b) l_var pc σ am s
+          hStateRel hRegConv hPcRel hCodeInstr.append_left hCodeInstr.append_right
+          tyCtx hTS hWTbe hWTL (fun v hv => hMapped v (by simp [TAC.vars]; exact hv))
+          hSimpleBV hcond
+      refine ⟨s_fin, k_fin, hChain, ?_, hRel_fin, ?_, ?_⟩
       · intro pc' σ' am' _hCfg
-        rw [hInstrs, hk1]; simp [List.length_append]
-      · exact fun v loc hv => hRel1 v loc hv
+        rw [hInstrs, hk_fin]; simp [List.length_append]
       · show s_fin.pc = pcMap (pc + 1)
         have hLen := hPcNext σ am rfl
-        show s1.pc + 1 = pcMap (pc + 1)
-        rw [hPC1, hLen]; simp [List.length_append]; omega
-      · show s_fin.arrayMem = am
-        simp [s_fin, ArmState.nextPC, hAM1, hArrayMem]
+        rw [hPC_fin, hLen]; simp [List.length_append]; omega
+      · rw [hAM_fin]; exact hArrayMem
     | bvar v =>
       have hInstrs : instrs = verifiedGenBoolExpr layout (.bvar v) ++
           [.cbnz .x0 (pcMap l_var)] := by
         have := hSome; simp [verifiedGenInstr, hRC, hII, hSimpleBV] at this
         exact this.symm
       rw [hInstrs] at hCodeInstr hPcNext
-      have hCodeBE := hCodeInstr.append_left
-      have hCodeCbnz := hCodeInstr.append_right
-      obtain ⟨s1, k1, hSteps1N, hk1, hX0_1, hRel1, hPC1, hAM1⟩ :=
-        verifiedGenBoolExpr_correct prog layout (.bvar v) σ s (pcMap pc)
-          hStateRel hRegConv hCodeBE hPcRel tyCtx hTS hWTbe hWTL
-          (fun v hv => hMapped v (by simp [TAC.vars]; exact hv)) hSimpleBV am
-      have hCbnz := hCodeCbnz.head; rw [← hPC1] at hCbnz
-      have hx0_eq : s1.regs .x0 = 0 := by rw [hX0_1, hcond]; simp
-      let s_fin : ArmState := s1.nextPC
-      have hStepCbnzN : ArmStepsN prog s1 s_fin 1 :=
-        ArmStepsN.single (.cbnz_fall .x0 _ hCbnz hx0_eq)
-      have hChain : ArmStepsN prog s s_fin (k1 + 1) := ArmStepsN_trans hSteps1N hStepCbnzN
-      refine ⟨s_fin, k1 + 1, hChain, ?_, ?_, ?_, ?_⟩
+      obtain ⟨s_fin, k_fin, hChain, hk_fin, hRel_fin, hPC_fin, hAM_fin⟩ :=
+        cbnz_fall_chain prog layout pcMap (.bvar v) l_var pc σ am s
+          hStateRel hRegConv hPcRel hCodeInstr.append_left hCodeInstr.append_right
+          tyCtx hTS hWTbe hWTL (fun v hv => hMapped v (by simp [TAC.vars]; exact hv))
+          hSimpleBV hcond
+      refine ⟨s_fin, k_fin, hChain, ?_, hRel_fin, ?_, ?_⟩
       · intro pc' σ' am' _hCfg
-        rw [hInstrs, hk1]; simp [List.length_append]
-      · exact fun v loc hv => hRel1 v loc hv
+        rw [hInstrs, hk_fin]; simp [List.length_append]
       · show s_fin.pc = pcMap (pc + 1)
         have hLen := hPcNext σ am rfl
-        show s1.pc + 1 = pcMap (pc + 1)
-        rw [hPC1, hLen]; simp [List.length_append]; omega
-      · show s_fin.arrayMem = am
-        simp [s_fin, ArmState.nextPC, hAM1, hArrayMem]
+        rw [hPC_fin, hLen]; simp [List.length_append]; omega
+      · rw [hAM_fin]; exact hArrayMem
     | cmp op a b =>
       have hInstrs : instrs = verifiedGenBoolExpr layout (.cmp op a b) ++
           [.cbnz .x0 (pcMap l_var)] := by
         have := hSome; simp [verifiedGenInstr, hRC, hII, hSimpleBV] at this
         exact this.symm
       rw [hInstrs] at hCodeInstr hPcNext
-      have hCodeBE := hCodeInstr.append_left
-      have hCodeCbnz := hCodeInstr.append_right
-      obtain ⟨s1, k1, hSteps1N, hk1, hX0_1, hRel1, hPC1, hAM1⟩ :=
-        verifiedGenBoolExpr_correct prog layout (.cmp op a b) σ s (pcMap pc)
-          hStateRel hRegConv hCodeBE hPcRel tyCtx hTS hWTbe hWTL
-          (fun v hv => hMapped v (by simp [TAC.vars]; exact hv)) hSimpleBV am
-      have hCbnz := hCodeCbnz.head; rw [← hPC1] at hCbnz
-      have hx0_eq : s1.regs .x0 = 0 := by rw [hX0_1, hcond]; simp
-      let s_fin : ArmState := s1.nextPC
-      have hStepCbnzN : ArmStepsN prog s1 s_fin 1 :=
-        ArmStepsN.single (.cbnz_fall .x0 _ hCbnz hx0_eq)
-      have hChain : ArmStepsN prog s s_fin (k1 + 1) := ArmStepsN_trans hSteps1N hStepCbnzN
-      refine ⟨s_fin, k1 + 1, hChain, ?_, ?_, ?_, ?_⟩
+      obtain ⟨s_fin, k_fin, hChain, hk_fin, hRel_fin, hPC_fin, hAM_fin⟩ :=
+        cbnz_fall_chain prog layout pcMap (.cmp op a b) l_var pc σ am s
+          hStateRel hRegConv hPcRel hCodeInstr.append_left hCodeInstr.append_right
+          tyCtx hTS hWTbe hWTL (fun v hv => hMapped v (by simp [TAC.vars]; exact hv))
+          hSimpleBV hcond
+      refine ⟨s_fin, k_fin, hChain, ?_, hRel_fin, ?_, ?_⟩
       · intro pc' σ' am' _hCfg
-        rw [hInstrs, hk1]; simp [List.length_append]
-      · exact fun v loc hv => hRel1 v loc hv
+        rw [hInstrs, hk_fin]; simp [List.length_append]
       · show s_fin.pc = pcMap (pc + 1)
         have hLen := hPcNext σ am rfl
-        show s1.pc + 1 = pcMap (pc + 1)
-        rw [hPC1, hLen]; simp [List.length_append]; omega
-      · show s_fin.arrayMem = am
-        simp [s_fin, ArmState.nextPC, hAM1, hArrayMem]
+        rw [hPC_fin, hLen]; simp [List.length_append]; omega
+      · rw [hAM_fin]; exact hArrayMem
     | fcmp fop a b =>
       have hInstrs : instrs = verifiedGenBoolExpr layout (.fcmp fop a b) ++
           [.cbnz .x0 (pcMap l_var)] := by
         have := hSome; simp [verifiedGenInstr, hRC, hII, hSimpleBV] at this
         exact this.symm
       rw [hInstrs] at hCodeInstr hPcNext
-      have hCodeBE := hCodeInstr.append_left
-      have hCodeCbnz := hCodeInstr.append_right
-      obtain ⟨s1, k1, hSteps1N, hk1, hX0_1, hRel1, hPC1, hAM1⟩ :=
-        verifiedGenBoolExpr_correct prog layout (.fcmp fop a b) σ s (pcMap pc)
-          hStateRel hRegConv hCodeBE hPcRel tyCtx hTS hWTbe hWTL
-          (fun v hv => hMapped v (by simp [TAC.vars]; exact hv)) hSimpleBV am
-      have hCbnz := hCodeCbnz.head; rw [← hPC1] at hCbnz
-      have hx0_eq : s1.regs .x0 = 0 := by rw [hX0_1, hcond]; simp
-      let s_fin : ArmState := s1.nextPC
-      have hStepCbnzN : ArmStepsN prog s1 s_fin 1 :=
-        ArmStepsN.single (.cbnz_fall .x0 _ hCbnz hx0_eq)
-      have hChain : ArmStepsN prog s s_fin (k1 + 1) := ArmStepsN_trans hSteps1N hStepCbnzN
-      refine ⟨s_fin, k1 + 1, hChain, ?_, ?_, ?_, ?_⟩
+      obtain ⟨s_fin, k_fin, hChain, hk_fin, hRel_fin, hPC_fin, hAM_fin⟩ :=
+        cbnz_fall_chain prog layout pcMap (.fcmp fop a b) l_var pc σ am s
+          hStateRel hRegConv hPcRel hCodeInstr.append_left hCodeInstr.append_right
+          tyCtx hTS hWTbe hWTL (fun v hv => hMapped v (by simp [TAC.vars]; exact hv))
+          hSimpleBV hcond
+      refine ⟨s_fin, k_fin, hChain, ?_, hRel_fin, ?_, ?_⟩
       · intro pc' σ' am' _hCfg
-        rw [hInstrs, hk1]; simp [List.length_append]
-      · exact fun v loc hv => hRel1 v loc hv
+        rw [hInstrs, hk_fin]; simp [List.length_append]
       · show s_fin.pc = pcMap (pc + 1)
         have hLen := hPcNext σ am rfl
-        show s1.pc + 1 = pcMap (pc + 1)
-        rw [hPC1, hLen]; simp [List.length_append]; omega
-      · show s_fin.arrayMem = am
-        simp [s_fin, ArmState.nextPC, hAM1, hArrayMem]
+        rw [hPC_fin, hLen]; simp [List.length_append]; omega
+      · rw [hAM_fin]; exact hArrayMem
     | bexpr _ => simp [BoolExpr.hasSimpleOps] at hSimpleBV
   | arrLoad hinstr hidx hbounds =>
     rename_i idxVal arr dst idx ty
