@@ -6260,11 +6260,12 @@ private def checkRegConvention (vars : List Var) : Except String Unit := do
     if violatesRegConvention v then
       throw s!"register convention violation: variable '{v}' maps to a restricted register"
 
-/-- Generate the complete assembly for a program.
-    Calls `verifiedGenerateAsm` for the verified core, then wraps it with
-    prologue/epilogue, printf code, error handlers, and data sections. -/
-def generateAsm (tyCtx : TyCtx) (p : Prog) : Except String String := do
-  let r ← verifiedGenerateAsm tyCtx p
+/-- Format a `VerifiedAsmResult` into a complete assembly text.  Wraps the
+    verified core (`r.bodyFlat`) with AArch64 prologue/epilogue, runtime error
+    handlers (div-by-zero, bounds), printf format strings, and array data
+    sections.  All wrapping/printing here is unverified — the verified core
+    is the `VerifiedAsmResult` itself, produced by `verifiedGenerateAsm`. -/
+def formatVerifiedAsm (r : VerifiedAsmResult) (p : Prog) : Except String String := do
   let vars := collectVars p
   -- Defense-in-depth: register convention and callee-save checks
   checkRegConvention vars
@@ -6400,6 +6401,12 @@ def generateAsm (tyCtx : TyCtx) (p : Prog) : Except String String := do
        s!"  .space {(if p.arraySize arr == 0 then 1024 else p.arraySize arr) * 8}"]
   .ok (emit (header ++ [""] ++ initLines ++ [""] ++ body ++ footer ++ arrayData ++ [""]))
 
+/-- Generate the complete assembly for a program.  Thin wrapper: produces the
+    verified core via `verifiedGenerateAsm`, then renders it via `formatVerifiedAsm`. -/
+def generateAsm (tyCtx : TyCtx) (p : Prog) : Except String String := do
+  let r ← verifiedGenerateAsm tyCtx p
+  formatVerifiedAsm r p
+
 -- ============================================================
 -- § 6. End-to-end: parse → compile → codegen
 -- ============================================================
@@ -6487,6 +6494,47 @@ def compileToAsmWith (input : String) (noOpt : Bool) : Except String String := d
   let passes := if noOpt then [] else standardPasses tyCtx
   let opt := applyPasses tyCtx passes tac
   generateAsm tyCtx opt
+
+/-- **Structured compilation pipeline.**  Each stage maps directly to a
+    construct used in the top-level correctness theorems
+    (`while_to_arm_correctness` et al.).  Naming the stages explicitly here
+    makes the driver's structure mirror the verified pipeline.
+
+    Stages:
+    1. **Parser (unverified).**  `parseProgram : String → Except String Program`.
+    2. **Well-formedness check.**  `prog.wellFormed = true` is the precondition
+       of every top-level theorem.
+    3. **AST → TAC (verified).**  `prog.compileToTAC : Prog`, certified by
+       `compileToTAC_wellTyped`, `compileToTAC_stepClosed`,
+       `compileToTAC_checkBranchTargets`, `compileToTAC_codegenPrereqs`.
+    4. **Optimizations (verified, certificate-checked).**  `applyPasses tyCtx
+       passes (compileToTAC prog)` — each pass is checked by the executable
+       certificate checker; preservation lemmas are
+       `applyPasses_preserves_{halt_am, errorDiv, errorBounds, diverge,
+       invariants, stepClosedInBounds}`.
+    5. **TAC → verified ASM core (verified).**  `verifiedGenerateAsm tyCtx
+       opt = .ok r`, where `r : VerifiedAsmResult` carries the proof
+       payload (`GenAsmSpec`).  Totality from `generateAsm_total_with_passes`.
+    6. **Wrap + pretty-print (unverified).**  `formatVerifiedAsm r opt`
+       renders the verified core to assembly text by adding AArch64
+       prologue/epilogue, runtime error handlers, format strings, and
+       array data sections. -/
+def compilePipeline (input : String) (noOpt : Bool := false) :
+    Except String String := do
+  -- Stage 1: parse (unverified)
+  let prog ← parseProgram input
+  -- Stage 2: well-formedness check (precondition of all top-level theorems)
+  if !prog.wellFormed then .error "program is not well-formed"
+  let tyCtx := prog.tyCtx
+  -- Stage 3: AST → TAC (verified)
+  let tac := prog.compileToTAC
+  -- Stage 4: optimizations (verified, certificate-checked)
+  let optPasses := if noOpt then [] else standardPasses tyCtx
+  let opt := applyPasses tyCtx optPasses tac
+  -- Stage 5: TAC → verified ASM core (verified)
+  let r ← verifiedGenerateAsm tyCtx opt
+  -- Stage 6: wrap + pretty-print (unverified)
+  formatVerifiedAsm r opt
 
 def compileToAsm (input : String) : Except String String :=
   compileToAsmWith input false
