@@ -2123,18 +2123,44 @@ private theorem verifiedGenBoolExpr_no_branches (layout : VarLayout) (be : BoolE
         refine ⟨?_, ?_, ?_, ?_⟩ <;> intros <;> intro heq <;> exact ArmInstr.noConfusion heq
     · simp at hmem
 
-/-- **Probe P1 — `.ifgoto be l` branch-target-bounded.**  Three-nest
-    case validation for `bodyFlat_branch_target_bounded`.  Attempted in
-    this session; pattern matches the design doc but Lean struggled to
-    elaborate the nested-match type signatures of the `have loadA_nb /
-    loadB_nb` helpers (`Unknown constant False.var` at the `.not (.cmp)`
-    and `.not (.fcmp)` arms).  The proof strategy is sound; fix requires
-    either inlining the load analysis (no helpers) or flattening the
-    helper's type signature.  Deferred to the 14-case sweep, which will
-    handle `.ifgoto` alongside `.arrLoad`/`.arrStore` with a uniform
-    approach.  Helpers `formalLoadImm64_no_branches`,
-    `vLoadVarFP_no_branches`, `verifiedGenBoolExpr_no_branches` below
-    are ready to reuse. -/
+-- Helper: an instruction in a `match a with | .var v => vLoadVar ... | .lit n => formalLoadImm64 ... | _ => []`
+-- output has no branch form. Used by the `.not (.cmp)` arm of verifiedGenInstr_ifgoto_branch_bounded.
+private theorem match_var_lit_loadVar_no_branches
+    (layout : VarLayout) (e : Expr) (tmp : ArmReg) {i : ArmInstr}
+    (hi : i ∈ (match e with
+              | .var v => vLoadVar layout v tmp
+              | .lit n => formalLoadImm64 tmp n
+              | _ => ([] : List ArmInstr))) :
+    (∀ lbl, i ≠ ArmInstr.b lbl) ∧
+    (∀ rn lbl, i ≠ ArmInstr.cbz rn lbl) ∧
+    (∀ rn lbl, i ≠ ArmInstr.cbnz rn lbl) ∧
+    (∀ c lbl, i ≠ ArmInstr.bCond c lbl) := by
+  split at hi
+  · exact vLoadVar_no_branches _ _ _ _ hi
+  · exact formalLoadImm64_no_branches _ _ _ hi
+  · simp at hi
+
+-- Helper: float-load variant for the `.not (.fcmp)` arm — `.var` → vLoadVarFP,
+-- `.flit` → formalLoadImm64 + fmovToFP, else [].
+private theorem match_var_flit_loadFP_no_branches
+    (layout : VarLayout) (e : Expr) (fr : ArmFReg) {i : ArmInstr}
+    (hi : i ∈ (match e with
+              | .var v => vLoadVarFP layout v fr
+              | .flit n => formalLoadImm64 .x0 n ++ [ArmInstr.fmovToFP fr .x0]
+              | _ => ([] : List ArmInstr))) :
+    (∀ lbl, i ≠ ArmInstr.b lbl) ∧
+    (∀ rn lbl, i ≠ ArmInstr.cbz rn lbl) ∧
+    (∀ rn lbl, i ≠ ArmInstr.cbnz rn lbl) ∧
+    (∀ c lbl, i ≠ ArmInstr.bCond c lbl) := by
+  split at hi
+  · exact vLoadVarFP_no_branches _ _ _ _ hi
+  · simp only [List.mem_append, List.mem_singleton] at hi
+    rcases hi with hLd | hFmov
+    · exact formalLoadImm64_no_branches _ _ _ hLd
+    · subst hFmov
+      refine ⟨?_, ?_, ?_, ?_⟩ <;> intros <;> intro heq <;> exact ArmInstr.noConfusion heq
+  · simp at hi
+
 private theorem verifiedGenInstr_ifgoto_branch_bounded
     (layout : VarLayout) (pcMap : Nat → Nat) (be : BoolExpr) (l : Nat)
     (haltS divS boundsS : Nat) (arrayDecls : List (ArrayName × Nat × VarTy))
@@ -2148,7 +2174,149 @@ private theorem verifiedGenInstr_ifgoto_branch_bounded
        (∃ rn, instr' = ArmInstr.cbnz rn lbl) ∨
        (∃ c, instr' = ArmInstr.bCond c lbl)) →
       lbl ≤ boundsS := by
-  sorry
+  simp only [verifiedGenInstr] at hGen
+  split at hGen
+  · exact absurd hGen (by intro h; cases h)
+  · split at hGen
+    · exact absurd hGen (by intro h; cases h)
+    · intro instr' hmem lbl hbranch
+      split at hGen
+      · -- .not (.cmp op a b) arm. Use fresh names to avoid conflicts with Expr `a`/`b`.
+        rename_i e1 e2 cOp
+        simp only [Option.some.injEq] at hGen
+        subst hGen
+        -- After subst, verify what e1/e2/cOp are. `cOp` should be CmpOp, e1/e2 Expr.
+        simp only [List.mem_append, List.mem_cons, List.not_mem_nil, or_false] at hmem
+        rcases hmem with (hA | hB) | hCmp | hBCond
+        · -- hA is about (match e1 with | .var => vLoadVar ... | .lit => formalLoadImm64 ... | _ => [])
+          have ⟨nb, nz, nnz, nbc⟩ := match_var_lit_loadVar_no_branches layout e1 _ hA
+          rcases hbranch with h | ⟨rn, h⟩ | ⟨rn, h⟩ | ⟨c, h⟩
+          · exact absurd h (nb _)
+          · exact absurd h (nz rn _)
+          · exact absurd h (nnz rn _)
+          · exact absurd h (nbc c _)
+        · have ⟨nb, nz, nnz, nbc⟩ := match_var_lit_loadVar_no_branches layout e2 _ hB
+          rcases hbranch with h | ⟨rn, h⟩ | ⟨rn, h⟩ | ⟨c, h⟩
+          · exact absurd h (nb _)
+          · exact absurd h (nz rn _)
+          · exact absurd h (nnz rn _)
+          · exact absurd h (nbc c _)
+        · subst hCmp
+          rcases hbranch with h | ⟨rn, h⟩ | ⟨rn, h⟩ | ⟨c, h⟩
+          all_goals exact ArmInstr.noConfusion h
+        · subst hBCond
+          rcases hbranch with h | ⟨rn, h⟩ | ⟨rn, h⟩ | ⟨c, h⟩
+          · exact ArmInstr.noConfusion h
+          · exact ArmInstr.noConfusion h
+          · exact ArmInstr.noConfusion h
+          · cases h; exact hPcMapBound
+      · -- .not (.fcmp fop a b) arm. Same rename convention as .cmp: oldest-first.
+        rename_i e1 e2 fOp
+        simp only [Option.some.injEq] at hGen
+        subst hGen
+        simp only [List.mem_append, List.mem_cons, List.not_mem_nil, or_false] at hmem
+        rcases hmem with hLoads | hFcmp | hBCond
+        · -- instr' ∈ loads. Direct analysis: loadFP helper handles `.var` cleanly;
+          -- `.flit` gets distributed by simp — inline analysis in each sub-case.
+          -- Common continuation: given `(nb, nz, nnz, nbc)` for instr', close via hbranch.
+          suffices hnb :
+              (∀ lbl, instr' ≠ ArmInstr.b lbl) ∧
+              (∀ rn lbl, instr' ≠ ArmInstr.cbz rn lbl) ∧
+              (∀ rn lbl, instr' ≠ ArmInstr.cbnz rn lbl) ∧
+              (∀ c lbl, instr' ≠ ArmInstr.bCond c lbl) by
+            obtain ⟨nb, nz, nnz, nbc⟩ := hnb
+            rcases hbranch with h | ⟨rn, h⟩ | ⟨rn, h⟩ | ⟨c, h⟩
+            · exact absurd h (nb _)
+            · exact absurd h (nz rn _)
+            · exact absurd h (nnz rn _)
+            · exact absurd h (nbc c _)
+          -- Now prove the no-branches conjunction for instr' in loads.
+          -- loads is either (match a,b) with swaps; analyze via cases on e1, e2.
+          cases e1 with
+          | var va =>
+            cases e2 with
+            | var vb =>
+              -- loads = vLoadVarFP va ++ vLoadVarFP vb
+              simp only [List.mem_append] at hLoads
+              rcases hLoads with hA | hB
+              · exact vLoadVarFP_no_branches _ _ _ _ hA
+              · exact vLoadVarFP_no_branches _ _ _ _ hB
+            | flit nb =>
+              -- loads = vLoadVarFP va ++ (formalLoadImm64 .x0 nb ++ [fmovToFP ..])
+              simp only [List.mem_append, List.mem_singleton] at hLoads
+              rcases hLoads with hA | hImm | hFmov
+              · exact vLoadVarFP_no_branches _ _ _ _ hA
+              · exact formalLoadImm64_no_branches _ _ _ hImm
+              · subst hFmov
+                refine ⟨?_, ?_, ?_, ?_⟩ <;> intros <;> intro heq <;>
+                  exact ArmInstr.noConfusion heq
+            | _ =>
+              -- loads = vLoadVarFP va ++ []
+              simp only [List.mem_append, List.not_mem_nil, or_false] at hLoads
+              exact vLoadVarFP_no_branches _ _ _ _ hLoads
+          | flit na =>
+            cases e2 with
+            | var vb =>
+              -- (e1, e2) = (.flit na, .var vb) swap — loads = loadB ++ loadA
+              -- = vLoadVarFP vb ++ (formalLoadImm64 .x0 na ++ [fmovToFP ..])
+              simp only [List.mem_append, List.mem_singleton] at hLoads
+              rcases hLoads with hB | hImm | hFmov
+              · exact vLoadVarFP_no_branches _ _ _ _ hB
+              · exact formalLoadImm64_no_branches _ _ _ hImm
+              · subst hFmov
+                refine ⟨?_, ?_, ?_, ?_⟩ <;> intros <;> intro heq <;>
+                  exact ArmInstr.noConfusion heq
+            | flit nb =>
+              -- loads = loadA ++ loadB = (formalLoadImm64 .x0 na ++ [fmov]) ++ (formalLoadImm64 .x0 nb ++ [fmov])
+              simp only [List.mem_append, List.mem_singleton] at hLoads
+              rcases hLoads with (hImmA | hFmovA) | (hImmB | hFmovB)
+              · exact formalLoadImm64_no_branches _ _ _ hImmA
+              · subst hFmovA
+                refine ⟨?_, ?_, ?_, ?_⟩ <;> intros <;> intro heq <;>
+                  exact ArmInstr.noConfusion heq
+              · exact formalLoadImm64_no_branches _ _ _ hImmB
+              · subst hFmovB
+                refine ⟨?_, ?_, ?_, ?_⟩ <;> intros <;> intro heq <;>
+                  exact ArmInstr.noConfusion heq
+            | _ =>
+              -- loads = (formalLoadImm64 .x0 na ++ [fmov]) ++ []
+              simp only [List.mem_append, List.mem_singleton, List.not_mem_nil, or_false]
+                at hLoads
+              rcases hLoads with hImm | hFmov
+              · exact formalLoadImm64_no_branches _ _ _ hImm
+              · subst hFmov
+                refine ⟨?_, ?_, ?_, ?_⟩ <;> intros <;> intro heq <;>
+                  exact ArmInstr.noConfusion heq
+          | _ =>
+            -- e1 is neither .var nor .flit. loadA = []. loads = [] ++ loadB = loadB.
+            simp only [List.mem_append, List.not_mem_nil, false_or] at hLoads
+            exact match_var_flit_loadFP_no_branches layout e2 _ hLoads
+        · subst hFcmp
+          rcases hbranch with h | ⟨rn, h⟩ | ⟨rn, h⟩ | ⟨c, h⟩
+          all_goals exact ArmInstr.noConfusion h
+        · subst hBCond
+          rcases hbranch with h | ⟨rn, h⟩ | ⟨rn, h⟩ | ⟨c, h⟩
+          · exact ArmInstr.noConfusion h
+          · exact ArmInstr.noConfusion h
+          · exact ArmInstr.noConfusion h
+          · cases h; exact hPcMapBound
+      · -- fallback: verifiedGenBoolExpr be ++ [.cbnz .x0 (pcMap l)]
+        simp only [Option.some.injEq] at hGen
+        subst hGen
+        simp only [List.mem_append, List.mem_cons, List.not_mem_nil, or_false] at hmem
+        rcases hmem with hBE | hCbnz
+        · have ⟨nb, nz, nnz, nbc⟩ := verifiedGenBoolExpr_no_branches _ _ _ hBE
+          rcases hbranch with h | ⟨rn, h⟩ | ⟨rn, h⟩ | ⟨c, h⟩
+          · exact absurd h (nb _)
+          · exact absurd h (nz rn _)
+          · exact absurd h (nnz rn _)
+          · exact absurd h (nbc c _)
+        · subst hCbnz
+          rcases hbranch with h | ⟨rn, h⟩ | ⟨rn, h⟩ | ⟨c, h⟩
+          · exact ArmInstr.noConfusion h
+          · exact ArmInstr.noConfusion h
+          · cases h; exact hPcMapBound
+          · exact ArmInstr.noConfusion h
 /-
 -- Attempted proof below — kept commented for reference.  The structural
 -- issue is that Lean's elaborator generates `False.var` when reconstructing
