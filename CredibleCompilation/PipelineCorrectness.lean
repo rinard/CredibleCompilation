@@ -3646,4 +3646,126 @@ theorem bodyFlat_branch_target_bounded
     rw [spec.haltSaveBlock_eq] at hInHalt
     exact close_nb (genHaltSave_no_branches _ _ _ X hInHalt)
 
+/-- After any `ArmStep`, the new pc is either `s.pc + 1` (fall-through /
+    non-branch) or a branch target `lbl`, where the instruction at `s.pc`
+    is one of the branch forms with label `lbl`. -/
+private theorem ArmStep_pc_analysis {prog : ArmProg} {s s' : ArmState}
+    (h : ArmStep prog s s') :
+    s'.pc = s.pc + 1 ∨
+    ∃ lbl, s'.pc = lbl ∧
+      (prog[s.pc]? = some (ArmInstr.b lbl) ∨
+       (∃ rn, prog[s.pc]? = some (ArmInstr.cbz rn lbl)) ∨
+       (∃ rn, prog[s.pc]? = some (ArmInstr.cbnz rn lbl)) ∨
+       (∃ c, prog[s.pc]? = some (ArmInstr.bCond c lbl))) := by
+  cases h with
+  | cbz_taken rn lbl hi _ =>
+    exact Or.inr ⟨lbl, rfl, Or.inr (Or.inl ⟨rn, hi⟩)⟩
+  | cbnz_taken rn lbl hi _ =>
+    exact Or.inr ⟨lbl, rfl, Or.inr (Or.inr (Or.inl ⟨rn, hi⟩))⟩
+  | bCond_taken c lbl hi _ =>
+    exact Or.inr ⟨lbl, rfl, Or.inr (Or.inr (Or.inr ⟨c, hi⟩))⟩
+  | branch lbl hi =>
+    exact Or.inr ⟨lbl, rfl, Or.inl hi⟩
+  | _ => exact Or.inl rfl
+
+/-- **Phase 6 main theorem: ARM behavior exhaustion.**  Every ARM execution
+    from the pipeline's initial state lands in one of four bins: clean halt
+    (`haltFinal`), div-by-zero sentinel (`divS`), bounds-error sentinel
+    (`boundsS`), or divergence (`ArmDiverges`).
+
+    Proof (classical `em` + König): dispatch the three sentinel cases via
+    `by_cases`; if all three fail, build `ArmDiverges = ∀ n, ∃ s,
+    ArmStepsN init s n` by induction on `n` with the invariant
+    `s.pc ≤ boundsS`.  The inductive step uses `ArmStep_total_of_codeAt`
+    (progress from `bodyFlat[pc]? = some _`), `bodyFlat_branch_target_bounded`
+    (PC bound on branch targets), and the fall-through assumptions
+    (s.pc ≠ haltFinal ∧ s.pc ≠ divS ∧ s.pc ≠ boundsS, derived from the
+    negated sentinel hypotheses). -/
+theorem arm_behavior_exhaustive
+    (prog : Program) (htcs : prog.typeCheckStrict = true)
+    (passes : List (String × (Prog → ECertificate)))
+    {r : VerifiedAsmResult}
+    (hGen : verifiedGenerateAsm prog.tyCtx
+      (applyPassesPure prog.tyCtx passes prog.compileToTAC) = .ok r) :
+    (∃ s', ArmSteps r.bodyFlat (Phase6.initArmState r) s' ∧ s'.pc = r.haltFinal) ∨
+    (∃ s', ArmSteps r.bodyFlat (Phase6.initArmState r) s' ∧ s'.pc = r.divS) ∨
+    (∃ s', ArmSteps r.bodyFlat (Phase6.initArmState r) s' ∧ s'.pc = r.boundsS) ∨
+    ArmDiverges r.bodyFlat (Phase6.initArmState r) := by
+  classical
+  set p := applyPassesPure prog.tyCtx passes prog.compileToTAC with hp_def
+  -- Extract GenAsmSpec
+  have spec : GenAsmSpec prog.tyCtx p r := verifiedGenerateAsm_spec hGen
+  -- Extract `checkBranchTargets p.code = none` via pipeline invariant preservation
+  have htc := prog.typeCheckStrict_typeCheck htcs
+  have hWT0 : checkWellTypedProg prog.tyCtx prog.compileToTAC = true :=
+    checkWellTypedProg_complete (prog.compileToTAC_wellTyped htc)
+  have hPrereqs0 := compileToTAC_codegenPrereqs prog htcs
+  have hBranch0 := compileToTAC_checkBranchTargets prog
+  have hSimple0 := compileToTAC_checkBoolExprSimpleOps prog
+  obtain ⟨_, _, hBranch, _⟩ :=
+    applyPassesPure_preserves_invariants prog.tyCtx passes prog.compileToTAC
+      hWT0 hPrereqs0 hBranch0 hSimple0
+  -- Shorthand
+  set init := Phase6.initArmState r with hinit_def
+  -- By classical excluded middle, dispatch sentinel-reach cases
+  by_cases h1 : ∃ s', ArmSteps r.bodyFlat init s' ∧ s'.pc = r.haltFinal
+  · exact Or.inl h1
+  by_cases h2 : ∃ s', ArmSteps r.bodyFlat init s' ∧ s'.pc = r.divS
+  · exact Or.inr (Or.inl h2)
+  by_cases h3 : ∃ s', ArmSteps r.bodyFlat init s' ∧ s'.pc = r.boundsS
+  · exact Or.inr (Or.inr (Or.inl h3))
+  -- Fall-through: prove ArmDiverges
+  refine Or.inr (Or.inr (Or.inr ?_))
+  -- Key facts
+  have hBodySize : r.bodyFlat.size = r.haltFinal := by
+    simp only [VerifiedAsmResult.bodyFlat, List.size_toArray,
+      List.length_append, Array.length_toList]
+    rw [spec.haltFinal_eq, spec.haltS_eq]
+  have hHaltBound : r.haltFinal ≤ r.boundsS := by
+    rw [spec.boundsS_eq]; omega
+  -- ArmDiverges: ∀ n, ∃ s, ArmStepsN bodyFlat init s n
+  -- Strengthened invariant: also carry s.pc ≤ boundsS
+  intro n
+  suffices h : ∃ s, ArmStepsN r.bodyFlat init s n ∧ s.pc ≤ r.boundsS by
+    obtain ⟨s, hs, _⟩ := h; exact ⟨s, hs⟩
+  induction n with
+  | zero =>
+    refine ⟨init, ArmStepsN.refl_zero, ?_⟩
+    show init.pc ≤ r.boundsS
+    rw [hinit_def]
+    show (Phase6.initArmState r).pc ≤ r.boundsS
+    simp only [Phase6.initArmState]
+    have := pcMap_le_haltS spec 0 (by simp)
+    have hle : r.haltS ≤ r.boundsS := by
+      rw [spec.boundsS_eq, spec.haltFinal_eq]; omega
+    omega
+  | succ n ih =>
+    obtain ⟨s, hs_n, hPC_bound⟩ := ih
+    have hArmSteps_init_s : ArmSteps r.bodyFlat init s := ArmStepsN_to_ArmSteps hs_n
+    have hNeHalt : s.pc ≠ r.haltFinal := fun h => h1 ⟨s, hArmSteps_init_s, h⟩
+    have hNeDiv : s.pc ≠ r.divS := fun h => h2 ⟨s, hArmSteps_init_s, h⟩
+    have hNeBounds : s.pc ≠ r.boundsS := fun h => h3 ⟨s, hArmSteps_init_s, h⟩
+    -- s.pc ≤ boundsS, ≠ {haltFinal, haltFinal+1, haltFinal+2} → s.pc < haltFinal
+    have hPcLtHalt : s.pc < r.haltFinal := by
+      rw [spec.divS_eq] at hNeDiv
+      rw [spec.boundsS_eq] at hNeBounds
+      rw [spec.boundsS_eq] at hPC_bound
+      omega
+    have hPcLtBody : s.pc < r.bodyFlat.size := hBodySize ▸ hPcLtHalt
+    -- Get the instruction at s.pc
+    obtain ⟨i, hi⟩ : ∃ i, r.bodyFlat[s.pc]? = some i := by
+      rcases hlookup : r.bodyFlat[s.pc]? with _ | i
+      · rw [Array.getElem?_eq_none_iff] at hlookup; omega
+      · exact ⟨i, rfl⟩
+    obtain ⟨s', hStep⟩ := ArmStep_total_of_codeAt hi
+    have hs_n1 : ArmStepsN r.bodyFlat init s' (n + 1) := ArmStepsN_extend hs_n hStep
+    refine ⟨s', hs_n1, ?_⟩
+    -- Case on ArmStep_pc_analysis: either s'.pc = s.pc + 1 or s'.pc is a branch target
+    rcases ArmStep_pc_analysis hStep with hFall | ⟨lbl, hPc_eq, hBrForm⟩
+    · -- Fall-through: s'.pc = s.pc + 1 ≤ haltFinal ≤ boundsS
+      rw [hFall]; omega
+    · -- Branch: s'.pc = lbl, use bodyFlat_branch_target_bounded
+      rw [hPc_eq]
+      exact bodyFlat_branch_target_bounded spec hBranch s.pc lbl hBrForm
+
 end Phase6Main
