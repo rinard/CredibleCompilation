@@ -1040,7 +1040,8 @@ theorem compileStmtToProg_stuck (s : Stmt) (fuel : Nat) (σ σ' : Store)
 
 /-- If some expression in a list is unsafe, the compiled code for the list
     reaches an error. Walks through safe prefix via `compileExpr_correct`,
-    then applies `compileExpr_stuck` to the first unsafe arg. -/
+    then applies `compileExpr_stuck` to the first unsafe arg.
+    Cause-faithful clauses pin the error sentinel by listUnsafeDiv/listUnsafeBounds. -/
 private theorem compileExprs_unsafe (args : List SExpr) (offset nextTmp : Nat) (σ σ_tac : Store) (am : ArrayMem) (p : Prog)
     (htf : ∀ v ∈ args.flatMap SExpr.freeVars, v.isTmp = false)
     (hftf : ∀ v ∈ args.flatMap SExpr.freeVars, v.isFTmp = false)
@@ -1050,7 +1051,9 @@ private theorem compileExprs_unsafe (args : List SExpr) (offset nextTmp : Nat) (
     (hcode : RC.CodeAt (compileExprs args offset nextTmp).1 p offset) :
     ∃ pc_s σ_s c_err, FragExec p offset σ_tac pc_s σ_s am am ∧
       Step p (Cfg.run pc_s σ_s am) c_err ∧ c_err.isError ∧
-      pc_s < offset + (compileExprs args offset nextTmp).1.length := by
+      pc_s < offset + (compileExprs args offset nextTmp).1.length ∧
+      (SExpr.listUnsafeDiv σ am p.arrayDecls args → ∃ σ' am', c_err = Cfg.errorDiv σ' am') ∧
+      (SExpr.listUnsafeBounds σ am p.arrayDecls args → ∃ σ' am', c_err = Cfg.errorBounds σ' am') := by
   induction args generalizing offset nextTmp σ_tac with
   | nil => obtain ⟨_, hm, _⟩ := hunsafe; simp at hm
   | cons e rest ih =>
@@ -1082,26 +1085,47 @@ private theorem compileExprs_unsafe (args : List SExpr) (offset nextTmp : Nat) (
         | inr h => exact ⟨e', h, hns⟩
       have hagree_src : ∀ v, v.isTmp = false → v.isFTmp = false → σ_e v = σ v :=
         fun v h1 h2 => by rw [hagree_e v h1 h2, hagree v h1 h2]
-      obtain ⟨pc_s, σ_s, c_err, hfrag_rest, herr, hisErr, hlt⟩ := ih _ _ σ_e
+      obtain ⟨pc_s, σ_s, c_err, hfrag_rest, herr, hisErr, hlt, hdiv, hbounds⟩ := ih _ _ σ_e
         htf_rest hftf_rest (fun e' he' => htypedv e' (List.mem_cons_of_mem _ he'))
         hunsafe_rest hagree_src hcodeRest
-      refine ⟨pc_s, σ_s, c_err, Steps.trans hexec_e hfrag_rest, herr, hisErr, ?_⟩
-      -- hlt : pc_s < (offset + eLen) + restLen, goal: pc_s < offset + (eCode ++ restCode).length
-      have : (compileExprs (e :: rest) offset nextTmp).1.length =
-          (compileExpr e offset nextTmp).1.length +
-          (compileExprs rest (offset + (compileExpr e offset nextTmp).1.length)
-            (compileExpr e offset nextTmp).2.2).1.length := by
-        simp [compileExprs, List.length_append]
-      omega
+      refine ⟨pc_s, σ_s, c_err, Steps.trans hexec_e hfrag_rest, herr, hisErr, ?_, ?_, ?_⟩
+      · -- hlt : pc_s < (offset + eLen) + restLen, goal: pc_s < offset + (eCode ++ restCode).length
+        have : (compileExprs (e :: rest) offset nextTmp).1.length =
+            (compileExpr e offset nextTmp).1.length +
+            (compileExprs rest (offset + (compileExpr e offset nextTmp).1.length)
+              (compileExpr e offset nextTmp).2.2).1.length := by
+          simp [compileExprs, List.length_append]
+        omega
+      · -- listUnsafeDiv (e :: rest) = e.unsafeDiv ∨ (e.safe ∧ listUnsafeDiv rest)
+        intro h
+        simp only [SExpr.listUnsafeDiv] at h
+        rcases h with h' | ⟨_, h'⟩
+        · exact absurd h' ((SExpr.safe_iff_not_unsafe e σ am _).mp he_safe).1
+        · exact hdiv h'
+      · intro h
+        simp only [SExpr.listUnsafeBounds] at h
+        rcases h with h' | ⟨_, h'⟩
+        · exact absurd h' ((SExpr.safe_iff_not_unsafe e σ am _).mp he_safe).2
+        · exact hbounds h'
     · -- e is unsafe: error in the expression code
-      obtain ⟨pc_s, σ_s, c_err, hfrag, herr, hisErr, hlt⟩ :=
+      obtain ⟨pc_s, σ_s, c_err, hfrag, herr, hisErr, hlt, hdiv, hbounds⟩ :=
         compileExpr_stuck e offset nextTmp σ σ_tac am p htf_e hftf_e
           (htypedv e he_mem) he_safe hagree hcodeE
-      refine ⟨pc_s, σ_s, c_err, hfrag, herr, hisErr, ?_⟩
-      have : (compileExprs (e :: rest) offset nextTmp).1.length ≥
-          (compileExpr e offset nextTmp).1.length := by
-        simp [compileExprs, List.length_append]
-      omega
+      refine ⟨pc_s, σ_s, c_err, hfrag, herr, hisErr, ?_, ?_, ?_⟩
+      · have : (compileExprs (e :: rest) offset nextTmp).1.length ≥
+            (compileExpr e offset nextTmp).1.length := by
+          simp [compileExprs, List.length_append]
+        omega
+      · intro h
+        simp only [SExpr.listUnsafeDiv] at h
+        rcases h with h' | ⟨h_esafe, _⟩
+        · exact hdiv h'
+        · exact absurd h_esafe he_safe
+      · intro h
+        simp only [SExpr.listUnsafeBounds] at h
+        rcases h with h' | ⟨h_esafe, _⟩
+        · exact hbounds h'
+        · exact absurd h_esafe he_safe
 
 -- ============================================================
 -- § 16c. Statement unsafe theorem (generalises stuck)
