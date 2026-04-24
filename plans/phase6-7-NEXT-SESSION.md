@@ -1,24 +1,103 @@
 # Phase 6/7 Next Session — Final Plan and Handoff
 
 **Read this first.**  Supersedes all earlier Phase 6/7 planning documents
-in this directory.  Last updated: 2026-04-24 after **session 8** —
-**Phase B.0 + 29 of 31 Phase B.1 cases complete**; 2 cases remain in
-verifiedGenInstr_correct plus Phases C–H.
+in this directory.  Last updated: 2026-04-24 after **session 9** —
+**Phase B.0 + 29 of 31 top-level cases complete + 5 of 10 internal
+sub-cases of .iftrue filled**. .iftrue still has 5 internal sub-sorries,
+.iffall entirely sorried.
 
-## TL;DR for next session (session 9)
+## TL;DR for next session (session 10)
 
-Sorry count stands at **5** — 4 pre-existing in PipelineCorrectness.lean
-(3 Phase 6 out-of-scope + 1 Phase 7 target), and 1 on
-`verifiedGenInstr_correct` with 2 internal per-case sorries remaining
-(`.iftrue`, `.iffall`). Build green. Phase B signature is locked.
+Sorry count stands at **5** (unchanged from sessions 7/8/9) — 4
+pre-existing in PipelineCorrectness.lean (3 Phase 6 out-of-scope + 1
+Phase 7 target), and 1 on `verifiedGenInstr_correct` with 2 internal
+per-case sorries remaining (`.iftrue`, `.iffall`). Build green. Phase B
+signature is locked.
 
-**Session 9 starts with filling the last 2 Phase B.1 cases.**
-The other 8 cases landed in session 8 — reference commits
-`0bad354` (`.const`), `754bcfc` (`.copy`), `f6e5728` (`.floatUnary`),
-`ad66a01` (`.fbinop`), `3c9fbf8` (`.fternop`), `a7744ba` (`.binop`),
-`bf06bc2` (`.arrLoad`), `1410f3a` (`.arrStore`). Once Phase B closes,
-declaration sorry count drops 5 → 4. Then start Phase C (trivial,
-see below) and Phases D–H.
+**Session 10 continues .iftrue from session 9's partial progress.**
+Session 9 filled cmp {var/var, var/lit, lit/var, lit/lit} and fcmp
+var/var. Remaining for .iftrue: fcmp {var/flit, flit/var, flit/flit}
++ inner catch-all + outer catch-all. Then mirror all 10 sub-cases for
+.iffall (polarity flipped: hcond is be.eval = false, bCond takes
+.bCond_fall instead of .bCond_taken, final PC is pcMap (pc+1) not
+pcMap l_var).
+
+Reference commits for session 9's working sub-cases:
+`6ce9b4a` (cmp 4-variant), `7b5955c` (fcmp var/var).
+
+### Three blockers now documented (key patterns)
+
+1. **CoeFun defeq failure**: `layout va` vs `List.lookup va
+   layout.entries` are NOT defeq in `exact`/`show` contexts. Define
+   register lets using direct `List.lookup va layout.entries` form:
+   ```lean
+   let a_reg : ArmReg :=
+     match List.lookup va layout.entries with | some (.ireg r) => r | _ => .x1
+   ```
+
+2. **Motive capture for `let cond := match op with ...`**. Lean
+   generalizes over op-dependent hypotheses into the match motive.
+   Wrap in a fresh lambda application:
+   ```lean
+   let cond : Cond := (fun o : CmpOp => match o with
+     | .eq => Cond.eq | .ne => .ne | .lt => .lt | .le => .le) op
+   ```
+
+3. **Left-assoc `++` from simp**. `simp [verifiedGenInstr, ...] at this`
+   produces `(a ++ b) ++ c`. Use `rw [← List.append_assoc] at this`
+   before `exact this.symm` to get right-assoc form. For fcmp flit
+   cases where fmov+fcmp+bCond get merged into one trailing list,
+   either use simp-flattened form with manual loadImm+fmov (matches
+   c7b5d26 pre-session-7 flit/flit body), or reshape with two
+   `← List.append_assoc` steps.
+
+### Catch-all fallback — `be_var` substitution issue
+
+Lean's `cases be_var with | _ =>` expands each remaining constructor
+into its own sub-case, substituting `be_var` with the specific
+pattern. A unified tactic body referencing `be_var` fails with
+"Unknown identifier `be_var`". Handle each constructor explicitly:
+
+**Outer catch-all** (`cases be_var with | not inner => ... | _ =>`):
+- `.lit _`, `.bvar _`, `.bexpr _`: contradict via
+  `simp [BoolExpr.hasSimpleOps] at hSimpleBV` (hasSimpleOps false).
+- `.cmp op a b` (no .not): use cbnz fallback with
+  `verifiedGenBoolExpr layout (.cmp op a b) ++ [.cbnz .x0 ...]`.
+- `.fcmp fop a b` (no .not): similar cbnz fallback.
+
+**Inner catch-all** (inside `| not inner => ... cases inner with | _ =>`):
+- `.lit _`, `.bvar _`, `.bexpr _`: contradict via simp on hSimpleBV.
+- `.not inner'`: cbnz fallback with
+  `verifiedGenBoolExpr layout (.not (.not inner')) ++ [.cbnz .x0 ...]`.
+
+### Template for cbnz fallback (`verifiedGenBoolExpr_correct` + cbnz)
+
+```lean
+have hInstrs : instrs = verifiedGenBoolExpr layout <specific-be> ++
+    [.cbnz .x0 (pcMap l_var)] := by
+  have := hSome; simp [verifiedGenInstr, hRC, hII, hSimpleBV] at this
+  exact this.symm
+rw [hInstrs] at hCodeInstr hPcNext
+have hCodeBE := hCodeInstr.append_left
+have hCodeCbnz := hCodeInstr.append_right
+obtain ⟨s1, k1, hSteps1N, hk1, hX0_1, hRel1, hPC1, hAM1⟩ :=
+  verifiedGenBoolExpr_correct prog layout <specific-be> σ s (pcMap pc)
+    hStateRel hRegConv hCodeBE hPcRel tyCtx hTS hWTbe hWTL
+    (fun v hv => hMapped v (by simp [TAC.vars]; exact hv)) hSimpleBV am
+have hCbnz := hCodeCbnz.head; rw [← hPC1] at hCbnz
+have hx0_ne : s1.regs .x0 ≠ 0 := by rw [hX0_1, hcond]; simp
+let s_fin : ArmState := { s1 with pc := pcMap l_var }
+have hStepCbnzN : ArmStepsN prog s1 s_fin 1 :=
+  ArmStepsN.single (.cbnz_taken .x0 _ hCbnz hx0_ne)
+have hChain : ArmStepsN prog s s_fin (k1 + 1) :=
+  ArmStepsN_trans hSteps1N hStepCbnzN
+refine ⟨s_fin, k1 + 1, hChain, ?_, ?_, rfl, ?_⟩
+· intro pc' σ' am' _hCfg
+  rw [hInstrs, hk1]; simp [List.length_append]
+· exact fun v loc hv => hRel1 v loc hv
+· show s_fin.arrayMem = am
+  simp [s_fin, hAM1, hArrayMem]
+```
 
 ### 2 cases remaining
 

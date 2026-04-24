@@ -4,6 +4,124 @@ Chronological record of what was built and why, to reconstruct the sequence of d
 
 ---
 
+## Phase 6/7 session 9: Flavor A Phase B — .iftrue partial (2026-04-24)
+
+**Planned goal**: close the last 2 Phase B.1 case sorries (`.iftrue`,
+`.iffall`) per session 8's handoff pattern (b) — use
+`have hInstrs := by ...; rw [hInstrs] at hCodeInstr hPcNext` instead
+of `obtain rfl := Option.some.inj hSome`. Drop declaration sorry
+count 5 → 4, then proceed through Phases C–H.
+
+**Actual outcome**: **5 of 10 .iftrue internal sub-cases filled** —
+cmp var/var, cmp var/lit, cmp lit/var, cmp lit/lit, fcmp var/var.
+Build green throughout at 5 declaration sorries (unchanged).
+`.iftrue` still has sorries in fcmp {var/flit, flit/var, flit/flit}
++ inner catch-all + outer catch-all; `.iffall` entirely pending.
+
+### Three blockers worked through
+
+1. **CoeFun-instance defeq failure**. `layout va` (which coerces via
+   `CoeFun` → `fun v => List.lookup v layout.entries`) and
+   `List.lookup va layout.entries` (the simp-unfolded form) are NOT
+   recognized as definitionally equal by Lean's elaborator inside
+   match patterns. Symptom: `have hInstrs` with `let a_reg := match
+   layout va with ...` yields `Type mismatch` against the
+   simp-produced `match List.lookup va layout.entries with ...`.
+
+   **Fix**: define `a_reg`/`b_reg` lets using the direct
+   `List.lookup va layout.entries` form (no CoeFun), so they stay
+   syntactically identical to what simp produces:
+
+   ```lean
+   let a_reg : ArmReg :=
+     match List.lookup va layout.entries with | some (.ireg r) => r | _ => .x1
+   ```
+
+   Confirmed defeq for helper calls (vLoadVar_eff_exec expects the
+   CoeFun form; both forms type-check in its signature).
+
+2. **Motive capture for `let cond`**. Writing `let cond : Cond := match
+   op with | .eq => .eq | ...` in a context where `hSome`/`hcond`/
+   `hSimpleBV`/etc. mention `op` causes Lean's motive inference to
+   generalize the match over all those hypotheses — visible in error
+   output as `cond : Cond := match op, hMapped, hSome, hinstr, hcond,
+   heq, hSimpleBV, hWTbe, hWTcmp, hcmp_false with | CmpOp.eq,
+   hMapped, hSome, ... => Cond.eq | ...`. This makes `cond` term
+   unmanageable in downstream refs.
+
+   **Fix**: wrap the match in a fresh lambda application to strip
+   outer-hypothesis dependencies from the motive:
+
+   ```lean
+   let cond : Cond := (fun o : CmpOp => match o with
+     | .eq => Cond.eq | .ne => .ne | .lt => .lt | .le => .le) op
+   ```
+
+   The inner match elaborates under a fresh `o` without seeing
+   `hSome` etc., then the outer application binds `o = op`.
+
+3. **Left- vs right-associated `++` in simp output**. `simp
+   [verifiedGenInstr, hRC, hII, hSimpleBV] at hSome` produces
+   left-associated chains `(a ++ b) ++ c`. My hInstrs often used
+   right-associated `a ++ (b ++ c)` to keep helper consumers' CodeAt
+   boundaries simple.
+
+   **Fix**: insert `rw [← List.append_assoc] at this` before `exact
+   this.symm` to reshape simp's left-assoc to right-assoc — works for
+   2-chunk cases (`loadA ++ loadB ++ [tail]`).
+
+   **Remaining issue for fcmp flit cases**: simp flattens the
+   three-chunk `loadA ++ (formalLoadImm ++ [fmov]) ++ [fcmp, bCond]`
+   into a two-chunk `(loadA ++ formalLoadImm) ++ [fmov, fcmp,
+   bCond]` because `[fmov]` merges into the trailing list. Neither
+   form lets `loadFloatExpr_exec` directly consume the flit chunk
+   via a single `.append_right.append_left`. Session 10 should either
+   (a) follow the simp-flattened form and use manual
+   `loadImm64_fregs_preserved + fmovToFP` steps (matches old c7b5d26
+   pre-session-7 flit/flit body), or (b) reshape with two
+   `← List.append_assoc` steps plus a singleton-cons lemma.
+
+### Inner/outer catch-all `be_var` substitution
+
+Attempted unified inner (`cases inner with | _ =>`) and outer
+(`cases be_var with | _ =>`) cbnz fallbacks using
+`verifiedGenBoolExpr_correct` + `cbnz_taken`. Fails with "Unknown
+identifier `be_var`" because Lean's `_` wildcard expands each
+remaining constructor into its own sub-case, substituting `be_var`
+with the specific pattern in each branch.
+
+**Session 10 fix**: expand explicitly. Outer catch-all cases:
+`.lit/.bvar/.bexpr` discharge via
+`simp [BoolExpr.hasSimpleOps] at hSimpleBV` (hasSimpleOps false
+contradicts); `.cmp/.fcmp` (no `.not` wrapping) use cbnz fallback.
+Inner catch-all (inside `| not inner =>`): `.lit/.bvar/.bexpr`
+discharge similarly; `.not inner'` uses cbnz fallback with
+`be = .not (.not inner')`.
+
+### Sorry count trajectory (session 9)
+
+- Start: 2 case sorries (.iftrue, .iffall), declaration sorry count = 5.
+- End: .iftrue has 5 sub-sorries (3 fcmp + 2 catch-alls), .iffall
+  entirely sorried; declaration sorry count still 5.
+
+### Commits (session 9)
+
+```
+6ce9b4a Phase 6/7 session 9 B.1: fill .iftrue cmp sub-cases (var/var,
+        var/lit, lit/var, lit/lit)
+7b5955c Phase 6/7 session 9 B.1: fill .iftrue fcmp var/var case
+```
+
+### Budget assessment for session 10
+
+Remaining work: 3 fcmp sub-cases + 2 catch-all fallbacks for .iftrue,
+then mirror all 10 sub-cases for .iffall. With the three blockers
+now documented and patterns validated, each remaining sub-case is
+mechanical (~20-30 min). Estimated session 10 wall: 4-6 hours if
+uninterrupted. Phases C-H afterward.
+
+---
+
 ## Phase 6/7 session 8: Flavor A Phase B continuation (2026-04-24)
 
 **Planned goal**: continue Phase B.1 from session 7's handoff (10 remaining
