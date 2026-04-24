@@ -12,8 +12,8 @@ rather than the cause-agnostic disjunction:
 
 - `while_to_arm_div_preservation` → `∃ fuel, unsafeDiv fuel`
 - `while_to_arm_bounds_preservation` → `∃ fuel, unsafeBounds fuel`
-- `arm_div_implies_while_unsafe_div` → `∃ fuel, unsafeDiv fuel`
-- `arm_bounds_implies_while_unsafe_bounds` → `∃ fuel, unsafeBounds fuel`
+- `arm_div_implies_program_unsafe_div` → `∃ fuel, unsafeDiv fuel`
+- `arm_bounds_implies_program_unsafe_bounds` → `∃ fuel, unsafeBounds fuel`
 
 ### Changes
 
@@ -87,7 +87,7 @@ with no structural benefit.  Disjointness
 First of 5 stages toward eliminating the `unsafeDiv ∨ unsafeBounds`
 disjunction in the top-level cause-specific correctness theorems
 (`while_to_arm_div_preservation`, `while_to_arm_bounds_preservation`,
-`arm_div_implies_while_unsafe_div`, `arm_bounds_implies_while_unsafe_bounds`).
+`arm_div_implies_program_unsafe_div`, `arm_bounds_implies_program_unsafe_bounds`).
 
 **This stage landed** (commit `c7d9b80`, merged to main): clean type-level
 split with the disjunction retained per-case.  Stages 2–5 deferred — see
@@ -1319,21 +1319,21 @@ theorems for cross-sentinel contradiction.
 from an `IsInfiniteExec` TAC trace starting at init.  Deferred to a
 follow-up session (see § Remaining below).
 
-**Phase 7a (`arm_halts_implies_while_halts`)**: case on source bin;
+**Phase 7a (`arm_halts_implies_program_halts`)**: case on source bin;
 halts branch extracts the `ArmStateMatchesProgramState` from
 `while_to_arm_correctness` after using `sentinel_state_unique` to
 identify the forward-sim's ARM state with the hypothesis's; errors /
 typeErrors / diverges branches contradict via sentinel distinctness /
 `pipelined_no_typeError` / Step-2-lemma + `sentinel_stuck`.
 
-**Phase 7b (`arm_div_implies_while_unsafe_div`)**: mirrors Phase 7d's
+**Phase 7b (`arm_div_implies_program_unsafe_div`)**: mirrors Phase 7d's
 structure.  halts-bin contradicted via `haltFinal ≠ divS`, errors-bin
 returns the source-side `unsafeDiv ∨ unsafeBounds` witness directly
 (div) or contradicts via `divS ≠ boundsS` (bounds), typeErrors
 excluded, diverges contradicted via the deferred Step 2 + `sentinel_
 stuck`.
 
-**Phase 7c (`arm_bounds_implies_while_unsafe_bounds`)**: symmetric to
+**Phase 7c (`arm_bounds_implies_program_unsafe_bounds`)**: symmetric to
 7b with `boundsS`.
 
 ### Remaining
@@ -1467,7 +1467,7 @@ and PropChecker doesn't import it.
 - `arm_diverges_of_prefix_reaches_self_loop` (from PF1')
 - `tac_goto_self_loop_implies_arm_self_loop` (from PF2')
 
-**Phase 7d** (`arm_diverges_implies_while_diverges`, ~50 LOC):
+**Phase 7d** (`arm_diverges_implies_program_diverges`, ~50 LOC):
 - Case on `has_behavior_init` output.
 - halts/errors-div/errors-bounds: forward sim gives `ArmSteps init
   s_sent` with `s_sent.pc = sentinel`.  ArmDiverges at length `n + 1`
@@ -1534,9 +1534,9 @@ Remaining in PipelineCorrectness.lean:
 | `bodyFlat_branch_target_bounded` (Phase 6) | Out of scope — separate ~600 LOC |
 | `arm_behavior_exhaustive` (Phase 6) | Out of scope — ~100 LOC König |
 | `halt_state_observables_deterministic` (Phase 7a helper) | Session 4 — ~15 LOC corollary |
-| `arm_halts_implies_while_halts` (Phase 7a) | Session 4 — ~80 LOC |
-| `arm_div_implies_while_unsafe_div` (Phase 7b) | Session 4 — ~60 LOC |
-| `arm_bounds_implies_while_unsafe_bounds` (Phase 7c) | Session 4 — ~60 LOC |
+| `arm_halts_implies_program_halts` (Phase 7a) | Session 4 — ~80 LOC |
+| `arm_div_implies_program_unsafe_div` (Phase 7b) | Session 4 — ~60 LOC |
+| `arm_bounds_implies_program_unsafe_bounds` (Phase 7c) | Session 4 — ~60 LOC |
 | `verifiedGenInstr_ifgoto_branch_bounded` (P1 probe placeholder) | Out of scope — subsumed by Phase 6 sweep |
 
 Session 4 target: **7 → 3 sorrys** (Phase 7 complete).

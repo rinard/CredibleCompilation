@@ -1456,7 +1456,7 @@ theorem halt_state_observables_deterministic
     `halts` bin, match observables via `halt_state_observables_deterministic`.
     `typeErrors` excluded via `pipelined_no_typeError`; `diverges` excluded
     via `ArmDiverges` reaching-vs-stuck argument (design doc § 7a). -/
-theorem arm_halts_implies_while_halts
+theorem arm_halts_implies_program_halts
     (prog : Program) (htcs : prog.wellFormed = true)
     (passes : List (String × (Prog → ECertificate)))
     {r : VerifiedAsmResult}
@@ -1526,7 +1526,7 @@ theorem arm_halts_implies_while_halts
     cause = division by zero.
 
     Proof size: ~60 LOC. -/
-theorem arm_div_implies_while_unsafe_div
+theorem arm_div_implies_program_unsafe_div
     (prog : Program) (htcs : prog.wellFormed = true)
     (passes : List (String × (Prog → ECertificate)))
     {r : VerifiedAsmResult}
@@ -1588,7 +1588,7 @@ theorem arm_div_implies_while_unsafe_div
     Symmetric to 7b; forward counterpart is `while_to_arm_bounds_preservation`.
 
     Proof size: ~60 LOC. -/
-theorem arm_bounds_implies_while_unsafe_bounds
+theorem arm_bounds_implies_program_unsafe_bounds
     (prog : Program) (htcs : prog.wellFormed = true)
     (passes : List (String × (Prog → ECertificate)))
     {r : VerifiedAsmResult}
@@ -1659,7 +1659,7 @@ theorem arm_bounds_implies_while_unsafe_bounds
     the sentinel's; `sentinel_stuck` contradicts the outgoing step.
 
     Proof size: ~40 LOC. -/
-theorem arm_diverges_implies_while_diverges
+theorem arm_diverges_implies_program_diverges
     (prog : Program) (htcs : prog.wellFormed = true)
     (passes : List (String × (Prog → ECertificate)))
     {r : VerifiedAsmResult}
