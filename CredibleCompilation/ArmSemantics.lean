@@ -360,6 +360,19 @@ theorem ArmStepsN_prefix {prog : ArmProg} {s s' : ArmState} {n k : Nat}
     rw [show n + (k + 1) = (n + k) + 1 from by omega] at h
     obtain ⟨cmid, hmid, _⟩ := ArmStepsN_split_last h; exact ih hmid
 
+/-- `ArmSteps` between pc-distinct states lifts to a positive-length `ArmStepsN`.
+    Used in Phase D `step_simulation` to derive `1 ≤ k` on `.run` successors:
+    `s.pc = pcMap pc` and `s'.pc = pcMap (pc+1)` differ whenever the emitted
+    block has length ≥ 1 (which holds by `bodyPerPC_length_pos`). -/
+theorem ArmSteps_to_ArmStepsN_pos {prog : ArmProg} {s s' : ArmState}
+    (h : ArmSteps prog s s') (hne : s.pc ≠ s'.pc) :
+    ∃ k, ArmStepsN prog s s' k ∧ 1 ≤ k := by
+  obtain ⟨k, hk⟩ := ArmSteps_to_ArmStepsN h
+  refine ⟨k, hk, ?_⟩
+  rcases k with _ | k'
+  · change s = s' at hk; rw [hk] at hne; exact absurd rfl hne
+  · exact Nat.succ_le_succ (Nat.zero_le _)
+
 /-- ARM divergence (reachability form): from `s₀`, some state is reachable
     after every finite ARM step count. In general nondeterministic systems,
     this is strictly weaker than an exists-function form

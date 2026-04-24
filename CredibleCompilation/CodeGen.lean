@@ -4187,7 +4187,8 @@ private theorem step_simulation {tyCtx : TyCtx} {p : Prog} {r : VerifiedAsmResul
     (hPC : pc < p.size)
     (hTS : TypedStore tyCtx σ)
     (hInv : buildVerifiedInvMap p pc σ am) :
-    ∃ s', ArmSteps r.bodyFlat s s' ∧
+    ∃ s' k, ArmStepsN r.bodyFlat s s' k ∧
+          (∀ pc' σ' am', cfg' = .run pc' σ' am' → 1 ≤ k) ∧
           ExtSimRel r.layout r.pcMap r.divS r.boundsS cfg' s' ∧
           (∀ σ' am', cfg' = .halt σ' am' → s'.pc = r.haltFinal) := by
   -- Case split: lib-call, print, or normal instruction
@@ -5644,10 +5645,25 @@ private theorem step_simulation {tyCtx : TyCtx} {p : Prog} {r : VerifiedAsmResul
       pc := s_mid.pc + entries.length}
     have hAllSteps : ArmSteps r.bodyFlat s s_final :=
       hStepSaves.trans (hBaseSteps.trans hStepRestores)
+    -- Phase D: derive length-tracked ArmStepsN via pc-distinctness
+    have hFinPC : s_final.pc = r.pcMap (pc + 1) := by
+      show s_mid.pc + entries.length = r.pcMap (pc + 1)
+      have hPcN := hPcNext
+      rw [hBody] at hPcN
+      rw [hMidPC, hSavedPC, hPcN]
+      simp only [List.length_append, entriesToSaves_length, entriesToRestores_length,
+        show entries = callerSaveEntries r.layout r.varMap (DAEOpt.instrDef p[pc]) from rfl]
+      omega
+    have hPcDiff : s.pc ≠ s_final.pc := by
+      rw [hFinPC, hPcRel, hPcNext]
+      have h1 : 1 ≤ (r.bodyPerPC[pc]'hpcB).length := bodyPerPC_length_pos spec pc hPC
+      omega
+    obtain ⟨kFinal, hArmN, hkPos⟩ := ArmSteps_to_ArmStepsN_pos hAllSteps hPcDiff
     -- Prove ExtSimRel for the final state
     obtain ⟨hFresh, hNodup, hCoversIreg, hCoversFreg, hUniqIreg, hUniqFreg⟩ :=
       spec.callerSaveSpec
-    refine ⟨s_final, hAllSteps, ⟨?_, ?_, ?_⟩, ?haltCond⟩
+    refine ⟨s_final, kFinal, hArmN, ?_, ⟨?_, ?_, ?_⟩, ?haltCond⟩
+    · intro _ _ _ _hCfg; exact hkPos
     case haltCond =>
       intro σ' am' hEq; exact Cfg.noConfusion hEq
     · -- ExtStateRel via callerSave_composition_excluding
@@ -5677,12 +5693,7 @@ private theorem step_simulation {tyCtx : TyCtx} {p : Prog} {r : VerifiedAsmResul
       show ExtStateRel r.layout σ' s_final
       exact hCSCE.withPC _
     · -- PcRel: s_final.pc = pcMap (pc + 1)
-      show s_mid.pc + entries.length = r.pcMap (pc + 1)
-      rw [hBody] at hPcNext
-      rw [hMidPC, hSavedPC, hPcNext]
-      simp only [List.length_append, entriesToSaves_length, entriesToRestores_length,
-        show entries = callerSaveEntries r.layout r.varMap (DAEOpt.instrDef p[pc]) from rfl]
-      omega
+      exact hFinPC
     · -- ArrayMem preserved
       show (applyCallerRestores entries s_mid).arrayMem = am
       rw [applyCallerRestores_arrayMem]
@@ -5761,8 +5772,24 @@ private theorem step_simulation {tyCtx : TyCtx} {p : Prog} {r : VerifiedAsmResul
         pc := s_mid.pc + entries.length}
       have hAllSteps : ArmSteps r.bodyFlat s s_final :=
         hStepSaves.trans ((ArmSteps.single hStepPrint1).trans hStepRestores)
+      -- Phase D: derive length-tracked ArmStepsN via pc-distinctness
+      have hFinPC : s_final.pc = r.pcMap (pc + 1) := by
+        show s_mid.pc + entries.length = r.pcMap (pc + 1)
+        have hPcN := hPcNext
+        rw [hBody] at hPcN
+        rw [hMidPC, hPcN, hSPC]
+        simp only [List.length_append, entriesToSaves_length, entriesToRestores_length,
+                   List.length_cons, List.length_nil]
+        simp only [show entries = genCallerSaveAll r.layout r.varMap from rfl]
+        omega
+      have hPcDiff : s.pc ≠ s_final.pc := by
+        rw [hFinPC, hPcRel, hPcNext]
+        have h1 : 1 ≤ (r.bodyPerPC[pc]'hpcB).length := bodyPerPC_length_pos spec pc hPC
+        omega
+      obtain ⟨kFinal, hArmN, hkPos⟩ := ArmSteps_to_ArmStepsN_pos hAllSteps hPcDiff
       -- Prove ExtSimRel for the final state
-      refine ⟨s_final, hAllSteps, ⟨?_, ?_, ?_⟩, ?haltCond⟩
+      refine ⟨s_final, kFinal, hArmN, ?_, ⟨?_, ?_, ?_⟩, ?haltCond⟩
+      · intro _ _ _ _hCfg; exact hkPos
       case haltCond =>
         intro σ' am' hEq; exact Cfg.noConfusion hEq
       · -- ExtStateRel: callerSave_composition on the logical state, then
@@ -5793,13 +5820,7 @@ private theorem step_simulation {tyCtx : TyCtx} {p : Prog} {r : VerifiedAsmResul
         rw [this]
         exact hCSC.withPC _
       · -- PcRel: s_final.pc = pcMap (pc + 1)
-        show s_mid.pc + entries.length = r.pcMap (pc + 1)
-        rw [hBody] at hPcNext
-        rw [hMidPC, hPcNext, hSPC]
-        simp only [List.length_append, entriesToSaves_length, entriesToRestores_length,
-                   List.length_cons, List.length_nil]
-        simp only [show entries = genCallerSaveAll r.layout r.varMap from rfl]
-        omega
+        exact hFinPC
       · -- ArrayMem preserved (saves/havoc/restores don't touch arrayMem)
         show (applyCallerRestores entries s_mid).arrayMem = am
         rw [applyCallerRestores_arrayMem]
@@ -5893,7 +5914,12 @@ private theorem step_simulation {tyCtx : TyCtx} {p : Prog} {r : VerifiedAsmResul
             spec.varMapInjOnOffsets
             spec.layoutStackComesFromVarMap
             hCodeSave
-        refine ⟨s_fin, (ArmSteps.single hStep1).trans hSteps, ⟨hRel_fin, ?_⟩, ?haltCond⟩
+        -- Phase D: lift to length-tracked ArmStepsN. Halt case: .run claim is vacuous.
+        have hAllSteps : ArmSteps r.bodyFlat s s_fin :=
+          (ArmSteps.single hStep1).trans hSteps
+        obtain ⟨kFinal, hArmN⟩ := ArmSteps_to_ArmStepsN hAllSteps
+        refine ⟨s_fin, kFinal, hArmN, ?_, ⟨hRel_fin, ?_⟩, ?haltCond⟩
+        · intro _ _ _ hCfg; exact Cfg.noConfusion hCfg
         · show s_fin.arrayMem = am
           rw [hAM_fin, hAM1]
         case haltCond =>
@@ -5939,14 +5965,16 @@ private theorem step_simulation {tyCtx : TyCtx} {p : Prog} {r : VerifiedAsmResul
             (∀ arr idx val ty, p[pc]? = some (.arrStore arr idx val ty) →
               ∀ idxVal, σ idx = .int idxVal → idxVal < arraySizeBv p.arrayDecls arr) :=
           fun hBS => verifiedBoundsSafe_sound hPC hBS hInv
-        obtain ⟨s', _kEBS, hArmStepsN, _hKEBS, hRelOut⟩ := ext_backward_simulation p r.bodyFlat r.layout r.pcMap
+        obtain ⟨s', kEBS, hArmStepsN, hKEBS, hRelOut⟩ := ext_backward_simulation p r.bodyFlat r.layout r.pcMap
           r.haltS r.divS r.boundsS p.arrayDecls safe hOracle
           hStep hRel hPC tyCtx spec.wellTypedProg hTS spec.wellTypedLayout
           p[pc] (Prog.getElem?_eq_getElem hPC)
           (r.bodyPerPC[pc]'hpcB) hSome hCodeAt hPcNext
           (spec.layoutComplete pc hPC) rfl hNCSL hNCSLBin hNCSLPrintInt hNCSLPrintBool hNCSLPrintFloat hNCSLPrintStr
-        have hArmSteps := ArmStepsN_to_ArmSteps hArmStepsN
-        refine ⟨s', hArmSteps, hRelOut, ?haltCond⟩
+        -- Phase D: propagate length-tracked tuple. On .run, kEBS = block length ≥ 1.
+        have hLenPos : 1 ≤ (r.bodyPerPC[pc]'hpcB).length := bodyPerPC_length_pos spec pc hPC
+        refine ⟨s', kEBS, hArmStepsN, ?_, hRelOut, ?haltCond⟩
+        · intro pc' σ' am' hCfg; rw [hKEBS _ _ _ hCfg]; exact hLenPos
         case haltCond =>
           intro σ' am' hEq
           subst hEq
@@ -6078,8 +6106,9 @@ theorem tacToArm_refinement {tyCtx : TyCtx} {p : Prog} {r : VerifiedAsmResult}
   | step hStep rest ih =>
     intro pc σ am s hc hRel hTS_cur hInv_cur; subst hc
     have hPC := Step.pc_lt_of_step hStep
-    obtain ⟨s_mid, hArm1, hRel_mid, _hHaltMid⟩ :=
+    obtain ⟨s_mid, _kMid, hArmN1, _hKMid, hRel_mid, _hHaltMid⟩ :=
       step_simulation spec hStep hRel hPC hTS_cur hInv_cur
+    have hArm1 : ArmSteps r.bodyFlat s s_mid := ArmStepsN_to_ArmSteps hArmN1
     -- Classify the one-step successor
     rcases step_run_or_terminal spec.wellTypedProg hTS_cur hPC hStep with
       ⟨pc', σ', am', hEq, hTS'⟩ | hTerminal
