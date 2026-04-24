@@ -4,6 +4,136 @@ Chronological record of what was built and why, to reconstruct the sequence of d
 
 ---
 
+## Phase 6/7 session 8: Flavor A Phase B continuation (2026-04-24)
+
+**Planned goal**: continue Phase B.1 from session 7's handoff (10 remaining
+case sorries in `verifiedGenInstr_correct`), aiming to close Phase B and
+drop the declaration sorry from 5 → 4.
+
+**Actual outcome**: **8 of 10 cases filled** — `.const`, `.copy`,
+`.floatUnary`, `.fbinop`, `.fternop`, `.binop` (normal), `.arrLoad`,
+`.arrStore`. The two remaining cases (`.iftrue`, `.iffall`) share a
+let-binding unification pathology where `a_reg`/`b_reg`/`*_freg` lets
+defined inside nested `cases a`/`cases b` branches lose their identity
+under `obtain rfl := Option.some.inj hSome` — the goal RHS contains
+`(vLoadVar layout va a_reg ++ ...).length` while the helpers' `hk`
+equalities express `(vLoadVar layout va (match layout va with ...)).length`.
+The two forms are defeq, but omega and simp treat them as distinct
+opaque atoms, and neither `show`/`simp only [show ... from rfl]`/let-
+unfold incantations tried within ~30 minutes closed the goal. Build
+green throughout at 2 remaining case sorries (declaration sorry count
+still 5 — unchanged).
+
+### Session 7 patterns that continued working in session 8
+
+1. **Length-claim via `rw [hInstrs, hk*']; simp [List.length_append]; omega`**
+   when the case body begins `have hInstrs : instrs = ... := by ...;
+   rw [hInstrs] at hCodeInstr hPcNext`. The `hk*'` bridge lemmas re-express
+   the helper's `hk : k = (vLoadVar layout v (match ...)).length` in
+   terms of the local `let *_reg` binding — needed whenever the simp /
+   omega closing step sees the let-bound atoms rather than the unfolded
+   match. Example: `have hk1' : k1 = (vLoadVar layout y lv_reg).length := hk1`
+   works because `lv_reg` and `(match layout y with ...)` are defeq.
+
+2. **Closing with `ArmStepsN_trans` on explicit `h12`, `h123`, `h1234`
+   intermediate chain hypotheses** — keeps the k-arithmetic visible so
+   the length-claim `rw` chain has something syntactic to rewrite.
+
+3. **Per-op suffices** for multi-op cases (`.binop` simple ops, `.fbinop`
+   native ops) — unchanged from session 7's pattern; the `suffices hSimple`
+   body now returns the length-tracked tuple and each op's `apply hSimple`
+   discharges the ArmStep side condition via the shared helper.
+
+### Case-specific notes
+
+- **`.const`** (session 8 commit `0bad354`): three value types × up to
+  four layouts. Int/bool use `loadImm64_fregs_preserved` then
+  `vStoreVar_exec`; float/stack uses `loadImm64` → `.fmovToFP .d0` →
+  `vStoreVarFP_exec`; float/freg elides the store chunk to `[.fmovToFP r .x0]`.
+- **`.copy`** (`754bcfc`): self-copy branch is a `[.movR .x0 .x0]` nop;
+  FP-source path has a same-freg sub-case that emits `vStoreVarFP = []`
+  (0 ARM steps); non-FP path mirrors `.const`. Self-copy's ExtStateRel
+  closes via direct `intro w loc hw` + match-on-loc (σ[x ↦ σ x] = σ
+  semantically).
+- **`.floatUnary`** (`f6e5728`): native (pure `.floatUnaryNative`) vs
+  library-call (havocCallerSaved + `.floatUnaryLibCall` + hNCSL). Each
+  branch × freg/non-freg dst. Introduced `hk1'`/`hk3'` bridge pattern here.
+- **`.fbinop`** (`ad66a01`): `suffices hSimple` covers 6 native ops
+  (fadd/fsub/fmul/fdiv/fmin/fmax); `fpow` inlined with hNCSLBin-gated
+  havoc. Associativity mismatch on `k1 + k2 + 1 = A.len + (B.len + 1)`
+  requires `; omega` after the simp for the freg-dst branch.
+- **`.fternop`** (`3c9fbf8`): three FP loads + `fp_exec_and_store` for
+  fmadd/fmsub. Clean composition using the existing helper.
+- **`.binop` normal** (`a7744ba`): largest case at ~500 LOC. `suffices`
+  for 8 simple ops (add/sub/mul/band/bor/bxor/shl/shr); div/mod inlined.
+  Mod threads two scratch-x0 writes (sdiv q, mul q*b) before the final
+  `subR dst lv .x0` computing `a - q*b = srem a b`.
+- **`.arrLoad`** (`bf06bc2`): three element types × two boundsSafe modes.
+  Bool adds a `cmpImm dst 0` + `cset dst .ne` normalization after arrLd
+  to produce canonical 0/1 bit encoding.
+- **`.arrStore`** (`1410f3a`): `ty = .float` vs non-float, each with
+  boundsSafe sub-cases. Chain is `vLoadVar idx` → (optional cmpImm+bCond)
+  → `vLoadVar(FP) val` → `arrSt`/`farrSt`.
+
+### Blocker on `.iftrue`/`.iffall` — concrete diagnosis
+
+In the `.not (.cmp op a b)` branch with `a = .var va` and `b = .var vb`,
+the codegen expands `instrs = vLoadVar layout va (match layout va ...) ++
+vLoadVar layout vb (match layout vb ...) ++ [.cmpRR ..., .bCond ...]`,
+and `obtain rfl := Option.some.inj hSome` unifies this with the ambient
+`instrs`. The local `let a_reg := match layout va with | some (.ireg r)
+=> r | _ => ArmReg.x1` captures the same term.
+
+After `rw [hk1, hk2]` (using helper's match form) + `simp [List.length_append]`,
+omega's counterexample reports **both** `a_reg` and the explicit match
+expression as distinct free variables — omega can't see they are defeq.
+Attempted remedies that did NOT close the goal:
+
+- `rw [hk1', hk2']` using the `a_reg`/`b_reg`-form bridge lemmas
+- `simp only [show a_reg = (match layout va ...) from rfl, show b_reg = ... from rfl] at *`
+- `simp [List.length_append, List.length_cons, List.length_nil, Nat.add_assoc, Nat.add_comm, Nat.add_left_comm]`
+
+Session 9 should try: (a) skipping the `let a_reg` and inlining the
+match expression at every use site, (b) replacing `obtain rfl` with
+`have hInstrs : instrs = ...; rw [hInstrs] at hCodeInstr hPcNext`
+(matching the pattern used in `.binop`/`.arrLoad`/`.arrStore` where the
+length claim closes cleanly), or (c) `change` to force an explicit goal
+form before invoking omega. (b) is most likely the robust fix — it
+worked in every other session-8 case.
+
+### Sorry count trajectory (session 8)
+
+- Start: 10 case sorries in `verifiedGenInstr_correct`; declaration sorry
+  count = 5 (4 pre-existing in PipelineCorrectness.lean + 1 on
+  `verifiedGenInstr_correct`).
+- End: 2 case sorries; declaration sorry count still 5 (will drop to 4
+  only when the last two cases close).
+
+### Commits (session 8)
+
+```
+0bad354 Phase 6/7 session 8 B.1: fill .const case
+754bcfc Phase 6/7 session 8 B.1: fill .copy case
+f6e5728 Phase 6/7 session 8 B.1: fill .floatUnary case
+ad66a01 Phase 6/7 session 8 B.1: fill .fbinop case
+3c9fbf8 Phase 6/7 session 8 B.1: fill .fternop case
+a7744ba Phase 6/7 session 8 B.1: fill .binop normal case
+bf06bc2 Phase 6/7 session 8 B.1: fill .arrLoad case
+1410f3a Phase 6/7 session 8 B.1: fill .arrStore case
+```
+
+Branch `phase6-prep` pushed to `origin` at `1410f3a`.
+
+### Budget assessment for session 9
+
+`.iftrue` old body: ~400 LOC. `.iffall` old body: likely ~400 LOC. With
+the fix-pattern (b) above, porting should be mechanical — the proof
+structure is already written in `c7b5d26:CredibleCompilation/ArmCorrectness.lean:3144-3550`
+(for `.iftrue`) and :3551-3994 (for `.iffall`). Expected session 9 wall:
+2-3 hours, closing both cases + possibly starting Phases C-H.
+
+---
+
 ## Phase 6/7 session 7: Flavor A Phase B partial (2026-04-23)
 
 **Planned goal**: execute Flavor A Phase B per `plans/flavor-a-signatures.md`

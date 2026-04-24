@@ -1,37 +1,102 @@
 # Phase 6/7 Next Session — Final Plan and Handoff
 
 **Read this first.**  Supersedes all earlier Phase 6/7 planning documents
-in this directory.  Last updated: 2026-04-23 after **session 7** —
-**Phase B.0 + 21 of 31 Phase B.1 cases complete**; 10 cases remain in
+in this directory.  Last updated: 2026-04-24 after **session 8** —
+**Phase B.0 + 29 of 31 Phase B.1 cases complete**; 2 cases remain in
 verifiedGenInstr_correct plus Phases C–H.
 
-## TL;DR for next session (session 8)
+## TL;DR for next session (session 9)
 
 Sorry count stands at **5** — 4 pre-existing in PipelineCorrectness.lean
 (3 Phase 6 out-of-scope + 1 Phase 7 target), and 1 on
-`verifiedGenInstr_correct` with 10 internal per-case sorries remaining.
-Build green. Phase B signature is locked in place and cannot be reverted
-mid-way — session 8 must finish filling the remaining 10 cases atomically
-before committing any sig-level change.
+`verifiedGenInstr_correct` with 2 internal per-case sorries remaining
+(`.iftrue`, `.iffall`). Build green. Phase B signature is locked.
 
-**Session 8 starts with Phase B.1 continuation.** Reference the session 7
-commits (f7b5b78 through 48b0778) for worked examples spanning terminal,
-sentinel, and multi-helper .run cases. The spec's hard-first order:
-`.binop` → `.iftrue/.iffall` → `.floatUnary` → `.arrLoad/.arrStore` →
-`.const/.copy/.fbinop/.fternop`.
+**Session 9 starts with filling the last 2 Phase B.1 cases.**
+The other 8 cases landed in session 8 — reference commits
+`0bad354` (`.const`), `754bcfc` (`.copy`), `f6e5728` (`.floatUnary`),
+`ad66a01` (`.fbinop`), `3c9fbf8` (`.fternop`), `a7744ba` (`.binop`),
+`bf06bc2` (`.arrLoad`), `1410f3a` (`.arrStore`). Once Phase B closes,
+declaration sorry count drops 5 → 4. Then start Phase C (trivial,
+see below) and Phases D–H.
 
-### 10 cases remaining
+### 2 cases remaining
 
-| Case | Complexity | Sketch |
+| Case | Old-body LOC | Blocker |
 |---|---|---|
-| `.const` | complex | 3 value types × 4 layouts = ~12 leaves; FA1 probe covers stack-int |
-| `.copy` | complex | self-copy + freg + int; 4 layout combos |
-| `.binop` | complex | per-op (10 ops) with ×/÷ div-check prefix |
-| `.iftrue`, `.iffall` | complex | BoolExpr nested, ~400 LOC each |
-| `.arrLoad`, `.arrStore` | complex | 3 types × 3 layouts + bounds-check prefix |
-| `.fbinop` | complex | per-op native + libcall (fpow) |
-| `.floatUnary` | complex | native + libcall variants |
-| `.fternop` | complex | 3-arg load chain + per-op |
+| `.iftrue` | ~400 LOC (c7b5d26 lines 3144-3550) | let-binding unification under `obtain rfl` |
+| `.iffall` | ~400 LOC (c7b5d26 lines 3551-3994) | same pattern — likely same blocker |
+
+### Recommended fix path for `.iftrue`/`.iffall` (session 9)
+
+The session-8 blocker on `.iftrue`: inside the nested `cases` branches,
+a `let a_reg := match layout va with | some (.ireg r) => r | _ => .x1`
+is defined at the top of each sub-case. After `obtain rfl :=
+Option.some.inj hSome`, the goal RHS has `(vLoadVar layout va a_reg ++
+...).length` while the helper's `hk : k = (vLoadVar layout va (match
+layout va with ...)).length` uses the explicit match. omega sees these
+as two distinct opaque variables despite being defeq.
+
+Three fix options, in order of preference:
+
+1. **Replace `obtain rfl` with `have hInstrs : instrs = ...; rw [hInstrs]
+   at hCodeInstr hPcNext`** — this was the pattern used in
+   `.binop`/`.arrLoad`/`.arrStore` where the length claim closed cleanly.
+   The `rw [hInstrs]` at the subgoal site makes both sides of the
+   length-claim goal use consistent `a_reg` / `b_reg` via `rw [hk1', hk2']`
+   where `hk1' : k1 = (vLoadVar layout va a_reg).length := hk1`. This
+   was the robust session-8 pattern.
+
+2. **Inline the match expressions** — drop the `let a_reg` / `let b_reg`
+   bindings entirely and write `match layout va with | some (.ireg r) =>
+   r | _ => ArmReg.x1` at every use site. Verbose but sidesteps the
+   issue.
+
+3. **`change` to force the goal form** — after `rw [hk1, hk2]`, use
+   `change k1 + k2 + 1 + 1 = <fully-expanded-form>` then simp. Risky
+   because the expanded form depends on sub-case structure.
+
+Session 8's failed attempts for the record: `rw [hk1', hk2']`,
+`simp only [show a_reg = ... from rfl] at *`, `simp [List.length_append,
+Nat.add_assoc, Nat.add_comm, Nat.add_left_comm]`. None closed the goal.
+
+### Session 7+8 patterns — REUSE THESE
+
+1. **Length-claim proof for `.run` cases**:
+   ```lean
+   · intro pc' σ' am' _hCfg
+     rw [hInstrs, hk1', hk2', ...]; simp [List.length_append]; omega
+   ```
+   The `hk*'` bridge lemmas (e.g. `have hk1' : k1 = (vLoadVar layout v
+   lv_reg).length := hk1`) re-express the helper's match-form `hk` in
+   terms of the local let-bound `*_reg`. Critical for omega to close
+   when the ambient goal uses `*_reg`.
+
+2. **Vacuous length-claim for sentinel/terminal cfg'**:
+   ```lean
+   · intro pc' σ' am' h; cases h
+   ```
+
+3. **Chain construction** via `ArmStepsN_trans` with visible arithmetic:
+   ```lean
+   have h12 : ArmStepsN prog s s2 (k1 + k2) := ArmStepsN_trans hSteps1N hSteps2N
+   have hChain : ArmStepsN prog s s3 (k1 + k2 + 1) := ArmStepsN_trans h12 hStepN
+   ```
+
+4. **Syntax gotcha**: `exact ⟨..., by tac, next⟩` parses the comma into
+   the `by`-block. Use `refine ⟨..., ?_, next⟩` then prove subgoals.
+
+5. **Prelude is already in place** at the top of `verifiedGenInstr_correct`
+   (hRC, hII, hRegConv, hInjective, ⟨hStateRel, hPcRel, hArrayMem⟩).
+
+6. **The `suffices hSimple` idiom** for multi-op cases (`.binop` simple
+   ops, `.fbinop` native ops) — write the common proof once parameterized
+   over `armOp` / `fpOp`; each op's `apply hSimple` supplies the
+   ArmStep side condition.
+
+7. **`fp_exec_and_store` helper** bundles the "execute FP op + vStoreVarFP"
+   pattern into one length-tracked call. Used by `.fternop`, `.arrLoad/float`.
+   Returns `k = 1 + (vStoreVarFP layout x dst_reg).length`.
 
 ### Session 7 patterns — REUSE THESE
 
