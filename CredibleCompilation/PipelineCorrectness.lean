@@ -3491,4 +3491,159 @@ private theorem genHaltSave_no_branches (observable : List Var) (layout : VarLay
   obtain ⟨v, _, hv⟩ := hmem
   exact genHaltSaveOne_no_branches v layout varMap instr' hv
 
+/-- **Phase 6 helper: branch targets are bounded.**  For every branch
+    instruction embedded in `r.bodyFlat`, its label target is ≤ `r.boundsS`.
+
+    Proof structure (session 14):
+      1. Extract `X ∈ r.bodyFlat.toList` from the branch-form hypothesis.
+      2. Split `bodyFlat.toList = bodyPerPC.toList.flatMap id ++ haltSaveBlock.toList`.
+      3. If X is in the flatMap prefix, find the block it lives in
+         (via `List.mem_flatMap`), and therefore the TAC PC (via
+         `Array.mem_iff_getElem` on `bodyPerPC.toList`).
+      4. Dispatch on TAC type at that PC: print / lib-call / normal.
+         Print and lib-call use spec fields + the save/restore and printCall
+         `_no_branches` helpers for the wrapper pieces; the inner
+         `verifiedGenInstr` output is handled via the Phase6Probes2 aggregator.
+      5. If X is in the haltSaveBlock suffix, use `spec.haltSaveBlock_eq` +
+         `genHaltSave_no_branches` to contradict the branch-form.
+
+    Requires `hBranch : checkBranchTargets p.code = none` (passed in from the
+    caller; derived from `verifiedGenerateAsm` success). -/
+theorem bodyFlat_branch_target_bounded
+    {tyCtx : TyCtx} {p : Prog} {r : VerifiedAsmResult}
+    (spec : GenAsmSpec tyCtx p r)
+    (hBranch : checkBranchTargets p.code = none) :
+    ∀ (pc : Nat) (lbl : Nat),
+      (r.bodyFlat[pc]? = some (ArmInstr.b lbl) ∨
+       (∃ rn, r.bodyFlat[pc]? = some (ArmInstr.cbz rn lbl)) ∨
+       (∃ rn, r.bodyFlat[pc]? = some (ArmInstr.cbnz rn lbl)) ∨
+       (∃ c,  r.bodyFlat[pc]? = some (ArmInstr.bCond c lbl))) →
+      lbl ≤ r.boundsS := by
+  intro pc lbl hbranch
+  -- Step 1: Package hbranch as ⟨X, getElem? = some X, X is a branch-form⟩.
+  have ⟨X, hXAt, hXForm⟩ : ∃ X, r.bodyFlat[pc]? = some X ∧
+      (X = ArmInstr.b lbl ∨
+       (∃ rn, X = ArmInstr.cbz rn lbl) ∨
+       (∃ rn, X = ArmInstr.cbnz rn lbl) ∨
+       (∃ c,  X = ArmInstr.bCond c lbl)) := by
+    rcases hbranch with h | ⟨rn, h⟩ | ⟨rn, h⟩ | ⟨c, h⟩
+    · exact ⟨_, h, Or.inl rfl⟩
+    · exact ⟨_, h, Or.inr <| Or.inl ⟨rn, rfl⟩⟩
+    · exact ⟨_, h, Or.inr <| Or.inr <| Or.inl ⟨rn, rfl⟩⟩
+    · exact ⟨_, h, Or.inr <| Or.inr <| Or.inr ⟨c, rfl⟩⟩
+  -- Step 2: X is an element of bodyFlat.
+  have hXMem : X ∈ r.bodyFlat := by
+    rw [Array.mem_iff_getElem?]; exact ⟨pc, hXAt⟩
+  have hXMemList : X ∈ r.bodyFlat.toList := Array.mem_toList_iff.mpr hXMem
+  -- Step 3: Flat decomposition.
+  have hFlatList : r.bodyFlat.toList =
+      r.bodyPerPC.toList.flatMap id ++ r.haltSaveBlock.toList := by
+    simp only [VerifiedAsmResult.bodyFlat, List.toList_toArray]
+  rw [hFlatList, List.mem_append] at hXMemList
+  -- Useful bounds: haltS ≤ boundsS, divS ≤ boundsS, haltFinal ≤ boundsS.
+  have hHaltBound : r.haltS ≤ r.boundsS := by
+    rw [spec.boundsS_eq, spec.haltFinal_eq]; omega
+  have hDivBound : r.divS ≤ r.boundsS := by
+    rw [spec.boundsS_eq, spec.divS_eq]; omega
+  have hHaltFinalBound : r.haltFinal ≤ r.boundsS := by
+    rw [spec.boundsS_eq]; omega
+  -- Closer: from a non-branch witness for X, close lbl ≤ r.boundsS vacuously.
+  have close_nb :
+      (∀ lbl, X ≠ ArmInstr.b lbl) ∧
+      (∀ rn lbl, X ≠ ArmInstr.cbz rn lbl) ∧
+      (∀ rn lbl, X ≠ ArmInstr.cbnz rn lbl) ∧
+      (∀ c lbl, X ≠ ArmInstr.bCond c lbl) → lbl ≤ r.boundsS := by
+    intro ⟨nb, nz, nnz, nbc⟩
+    rcases hXForm with h | ⟨rn, h⟩ | ⟨rn, h⟩ | ⟨c, h⟩
+    · exact absurd h (nb _)
+    · exact absurd h (nz rn _)
+    · exact absurd h (nnz rn _)
+    · exact absurd h (nbc c _)
+  rcases hXMemList with hInBody | hInHalt
+  · -- X in bodyPerPC prefix
+    rw [List.mem_flatMap] at hInBody
+    obtain ⟨block, hBlockMem, hXInBlock⟩ := hInBody
+    simp only [id] at hXInBlock
+    rw [Array.mem_toList_iff, Array.mem_iff_getElem] at hBlockMem
+    obtain ⟨tac_pc, htac_pc_lt, hBlockEq⟩ := hBlockMem
+    rw [← hBlockEq] at hXInBlock
+    have htac_pc : tac_pc < p.size := spec.bodySize ▸ htac_pc_lt
+    -- hPcBound for the aggregator: pcMap l ≤ boundsS for any live branch
+    -- target l at p[tac_pc].
+    have hPcBound : ∀ l,
+        (p[tac_pc] = TAC.goto l ∨ ∃ be, p[tac_pc] = TAC.ifgoto be l) →
+        r.pcMap l ≤ r.boundsS := by
+      intro l hg
+      have hlLt : l < p.size :=
+        checkBranchTargets_to_labels_in_bounds hBranch htac_pc l hg
+      have hlLe : l ≤ p.size := Nat.le_of_lt hlLt
+      have h1 := pcMap_le_haltS spec l hlLe
+      exact Nat.le_trans h1 hHaltBound
+    -- Dispatch on TAC type at tac_pc
+    by_cases hPrint : ∃ fmt vs, p[tac_pc] = TAC.print fmt vs
+    · -- print: bodyPerPC[tac_pc] = saves ++ [.printCall lines] ++ restores
+      obtain ⟨lines, hEq⟩ := spec.printSaveRestore tac_pc htac_pc hPrint
+      rw [hEq] at hXInBlock
+      rw [List.mem_append, List.mem_append] at hXInBlock
+      apply close_nb
+      rcases hXInBlock with (hInSaves | hInPrint) | hInRestores
+      · exact entriesToSaves_no_branches _ X hInSaves
+      · exact printCall_no_branches lines X hInPrint
+      · exact entriesToRestores_no_branches _ X hInRestores
+    · -- non-print
+      have hNotPrint : ∀ fmt vs, p[tac_pc] ≠ TAC.print fmt vs := by
+        intro fmt vs h; exact hPrint ⟨fmt, vs, h⟩
+      by_cases hLib : isLibCallTAC p[tac_pc] = true
+      · -- lib-call: bodyPerPC[tac_pc] = saves ++ baseInstrs ++ restores
+        obtain ⟨baseInstrs, hGenInstr, hEq⟩ :=
+          spec.callSiteSaveRestore tac_pc htac_pc hLib
+        -- Derive hRC/hII from hGenInstr (verifiedGenInstr = none when either fails)
+        have hRC : r.layout.regConventionSafe = true := by
+          cases h : r.layout.regConventionSafe
+          · simp [verifiedGenInstr, h] at hGenInstr
+          · rfl
+        have hII : r.layout.isInjective = true := by
+          cases h : r.layout.isInjective
+          · simp [verifiedGenInstr, hRC, h] at hGenInstr
+          · rfl
+        rw [hEq] at hXInBlock
+        rw [List.mem_append, List.mem_append] at hXInBlock
+        rcases hXInBlock with (hInSaves | hInBase) | hInRestores
+        · exact close_nb (entriesToSaves_no_branches _ X hInSaves)
+        · -- X ∈ baseInstrs, apply aggregator.
+          have hLblBranch :
+              X = ArmInstr.b lbl ∨
+              (∃ rn, X = ArmInstr.cbz rn lbl) ∨
+              (∃ rn, X = ArmInstr.cbnz rn lbl) ∨
+              (∃ c, X = ArmInstr.bCond c lbl) := hXForm
+          exact verifiedGenInstr_branch_target_bounded r.layout r.pcMap p[tac_pc]
+            r.haltS r.divS r.boundsS p.arrayDecls (verifiedBoundsSafe p tac_pc)
+            hGenInstr hRC hII
+            hPcBound hHaltBound hDivBound X hInBase lbl hLblBranch
+        · exact close_nb (entriesToRestores_no_branches _ X hInRestores)
+      · -- normal case: bodyPerPC[tac_pc] = verifiedGenInstr output
+        have hNotLib : isLibCallTAC p[tac_pc] = false := by
+          cases h : isLibCallTAC p[tac_pc] <;> simp_all
+        have hGenInstr := spec.instrGen tac_pc htac_pc hNotLib hNotPrint
+        have hRC : r.layout.regConventionSafe = true := by
+          cases h : r.layout.regConventionSafe
+          · simp [verifiedGenInstr, h] at hGenInstr
+          · rfl
+        have hII : r.layout.isInjective = true := by
+          cases h : r.layout.isInjective
+          · simp [verifiedGenInstr, hRC, h] at hGenInstr
+          · rfl
+        have hLblBranch :
+            X = ArmInstr.b lbl ∨
+            (∃ rn, X = ArmInstr.cbz rn lbl) ∨
+            (∃ rn, X = ArmInstr.cbnz rn lbl) ∨
+            (∃ c, X = ArmInstr.bCond c lbl) := hXForm
+        exact verifiedGenInstr_branch_target_bounded r.layout r.pcMap p[tac_pc]
+          r.haltS r.divS r.boundsS p.arrayDecls (verifiedBoundsSafe p tac_pc)
+          hGenInstr hRC hII
+          hPcBound hHaltBound hDivBound X hXInBlock lbl hLblBranch
+  · -- X in haltSaveBlock suffix
+    rw [spec.haltSaveBlock_eq] at hInHalt
+    exact close_nb (genHaltSave_no_branches _ _ _ X hInHalt)
+
 end Phase6Main
