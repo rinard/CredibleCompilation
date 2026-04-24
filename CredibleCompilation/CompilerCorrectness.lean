@@ -1385,6 +1385,64 @@ theorem run_outOfBounds_iff (prog : Program) (fuel : Nat) :
     unfold run
     simp [List.foldl_nil, hd, hb]
 
+/-- With default (empty) inputs, `prog.run fuel = .halts σ am` iff `prog.interp fuel`
+    returns `some (σ, am)`.  (Backward uses `interp_some_implies_safe` to rule out
+    the unsafe branches of `run`.) -/
+theorem run_halts_iff (prog : Program) (fuel : Nat) (σ : Store) (am : ArrayMem) :
+    prog.run fuel = .halts σ am ↔ prog.interp fuel = some (σ, am) := by
+  classical
+  constructor
+  · intro h
+    unfold run at h
+    simp only [List.foldl_nil] at h
+    by_cases hd : prog.body.unsafeDiv fuel prog.initStore ArrayMem.init prog.arrayDecls
+    · simp [hd] at h
+    · by_cases hb : prog.body.unsafeBounds fuel prog.initStore ArrayMem.init prog.arrayDecls
+      · simp [hd, hb] at h
+      · simp only [hd, hb, if_false] at h
+        split at h
+        · rename_i σ' am' hi
+          cases h
+          unfold Program.interp; simp [List.foldl_nil, hi]
+        · cases h
+  · intro hi
+    have hi' : prog.body.interp fuel prog.initStore ArrayMem.init prog.arrayDecls = some (σ, am) := by
+      unfold Program.interp at hi; simp only [List.foldl_nil] at hi; exact hi
+    have hsafe := Stmt.interp_some_implies_safe prog.body fuel _ _ _ _ _ hi'
+    have ⟨hnd, hnb⟩ := (Stmt.safe_iff_not_unsafe prog.body fuel
+      prog.initStore ArrayMem.init prog.arrayDecls).mp hsafe
+    unfold run
+    simp [List.foldl_nil, hnd, hnb, hi']
+
+/-- With default (empty) inputs, `prog.run fuel = .outOfFuel` iff source is safe
+    at this fuel AND `prog.interp fuel = none`. -/
+theorem run_outOfFuel_iff (prog : Program) (fuel : Nat) :
+    prog.run fuel = .outOfFuel ↔
+      prog.body.safe fuel prog.initStore ArrayMem.init prog.arrayDecls ∧
+      prog.interp fuel = none := by
+  classical
+  constructor
+  · intro h
+    unfold run at h
+    simp only [List.foldl_nil] at h
+    by_cases hd : prog.body.unsafeDiv fuel prog.initStore ArrayMem.init prog.arrayDecls
+    · simp [hd] at h
+    · by_cases hb : prog.body.unsafeBounds fuel prog.initStore ArrayMem.init prog.arrayDecls
+      · simp [hd, hb] at h
+      · refine ⟨(Stmt.safe_iff_not_unsafe _ _ _ _ _).mpr ⟨hd, hb⟩, ?_⟩
+        unfold Program.interp; simp only [List.foldl_nil]
+        simp only [hd, hb, if_false] at h
+        split at h
+        · cases h
+        · rename_i hi; exact hi
+  · intro ⟨hsafe, hi⟩
+    have ⟨hnd, hnb⟩ := (Stmt.safe_iff_not_unsafe prog.body fuel
+      prog.initStore ArrayMem.init prog.arrayDecls).mp hsafe
+    have hi' : prog.body.interp fuel prog.initStore ArrayMem.init prog.arrayDecls = none := by
+      unfold Program.interp at hi; simp only [List.foldl_nil] at hi; exact hi
+    unfold run
+    simp [List.foldl_nil, hnd, hnb, hi']
+
 end Program
 
 -- ============================================================

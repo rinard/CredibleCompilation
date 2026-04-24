@@ -1466,7 +1466,7 @@ theorem arm_halts_implies_while_halts
     (hArm : ArmSteps r.bodyFlat (r.initArmState) s)
     (hPC : s.pc = r.haltFinal) :
     ∃ fuel σ_src am_src,
-      prog.interp fuel = some (σ_src, am_src) ∧
+      prog.run fuel = .halts σ_src am_src ∧
       ArmStateMatchesProgramState s r.layout prog.compileToTAC.observable σ_src am_src := by
   have htc := prog.wellFormed_typeCheck htcs
   have hSC : StepClosedInBounds (applyPasses prog.tyCtx passes prog.compileToTAC) :=
@@ -1481,7 +1481,7 @@ theorem arm_halts_implies_while_halts
       while_to_arm_correctness prog htcs passes hGen hhalt
     have heq := sentinel_state_unique spec hArm (.inl hPC) hArm' (.inl hPC')
     subst heq
-    exact ⟨fuel, σ_src, am_src, hinterp, hMatch⟩
+    exact ⟨fuel, σ_src, am_src, (Program.run_halts_iff prog fuel σ_src am_src).mpr hinterp, hMatch⟩
   | errorDiv σ_opt =>
     exfalso
     obtain ⟨am_opt, hErrDiv⟩ := hbeh
@@ -1666,16 +1666,15 @@ theorem arm_diverges_implies_while_diverges
     (hGen : verifiedGenerateAsm prog.tyCtx
       (applyPasses prog.tyCtx passes prog.compileToTAC) = .ok r)
     (hDiv : ArmDiverges r.bodyFlat (r.initArmState)) :
-    ∀ fuel, prog.interp fuel = none := by
+    ∀ fuel, prog.run fuel = .outOfFuel := by
   have htc := prog.wellFormed_typeCheck htcs
   have hInitEq : Store.typedInit prog.tyCtx = prog.initStore :=
     Program.typedInit_eq_initStore prog htc
+  have hts : TypedStore prog.tyCtx (Store.typedInit prog.tyCtx) := TypedStore.typedInit _
   have hSC : StepClosedInBounds (applyPasses prog.tyCtx passes prog.compileToTAC) :=
     applyPasses_preserves_stepClosedInBounds prog.tyCtx passes _
       (prog.compileToTAC_stepClosed htc)
   have spec := verifiedGenerateAsm_spec hGen
-  -- Helper: contradict any `ArmSteps init s_sent` ending at a sentinel PC via
-  -- ArmDiverges + state_uniqueness + sentinel_stuck.
   have sentinel_contradict : ∀ {s_sent : ArmState}
       (_hReach : ArmSteps r.bodyFlat (r.initArmState) s_sent)
       (_hPC : s_sent.pc = r.haltFinal ∨ s_sent.pc = r.divS ∨ s_sent.pc = r.boundsS),
@@ -1691,26 +1690,39 @@ theorem arm_diverges_implies_while_diverges
   obtain ⟨b, hbeh⟩ := has_behavior_init _ (Store.typedInit prog.tyCtx) hSC
   cases b with
   | halts σ_opt =>
+    exfalso
     obtain ⟨am_opt, hhalt⟩ := hbeh
     obtain ⟨_, _, _, s', _, hArm, _, hPC⟩ :=
       while_to_arm_correctness prog htcs passes hGen hhalt
-    exact (sentinel_contradict hArm (.inl hPC)).elim
+    exact sentinel_contradict hArm (.inl hPC)
   | errorDiv σ_opt =>
+    exfalso
     obtain ⟨am_opt, hErrDiv⟩ := hbeh
     obtain ⟨s', hArm, hPC⟩ :=
       (while_to_arm_div_preservation prog htcs passes hGen hErrDiv).2
-    exact (sentinel_contradict hArm (.inr (.inl hPC))).elim
+    exact sentinel_contradict hArm (.inr (.inl hPC))
   | errorBounds σ_opt =>
+    exfalso
     obtain ⟨am_opt, hErrBounds⟩ := hbeh
-    obtain ⟨s', hArm, hPC⟩ :=
+    obtain ⟨s', hArm, hPC'⟩ :=
       (while_to_arm_bounds_preservation prog htcs passes hGen hErrBounds).2
-    exact (sentinel_contradict hArm (.inr (.inr hPC))).elim
+    exact sentinel_contradict hArm (.inr (.inr hPC'))
   | typeErrors σ_opt =>
+    exfalso
     obtain ⟨am', hte⟩ := hbeh
     exact absurd hte (pipelined_no_typeError prog htcs passes σ_opt am')
   | diverges =>
     obtain ⟨f, hinf, hf0⟩ := hbeh
-    exact while_to_arm_divergence_preservation prog htcs passes hinf hf0
+    -- Source interp is none at all fuels (existing chain).
+    have hinterp_none : ∀ fuel, prog.interp fuel = none :=
+      while_to_arm_divergence_preservation prog htcs passes hinf hf0
+    -- Source is safe at all fuels (new chain via compileToTAC infinite trace).
+    obtain ⟨g, hg, hg0⟩ :=
+      applyPasses_preserves_diverge prog.tyCtx passes _ hts hinf hf0
+    have hsafe_all : ∀ fuel, prog.body.safe fuel prog.initStore ArrayMem.init prog.arrayDecls :=
+      source_safe_of_compileToTAC_diverges prog htcs hg (hInitEq ▸ hg0)
+    intro fuel
+    exact (Program.run_outOfFuel_iff prog fuel).mpr ⟨hsafe_all fuel, hinterp_none fuel⟩
 
 end Phase7Skeleton
 

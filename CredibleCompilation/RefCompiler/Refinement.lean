@@ -355,6 +355,37 @@ private theorem StepsN_to_RefStepsN {p : Prog} {c c' : Cfg} {n : Nat}
   | zero => exact h ▸ .refl
   | succ n ih => obtain ⟨c'', hs, hr⟩ := h; exact .step hs (ih hr)
 
+/-- If `prog.compileToTAC` has an infinite execution from the initial state, the
+    source program is safe at every fuel.  Suppose ∃ fuel where source is unsafe
+    (div or bounds); cause-faithful forward gives a finite compileToTAC trace
+    ending in errorDiv/errorBounds, contradicting infinite execution. -/
+theorem source_safe_of_compileToTAC_diverges (prog : Program) (htcs : prog.wellFormed = true)
+    {g : Nat → Cfg}
+    (hg : IsInfiniteExec prog.compileToTAC g)
+    (hg0 : g 0 = Cfg.run 0 prog.initStore ArrayMem.init) :
+    ∀ fuel, prog.body.safe fuel prog.initStore ArrayMem.init prog.arrayDecls := by
+  intro fuel
+  by_contra hns
+  rw [Stmt.not_safe_iff_unsafeDiv_or_unsafeBounds] at hns
+  -- Common machinery: take any finite reach-error trace, contradict infinite g
+  have contradict : ∀ {c_err : Cfg} (_hErr : c_err.isError),
+      (prog.compileToTAC ⊩ Cfg.run 0 prog.initStore ArrayMem.init ⟶* c_err) → False := by
+    intro c_err hErr hreach
+    obtain ⟨k, hk⟩ := hreach.to_RefStepsN
+    have hN := inf_exec_to_StepsN hg (k + 1)
+    rw [hg0] at hN
+    have hRefN : RefStepsN prog.compileToTAC (k + 1)
+        (Cfg.run 0 prog.initStore ArrayMem.init) (g (k + 1)) :=
+      StepsN_to_RefStepsN hN
+    have hsuffix := RefStepsN.det_prefix hk hRefN (by omega)
+    have heq : (k + 1) - k = 0 + 1 := by omega
+    exact RefStepsN.no_step_error hErr (heq ▸ hsuffix)
+  rcases hns with hud | hub
+  · obtain ⟨σ', am', hreach⟩ := whileToTAC_reaches_errorDiv prog fuel htcs hud
+    exact contradict (by simp [Cfg.isError]) hreach
+  · obtain ⟨σ', am', hreach⟩ := whileToTAC_reaches_errorBounds prog fuel htcs hub
+    exact contradict (by simp [Cfg.isError]) hreach
+
 /-- Cast `RefStepsN` along an equality of step counts. -/
 private theorem refStepsN_cast' {p : Prog} {n n' : Nat} {c c' : Cfg}
     (h : RefStepsN p n c c') (heq : n = n') : RefStepsN p n' c c' := heq ▸ h
