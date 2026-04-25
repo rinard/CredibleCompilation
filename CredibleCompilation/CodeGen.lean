@@ -6473,14 +6473,31 @@ def standardPasses (tyCtx : TyCtx) : List (String × (Prog → ECertificate)) :=
     ("DCE", DCEOpt.optimize tyCtx),
     ("RegAlloc", RegAllocOpt.optimize tyCtx) ]
 
+/-- **Verified core of the compiler driver.**
+
+    From a parsed `Program` AST, runs the post-parse compilation pipeline:
+    well-formedness check, AST → TAC, optimization passes (or none if `noOpt`),
+    verified ARM codegen.  Returns a `VerifiedAsmResult` carrying the proof
+    payload (`GenAsmSpec`), or an error string if the program is not well-formed.
+
+    This is the function the connecting top-level theorem
+    `compileProgramAst_correctness` (in `PipelineCorrectness.lean`) reasons
+    about: it bridges the driver's call sequence to `while_to_arm_correctness`. -/
+def compileProgramAst (prog : Program) (noOpt : Bool := false) :
+    Except String VerifiedAsmResult :=
+  if prog.wellFormed then
+    verifiedGenerateAsm prog.tyCtx
+      (applyPasses prog.tyCtx (if noOpt then [] else standardPasses prog.tyCtx)
+        prog.compileToTAC)
+  else
+    .error "program is not well-formed"
+
 def compileToAsmWith (input : String) (noOpt : Bool) : Except String String := do
   let prog ← parseProgram input
-  if !prog.wellFormed then .error "program failed type check (frontend)"
-  let tac := prog.compileToTAC
-  let tyCtx := prog.tyCtx
-  let passes := if noOpt then [] else standardPasses tyCtx
-  let opt := applyPasses tyCtx passes tac
-  generateAsm tyCtx opt
+  let r ← compileProgramAst prog noOpt
+  let opt := applyPasses prog.tyCtx
+    (if noOpt then [] else standardPasses prog.tyCtx) prog.compileToTAC
+  formatVerifiedAsm r opt
 
 /-- **Structured compilation pipeline.**  Each stage maps directly to a
     construct used in the top-level correctness theorems
@@ -6510,17 +6527,11 @@ def compilePipeline (input : String) (noOpt : Bool := false) :
     Except String String := do
   -- Stage 1: parse (unverified)
   let prog ← parseProgram input
-  -- Stage 2: well-formedness check (precondition of all top-level theorems)
-  if !prog.wellFormed then .error "program is not well-formed"
-  let tyCtx := prog.tyCtx
-  -- Stage 3: AST → TAC (verified)
-  let tac := prog.compileToTAC
-  -- Stage 4: optimizations (verified, certificate-checked)
-  let optPasses := if noOpt then [] else standardPasses tyCtx
-  let opt := applyPasses tyCtx optPasses tac
-  -- Stage 5: TAC → verified ASM core (verified)
-  let r ← verifiedGenerateAsm tyCtx opt
+  -- Stages 2-5: verified core (well-formedness, AST→TAC, optimizations, verified ASM)
+  let r ← compileProgramAst prog noOpt
   -- Stage 6: wrap + pretty-print (unverified)
+  let opt := applyPasses prog.tyCtx
+    (if noOpt then [] else standardPasses prog.tyCtx) prog.compileToTAC
   formatVerifiedAsm r opt
 
 def compileToAsm (input : String) : Except String String :=

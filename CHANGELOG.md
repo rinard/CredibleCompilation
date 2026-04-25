@@ -4,6 +4,55 @@ Chronological record of what was built and why, to reconstruct the sequence of d
 
 ---
 
+## Driver-to-theorem bridge: connect compiler driver to top-level correctness (2026-04-25)
+
+Refactored the compiler driver to expose its post-parse verified core as a
+named function, then proved four connecting theorems linking it to the
+existing top-level correctness theorems.
+
+### Driver refactor (CodeGen.lean)
+
+New definition `compileProgramAst : Program → Bool → Except String VerifiedAsmResult`
+runs well-formedness check + AST→TAC + optimizations + verified ARM codegen.
+This is precisely the call sequence that `while_to_arm_correctness` reasons
+about; exposing it as a function lets a theorem quantify over its result.
+
+`compilePipeline` and `compileToAsmWith` (the user-facing string-to-string
+drivers) now both delegate to `compileProgramAst` and only add the
+unverified parser front-end and `formatVerifiedAsm` back-end as thin
+wrappers.  No behavior change for callers (`Compiler.lean main`, tests).
+
+### Connecting theorems (PipelineCorrectness.lean § 6b)
+
+Four parallel bridges, one per behavior:
+
+- `compileProgramAst_correctness` — driver succeeds + optimized TAC halts ⇒
+  source halts and ARM matches observables (via `while_to_arm_correctness`).
+- `compileProgramAst_div_preservation` — driver succeeds + optimized TAC
+  reaches `errorDiv` ⇒ source unsafe-div + ARM at `divS` sentinel.
+- `compileProgramAst_bounds_preservation` — same shape for `errorBounds`.
+- `compileProgramAst_divergence_preservation` — driver succeeds + optimized
+  TAC diverges ⇒ source diverges at every fuel.
+
+Each proof is 4 lines: `unfold`, `split`, apply the underlying theorem on
+the `wellFormed = true` branch, discharge the `.error = .ok r` contradiction
+on the false branch.  Zero new sorrys.
+
+### What this closes
+
+The driver and the top-level theorems are now linked by a named theorem
+that can be cited from documentation and external tools.  The
+verified/unverified boundary is correctly placed at the parser: theorems
+take a `Program` AST, drivers wrap them with the partial parser and the
+unverified `formatVerifiedAsm` pretty-printer.
+
+The halting/error/divergence hypotheses remain — these theorems are
+refinement-direction (optimized TAC behavior ⇒ source behavior), not
+forward (source behavior ⇒ ARM behavior).  Forward-direction guarantees
+would require additional preservation lemmas not in scope here.
+
+---
+
 ## Disjunction elimination — Stages 2–5: cause-faithful forward compilation (2026-04-24)
 
 Completes the disjunction-elimination refactor begun in Stage 1.  All 4

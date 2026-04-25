@@ -583,6 +583,111 @@ theorem while_to_arm_divergence_preservation
   exact whileToTAC_refinement prog htcs .diverges hdiv_init
 
 -- ============================================================
+-- § 6b. Connecting the driver to top-level correctness
+-- ============================================================
+
+/-- **Driver-to-theorem bridge: halts.**
+
+    The compiler driver `compileProgramAst` runs the verified post-parse
+    pipeline (well-formedness check → AST→TAC → optimizations → verified
+    ARM codegen).  This theorem connects a successful driver run to the
+    top-level `while_to_arm_correctness` guarantee:
+
+    *If the driver returned `.ok r` and the optimized TAC halts, then the
+    source `prog.interp` halts and the ARM program reaches a final state
+    matching the source observables.*
+
+    The proof is a thin wrapper: it extracts `prog.wellFormed = true` from
+    the driver's success case, then applies `while_to_arm_correctness`. -/
+theorem compileProgramAst_correctness
+    {prog : Program} {noOpt : Bool} {r : VerifiedAsmResult}
+    (hDriver : compileProgramAst prog noOpt = .ok r)
+    {σ_opt : Store} {am_opt : ArrayMem}
+    (hHalt : haltsWithResult
+              (applyPasses prog.tyCtx
+                (if noOpt then [] else standardPasses prog.tyCtx)
+                prog.compileToTAC)
+              0 (Store.typedInit prog.tyCtx) σ_opt ArrayMem.init am_opt) :
+    ∃ fuel σ_src am_src s',
+      prog.interp fuel = some (σ_src, am_src) ∧
+      ArmSteps r.bodyFlat
+        { regs := fun _ => 0, fregs := fun _ => 0, stack := fun _ => 0,
+          pc := r.pcMap 0, flags := ⟨0, 0⟩ } s' ∧
+      ArmStateMatchesProgramState s' r.layout prog.compileToTAC.observable σ_src am_src ∧
+      s'.pc = r.haltFinal := by
+  unfold compileProgramAst at hDriver
+  split at hDriver
+  · rename_i hwf
+    exact while_to_arm_correctness prog hwf _ hDriver hHalt
+  · simp at hDriver
+
+/-- **Driver-to-theorem bridge: division-by-zero.**
+
+    If the driver succeeds and the optimized TAC reaches `errorDiv`, then
+    the source program is unsafe at some fuel and the ARM program steps to
+    the verified `divS` sentinel. -/
+theorem compileProgramAst_div_preservation
+    {prog : Program} {noOpt : Bool} {r : VerifiedAsmResult}
+    (hDriver : compileProgramAst prog noOpt = .ok r)
+    {σ_err : Store} {am_err : ArrayMem}
+    (hErr : (applyPasses prog.tyCtx
+              (if noOpt then [] else standardPasses prog.tyCtx)
+              prog.compileToTAC) ⊩
+        Cfg.run 0 (Store.typedInit prog.tyCtx)
+          ArrayMem.init ⟶* Cfg.errorDiv σ_err am_err) :
+    (∃ fuel, prog.body.unsafeDiv fuel prog.initStore ArrayMem.init prog.arrayDecls) ∧
+    (∃ s', ArmSteps r.bodyFlat
+      { regs := fun _ => 0, fregs := fun _ => 0, stack := fun _ => 0,
+        pc := r.pcMap 0, flags := ⟨0, 0⟩ } s' ∧
+      s'.pc = r.divS) := by
+  unfold compileProgramAst at hDriver
+  split at hDriver
+  · rename_i hwf
+    exact while_to_arm_div_preservation prog hwf _ hDriver hErr
+  · simp at hDriver
+
+/-- **Driver-to-theorem bridge: array-bounds error.** -/
+theorem compileProgramAst_bounds_preservation
+    {prog : Program} {noOpt : Bool} {r : VerifiedAsmResult}
+    (hDriver : compileProgramAst prog noOpt = .ok r)
+    {σ_err : Store} {am_err : ArrayMem}
+    (hErr : (applyPasses prog.tyCtx
+              (if noOpt then [] else standardPasses prog.tyCtx)
+              prog.compileToTAC) ⊩
+        Cfg.run 0 (Store.typedInit prog.tyCtx)
+          ArrayMem.init ⟶* Cfg.errorBounds σ_err am_err) :
+    (∃ fuel, prog.body.unsafeBounds fuel prog.initStore ArrayMem.init prog.arrayDecls) ∧
+    (∃ s', ArmSteps r.bodyFlat
+      { regs := fun _ => 0, fregs := fun _ => 0, stack := fun _ => 0,
+        pc := r.pcMap 0, flags := ⟨0, 0⟩ } s' ∧
+      s'.pc = r.boundsS) := by
+  unfold compileProgramAst at hDriver
+  split at hDriver
+  · rename_i hwf
+    exact while_to_arm_bounds_preservation prog hwf _ hDriver hErr
+  · simp at hDriver
+
+/-- **Driver-to-theorem bridge: divergence.**
+
+    If the driver succeeds and the optimized TAC diverges, then the source
+    While program diverges (does not terminate at any fuel). -/
+theorem compileProgramAst_divergence_preservation
+    {prog : Program} {noOpt : Bool} {r : VerifiedAsmResult}
+    (hDriver : compileProgramAst prog noOpt = .ok r)
+    {f : Nat → Cfg}
+    (hDiv : IsInfiniteExec
+      (applyPasses prog.tyCtx
+        (if noOpt then [] else standardPasses prog.tyCtx)
+        prog.compileToTAC) f)
+    (hf0 : f 0 = Cfg.run 0 (Store.typedInit prog.tyCtx) ArrayMem.init) :
+    ∀ fuel, prog.interp fuel = none := by
+  unfold compileProgramAst at hDriver
+  split at hDriver
+  · rename_i hwf
+    exact while_to_arm_divergence_preservation prog hwf _ hDiv hf0
+  · simp at hDriver
+
+-- ============================================================
 -- § 7. Totality of generateAsm on the optimized pipeline
 -- ============================================================
 
