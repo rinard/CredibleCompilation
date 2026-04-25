@@ -108,7 +108,7 @@ C
       N = 1000
       DW = 0.2D0
 C
-      DO 500 REP = 1, 4000000
+      DO 500 REP = 1, 2260000
          DO 200 K = 1, N
             DI = Y(K) - G(K)/(XX(K) + DK)
             DN = DW

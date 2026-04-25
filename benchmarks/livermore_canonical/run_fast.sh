@@ -1,13 +1,13 @@
 #!/bin/bash
 #
 # Fast correctness sweep for canonical Livermore Loops.
-# Reduces rep counts by $DIVISOR (default 1000) so each binary runs in <1s,
-# then runs every variant exactly once and compares the printed checksum
-# across .f / .c / .w (FIL).
+# Reduces rep counts by $DIVISOR (default 1000), then builds and runs the
+# three optimized variants exactly once each (gfortran -O2, clang -O2, FIL-O2)
+# and compares the printed checksum across .f / .c / .w.
 #
 # Usage:  ./run_fast.sh                 — all kernels, divisor 1000
 #         ./run_fast.sh k03_dot         — one kernel
-#         DIVISOR=100 ./run_fast.sh     — override divisor
+#         DIVISOR=10000 ./run_fast.sh   — override divisor
 #
 set -euo pipefail
 
@@ -91,7 +91,6 @@ open(sys.argv[2], 'w').write(text)
   fi
 
   if [ -f "$cfile" ]; then
-    # Reduce #define NREPS NNNN
     python3 -c "
 import re, sys
 text = open(sys.argv[1]).read()
@@ -104,10 +103,9 @@ open(sys.argv[2], 'w').write(text)
   fi
 done
 
-# Make signel.h available to the C build path
 cp "$SCRIPT_DIR/signel.h" "$FAST_DIR/src/signel.h" 2>/dev/null || true
 
-# ── compile ────────────────────────────────────────────────────
+# ── compile (only the three optimized variants) ────────────────
 
 echo "Compiling …"
 compile_fail=()
@@ -117,20 +115,18 @@ for name in "${KERNELS[@]}"; do
   cfile="$FAST_DIR/src/${name}.c"
 
   if [ -f "$ffile" ]; then
-    gfortran -O0 -o "$FAST_DIR/${name}_f_O0" "$ffile" 2>/dev/null || true
-    gfortran -O1 -o "$FAST_DIR/${name}_f_O1" "$ffile" 2>/dev/null || true
-    gfortran -O2 -o "$FAST_DIR/${name}_f_O2" "$ffile" 2>/dev/null || true
+    gfortran -O2 -o "$FAST_DIR/${name}_f_O2" "$ffile" 2>/dev/null \
+      || compile_fail+=("$name (f-O2)")
   fi
 
   if [ -f "$cfile" ]; then
-    cc -O0 -lm -o "$FAST_DIR/${name}_c_O0" "$cfile" 2>/dev/null || true
-    cc -O1 -lm -o "$FAST_DIR/${name}_c_O1" "$cfile" 2>/dev/null || true
-    cc -O2 -lm -o "$FAST_DIR/${name}_c_O2" "$cfile" 2>/dev/null || true
+    cc -O2 -lm -o "$FAST_DIR/${name}_c_O2" "$cfile" 2>/dev/null \
+      || compile_fail+=("$name (c-O2)")
   fi
 
   if [ -f "$wfile" ]; then
-    "$COMPILER" "$wfile" -O0 -o "$FAST_DIR/${name}_wl_O0" 2>/dev/null || compile_fail+=("$name (wl-O0)")
-    "$COMPILER" "$wfile"     -o "$FAST_DIR/${name}_wl_opt" 2>/dev/null || compile_fail+=("$name (wl-opt)")
+    "$COMPILER" "$wfile" -o "$FAST_DIR/${name}_wl_opt" 2>/dev/null \
+      || compile_fail+=("$name (wl-opt)")
   fi
 done
 
@@ -139,13 +135,13 @@ if [ ${#compile_fail[@]} -gt 0 ]; then
   printf '       %s\n' "${compile_fail[@]}"
 fi
 
-# ── run and compare ────────────────────────────────────────────
+# ── run once and compare ───────────────────────────────────────
 
 echo ""
-printf "%-22s  %7s %7s %7s %7s %7s %7s %7s %7s   %s\n" \
-       "Kernel" "F-O0" "F-O1" "F-O2" "C-O0" "C-O1" "C-O2" "FIL" "FIL-O2" "OK?"
-printf "%-22s  %7s %7s %7s %7s %7s %7s %7s %7s   %s\n" \
-       "──────────────────" "──────" "──────" "──────" "──────" "──────" "──────" "──────" "──────" "──────"
+printf "%-22s  %8s %8s %8s   %s\n" \
+       "Kernel" "F-O2" "C-O2" "FIL-O2" "OK?"
+printf "%-22s  %8s %8s %8s   %s\n" \
+       "──────────────────" "────────" "────────" "────────" "──────"
 
 pass=0; fail=0; skip=0
 
@@ -162,16 +158,14 @@ for name in "${KERNELS[@]}"; do
       echo "—"
     fi
   }
-  T_f0=$(run_one f_O0); T_f1=$(run_one f_O1); T_f2=$(run_one f_O2)
-  T_c0=$(run_one c_O0); T_c1=$(run_one c_O1); T_c2=$(run_one c_O2)
-  T_w0=$(run_one wl_O0); T_wo=$(run_one wl_opt)
+  T_f2=$(run_one f_O2)
+  T_c2=$(run_one c_O2)
+  T_wo=$(run_one wl_opt)
 
   OUT_f2="$FAST_DIR/${name}_f_O2.out"
   OUT_c2="$FAST_DIR/${name}_c_O2.out"
-  OUT_w0="$FAST_DIR/${name}_wl_O0.out"
   OUT_wo="$FAST_DIR/${name}_wl_opt.out"
 
-  # Cross-language correctness on the first numeric token of each output.
   match=$(python3 -c "
 import re, sys
 num_re = r'[-+]?(?:\d+\.\d*|\.\d+|\d+)[eEdD][-+]?\d+|[-+]?\d+\.\d*|[-+]?\.\d+|[-+]?\d+'
@@ -180,10 +174,8 @@ def first(path):
     try:
         for line in open(path).read().splitlines():
             s = line.strip().lower()
-            # Skip C's 'elapsed: ...' timing lines entirely
             if s.startswith(('elapsed', 'time:', 'time ')):
                 continue
-            # Strip leading 'kNN ...:' kernel-tag prefix that Fortran prints
             line = re.sub(r'^\s*k\d+[^=]*=', '', line, count=1)
             for m in re.finditer(num_re, line):
                 tok = m.group(0).replace('d','e').replace('D','E')
@@ -198,7 +190,6 @@ def first(path):
 paths = {
     'F-O2':  '$OUT_f2',
     'C-O2':  '$OUT_c2',
-    'FIL':   '$OUT_w0',
     'FIL-O2':'$OUT_wo',
 }
 vals = {k: first(p) for k,p in paths.items() if p}
@@ -228,8 +219,8 @@ else:
     ((fail++))
   fi
 
-  printf "%-22s  %7s %7s %7s %7s %7s %7s %7s %7s   %s\n" \
-    "$name" "$T_f0" "$T_f1" "$T_f2" "$T_c0" "$T_c1" "$T_c2" "$T_w0" "$T_wo" "$match"
+  printf "%-22s  %8s %8s %8s   %s\n" \
+    "$name" "$T_f2" "$T_c2" "$T_wo" "$match"
 done
 
 echo ""

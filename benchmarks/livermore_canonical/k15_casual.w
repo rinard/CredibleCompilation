@@ -81,7 +81,7 @@ while (j <= 7) {
 
 n := 101;
 rep := 1;
-while (rep <= 600000) {
+while (rep <= 4300000) {
   ng := 7;
   nz := n;
   ar := 0.053;

@@ -47,7 +47,7 @@ C
 C
 C     Kernel loop (canonical: PX(i,j) += VY(i,k) * CX(k,j))
 C
-      DO 500 REP = 1, 100000
+      DO 500 REP = 1, 425000
          DO 300 K = 1, 25
             DO 200 I = 1, 25
                DO 100 J = 1, N

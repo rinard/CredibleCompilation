@@ -61,7 +61,7 @@ C
 C     Kernel loop
 C
       N = 995
-      DO 200 REP = 1, 20000000
+      DO 200 REP = 1, 17000000
           DO 90 K = 1, N
               X(K) = U(K) + R*(Z(K) + R*Y(K)) +
      &               T*(U(K+3) + R*(U(K+2) + R*U(K+1)) +

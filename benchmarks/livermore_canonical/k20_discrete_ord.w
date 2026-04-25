@@ -121,7 +121,7 @@ while (k <= 1001) {
 
 dw := 0.2;
 rep := 1;
-while (rep <= 4000000) {
+while (rep <= 2260000) {
   k := 1;
   while (k <= 1000) {
     di := y[k] - g[k] / (xx[k] + dk);

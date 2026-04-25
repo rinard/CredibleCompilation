@@ -13,7 +13,7 @@
 #define NJ    101
 #define NK    25
 #define NI    25
-#define NREPS 100000
+#define NREPS 425000
 
 #define PX(i,j) px[((j)-1)*25  + (i)]
 #define VY(i,k) vy[((k)-1)*101 + (i)]

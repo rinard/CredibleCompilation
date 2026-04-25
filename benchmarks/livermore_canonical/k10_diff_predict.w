@@ -34,7 +34,7 @@ while (j <= 101) {
 };
 
 rep := 1;
-while (rep <= 6000000) {
+while (rep <= 52000000) {
   k := 1;
   while (k <= 101) {
     ar             := cx[(k - 1) * 25 + 5];

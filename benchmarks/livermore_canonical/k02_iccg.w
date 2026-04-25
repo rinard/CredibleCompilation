@@ -14,7 +14,7 @@ while (k <= 2050) {
 };
 
 rep := 1;
-while (rep <= 1500000) {
+while (rep <= 7500000) {
   fuzz := 0.001234500;
   buzz := 1.0 + fuzz;
   fizz := 1.1 * fuzz;

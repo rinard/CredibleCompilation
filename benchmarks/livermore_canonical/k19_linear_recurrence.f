@@ -55,7 +55,7 @@ C
 C
 C     Kernel loop (canonical: forward sweep then backward sweep)
 C
-      DO 500 REP = 1, 13000000
+      DO 500 REP = 1, 39200000
          STB5 = STB5_INIT
          KB5I = 0
 C        Forward sweep (DO 191)

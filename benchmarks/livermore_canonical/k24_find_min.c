@@ -8,7 +8,7 @@
 #include "signel.h"
 
 #define N     1001
-#define NREPS 30600000
+#define NREPS 40750000
 
 int main(void) {
     double x[1002];

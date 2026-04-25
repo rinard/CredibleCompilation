@@ -46,7 +46,7 @@ C
 C     Kernel loop
 C
       N = 101
-      DO 200 REP = 1, 6000000
+      DO 200 REP = 1, 58000000
           DO 90 K = 1, N
               PX(1,K) = DM28*PX(13,K) + DM27*PX(12,K)
      &                + DM26*PX(11,K) + DM25*PX(10,K)

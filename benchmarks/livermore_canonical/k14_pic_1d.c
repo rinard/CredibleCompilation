@@ -6,7 +6,7 @@
 #include "signel.h"
 
 #define N     1001
-#define NREPS 14000000
+#define NREPS 2700000
 
 int main(void) {
     static double vx[1002], xx[1002], xi[1002], ex1[1002], dex1[1002];

@@ -36,7 +36,7 @@ C
 C     Kernel loop
 C
       N = 101
-      DO 200 REP = 1, 6000000
+      DO 200 REP = 1, 52000000
           DO 90 K = 1, N
               AR       =      CX(5,K)
               BR       = AR - PX(5,K)

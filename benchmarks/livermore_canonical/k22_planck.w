@@ -45,7 +45,7 @@ while (k <= 101) {
 };
 
 rep := 1;
-while (rep <= 48640000) {
+while (rep <= 51900000) {
   expmax := 20.0;
   fw := 1.0;
   u[101] := 0.99 * expmax * v[101];

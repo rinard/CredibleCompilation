@@ -11,7 +11,7 @@
 #include "signel.h"
 
 #define NTOT  (101 * 7)
-#define NREPS 8000000
+#define NREPS 10200000
 
 #define ZA(k,j) za[((j)-1)*101 + (k)]
 #define ZB(k,j) zb[((j)-1)*101 + (k)]

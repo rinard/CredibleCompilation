@@ -75,7 +75,7 @@ C
 C     Kernel 15 body (verbatim from canonical lines 297-329)
 C     Arithmetic IFs translated to cascaded IF/THEN/ELSE.
 C
-      DO 500 REP = 1, 600000
+      DO 500 REP = 1, 4300000
          NG = 7
          NZ = N
          AR = 0.053D0

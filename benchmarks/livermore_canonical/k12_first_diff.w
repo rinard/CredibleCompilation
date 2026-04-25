@@ -14,7 +14,7 @@ while (k <= 1001) {
 };
 
 rep := 1;
-while (rep <= 35000000) {
+while (rep <= 41000000) {
   k := 1;
   while (k <= 1000) {
     x[k] := y[k + 1] - y[k];

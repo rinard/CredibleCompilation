@@ -7,7 +7,7 @@
 #include "signel.h"
 
 #define N     64
-#define NREPS 2600000
+#define NREPS 28000000
 
 /* Column-major 1-based: arr(j,k) = arr[(k-1)*Nfast + j] */
 #define P(j,k) p[((k)-1)*4 + (j)]

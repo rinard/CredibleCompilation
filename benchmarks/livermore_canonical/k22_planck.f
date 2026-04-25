@@ -56,7 +56,7 @@ C
 C
       N = 101
 C
-      DO 500 REP = 1, 48640000
+      DO 500 REP = 1, 51900000
          EXPMAX = 20.0D0
          FW = 1.0D0
          U(N) = 0.99D0 * EXPMAX * V(N)

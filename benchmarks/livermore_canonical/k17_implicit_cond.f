@@ -72,7 +72,7 @@ C
 C
 C     Kernel 17 body (verbatim from canonical lines 394-427)
 C
-      DO 500 REP = 1, 23000000
+      DO 500 REP = 1, 39000000
          DW    = 5.0000D0 / 3.0000D0
          FW    = 1.0000D0 / 3.0000D0
          TW    = 1.0300D0 / 3.0700D0

@@ -8,7 +8,7 @@
 #include "signel.h"
 
 #define N     995
-#define NREPS 20000000
+#define NREPS 17000000
 
 int main(void) {
     /* U needs k+6 access; allocate [1002] but only fill 1..1001 */

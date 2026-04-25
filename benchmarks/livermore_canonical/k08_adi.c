@@ -6,7 +6,7 @@
 #include "signel.h"
 
 #define N     100
-#define NREPS 1000000
+#define NREPS 13300000
 
 /* 1-based Fortran column-major: U(arr,k1,k2,k3) with dims (5,101,2) */
 #define U(arr,k1,k2,k3) arr[((k3)-1)*505 + ((k2)-1)*5 + (k1)]

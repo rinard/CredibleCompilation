@@ -54,7 +54,7 @@ C
 C
 C     Kernel 16 body (canonical state machine, lines 357-385)
 C
-      DO 500 REP = 1, 162000000
+      DO 500 REP = 1, 400000000
          M  = 1
          I1 = M
          K2 = 0

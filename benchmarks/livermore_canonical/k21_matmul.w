@@ -39,7 +39,7 @@ while (j <= 101) {
 };
 
 rep := 1;
-while (rep <= 100000) {
+while (rep <= 425000) {
   k := 1;
   while (k <= 25) {
     i := 1;

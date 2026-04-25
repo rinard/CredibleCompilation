@@ -44,7 +44,7 @@ while (k <= 101) {
 };
 
 rep := 1;
-while (rep <= 13000000) {
+while (rep <= 39200000) {
   stb5 := stb5_init;
   kb5i := 0;
   k := 1;

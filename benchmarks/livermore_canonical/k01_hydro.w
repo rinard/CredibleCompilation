@@ -40,7 +40,7 @@ while (k <= 1012) {
 };
 
 rep := 1;
-while (rep <= 26000000) {
+while (rep <= 38000000) {
   k := 1;
   while (k <= 1001) {
     x[k] := q + y[k] * (r * z[k + 10] + t * z[k + 11]);

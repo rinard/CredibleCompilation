@@ -51,7 +51,7 @@ while (k <= 1001) {
 };
 
 rep := 1;
-while (rep <= 20000000) {
+while (rep <= 17000000) {
   k := 1;
   while (k <= 995) {
     x[k] := u[k] + r * (z[k] + r * y[k])

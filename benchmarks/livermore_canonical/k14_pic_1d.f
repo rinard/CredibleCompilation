@@ -78,7 +78,7 @@ C
 C
 C     Kernel 14 body (verbatim from canonical lines 243-264)
 C
-      DO 500 REP = 1, 14000000
+      DO 500 REP = 1, 2700000
          DO 141 K = 1, N
             VX(K)   = 0.0D0
             XX(K)   = 0.0D0

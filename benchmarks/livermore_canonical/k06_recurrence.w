@@ -14,7 +14,7 @@ while (k <= 4096) {
 };
 
 rep := 1;
-while (rep <= 30000) {
+while (rep <= 10000000) {
   i := 1;
   while (i <= 64) {
     w[i] := 0.0;

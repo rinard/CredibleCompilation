@@ -78,7 +78,7 @@ C
 C     Kernel loop
 C
       N = 100
-      DO 200 REP = 1, 1000000
+      DO 200 REP = 1, 13300000
           NL1 = 1
           NL2 = 2
           FW = 2.0D0
