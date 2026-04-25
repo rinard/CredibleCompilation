@@ -7,3 +7,8 @@ benchmarks/livermore/build_bench5/
 benchmarks/livermore/build_opt_compare/
 benchmarks/livermore/bench_results.txt
 benchmarks/livermore/__pycache__/
+benchmarks/livermore_canonical/build/
+benchmarks/livermore_canonical/build_fast/
+benchmarks/livermore_canonical/build_full/
+benchmarks/livermore_canonical/build_opt_compare/
+benchmarks/livermore_canonical/__pycache__/

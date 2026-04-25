@@ -1,7 +1,11 @@
-/* K22 — Planckian Distribution (1-based indexing, matches Fortran exactly)
-   Fortran: DIMENSION U(1001), V(1001), X(1001), Y(1001), W(1001), N=101
-   U(N) = 0.99*EXPMAX*V(N)
-   DO K=1,N: Y(K) = U(K)/V(K); W(K) = X(K)/(DEXP(Y(K))-1.0) */
+/* K22 -- Planckian Distribution (canonical, 1-based indexing)
+   Canonical body:
+     EXPMAX = 20.0
+     fw = 1.0
+     U(n) = 0.99*EXPMAX*V(n)
+     DO 22 k=1,n:
+       Y(k) = U(k)/V(k)
+       W(k) = X(k)/(EXP(Y(k)) - fw) */
 #include <stdio.h>
 #include <math.h>
 #include <time.h>
@@ -11,28 +15,27 @@
 #define NREPS 48640000
 
 int main(void) {
-    double u[1002], v[1002], x[1002], y[1002], w[1002];
+    double u[102], v[102], w[102], x[102], y[102];
 
-    signel(u+1, 1001);
-    signel(v+1, 1001);
-    signel(x+1, 1001);
+    signel(u+1, 101);
+    signel(v+1, 101);
+    signel(x+1, 101);
     /* Ensure v[k] > 0 (used as divisor) */
-    for (long k = 1; k <= 1001; k++)
+    for (long k = 1; k <= 101; k++)
         if (v[k] <= 0.0) v[k] = 1.0;
-    /* Ensure x[k] > 0 for exp-1 divisor */
-    for (long k = 1; k <= 1001; k++)
-        if (x[k] <= 0.0) x[k] = 0.01;
+    for (long k = 1; k <= 101; k++) { y[k] = 0.0; w[k] = 0.0; }
 
     struct timespec t0, t1;
     clock_gettime(CLOCK_MONOTONIC, &t0);
 
-    double expmax;
+    double expmax, fw;
     for (long rep = 0; rep < NREPS; rep++) {
         expmax = 20.0;
+        fw = 1.0;
         u[N] = 0.99 * expmax * v[N];
         for (long k = 1; k <= N; k++) {
             y[k] = u[k] / v[k];
-            w[k] = x[k] / (exp(y[k]) - 1.0);
+            w[k] = x[k] / (exp(y[k]) - fw);
         }
     }
 

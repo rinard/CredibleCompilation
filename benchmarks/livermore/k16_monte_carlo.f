@@ -30,11 +30,11 @@ C     Initialize arrays (simplified SIGNEL)
       ZONE(1) = 5
 
 C     Spacer init for r,s,t (simplified)
-      R = 0.1D0
-      S = 0.1D0
-      T = 0.1D0
+      R = 0.05D0
+      S = 0.05D0
+      T = 0.05D0
 
-      DO 500 IREP = 1, 694000
+      DO 500 IREP = 1, 162000000
          I1 = 1
          M  = 1
          K2 = 0

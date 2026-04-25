@@ -9,9 +9,9 @@ array d[301] : float, plan[301] : float, zone[301] : int;
 n := 75;
 ii := n / 3;
 lb := ii + ii;
-r := 0.1;
-s := 0.1;
-t := 0.1;
+r := 0.05;
+s := 0.05;
+t := 0.05;
 
 fuzz := 0.001234500;
 buzz := 1.0 + fuzz;
@@ -33,7 +33,7 @@ while (i <= 300) {
 zone[1] := 5;
 
 rep := 1;
-while (rep <= 694000) {
+while (rep <= 162000000) {
   i1 := 1;
   m := 1;
   k2 := 0;

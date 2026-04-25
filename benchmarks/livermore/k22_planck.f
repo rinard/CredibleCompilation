@@ -65,7 +65,7 @@ C
 C
 C     Kernel 22: Planckian Distribution
 C
-      DO 500 IREP = 1, 760000
+      DO 500 IREP = 1, 48640000
          EXPMAX = 20.0D0
          U(N) = 0.99D0 * EXPMAX * V(N)
          DO 200 K = 1, N

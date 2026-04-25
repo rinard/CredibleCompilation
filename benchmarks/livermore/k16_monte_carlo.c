@@ -7,7 +7,7 @@
 #include "signel.h"
 
 #define N     75
-#define NREPS 694000
+#define NREPS 162000000
 
 int main(void) {
     double d[301], plan[301];
@@ -20,7 +20,7 @@ int main(void) {
         zone[i] = (i - 1) % (N + 1);
     zone[1] = 5;
 
-    double r = 0.1, s = 0.1, t = 0.1;
+    double r = 0.05, s = 0.05, t = 0.05;
 
     struct timespec t0, t1;
     clock_gettime(CLOCK_MONOTONIC, &t0);
