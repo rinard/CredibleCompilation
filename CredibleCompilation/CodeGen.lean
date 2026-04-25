@@ -6459,8 +6459,8 @@ def applyPasses (tyCtx : TyCtx) : List (String × (Prog → ECertificate)) → P
       | .error _ => p
     applyPasses tyCtx rest p'
 
-/-- The standard optimization pass list. -/
-def standardPasses (tyCtx : TyCtx) : List (String × (Prog → ECertificate)) :=
+/-- Previous (legacy) optimization pass list, kept for comparison. -/
+def previousPasses (tyCtx : TyCtx) : List (String × (Prog → ECertificate)) :=
   [ ("DCE", DCEOpt.optimize tyCtx),
     ("LICM", LICMOpt.optimize tyCtx),
     ("ConstProp", ConstPropOpt.optimize tyCtx),
@@ -6471,6 +6471,58 @@ def standardPasses (tyCtx : TyCtx) : List (String × (Prog → ECertificate)) :=
     ("ConstHoist", ConstHoistOpt.optimize tyCtx),
     ("Peephole", PeepholeOpt.optimize tyCtx),
     ("DCE", DCEOpt.optimize tyCtx),
+    ("RegAlloc", RegAllocOpt.optimize tyCtx) ]
+
+/-- The standard optimization pass list.
+
+    Structure:
+      Phase 1: front-load ConstProp + DCE + CSE so later passes see
+        folded constants and unified subexpressions.
+      Phase 2: LICM cluster `[LICM, ConstProp, ConstHoist, CSE, DAE]`,
+        repeated 4 times. LICM hoists `const` instructions one loop
+        level per run; the cluster around it canonicalizes copies and
+        kills writes the redundancy passes have made dead. 4 iterations
+        suffice for the deepest Livermore nest (k21 matmul: rep/k/i/j).
+      Phase 3: FMAFusion runs late, after redundancy is gone, so every
+        surviving `fmul` is real and fusion candidates are not stranded
+        by upstream CSE replacing a consumer with a copy.
+      Phase 4: final DCE + Peephole cleanup, then RegAlloc.
+
+    Each pass is independently certificate-checked by `applyPasses`, so
+    reordering and iteration cost only compile time. -/
+def standardPasses (tyCtx : TyCtx) : List (String × (Prog → ECertificate)) :=
+  -- Phase 1: front-load
+  [ ("ConstProp", ConstPropOpt.optimize tyCtx),
+    ("DCE", DCEOpt.optimize tyCtx),
+    ("CSE", CSEOpt.optimize tyCtx),
+    ("ConstProp", ConstPropOpt.optimize tyCtx),
+    ("DAE", DAEOpt.optimize tyCtx),
+  -- Phase 2: LICM cluster × 4 (one iteration per loop-nesting level)
+    ("LICM", LICMOpt.optimize tyCtx),
+    ("ConstProp", ConstPropOpt.optimize tyCtx),
+    ("ConstHoist", ConstHoistOpt.optimize tyCtx),
+    ("CSE", CSEOpt.optimize tyCtx),
+    ("DAE", DAEOpt.optimize tyCtx),
+    ("LICM", LICMOpt.optimize tyCtx),
+    ("ConstProp", ConstPropOpt.optimize tyCtx),
+    ("ConstHoist", ConstHoistOpt.optimize tyCtx),
+    ("CSE", CSEOpt.optimize tyCtx),
+    ("DAE", DAEOpt.optimize tyCtx),
+    ("LICM", LICMOpt.optimize tyCtx),
+    ("ConstProp", ConstPropOpt.optimize tyCtx),
+    ("ConstHoist", ConstHoistOpt.optimize tyCtx),
+    ("CSE", CSEOpt.optimize tyCtx),
+    ("DAE", DAEOpt.optimize tyCtx),
+    ("LICM", LICMOpt.optimize tyCtx),
+    ("ConstProp", ConstPropOpt.optimize tyCtx),
+    ("ConstHoist", ConstHoistOpt.optimize tyCtx),
+    ("CSE", CSEOpt.optimize tyCtx),
+    ("DAE", DAEOpt.optimize tyCtx),
+  -- Phase 3: late FMAFusion
+    ("FMAFusion", FMAFusionOpt.optimize tyCtx),
+  -- Phase 4: cleanup + register allocation
+    ("DCE", DCEOpt.optimize tyCtx),
+    ("Peephole", PeepholeOpt.optimize tyCtx),
     ("RegAlloc", RegAllocOpt.optimize tyCtx) ]
 
 /-- **Verified core of the compiler driver.**
