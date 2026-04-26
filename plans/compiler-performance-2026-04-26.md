@@ -232,16 +232,100 @@ After this work, the remaining cost centres are:
    List-based shape as CSE used to have. The merge-equality and
    worklist-dedup tricks would apply directly.
 
-3. **`checkRelConsistency`** rebuilds its own `FastVarMap` per call.
-   Sharing the map with the surrounding `checkAllTransitionsExec`
-   would save another ~10-15 % on big kernels.
-
-4. **The invariant size itself.** ConstProp emits ~98 atoms per PC on a
+3. **The invariant size itself.** ConstProp emits ~98 atoms per PC on a
    600-PC program, most of which are constants that never change.
    Compressing the invariant (only emit atoms at PCs where the const
    becomes valid, let the checker carry it forward) would cut both
    cert size and check time. This is a semantic change to the analysis
    output, not a checker change.
+
+## Follow-up: HashMap unification (2026-04-26 PM, commit 23403af)
+
+A second pass on the same area, motivated by code consistency rather
+than performance. Three changes:
+
+### Op 1 — single per-cert FastVarMap cache
+
+`checkRelConsistency` rebuilt `FastVarMap.ofList inv_orig` per edge call,
+duplicating work already done by the surrounding `checkAllTransitionsExec`.
+`checkInvariantsPreservedExec` and `checkAllTransitionsExec` similarly
+each built their own per-PC maps. Total: 3 separate `FastVarMap.ofList`
+chains for `inv_orig` per cert.
+
+Refactor: `checkCertificateExec` now builds `invMaps_orig` and
+`invMaps_trans` once via `buildInvMaps : Array EInv → Array (FastVarMap × Nat)`
+and threads them through three new variants:
+- `checkInvariantsPreservedFromMaps`
+- `checkAllTransitionsFromMaps`
+- `checkRelConsistencyFromMap`
+
+Each comes with an equivalence lemma to its original, all proven by
+`unfold + simp [invMapAt_buildInvMaps, ...]`. The keystone lemma
+`invMapAt_buildInvMaps` shows that looking up the cached array at PC `p`
+agrees with the inline build of `(FastVarMap.ofList (invs.getD p []), sdFuel ...)`.
+
+### Op 2 — extend FastVarMap to cold-spot lookups
+
+`checkDivPreservationExec` and `checkBoundsPreservationExec` used
+`inv.find?` for "is this var bound to a known literal" lookups
+(O(|inv|) per arrLoad/arrStore/div instruction). New variants
+`checkDivPreservationFromMaps` / `checkBoundsPreservationFromMaps` use
+`FastVarMap.getD` from the cache and pattern-match on `.lit` directly.
+
+The equivalence lemma `invFindLit_eq_invMapGetD` covers the generic
+pattern (`match inv.find? ... with | some (_, .lit c) => P c | _ => false`
+becomes `match invMap.getD k _ with | .lit c => P c | _ => false`) by
+case analysis on the underlying `Option (Var × Expr)`. Per-function
+equivalences then follow by `simp`.
+
+### Op 3 — document the two-level architecture
+
+Audit of all list-based originals confirmed they are load-bearing for
+soundness proofs in `SoundnessBridge.lean` (each is referenced 5-22 times
+across ~30 proofs that `unfold` and pattern-match on bodies). Deletion
+would require migrating those proofs to reason about Fast forms
+directly — a substantial refactor not undertaken.
+
+Instead, added a "Two-level architecture" section to the
+`ExecChecker.lean` module docstring documenting:
+- list-based originals exist for proofs;
+- HashMap-backed Fast/Early/FromMaps variants are the live runtime path;
+- equivalence lemmas (12 of them) bridge between the two;
+- the convention for adding new check functions.
+
+### Performance impact
+
+Effectively zero — total Livermore pass time changed by ~2s (within
+noise) across the whole 24-kernel suite. The cache savings I had
+estimated at ~10-15s did not materialize, evidently because
+`FastVarMap.ofList` is fast enough at HashMap construction that the
+duplication wasn't a real cost. Output verified unchanged on k03
+(10.007504) and k21 (106223.477851).
+
+Changes were kept anyway: the live `checkCertificateExec` body now
+uniformly calls FromMaps variants throughout (no list-based functions
+on the runtime path), and the convention is documented for future
+contributors. ~310 LOC added to `ExecChecker.lean`, 7 LOC added to
+`SoundnessBridge.lean`.
+
+### Proofs touched
+
+`checkCertificateExec_sound` gained 4 `rw` lines (one per new FromMaps
+equivalence) to convert the conjuncts of `unfold checkCertificateExec`
+back to original-form before passing to the existing per-conjunct
+soundness theorems. No other proofs needed updating — the bodies of
+the original functions are unchanged.
+
+### Lesson
+
+The earlier "predicted ~10-15s" estimate was a back-of-envelope
+guess that fell apart on contact with measurement. Worth flagging:
+**before committing to a perf refactor, probe — even when the change
+is mechanically simple.** I had recommended a probe in the report's
+earlier "Op 1" discussion, and skipping it (because the user wanted
+all three for code-consistency reasons) cost the right amount of
+time given the consistency goal, but the perf-prediction error itself
+was a clean miss.
 
 ## Lessons
 

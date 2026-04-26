@@ -79,6 +79,32 @@ the rest of the suite. Full report in
 `suffix:RegAlloc` analyze (5.5 s on k15) and `cluster:DAE` analyze
 (1.4 s/call) are the next targets — both untouched here.
 
+### Follow-up (later same day, commit 23403af)
+
+Three code-consistency passes on the same area, motivated by uniform
+HashMap usage rather than additional speedup:
+
+- **Op 1**: single per-cert `FastVarMap` cache built once by
+  `checkCertificateExec` via `buildInvMaps` and threaded through new
+  `*FromMaps`/`*FromMap` variants of `checkInvariantsPreservedExec`,
+  `checkAllTransitionsExec`, and `checkRelConsistency`. Three
+  equivalence lemmas via `invMapAt_buildInvMaps`.
+- **Op 2**: extend FastVarMap to cold-spot lookups in
+  `checkDivPreservationExec` and `checkBoundsPreservationExec` (which
+  used `inv.find?` for "var bound to known literal" checks). Two more
+  FromMaps variants + helper lemma `invFindLit_eq_invMapGetD`.
+- **Op 3**: documented the two-level architecture (list-based
+  originals for proofs, HashMap-backed Fast/FromMaps for runtime,
+  equivalence lemmas as the bridge) in the `ExecChecker.lean` module
+  docstring. Audit confirmed list-based originals can't be deleted
+  without rewriting ~30 proofs in `SoundnessBridge.lean`.
+
+`checkCertificateExec_sound` gained 4 `rw` lines for the new
+equivalences. Performance impact effectively zero (within noise) —
+`FastVarMap.ofList` was fast enough that the duplicate-build overhead
+wasn't a real cost. Kept for the consistency win: the live
+`checkCertificateExec` body now uniformly calls FromMaps variants.
+
 ---
 
 ## Driver-to-theorem bridge: connect compiler driver to top-level correctness (2026-04-25)
