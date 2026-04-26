@@ -4,6 +4,83 @@ Chronological record of what was built and why, to reconstruct the sequence of d
 
 ---
 
+## Compiler performance: checker speedup (2026-04-26)
+
+End-to-end Livermore compile time **282.6 s → 139.8 s (2.0×)** by
+HashMap-backing the certificate checker's hot paths and adding early
+termination to `simplifyDeep`.
+
+### Pipeline reorganisation (earlier in the same arc)
+
+`standardPasses` rewritten as a "front-load + LICM cluster ×4 + late
+FMAFusion + cleanup" sequence; old order kept as `previousPasses`.
+Also added `applyPassesUntilFixedOrN` and `applyStandardPipelineFixpoint`
+that iterate the LICM cluster to a fixed point or 5 iterations
+(whichever comes first), and wired them into `compilePipeline` /
+`compileToAsmWith` / `compileFileToFile`.
+
+### Driver instrumentation
+
+`compileFileToFile` now emits stderr marker lines per step:
+`[PASS] phase=… name=… us=… size_in=… size_out=…`,
+`[CLUSTER] iters=… fixedPoint=…`,
+`[STAGE] name=… us=…`,
+`[TOTAL] compile_us=…`.
+A new script `benchmarks/livermore_canonical/run_pipeline_report.sh`
+parses these into per-kernel and per-pass aggregates.
+
+### Bottleneck investigation
+
+Per-pass aggregate showed `cluster:CSE` = 39 % of total time. CSE-side
+micro-opts (length-based merge equality, worklist dedup, LIFO order)
+gave ~0 improvement. Splitting `analyze` vs `check` time inside
+`runPassTimed` revealed that **the checker dominates 85-100 % of every
+pass**; the analyses themselves are small. Per-check breakdown then
+showed `checkAllTransitionsExec` was 90 %+ of checker time, with
+`checkInvariantsPreservedExec` second.
+
+Both call `simplifyDeep` on a `List`-backed `EInv`: O(|inv|) per `.var`
+lookup, and `fuel = |inv|+1` iterations applied unconditionally. For
+ConstProp's cluster invariants (~100 atoms per PC, ~600 PCs), that's
+billions of operations per pass.
+
+### Fix (ExecChecker.lean)
+
+- `Expr.simplifyDeepFastEarly` — like `simplifyDeepFast` but stops at
+  the first iteration that produces no change. 30-100× cut in inner
+  iteration count for typical expressions.
+- `checkInvAtomFast` taking a precomputed `FastVarMap` + fuel.
+  `checkInvariantsPreservedExec` now builds the map once per PC.
+- `BoolExpr.normalizeFast`, `BoolExpr.symEvalFast`, `computeNextPCFast`,
+  `checkInstrAliasOkFast`, `checkOrigPathFast` — Fast mirrors of the
+  `checkOrigPath` walk that thread `(invMap, fuel)` through the
+  recursion. `checkAllTransitionsExec` builds the map once per pc_t.
+- `checkRelConsistency`'s simplify calls switched from
+  `simplifyDeepFast` to `simplifyDeepFastEarly`.
+
+The original list-based functions are kept (untouched by callers) so
+`PipelineCorrectness.lean` proofs need no changes.
+
+### Results
+
+- `cluster:CSE` 111.5 s → 14.0 s (8.0×)
+- `prefix:CSE` 22.8 s → 5.5 s (4.1×)
+- `cluster:ConstProp` 23.1 s → 12.7 s (1.8×)
+- `cluster:ConstHoist` 23.2 s → 12.7 s (1.8×)
+- k18_hydro_2d total 145 s → 50 s (2.9×)
+- k08_adi total 25.8 s → 11.9 s (2.2×)
+
+Output verified unchanged on k03 (10.007504), k21 (106223.477851), and
+the rest of the suite. Full report in
+`plans/compiler-performance-2026-04-26.md`.
+
+### Remaining cost centres
+
+`suffix:RegAlloc` analyze (5.5 s on k15) and `cluster:DAE` analyze
+(1.4 s/call) are the next targets — both untouched here.
+
+---
+
 ## Driver-to-theorem bridge: connect compiler driver to top-level correctness (2026-04-25)
 
 Refactored the compiler driver to expose its post-parse verified core as a
