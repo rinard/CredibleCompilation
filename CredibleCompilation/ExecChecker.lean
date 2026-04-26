@@ -13,6 +13,58 @@ that the transformed program's behavior matches the original. Invariants are
 represented as lists of `(var, expr)` atoms. An explicit **expression relation**
 (per transformed PC) relates expressions over original variables to expressions
 over transformed variables via pairs `(e_orig, e_trans)` asserting equality.
+
+## Two-level architecture: list-based vs HashMap-backed
+
+Several check functions and helpers exist in **two parallel forms**:
+
+1. **List-based originals** — take `inv : EInv` (a `List (Var × Expr)`) and
+   look up vars via `inv.find?` / `lookupExpr`. Examples: `Expr.simplify`,
+   `Expr.simplifyDeep`, `BoolExpr.normalize`, `BoolExpr.symEval`,
+   `computeNextPC`, `checkInstrAliasOk`, `checkOrigPath`, `checkInvAtom`,
+   `checkInvariantsPreservedExec`, `checkAllTransitionsExec`,
+   `checkRelConsistency`, `checkDivPreservationExec`,
+   `checkBoundsPreservationExec`. These are the form the **soundness
+   theorems in `SoundnessBridge.lean` reason about** (~30 proofs unfold
+   their bodies and pattern-match on `inv.find?` results).
+
+2. **HashMap-backed Fast/Early/FromMaps variants** — take
+   `FastVarMap = Std.HashMap String Expr` (precomputed once) and look up
+   vars in O(1). Examples: `Expr.simplifyFast`, `Expr.simplifyDeepFast`,
+   `Expr.simplifyDeepFastEarly`, `BoolExpr.normalizeFast`,
+   `BoolExpr.symEvalFast`, `computeNextPCFast`, `checkInstrAliasOkFast`,
+   `checkOrigPathFast`, `checkInvAtomFast`,
+   `checkInvariantsPreservedFromMaps`, `checkAllTransitionsFromMaps`,
+   `checkRelConsistencyFromMap`, `checkDivPreservationFromMaps`,
+   `checkBoundsPreservationFromMaps`. **`checkCertificateExec` calls only
+   these on the live runtime path**, sharing a single per-PC `FastVarMap`
+   cache built by `buildInvMaps`.
+
+3. **Equivalence lemmas** form the bridge:
+   `simplifyDeepFastEarly_eq_simplifyDeep`,
+   `checkInvAtomFast_eq_checkInvAtom`,
+   `BoolExpr.normalizeFast_eq_normalize`, `BoolExpr.symEvalFast_eq_symEval`,
+   `computeNextPCFast_eq_computeNextPC`,
+   `checkInstrAliasOkFast_eq_checkInstrAliasOk`,
+   `checkOrigPathFast_eq_checkOrigPath`,
+   `checkInvariantsPreservedFromMaps_eq`,
+   `checkAllTransitionsFromMaps_eq`, `checkRelConsistencyFromMap_eq`,
+   `checkDivPreservationFromMaps_eq`, `checkBoundsPreservationFromMaps_eq`.
+   Each says "Fast/FromMaps form at the canonical call shape (built from
+   the cert's invariants) equals the list-based original".
+   `checkCertificateExec_sound` uses these as `rw`s to convert the
+   conjuncts of `unfold checkCertificateExec at h` from FromMaps form
+   back to original form, after which the existing per-conjunct
+   soundness theorems apply.
+
+**Convention**: when adding a new check function, write the list-based
+original (proof-friendly) and the FromMaps variant (cache-friendly),
+plus the equivalence lemma. Wire only the FromMaps variant into
+`checkCertificateExec`; soundness flows through the equivalence lemma.
+
+The list-based originals cannot be deleted without rewriting the
+~30 proofs in `SoundnessBridge.lean` to reason about Fast forms
+directly — a substantial refactor that hasn't been undertaken.
 -/
 
 -- ============================================================
@@ -467,6 +519,33 @@ abbrev FastVarMap := Std.HashMap String Expr
 def FastVarMap.ofList (ss : List (Var × Expr)) : FastVarMap :=
   ss.reverse.foldl (fun m (v, e) => m.insert v e) {}
 
+/-- Per-PC cache: build a `(FastVarMap, fuel)` for every invariant in `invs`.
+    Used by `checkCertificateExec` to share invariant maps across the three
+    check functions (`checkInvariantsPreserved`, `checkAllTransitions`,
+    `checkRelConsistency`) instead of letting each rebuild its own. -/
+def buildInvMaps (invs : Array EInv) : Array (FastVarMap × Nat) :=
+  invs.map fun inv => (FastVarMap.ofList inv, sdFuel inv)
+
+/-- Lookup helper: extracts `(FastVarMap, fuel)` for a PC, with the same
+    "empty invariant" default that the inline-build call sites use. -/
+@[inline] def invMapAt (invMaps : Array (FastVarMap × Nat)) (pc : Nat) :
+    FastVarMap × Nat :=
+  invMaps.getD pc (FastVarMap.ofList [], sdFuel [])
+
+/-- Looking up the cache built by `buildInvMaps` agrees with what the
+    inline-build call sites compute: `(FastVarMap.ofList inv_pre, sdFuel inv_pre)`
+    where `inv_pre = invs.getD pc []`. The default-value cases align because
+    `f [] = (FastVarMap.ofList [], sdFuel [])` matches `invMapAt`'s default. -/
+theorem invMapAt_buildInvMaps (invs : Array EInv) (pc : Nat) :
+    invMapAt (buildInvMaps invs) pc =
+      (FastVarMap.ofList (invs.getD pc ([] : EInv)),
+       sdFuel (invs.getD pc ([] : EInv))) := by
+  unfold invMapAt buildInvMaps
+  by_cases hpc : pc < invs.size
+  · simp [Array.getD, hpc, Array.size_map, Array.getElem_map]
+  · simp [Array.getD, hpc, Array.size_map]
+
+
 def Expr.substSymFast (m : FastVarMap) : Expr → Expr
   | .lit n      => .lit n
   | .blit b     => .blit b
@@ -566,6 +645,24 @@ theorem FastVarMap.ofList_getD_eq_lookupExpr (inv : EInv) (v : Var) :
   cases hf : inv.find? (fun p => p.1 == v) with
   | none => rfl
   | some p => simp [Option.map]
+
+/-- Generic pattern lemma: looking up an `inv : EInv` for a literal-valued
+    binding gives the same Bool whether you walk the list and pattern-match
+    on the `Option (Var × Expr)` result, or look up the `FastVarMap` and
+    pattern-match on the resulting `Expr`. Used by `checkDivPreservationExec`-
+    and `checkBoundsPreservationExec`-style "is this var a known non-zero
+    constant" lookups. -/
+theorem invFindLit_eq_invMapGetD (inv : EInv) (k : Var) (P : BitVec 64 → Bool) :
+    (match (FastVarMap.ofList inv).getD k (.var k) with
+     | .lit c => P c | _ => false)
+    = (match inv.find? (fun (v, _) => v == k) with
+       | some (_, .lit c) => P c | _ => false) := by
+  rw [FastVarMap.ofList_getD]
+  cases h : inv.find? (fun p => p.1 == k) with
+  | none => rfl
+  | some pair =>
+    obtain ⟨_, e⟩ := pair
+    cases e <;> rfl
 
 /-- Substitute each variable in an expression with its symbolic post-value. -/
 def Expr.substSym (ss : SymStore) : Expr → Expr
@@ -806,6 +903,34 @@ def checkInvariantsPreservedExec (cert : ECertificate) : Bool :=
       | none => true
   checkProg cert.orig cert.inv_orig &&
   checkProg cert.trans cert.inv_trans
+
+/-- Cached variant of `checkInvariantsPreservedExec`: takes precomputed
+    per-PC `(FastVarMap, fuel)` arrays instead of building them inline. The
+    caller (`checkCertificateExec`) builds these once and shares them with
+    `checkAllTransitionsFromMaps` so invariant maps are not rebuilt. -/
+def checkInvariantsPreservedFromMaps (cert : ECertificate)
+    (invMaps_orig invMaps_trans : Array (FastVarMap × Nat)) : Bool :=
+  let checkProg (prog : Prog) (inv : Array EInv)
+      (invMaps : Array (FastVarMap × Nat)) : Bool :=
+    (List.range prog.size).all fun pc =>
+      match prog[pc]? with
+      | some instr =>
+        let (invMap, fuel) := invMapAt invMaps pc
+        (instr.successors pc).all fun pc' =>
+          (inv.getD pc' ([] : EInv)).all (checkInvAtomFast invMap fuel instr)
+      | none => true
+  checkProg cert.orig cert.inv_orig invMaps_orig &&
+  checkProg cert.trans cert.inv_trans invMaps_trans
+
+/-- `checkInvariantsPreservedFromMaps` agrees with `checkInvariantsPreservedExec`
+    when called with maps built from the cert's invariants — i.e., the cache
+    is just the per-PC pre-computation that the original does inline. -/
+theorem checkInvariantsPreservedFromMaps_eq (cert : ECertificate) :
+    checkInvariantsPreservedFromMaps cert
+      (buildInvMaps cert.inv_orig) (buildInvMaps cert.inv_trans)
+      = checkInvariantsPreservedExec cert := by
+  unfold checkInvariantsPreservedFromMaps checkInvariantsPreservedExec
+  simp only [invMapAt_buildInvMaps]
 
 /-- **Condition 4a**: Each halt in trans corresponds to a halt in orig.
     Uses `instrCerts` (not `haltCerts`) for consistency with the simulation. -/
@@ -1145,6 +1270,50 @@ def checkRelConsistency
       v_o.simplifyDeepFastEarly fuel invMap == (v_t.substSymFast preSubstMap).simplifyDeepFastEarly fuel invMap
   pairCheck && fvCheck && amFvCheck && amCheck
 
+/-- Cached variant of `checkRelConsistency`: takes a precomputed
+    `(invMap, fuel)` for `inv_orig` instead of building it inline.
+    The body is otherwise identical, so the call sites can share the
+    map built once at the surrounding pc_t. -/
+def checkRelConsistencyFromMap
+    (orig : Prog) (pc_orig : Label) (origLabels : List Label) (transInstr : TAC)
+    (invMap : FastVarMap) (fuel : Nat)
+    (rel_pre rel_post : EExprRel) : Bool :=
+  let (origSS, origSAM) := execPath orig ([] : SymStore) ([] : SymArrayMem) pc_orig origLabels
+  let (transSS, transSAM) := execSymbolic ([] : SymStore) ([] : SymArrayMem) transInstr
+  let preSubst := buildSubstMap rel_pre
+  let origSSMap := FastVarMap.ofList origSS
+  let transSSMap := FastVarMap.ofList transSS
+  let preSubstMap := FastVarMap.ofList preSubst
+  let pairCheck := rel_post.all fun (e_o, e_t) =>
+    let origVal := e_o.substSymFast origSSMap |>.simplifyDeepFastEarly fuel invMap
+    let transVal := (e_t.substSymFast transSSMap).substSymFast preSubstMap |>.simplifyDeepFastEarly fuel invMap
+    origVal == transVal
+  let relVarSet := Std.HashMap.ofList (rel_pre.filterMap fun (_, e_t') =>
+    match e_t' with | .var w => some (w, ()) | _ => none)
+  let relHasVar (w : Var) := relVarSet.contains w
+  let fvCheck := rel_post.all fun (_, e_t) =>
+    (e_t.substSymFast transSSMap).freeVars.all fun w => relHasVar w
+  let amFvCheck := transSAM.all fun (_, i_t, v_t) =>
+    i_t.freeVars.all (fun w => relHasVar w) &&
+    v_t.freeVars.all (fun w => relHasVar w)
+  let amCheck := origSAM.length == transSAM.length &&
+    (origSAM.zip transSAM).all fun ((a_o, i_o, v_o), (a_t, i_t, v_t)) =>
+      a_o == a_t &&
+      i_o.simplifyDeepFastEarly fuel invMap == (i_t.substSymFast preSubstMap).simplifyDeepFastEarly fuel invMap &&
+      v_o.simplifyDeepFastEarly fuel invMap == (v_t.substSymFast preSubstMap).simplifyDeepFastEarly fuel invMap
+  pairCheck && fvCheck && amFvCheck && amCheck
+
+/-- `checkRelConsistencyFromMap` agrees with `checkRelConsistency` when the
+    map is built from `inv_orig`. The bodies differ only in whether
+    `(invMap, fuel)` are passed in or computed inline; otherwise identical. -/
+theorem checkRelConsistencyFromMap_eq
+    (orig : Prog) (pc_orig : Label) (origLabels : List Label) (transInstr : TAC)
+    (inv_orig : EInv) (rel_pre rel_post : EExprRel) :
+    checkRelConsistencyFromMap orig pc_orig origLabels transInstr
+        (FastVarMap.ofList inv_orig) (sdFuel inv_orig) rel_pre rel_post
+      = checkRelConsistency orig pc_orig origLabels transInstr inv_orig rel_pre rel_post := by
+  rfl
+
 /-- **Condition 3**: Every transition in the transformed program has a
     corresponding original-program path with consistent variable effects.
 
@@ -1180,6 +1349,50 @@ def checkAllTransitionsExec (cert : ECertificate) : Bool :=
               tc.rel tc.rel_next
       | none => false
     | none => true
+
+/-- Cached variant of `checkAllTransitionsExec`: takes the precomputed
+    `invMaps_orig` array built once by `checkCertificateExec`. Looks up
+    `(invMap, fuel)` per `ic.pc_orig` instead of building inline, and
+    threads them to `checkRelConsistencyFromMap` so the inner call also
+    skips its own map build. -/
+def checkAllTransitionsFromMaps (cert : ECertificate)
+    (invMaps_orig : Array (FastVarMap × Nat)) : Bool :=
+  (List.range cert.trans.size).all fun pc_t =>
+    match cert.trans[pc_t]? with
+    | some .halt => true
+    | some instr =>
+      match cert.instrCerts[pc_t]? with
+      | some ic =>
+        let (invMap, fuel) := invMapAt invMaps_orig ic.pc_orig
+        (instr.successors pc_t).all fun pc_t' =>
+          let ic' := cert.instrCerts.getD pc_t' default
+          let branchInfo := match instr with
+            | .ifgoto b l =>
+              match b.mapVarsRel ic.rel with
+              | some origCond =>
+                if !(l == pc_t + 1) then some (origCond, pc_t' == l) else none
+              | none => none
+            | _ => none
+          ic.transitions.any fun tc =>
+            tc.rel == ic.rel &&
+            tc.rel_next == ic'.rel &&
+            checkOrigPathFast cert.orig ([] : SymStore) ([] : SymArrayMem) invMap fuel
+              ic.pc_orig tc.origLabels ic'.pc_orig branchInfo &&
+            checkRelConsistencyFromMap cert.orig ic.pc_orig tc.origLabels instr
+              invMap fuel
+              tc.rel tc.rel_next
+      | none => false
+    | none => true
+
+/-- `checkAllTransitionsFromMaps` agrees with `checkAllTransitionsExec` when
+    the map array is built from `cert.inv_orig`. Same logic, just lookups
+    instead of inline builds, and via `checkRelConsistencyFromMap` for the
+    inner call (which also agrees by `checkRelConsistencyFromMap_eq`). -/
+theorem checkAllTransitionsFromMaps_eq (cert : ECertificate) :
+    checkAllTransitionsFromMaps cert (buildInvMaps cert.inv_orig)
+      = checkAllTransitionsExec cert := by
+  unfold checkAllTransitionsFromMaps checkAllTransitionsExec
+  simp only [invMapAt_buildInvMaps, checkRelConsistencyFromMap_eq]
 
 /-- **Condition 5**: Zero-step original transitions decrease the measure. -/
 def checkNonterminationExec (cert : ECertificate) : Bool :=
@@ -1250,6 +1463,48 @@ def checkDivPreservationExec (cert : ECertificate) : Bool :=
         | _ => false
       | _ => true
 
+/-- Cached variant of `checkDivPreservationExec`: looks up the divisor's
+    constant value via the per-PC `FastVarMap` cache instead of `inv.find?`.
+    Functionally equivalent to the original; used by `checkCertificateExec`
+    so all per-PC invariant lookups go through the shared cache. -/
+def checkDivPreservationFromMaps (cert : ECertificate)
+    (invMaps_orig : Array (FastVarMap × Nat)) : Bool :=
+  (List.range cert.trans.size).all fun pc_t =>
+    match cert.trans[pc_t]? with
+    | some (.binop _ op y z) =>
+      let ic := cert.instrCerts.getD pc_t default
+      match cert.orig[ic.pc_orig]? with
+      | some (.binop _ op' y' z') =>
+        op == op' &&
+        match op with
+        | .div | .mod =>
+          relFindOrigVar ic.rel y == some y' &&
+          (relFindOrigVar ic.rel z == some z' ||
+           ((match relFindOrigExpr ic.rel z with
+             | some (.lit c) => c != 0 | _ => false) &&
+            (match (invMapAt invMaps_orig ic.pc_orig).1.getD z' (.var z') with
+             | .lit c => c != 0 | _ => false)))
+        | _ => true
+      | _ => false
+    | _ =>
+      let ic := cert.instrCerts.getD pc_t default
+      match cert.orig[ic.pc_orig]? with
+      | some (.binop _ .div _ z) | some (.binop _ .mod _ z) =>
+        let invMap := (invMapAt invMaps_orig ic.pc_orig).1
+        match invMap.getD z (.var z) with
+        | .lit c => c != 0
+        | _ => false
+      | _ => true
+
+/-- `checkDivPreservationFromMaps` agrees with `checkDivPreservationExec`
+    when the maps are built from `cert.inv_orig`. Both lookup strategies
+    return the same Bool by `invFindLit_eq_invMapGetD`. -/
+theorem checkDivPreservationFromMaps_eq (cert : ECertificate) :
+    checkDivPreservationFromMaps cert (buildInvMaps cert.inv_orig)
+      = checkDivPreservationExec cert := by
+  unfold checkDivPreservationFromMaps checkDivPreservationExec
+  simp only [invMapAt_buildInvMaps, invFindLit_eq_invMapGetD]
+
 /-- **Condition 10 (error preservation for array bounds)**: for every
     `arrLoad`/`arrStore` in the transformed program, the original at the
     mapped PC has a matching array instruction on the same array with the
@@ -1282,6 +1537,44 @@ def checkBoundsPreservationExec (cert : ECertificate) : Bool :=
         arr == arr' && idxOk idx idx'
       | _ => false
     | _ => true
+
+/-- Cached variant of `checkBoundsPreservationExec`: looks up the index's
+    constant value via the per-PC `FastVarMap` cache instead of `inv.find?`.
+    Functionally equivalent to the original. -/
+def checkBoundsPreservationFromMaps (cert : ECertificate)
+    (invMaps_orig : Array (FastVarMap × Nat)) : Bool :=
+  (List.range cert.trans.size).all fun pc_t =>
+    let ic := cert.instrCerts.getD pc_t default
+    let invMap := (invMapAt invMaps_orig ic.pc_orig).1
+    let idxOk (idx idx' : Var) :=
+      relFindOrigVar ic.rel idx == some idx' ||
+      (match invMap.getD idx' (.var idx') with
+       | .lit c =>
+         match relFindOrigExpr ic.rel idx with
+         | some (.lit c') => c == c'
+         | _ => false
+       | _ => false)
+    match cert.trans[pc_t]? with
+    | some (.arrLoad _ arr idx _) =>
+      match cert.orig[ic.pc_orig]? with
+      | some (.arrLoad _ arr' idx' _) =>
+        arr == arr' && idxOk idx idx'
+      | _ => false
+    | some (.arrStore arr idx _ _) =>
+      match cert.orig[ic.pc_orig]? with
+      | some (.arrStore arr' idx' _ _) =>
+        arr == arr' && idxOk idx idx'
+      | _ => false
+    | _ => true
+
+/-- `checkBoundsPreservationFromMaps` agrees with `checkBoundsPreservationExec`
+    when the maps are built from `cert.inv_orig`. The `idxOk` lookup is the
+    only difference, and `invFindLit_eq_invMapGetD` covers it. -/
+theorem checkBoundsPreservationFromMaps_eq (cert : ECertificate) :
+    checkBoundsPreservationFromMaps cert (buildInvMaps cert.inv_orig)
+      = checkBoundsPreservationExec cert := by
+  unfold checkBoundsPreservationFromMaps checkBoundsPreservationExec
+  simp only [invMapAt_buildInvMaps, invFindLit_eq_invMapGetD]
 
 /-- **Condition 12**: On each orig path, all instructions after the first are scalar,
     AND if the first orig instruction is an array op, the trans instruction at pc_t must
@@ -1417,22 +1710,29 @@ def checkNoRegisterCollisions (p : Prog) : Bool :=
 
 /-- Check all certificate conditions. Returns `true` iff the certificate is valid. -/
 def checkCertificateExec (cert : ECertificate) : Bool :=
+  -- Build the per-PC FastVarMap caches once and share across the three
+  -- check functions that would otherwise rebuild them. The
+  -- `*FromMaps`/`*FromMap` variants are equivalent to the originals at this
+  -- call shape (see `checkInvariantsPreservedFromMaps_eq`,
+  -- `checkAllTransitionsFromMaps_eq`).
+  let invMaps_orig := buildInvMaps cert.inv_orig
+  let invMaps_trans := buildInvMaps cert.inv_trans
   checkWellTypedProg cert.tyCtx cert.orig &&
   checkWellTypedProg cert.tyCtx cert.trans &&
   (cert.orig.observable == cert.trans.observable) &&
   checkStartCorrespondenceExec cert &&
   checkInvariantsAtStartExec cert &&
   checkRelAtStartExec cert &&
-  checkInvariantsPreservedExec cert &&
+  checkInvariantsPreservedFromMaps cert invMaps_orig invMaps_trans &&
   checkNoArrReadInInvs cert.inv_orig &&
   checkNoArrReadInInvs cert.inv_trans &&
   checkNoArrReadInRels cert.instrCerts &&
-  checkAllTransitionsExec cert &&
+  checkAllTransitionsFromMaps cert invMaps_orig &&
   checkHaltCorrespondenceExec cert &&
   checkHaltObservableExec cert &&
   checkNonterminationExec cert &&
-  checkDivPreservationExec cert &&
-  checkBoundsPreservationExec cert &&
+  checkDivPreservationFromMaps cert invMaps_orig &&
+  checkBoundsPreservationFromMaps cert invMaps_orig &&
   checkArraySizesExec cert &&
   checkOrigPathBoundsOk cert &&
   checkSuccessorsInBounds cert &&

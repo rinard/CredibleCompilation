@@ -3791,6 +3791,13 @@ theorem soundness_bridge
   -- Derive identity-pair condition from checkRelAtStartExec
   have hrel0 : (dc.instrCerts.getD 0 default).rel.all (fun (e_o, e_t) => e_o == e_t) = true := by
     unfold checkRelAtStartExec at h_relstart; exact h_relstart
+  -- Convert FromMaps-form hypotheses (from the per-cert FastVarMap cache used
+  -- by checkCertificateExec for performance) back to the original-form
+  -- hypotheses that the soundness theorems expect.
+  rw [checkInvariantsPreservedFromMaps_eq] at h_invpres
+  rw [checkAllTransitionsFromMaps_eq] at h_trans
+  rw [checkDivPreservationFromMaps_eq] at h_div
+  rw [checkBoundsPreservationFromMaps_eq] at h_bndpres
   exact {
     well_typed_orig  := by simp [toPCertificate]; exact checkWellTypedProg_sound hwt_orig
     well_typed_trans := by simp [toPCertificate]; exact checkWellTypedProg_sound hwt_trans
