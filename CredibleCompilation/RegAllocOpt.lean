@@ -79,6 +79,48 @@ def neighbors (graph : List (Var × List Var)) (v : Var) : List Var :=
   | none => []
 
 -- ============================================================
+-- § 2b. Loop-depth analysis (back-edge counting)
+-- ============================================================
+
+/-- Find back edges: PCs where a successor target ≤ source PC.
+    Returns a list of (header, latch) pairs. -/
+def findBackEdges (prog : Prog) : List (Nat × Nat) :=
+  (List.range prog.size).foldl (fun (acc : List (Nat × Nat)) pc =>
+    match prog[pc]? with
+    | some instr =>
+      (instr.successors pc).foldl (fun acc' succ =>
+        if succ ≤ pc then (succ, pc) :: acc' else acc'
+      ) acc
+    | none => acc
+  ) ([] : List (Nat × Nat))
+
+/-- Loop depth at each PC = number of back-edge ranges (header, latch)
+    that contain that PC, where the range is [header, latch] inclusive.
+    Nested loops naturally accumulate depth. -/
+def computeLoopDepth (prog : Prog) : Array Nat :=
+  let backEdges := findBackEdges prog
+  ((List.range prog.size).map fun pc =>
+    backEdges.foldl (fun d (hdr, latch) =>
+      if hdr ≤ pc && pc ≤ latch then d + 1 else d) 0
+  ).toArray
+
+/-- Chaitin-style spill cost per variable: sum over uses of `10^loop_depth`.
+    A variable used inside a depth-2 loop counts each use as 100; depth-1 as 10. -/
+def computeUseCost (prog : Prog) (loopDepth : Array Nat) : List (Var × Nat) :=
+  (List.range prog.size).foldl (fun (acc : List (Var × Nat)) pc =>
+    match prog[pc]? with
+    | some instr =>
+      let depth := loopDepth.getD pc 0
+      let weight := 10 ^ depth
+      (DAEOpt.instrUse instr).foldl (fun acc' v =>
+        match acc'.find? (fun (x, _) => x == v) with
+        | some _ => acc'.map fun (x, c) => if x == v then (x, c + weight) else (x, c)
+        | none => (v, weight) :: acc'
+      ) acc
+    | none => acc
+  ) ([] : List (Var × Nat))
+
+-- ============================================================
 -- § 3. Graph coloring with spill selection
 -- ============================================================
 
@@ -90,19 +132,37 @@ private def lowestAvailable (used : List Nat) : Nat :=
     | fuel + 1 => if used.contains n then go (n + 1) fuel else n
   go 0 (used.length + 1)
 
-/-- Select the best variable to spill: longest live range (most likely to
-    free other nodes by reducing degree). -/
-private def selectSpill (graph : List (Var × List Var)) (liveRanges : List (Var × Nat)) : Var :=
+/-- Look up Chaitin spill cost for a variable. -/
+private def costOf (useCost : List (Var × Nat)) (v : Var) : Nat :=
+  match useCost.find? (fun (x, _) => x == v) with
+  | some (_, c) => c
+  | none => 0
+
+/-- Look up degree (neighbor count) for a variable in the current graph. -/
+private def degreeOf (graph : List (Var × List Var)) (v : Var) : Nat :=
+  match graph.find? (fun (x, _) => x == v) with
+  | some (_, nbrs) => nbrs.length
+  | none => 0
+
+/-- Select the best variable to spill: minimize Chaitin cost / degree.
+    A variable with few uses (low cost) and many interferences (high degree)
+    is the best spill candidate — spilling frees many neighbors at little
+    runtime cost. Loop-resident variables have inflated cost via 10^depth
+    weighting (computeUseCost) so they are spilled last. -/
+private def selectSpill (graph : List (Var × List Var)) (useCost : List (Var × Nat)) : Var :=
   let graphVars := graph.map Prod.fst
   match graphVars with
   | [] => ""
   | v :: rest =>
     rest.foldl (fun best w =>
-      let bestRange := match liveRanges.find? (fun (x, _) => x == best) with
-        | some (_, r) => r | none => 0
-      let wRange := match liveRanges.find? (fun (x, _) => x == w) with
-        | some (_, r) => r | none => 0
-      if wRange > bestRange then w else best
+      let bestC := costOf useCost best
+      let bestD := degreeOf graph best
+      let wC := costOf useCost w
+      let wD := degreeOf graph w
+      -- Compare cost/degree via cross-multiplication: w wins if
+      --   wC / wD < bestC / bestD  ⟺  wC * bestD < bestC * wD
+      -- (using max(_,1) on degree to avoid div-by-zero; matters at the leaves)
+      if wC * (max bestD 1) < bestC * (max wD 1) then w else best
     ) v
 
 /-- Graph coloring with spill selection.
@@ -110,7 +170,7 @@ private def selectSpill (graph : List (Var × List Var)) (liveRanges : List (Var
     Caller-saved registers are listed first in intRegNums/floatRegNums,
     so `lowestAvailable` naturally prioritizes them. -/
 partial def graphColor (graph : List (Var × List Var)) (K : Nat)
-    (liveRanges : List (Var × Nat))
+    (useCost : List (Var × Nat))
     : List (Var × Nat) × List Var :=
   if graph.isEmpty then ([], [])
   else
@@ -119,17 +179,17 @@ partial def graphColor (graph : List (Var × List Var)) (K : Nat)
     | some (v, _) =>
       let nbrs_v := neighbors graph v
       let graph' := removeNode graph v
-      let (coloring, spilled) := graphColor graph' K liveRanges
+      let (coloring, spilled) := graphColor graph' K useCost
       -- Assign lowest color not used by colored neighbors
       let usedColors := coloring.filterMap fun (w, c) =>
         if nbrs_v.contains w then some c else none
       let color := lowestAvailable usedColors
       ((v, color) :: coloring, spilled)
     | none =>
-      -- All nodes have degree ≥ K → spill the longest-lived variable
-      let spillVar := selectSpill graph liveRanges
+      -- All nodes have degree ≥ K → spill the lowest-cost variable
+      let spillVar := selectSpill graph useCost
       let graph' := removeNode graph spillVar
-      let (coloring, spilled) := graphColor graph' K liveRanges
+      let (coloring, spilled) := graphColor graph' K useCost
       (coloring, spillVar :: spilled)
 
 -- ============================================================
@@ -158,7 +218,10 @@ def computeColoring (tyCtx : TyCtx) (prog : Prog) : List (Var × String) :=
     let allVars := collectLiveVars liveOut
     if allVars.isEmpty then []
     else
-      let liveRanges := computeLiveRanges liveOut
+      -- Chaitin spill cost: each use weighted by 10^loop_depth at that PC.
+      -- This biases the spill heuristic away from loop-resident variables.
+      let loopDepth := computeLoopDepth prog
+      let useCost := computeUseCost prog loopDepth
       -- Separate int+bool (xN registers) from float (dN registers).
       -- Int and bool share the same physical registers but get different
       -- name prefixes (__ir vs __br) so the type context can derive types.
@@ -177,8 +240,8 @@ def computeColoring (tyCtx : TyCtx) (prog : Prog) : List (Var × String) :=
       -- Color each graph. Caller-saved registers are listed first in
       -- intRegNums/floatRegNums, so lowestAvailable naturally prioritizes them.
       -- CodeGen inserts save/restore around call sites for live caller-saved regs.
-      let (intBoolColoring, _) := graphColor intBoolGraph intRegNums.size liveRanges
-      let (floatColoring, _) := graphColor floatGraph floatRegNums.size liveRanges
+      let (intBoolColoring, _) := graphColor intBoolGraph intRegNums.size useCost
+      let (floatColoring, _) := graphColor floatGraph floatRegNums.size useCost
       -- Determine the type of each color from the first variable that uses it
       let colorTypes := intBoolColoring.foldl (fun (acc : List (Nat × VarTy)) (v, c) =>
         if acc.any (fun (c', _) => c' == c) then acc

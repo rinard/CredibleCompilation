@@ -1,18 +1,18 @@
 #!/bin/bash
 #
 # Full Livermore Loops timing: Fortran -O{0,1,2}, C -O{0,1,2}, WL -O0 + optimized.
-# Wall-clock, best-of-3 per variant. Full rep counts.
+# Wall-clock, best-of-5 per variant. Full rep counts.
 #
 # Usage:  ./run_full.sh                 — all kernels
 #         ./run_full.sh k03_dot k05_tridiag
-#         RUNS=5 ./run_full.sh          — override run count
+#         RUNS=3 ./run_full.sh          — override run count
 #
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJ_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 BUILD_DIR="$SCRIPT_DIR/build_full"
-RUNS=${RUNS:-3}
+RUNS=${RUNS:-5}
 
 mkdir -p "$BUILD_DIR"
 
