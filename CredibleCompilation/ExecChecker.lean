@@ -674,6 +674,46 @@ theorem Expr.simplifyDeepFast_eq_simplifyDeep (n : Nat) (e : Expr) (inv : EInv) 
     show (e.simplifyFast _).simplifyDeepFast n _ = (e.simplify inv).simplifyDeep n inv
     rw [Expr.simplifyFast_eq_simplify]; exact ih _
 
+/-- Applying `simplifyFast` to a fixpoint stays at the fixpoint, so
+    `simplifyDeepFast n m e = e` for any `n`. -/
+theorem Expr.simplifyDeepFast_idempotent_at_fp
+    (m : FastVarMap) (e : Expr) (hfp : e.simplifyFast m = e) :
+    ∀ n, e.simplifyDeepFast n m = e := by
+  intro n
+  induction n with
+  | zero => exact hfp
+  | succ n ih =>
+    show (e.simplifyFast m).simplifyDeepFast n m = e
+    rw [hfp]; exact ih
+
+/-- `simplifyDeepFastEarly` and `simplifyDeepFast` agree at every fuel. -/
+theorem Expr.simplifyDeepFastEarly_eq_simplifyDeepFast
+    (n : Nat) (m : FastVarMap) (e : Expr) :
+    e.simplifyDeepFastEarly n m = e.simplifyDeepFast n m := by
+  induction n generalizing e with
+  | zero => rfl
+  | succ n ih =>
+    show (let e' := e.simplifyFast m
+          if e' == e then e' else e'.simplifyDeepFastEarly n m)
+         = (e.simplifyFast m).simplifyDeepFast n m
+    by_cases hb : e.simplifyFast m == e
+    · have hfp : e.simplifyFast m = e := (beq_iff_eq).mp hb
+      simp only [hb, ↓reduceIte]
+      rw [hfp]
+      exact (Expr.simplifyDeepFast_idempotent_at_fp m e hfp n).symm
+    · simp only [hb, Bool.false_eq_true, ↓reduceIte]
+      exact ih (e.simplifyFast m)
+
+/-- Equivalence specialised to the actual call shape used in the live
+    checker (`FastVarMap.ofList inv` and `sdFuel inv`). This is the
+    rewrite the soundness proofs need. -/
+theorem Expr.simplifyDeepFastEarly_eq_simplifyDeep
+    (inv : EInv) (e : Expr) :
+    e.simplifyDeepFastEarly (sdFuel inv) (FastVarMap.ofList inv)
+      = e.simplifyDeep (sdFuel inv) inv := by
+  rw [Expr.simplifyDeepFastEarly_eq_simplifyDeepFast]
+  exact Expr.simplifyDeepFast_eq_simplifyDeep _ e inv
+
 /-- The HashMap-based variable set lookup used in `checkRelConsistency` is equivalent
     to the list-based `any` check used in the spec theorems. -/
 theorem relVarSet_contains_eq_any (rel_pre : EExprRel) (w : Var) :
@@ -948,6 +988,123 @@ def checkOrigPathFast (orig : Prog) (ss : SymStore) (sam : SymArrayMem)
       pcOk && aliasOk &&
       checkOrigPathFast orig ss' sam' invMap fuel nextPC rest pc_next none
     | none => false
+
+-- ============================================================
+-- § 6a. Wrapper-equivalence lemmas
+--
+-- Each Fast wrapper is point-wise equal to the original wrapper when called
+-- with `FastVarMap.ofList inv` and `sdFuel inv`. Soundness proofs for the
+-- runtime checker bodies (`checkInvariantsPreservedExec`,
+-- `checkAllTransitionsExec`, `checkRelConsistency`) rewrite Fast → original
+-- via these equalities and reuse the existing reasoning about the originals.
+-- The originals are kept around solely as proof intermediates and are not
+-- called from any live path.
+-- ============================================================
+
+/-- `checkInvAtomFast` with the canonical map/fuel equals `checkInvAtom`. -/
+theorem checkInvAtomFast_eq_checkInvAtom
+    (inv_pre : EInv) (instr : TAC) (atom : Var × Expr) :
+    checkInvAtomFast (FastVarMap.ofList inv_pre) (sdFuel inv_pre) instr atom
+      = checkInvAtom inv_pre instr atom := by
+  unfold checkInvAtomFast checkInvAtom
+  simp only [Expr.simplifyDeepFastEarly_eq_simplifyDeep]
+
+/-- Function-extensionality form of `checkInvAtomFast_eq_checkInvAtom`,
+    needed when the function is partially applied (e.g., as the predicate
+    of a `List.all`). -/
+theorem checkInvAtomFast_eq_checkInvAtom_fn (inv_pre : EInv) (instr : TAC) :
+    checkInvAtomFast (FastVarMap.ofList inv_pre) (sdFuel inv_pre) instr
+      = checkInvAtom inv_pre instr := by
+  funext atom; exact checkInvAtomFast_eq_checkInvAtom inv_pre instr atom
+
+/-- `BoolExpr.normalizeFast` with the canonical map/fuel equals
+    `BoolExpr.normalize`. -/
+theorem BoolExpr.normalizeFast_eq_normalize
+    (b : BoolExpr) (ss : SymStore) (inv : EInv) :
+    b.normalizeFast ss (FastVarMap.ofList inv) (sdFuel inv)
+      = b.normalize ss inv := by
+  induction b with
+  | lit _ => rfl
+  | bvar x =>
+    simp only [BoolExpr.normalizeFast, BoolExpr.normalize,
+      Expr.simplifyDeepFastEarly_eq_simplifyDeep]
+  | cmp op a b =>
+    simp only [BoolExpr.normalizeFast, BoolExpr.normalize,
+      Expr.simplifyDeepFastEarly_eq_simplifyDeep]
+  | fcmp op a b =>
+    simp only [BoolExpr.normalizeFast, BoolExpr.normalize,
+      Expr.simplifyDeepFastEarly_eq_simplifyDeep]
+  | not e ih =>
+    simp only [BoolExpr.normalizeFast, BoolExpr.normalize, ih]
+  | bexpr e =>
+    simp only [BoolExpr.normalizeFast, BoolExpr.normalize,
+      Expr.simplifyDeepFastEarly_eq_simplifyDeep]
+
+/-- `BoolExpr.symEvalFast` with the canonical map/fuel equals
+    `BoolExpr.symEval`. -/
+theorem BoolExpr.symEvalFast_eq_symEval
+    (b : BoolExpr) (ss : SymStore) (inv : EInv) :
+    b.symEvalFast ss (FastVarMap.ofList inv) (sdFuel inv)
+      = b.symEval ss inv := by
+  induction b with
+  | lit _ => rfl
+  | bvar x =>
+    simp only [BoolExpr.symEvalFast, BoolExpr.symEval,
+      Expr.simplifyDeepFastEarly_eq_simplifyDeep]
+  | cmp op a b =>
+    simp only [BoolExpr.symEvalFast, BoolExpr.symEval,
+      Expr.simplifyDeepFastEarly_eq_simplifyDeep]
+  | fcmp op a b => rfl
+  | not e ih =>
+    simp only [BoolExpr.symEvalFast, BoolExpr.symEval, ih]
+  | bexpr e =>
+    simp only [BoolExpr.symEvalFast, BoolExpr.symEval,
+      Expr.simplifyDeepFastEarly_eq_simplifyDeep]
+
+/-- `computeNextPCFast` with the canonical map/fuel equals `computeNextPC`. -/
+theorem computeNextPCFast_eq_computeNextPC
+    (instr : TAC) (pc : Label) (ss : SymStore) (inv : EInv) :
+    computeNextPCFast instr pc ss (FastVarMap.ofList inv) (sdFuel inv)
+      = computeNextPC instr pc ss inv := by
+  cases instr <;>
+    simp only [computeNextPCFast, computeNextPC,
+      BoolExpr.symEvalFast_eq_symEval]
+
+/-- `checkInstrAliasOkFast` with the canonical map/fuel equals
+    `checkInstrAliasOk`. -/
+theorem checkInstrAliasOkFast_eq_checkInstrAliasOk
+    (instr : TAC) (ss : SymStore) (sam : SymArrayMem) (inv : EInv) :
+    checkInstrAliasOkFast instr ss sam (FastVarMap.ofList inv) (sdFuel inv)
+      = checkInstrAliasOk instr ss sam inv := by
+  cases instr <;>
+    simp only [checkInstrAliasOkFast, checkInstrAliasOk,
+      Expr.simplifyDeepFastEarly_eq_simplifyDeep]
+
+/-- `checkOrigPathFast` with the canonical map/fuel equals `checkOrigPath`. -/
+theorem checkOrigPathFast_eq_checkOrigPath
+    (orig : Prog) (inv : EInv) :
+    ∀ (ss : SymStore) (sam : SymArrayMem) (pc : Label) (labels : List Label)
+      (pc_next : Label) (branchInfo : Option (BoolExpr × Bool)),
+    checkOrigPathFast orig ss sam (FastVarMap.ofList inv) (sdFuel inv)
+        pc labels pc_next branchInfo
+      = checkOrigPath orig ss sam inv pc labels pc_next branchInfo := by
+  intro ss sam pc labels
+  induction labels generalizing ss sam pc with
+  | nil =>
+    intro pc_next branchInfo
+    rfl
+  | cons nextPC rest ih =>
+    intro pc_next branchInfo
+    unfold checkOrigPathFast checkOrigPath
+    cases horig : orig[pc]? with
+    | none => rfl
+    | some instr =>
+      simp only [computeNextPCFast_eq_computeNextPC,
+        BoolExpr.normalizeFast_eq_normalize,
+        checkInstrAliasOkFast_eq_checkInstrAliasOk]
+      have hrec := ih (execSymbolic ss sam instr).1 (execSymbolic ss sam instr).2
+                     nextPC pc_next none
+      rw [hrec]
 
 /-- Check expression relation consistency via symbolic execution.
     For every `(e_o, e_t)` pair in `rel_post`, the original-side expression

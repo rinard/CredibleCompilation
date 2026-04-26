@@ -1069,6 +1069,7 @@ theorem checkInvariantsPreservedExec_sound (dc : ECertificate)
     (hnoarr_trans : checkNoArrReadInInvs dc.inv_trans = true) :
     checkInvariantsPreservedProp (toPCertificate dc) := by
   unfold checkInvariantsPreservedExec at h
+  simp only [checkInvAtomFast_eq_checkInvAtom_fn] at h
   have ⟨h1, h2⟩ := and_true_split h
   exact ⟨checkProg_sound dc.orig dc.inv_orig h1 hnoarr_orig,
          checkProg_sound dc.trans dc.inv_trans h2 hnoarr_trans⟩
@@ -2664,7 +2665,7 @@ private theorem checkRelConsistency_pairCheck
       (e_o.substSym (execPath orig ([] : SymStore) ([] : SymArrayMem) pc_orig origLabels).1).simplifyDeep (sdFuel inv_orig) inv_orig ==
       ((e_t.substSym (execSymbolic ([] : SymStore) ([] : SymArrayMem) transInstr).1).substSym
         (buildSubstMap rel_pre)).simplifyDeep (sdFuel inv_orig) inv_orig) = true := by
-  simp only [← Expr.substSymFast_eq_substSym, ← Expr.simplifyDeepFast_eq_simplifyDeep]
+  simp only [← Expr.substSymFast_eq_substSym, ← Expr.simplifyDeepFastEarly_eq_simplifyDeep]
   simp only [checkRelConsistency, Bool.and_eq_true] at h
   exact h.1.1.1
 
@@ -2706,7 +2707,7 @@ private theorem checkRelConsistency_amCheck
         a_o == a_t &&
         i_o.simplifyDeep (sdFuel inv_orig) inv_orig == (i_t.substSym (buildSubstMap rel_pre)).simplifyDeep (sdFuel inv_orig) inv_orig &&
         v_o.simplifyDeep (sdFuel inv_orig) inv_orig == (v_t.substSym (buildSubstMap rel_pre)).simplifyDeep (sdFuel inv_orig) inv_orig) = true := by
-  simp only [← Expr.substSymFast_eq_substSym, ← Expr.simplifyDeepFast_eq_simplifyDeep]
+  simp only [← Expr.substSymFast_eq_substSym, ← Expr.simplifyDeepFastEarly_eq_simplifyDeep]
   simp only [checkRelConsistency, Bool.and_eq_true] at h
   obtain ⟨_, hamCheck⟩ := h
   simp only [beq_iff_eq] at hamCheck
@@ -3271,6 +3272,7 @@ private theorem extractTransCheck (dc : ECertificate)
       obtain ⟨h12, hpath⟩ := h123
       rw [Bool.and_eq_true] at h12
       obtain ⟨hrel_eq, hrel_next_eq⟩ := h12
+      rw [checkOrigPathFast_eq_checkOrigPath] at hpath
       refine ⟨dic, rfl, dtc, hdtc_mem,
         beq_iff_eq.mp hrel_eq, beq_iff_eq.mp hrel_next_eq, hpath, hrel_check⟩
   | _ =>
@@ -3288,6 +3290,7 @@ private theorem extractTransCheck (dc : ECertificate)
       obtain ⟨h12, hpath⟩ := h123
       rw [Bool.and_eq_true] at h12
       obtain ⟨hrel_eq, hrel_next_eq⟩ := h12
+      rw [checkOrigPathFast_eq_checkOrigPath] at hpath
       refine ⟨dic, rfl, dtc, hdtc_mem,
         beq_iff_eq.mp hrel_eq, beq_iff_eq.mp hrel_next_eq, hpath, hrel_check⟩
 
