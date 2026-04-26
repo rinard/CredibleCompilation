@@ -14,30 +14,9 @@ DCE only needs basic reachability — no invariants required.
 namespace DCEOpt
 
 -- ============================================================
--- § 1. Reachability analysis (plain successors)
+-- § 1. Transform instructions
 -- ============================================================
-
-private partial def reachLoop (prog : Prog)
-    (visited : Array Bool) (worklist : List Nat) : Array Bool :=
-  match worklist with
-  | [] => visited
-  | pc :: rest =>
-    if pc < prog.size && !(visited.getD pc false) then
-      let visited' := visited.set! pc true
-      let succs := match prog[pc]? with
-        | some instr => instr.successors pc
-        | none => []
-      reachLoop prog visited' (succs ++ rest)
-    else
-      reachLoop prog visited rest
-
-/-- Compute the set of reachable PCs from PC 0, following all edges. -/
-def reachable (prog : Prog) : Array Bool :=
-  reachLoop prog (Array.replicate prog.size false) (0 :: [])
-
--- ============================================================
--- § 2. Transform instructions
--- ============================================================
+-- Reachability is `_root_.reachable` from `ExecChecker`.
 
 /-- Transform a single original instruction: remap labels. -/
 def transformInstr (prog : Prog) (revMap : Array Nat) (origPC : Nat) : TAC :=
@@ -73,7 +52,7 @@ def transformProg (prog : Prog) (origMap : Array Nat) (revMap : Array Nat) : Pro
     arrayDecls := prog.arrayDecls }
 
 -- ============================================================
--- § 3. Certificate generation
+-- § 2. Certificate generation
 -- ============================================================
 
 /-- Build per-instruction certificates.
@@ -107,14 +86,14 @@ def buildInstrCerts (origMap : Array Nat) (trans : Prog) (allVars : List Var) : 
   arr.toArray
 
 -- ============================================================
--- § 4. Main entry point
+-- § 3. Main entry point
 -- ============================================================
 
 /-- Run dead code elimination on `prog` and produce a certified transformation.
     Uses empty invariants — after ConstProp resolves branches to `goto`,
     basic reachability suffices. -/
 def optimize (tyCtx : TyCtx) (prog : Prog) : ECertificate :=
-  let reached := reachable prog
+  let reached := _root_.reachable prog
   let origMap := _root_.buildOrigMap reached
   let revMap := _root_.buildRevMap origMap prog.size
   let trans := transformProg prog origMap revMap
