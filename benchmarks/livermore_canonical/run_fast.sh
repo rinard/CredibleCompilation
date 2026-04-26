@@ -176,7 +176,9 @@ def first(path):
             s = line.strip().lower()
             if s.startswith(('elapsed', 'time:', 'time ')):
                 continue
-            line = re.sub(r'^\s*k\d+[^=]*=', '', line, count=1)
+            # If the line has an '=', take the rightmost part (value, not the LHS index)
+            if '=' in line:
+                line = line.rsplit('=', 1)[1]
             for m in re.finditer(num_re, line):
                 tok = m.group(0).replace('d','e').replace('D','E')
                 try:

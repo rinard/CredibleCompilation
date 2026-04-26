@@ -27,7 +27,7 @@ if [ $# -gt 0 ]; then
   KERNELS=("$@")
 fi
 
-NRUNS=5
+NRUNS=${NRUNS:-1}
 
 # ── compile all kernels ──────────────────────────────────────────
 echo "Compiling kernels..."
