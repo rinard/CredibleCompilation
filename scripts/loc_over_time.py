@@ -94,13 +94,15 @@ def main():
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
-    import matplotlib.dates as mdates
 
     dates = [d for d, _ in data]
     code = [c["code"] for _, c in data]
     comment = [c["comment"] for _, c in data]
     blank = [c["blank"] for _, c in data]
     total = [c + m + b for c, m, b in zip(code, comment, blank)]
+    # Project days: day 0 = first sample
+    day0 = dates[0]
+    days = [(d - day0).days for d in dates]
 
     if args.pldi:
         plt.rcParams.update({
@@ -111,27 +113,27 @@ def main():
             "ytick.labelsize": 7,
             "legend.fontsize": 7,
             "font.family": "serif",
+            "font.serif": ["Times New Roman", "Times", "DejaVu Serif"],
+            "mathtext.fontset": "stix",
         })
         fig, ax = plt.subplots(figsize=(3.3, 2.0))
     else:
+        plt.rcParams.update({
+            "font.family": "serif",
+            "font.serif": ["Times New Roman", "Times", "DejaVu Serif"],
+            "mathtext.fontset": "stix",
+        })
         fig, ax = plt.subplots(figsize=(7.5, 4.5))
 
-    # Stacked area: code (bottom), comment (middle), blank (top)
-    ax.fill_between(dates, 0, code, label="code", alpha=0.85, color="#2b6cb0")
-    ax.fill_between(dates, code, [c + m for c, m in zip(code, comment)],
-                    label="comment", alpha=0.6, color="#a0aec0")
-    ax.fill_between(dates, [c + m for c, m in zip(code, comment)], total,
-                    label="blank", alpha=0.4, color="#cbd5e0")
+    # Line + small-dot markers; non-blank, non-comment LOC only
+    # (matches the paper's LOC-by-kind table total).
+    ax.plot(days, code, marker="o", markersize=2.5, linewidth=1.0, color="#2b6cb0")
 
-    ax.set_xlabel("Date")
-    ax.set_ylabel("Lines of Lean")
-    ax.legend(loc="upper left", frameon=False)
-    ax.xaxis.set_major_locator(mdates.WeekdayLocator(byweekday=mdates.MO))
-    ax.xaxis.set_major_formatter(mdates.DateFormatter("%b %d"))
-    fig.autofmt_xdate(rotation=30, ha="right")
+    ax.set_xlabel("Project day")
+    ax.set_ylabel("Lines of Code")
+    ax.set_xlim(days[0], days[-1])
+    ax.set_ylim(0, max(code) * 1.05)
     ax.grid(True, axis="y", linestyle=":", alpha=0.5)
-    ax.set_xlim(dates[0], dates[-1])
-    ax.set_ylim(0, max(total) * 1.05)
 
     fig.tight_layout()
     png = args.out + ".png"
