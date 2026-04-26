@@ -10,49 +10,124 @@ def writeRuntime : IO String := do
   IO.FS.writeFile ⟨path⟩ runtimeSrc
   return path
 
+-- ============================================================
+-- Instrumented IO-aware pass runners (used by compileFileToFile).
+-- Pure variants live in CodeGen.lean and remain unchanged.
+-- Marker lines are emitted to stderr for downstream scripts:
+--   [PASS]    phase=<p> iter=<i> name=<n> us=<elapsed> size_in=<a> size_out=<b>
+--   [CLUSTER] iters=<n> fixedPoint=<true|false>
+--   [STAGE]   name=<n> us=<elapsed> ...
+--   [TOTAL]   compile_us=<elapsed>
+-- ============================================================
+
+private def runPassTimed (tyCtx : TyCtx) (phase : String) (iter : Nat)
+    (name : String) (pass : Prog → ECertificate) (p : Prog) : IO Prog := do
+  let t0 ← IO.monoNanosNow
+  let p' := match applyPass name tyCtx pass p with
+    | .ok p' => p'
+    | .error _ => p
+  let t1 ← IO.monoNanosNow
+  let us := (t1 - t0) / 1000
+  IO.eprintln s!"[PASS] phase={phase} iter={iter} name={name} us={us} \
+    size_in={p.size} size_out={p'.size}"
+  pure p'
+
+private def runPassListTimed (tyCtx : TyCtx) (phase : String) (iter : Nat)
+    (passes : List (String × (Prog → ECertificate))) (p : Prog) : IO Prog :=
+  passes.foldlM (fun p (name, pass) => runPassTimed tyCtx phase iter name pass p) p
+
+private def runFixpointTimedAux (tyCtx : TyCtx)
+    (passes : List (String × (Prog → ECertificate))) :
+    Nat → Nat → Prog → IO (Prog × Nat × Bool)
+  | 0, iter, p => pure (p, iter, false)
+  | n + 1, iter, p => do
+    let p' ← runPassListTimed tyCtx "cluster" (iter + 1) passes p
+    if p'.code == p.code then pure (p', iter + 1, true)
+    else runFixpointTimedAux tyCtx passes n (iter + 1) p'
+
+private def runFixpointTimed (tyCtx : TyCtx)
+    (passes : List (String × (Prog → ECertificate))) (maxIter : Nat)
+    (p : Prog) : IO Prog := do
+  let (p', iters, fixedPoint) ← runFixpointTimedAux tyCtx passes maxIter 0 p
+  IO.eprintln s!"[CLUSTER] iters={iters} fixedPoint={fixedPoint}"
+  pure p'
+
+/-- Mirror of `applyStandardPipelineFixpoint` with per-pass timing instrumentation. -/
+private def runStandardPipelineTimed (tyCtx : TyCtx) (p : Prog) : IO Prog := do
+  let p ← runPassListTimed tyCtx "prefix" 0 (prefixPasses tyCtx) p
+  let p ← runFixpointTimed tyCtx (licmClusterPasses tyCtx) 5 p
+  runPassListTimed tyCtx "suffix" 0 (suffixPasses tyCtx) p
+
 /-- **Structured driver: compile a source file to an assembly text file.**
 
     Each step's name and order matches the corresponding stage in the verified
     pipeline (see `compilePipeline` in CodeGen.lean and the top-level theorems
     in PipelineCorrectness.lean).  Stages are logged to stderr so the structure
-    is observable from the command line. -/
+    is observable from the command line.
+
+    Per-pass timings, LICM cluster iteration count, and total compile time are
+    emitted as `[PASS]`, `[CLUSTER]`, `[STAGE]`, `[TOTAL]` marker lines on
+    stderr for downstream report scripts to parse. -/
 def compileFileToFile (inputFile outputFile : String) (noOpt : Bool) : IO UInt32 := do
+  let tStart ← IO.monoNanosNow
   IO.eprintln s!"[1/6] Reading source file: {inputFile}"
+  let tReadStart ← IO.monoNanosNow
   let src ← IO.FS.readFile ⟨inputFile⟩
+  let tReadEnd ← IO.monoNanosNow
+  IO.eprintln s!"[STAGE] name=read us={(tReadEnd - tReadStart) / 1000}"
   -- Stage 1: parse (unverified)
   IO.eprintln s!"[2/6] Parsing (unverified)..."
+  let tParseStart ← IO.monoNanosNow
   let prog ← match parseProgram src with
     | .ok p => pure p
     | .error e => IO.eprintln s!"  parse error: {e}"; return 1
+  let tParseEnd ← IO.monoNanosNow
+  IO.eprintln s!"[STAGE] name=parse us={(tParseEnd - tParseStart) / 1000}"
   -- Stage 2: well-formedness
   IO.eprintln s!"[3/6] Well-formedness check..."
+  let tWfStart ← IO.monoNanosNow
   if !prog.wellFormed then
     IO.eprintln s!"  program is not well-formed (typecheck/noGoto/noReservedNames failed)"
     return 1
+  let tWfEnd ← IO.monoNanosNow
+  IO.eprintln s!"[STAGE] name=wellformed us={(tWfEnd - tWfStart) / 1000}"
   let tyCtx := prog.tyCtx
   -- Stage 3: AST → TAC (verified)
   IO.eprintln s!"[4/6] AST → TAC (verified by compileToTAC_*) ..."
+  let tTacStart ← IO.monoNanosNow
   let tac := prog.compileToTAC
+  let tTacEnd ← IO.monoNanosNow
+  IO.eprintln s!"[STAGE] name=compileToTAC us={(tTacEnd - tTacStart) / 1000} tac_size={tac.size}"
   IO.eprintln s!"  TAC size: {tac.size}"
-  -- Stage 4: optimizations (verified, certificate-checked)
+  -- Stage 4: optimizations (verified, certificate-checked, instrumented)
   IO.eprintln s!"[5/6] Applying optimization passes \
     (prefix + LICM cluster fixed-point ≤5 + suffix)..."
-  let opt :=
-    if noOpt then tac
-    else applyStandardPipelineFixpoint tyCtx tac
+  let tOptStart ← IO.monoNanosNow
+  let opt ← if noOpt then pure tac else runStandardPipelineTimed tyCtx tac
+  let tOptEnd ← IO.monoNanosNow
+  IO.eprintln s!"[STAGE] name=optimize us={(tOptEnd - tOptStart) / 1000} opt_size={opt.size}"
   IO.eprintln s!"  Optimized TAC size: {opt.size}"
   -- Stage 5: TAC → verified ASM core (verified)
   IO.eprintln s!"[6/6] TAC → verified ASM (verifiedGenerateAsm) + format & write..."
+  let tCgStart ← IO.monoNanosNow
   let r ← match verifiedGenerateAsm tyCtx opt with
     | .ok r => pure r
     | .error e => IO.eprintln s!"  verifiedGenerateAsm error: {e}"; return 1
+  let tCgEnd ← IO.monoNanosNow
+  IO.eprintln s!"[STAGE] name=verifiedCodegen us={(tCgEnd - tCgStart) / 1000} \
+    arm_instrs={r.bodyFlat.size}"
   IO.eprintln s!"  Verified ASM core: {r.bodyFlat.size} ARM instructions"
   -- Stage 6: format (unverified pretty-print + boilerplate) → write
+  let tFmtStart ← IO.monoNanosNow
   let asm ← match formatVerifiedAsm r opt with
     | .ok s => pure s
     | .error e => IO.eprintln s!"  format error: {e}"; return 1
   IO.FS.writeFile ⟨outputFile⟩ asm
+  let tFmtEnd ← IO.monoNanosNow
+  IO.eprintln s!"[STAGE] name=format us={(tFmtEnd - tFmtStart) / 1000}"
   IO.eprintln s!"  Written: {outputFile}"
+  let tEnd ← IO.monoNanosNow
+  IO.eprintln s!"[TOTAL] compile_us={(tEnd - tStart) / 1000}"
   return 0
 
 def main (args : List String) : IO UInt32 := do
