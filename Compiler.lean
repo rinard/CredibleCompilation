@@ -22,13 +22,25 @@ def writeRuntime : IO String := do
 
 private def runPassTimed (tyCtx : TyCtx) (phase : String) (iter : Nat)
     (name : String) (pass : Prog → ECertificate) (p : Prog) : IO Prog := do
+  -- Split timing: analyze = build certificate; check = run executable checker.
+  -- IORef round-trip between t0/t1 forces evaluation of the cert structure so
+  -- the Lean compiler cannot hoist construction work into the check window.
   let t0 ← IO.monoNanosNow
-  let p' := match applyPass name tyCtx pass p with
-    | .ok p' => p'
-    | .error _ => p
+  let cert := { pass p with tyCtx := tyCtx }
+  let ref ← IO.mkRef cert
+  let cert ← ref.get
   let t1 ← IO.monoNanosNow
-  let us := (t1 - t0) / 1000
-  IO.eprintln s!"[PASS] phase={phase} iter={iter} name={name} us={us} \
+  let p' :=
+    if cert.orig.code != p.code || cert.orig.observable != p.observable ||
+       cert.orig.arrayDecls != p.arrayDecls then p
+    else if checkCertificateExec cert then cert.trans
+    else p
+  let t2 ← IO.monoNanosNow
+  let analyze_us := (t1 - t0) / 1000
+  let check_us := (t2 - t1) / 1000
+  let total_us := (t2 - t0) / 1000
+  IO.eprintln s!"[PASS] phase={phase} iter={iter} name={name} us={total_us} \
+    analyze_us={analyze_us} check_us={check_us} \
     size_in={p.size} size_out={p'.size}"
   pure p'
 

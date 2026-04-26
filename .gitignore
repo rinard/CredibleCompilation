@@ -13,4 +13,5 @@ benchmarks/livermore_canonical/build_full/
 benchmarks/livermore_canonical/build_opt_compare/
 benchmarks/livermore_canonical/build_compile_time/
 benchmarks/livermore_canonical/build_pipeline_report/
+benchmarks/livermore_canonical/build_checker_overhead/
 benchmarks/livermore_canonical/__pycache__/
