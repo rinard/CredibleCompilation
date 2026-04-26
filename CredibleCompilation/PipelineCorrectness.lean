@@ -1829,6 +1829,70 @@ theorem arm_diverges_implies_program_diverges
     intro fuel
     exact (Program.run_outOfFuel_iff prog fuel).mpr ⟨hsafe_all fuel, hinterp_none fuel⟩
 
+-- ============================================================
+-- § 7e. Connecting the driver to backward refinement
+-- ============================================================
+
+/-- **Driver-to-theorem bridge: ARM halt implies source halt.**
+
+    Backward dual of `compileProgramAst_correctness`.  If the driver returned
+    `.ok r` and the ARM trace ends at `haltFinal`, then the source program
+    halts safely with observables matching the ARM state. -/
+theorem compileProgramAst_arm_halts_implies_program_halts
+    {prog : Program} {noOpt : Bool} {r : VerifiedAsmResult}
+    (hDriver : compileProgramAst prog noOpt = .ok r)
+    {s : ArmState}
+    (hArm : ArmSteps r.bodyFlat (r.initArmState) s)
+    (hPC : s.pc = r.haltFinal) :
+    ∃ fuel σ_src am_src,
+      prog.run fuel = .halts σ_src am_src ∧
+      ArmStateMatchesProgramState s r.layout prog.compileToTAC.observable σ_src am_src := by
+  unfold compileProgramAst at hDriver
+  split at hDriver
+  · rename_i hwf
+    exact arm_halts_implies_program_halts prog hwf _ hDriver hArm hPC
+  · simp at hDriver
+
+/-- **Driver-to-theorem bridge: ARM div-by-zero sentinel implies source unsafe (division).** -/
+theorem compileProgramAst_arm_div_implies_program_unsafe_div
+    {prog : Program} {noOpt : Bool} {r : VerifiedAsmResult}
+    (hDriver : compileProgramAst prog noOpt = .ok r)
+    {s : ArmState}
+    (hArm : ArmSteps r.bodyFlat (r.initArmState) s)
+    (hPC : s.pc = r.divS) :
+    ∃ fuel, prog.run fuel = .divByZero := by
+  unfold compileProgramAst at hDriver
+  split at hDriver
+  · rename_i hwf
+    exact arm_div_implies_program_unsafe_div prog hwf _ hDriver hArm hPC
+  · simp at hDriver
+
+/-- **Driver-to-theorem bridge: ARM bounds sentinel implies source unsafe (bounds).** -/
+theorem compileProgramAst_arm_bounds_implies_program_unsafe_bounds
+    {prog : Program} {noOpt : Bool} {r : VerifiedAsmResult}
+    (hDriver : compileProgramAst prog noOpt = .ok r)
+    {s : ArmState}
+    (hArm : ArmSteps r.bodyFlat (r.initArmState) s)
+    (hPC : s.pc = r.boundsS) :
+    ∃ fuel, prog.run fuel = .outOfBounds := by
+  unfold compileProgramAst at hDriver
+  split at hDriver
+  · rename_i hwf
+    exact arm_bounds_implies_program_unsafe_bounds prog hwf _ hDriver hArm hPC
+  · simp at hDriver
+
+/-- **Driver-to-theorem bridge: ARM divergence implies source divergence.** -/
+theorem compileProgramAst_arm_diverges_implies_program_diverges
+    {prog : Program} {noOpt : Bool} {r : VerifiedAsmResult}
+    (hDriver : compileProgramAst prog noOpt = .ok r)
+    (hDiv : ArmDiverges r.bodyFlat (r.initArmState)) :
+    ∀ fuel, prog.run fuel = .outOfFuel := by
+  unfold compileProgramAst at hDriver
+  split at hDriver
+  · rename_i hwf
+    exact arm_diverges_implies_program_diverges prog hwf _ hDriver hDiv
+  · simp at hDriver
+
 end Phase7Skeleton
 
 -- ============================================================
