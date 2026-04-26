@@ -4054,4 +4054,80 @@ theorem program_run_exhaustive
   · exact Or.inr (Or.inr (Or.inr
       (arm_diverges_implies_program_diverges prog htcs passes hGen hDiv)))
 
+/-- **AST-level exhaustion: every program's `run` lands in one of four bins.**
+
+    The disjunction follows by pigeonhole on `RunResult`'s four constructors:
+    if no fuel produces halt/div/bounds, every fuel must produce `outOfFuel`.
+    No compilation, type-checking, or even well-formedness needed — the
+    statement is purely about the total `run` function.  Compare to
+    `program_run_exhaustive` which uses well-formedness + a successful
+    codegen to route through ARM exhaustion; this version skips all that. -/
+theorem program_run_exhaustive_pure (prog : Program) :
+    (∃ fuel σ_src am_src, prog.run fuel = .halts σ_src am_src) ∨
+    (∃ fuel, prog.run fuel = .divByZero) ∨
+    (∃ fuel, prog.run fuel = .outOfBounds) ∨
+    (∀ fuel, prog.run fuel = .outOfFuel) := by
+  classical
+  by_cases h1 : ∃ fuel σ am, prog.run fuel = .halts σ am
+  · exact Or.inl h1
+  by_cases h2 : ∃ fuel, prog.run fuel = .divByZero
+  · exact Or.inr (Or.inl h2)
+  by_cases h3 : ∃ fuel, prog.run fuel = .outOfBounds
+  · exact Or.inr (Or.inr (Or.inl h3))
+  refine Or.inr (Or.inr (Or.inr ?_))
+  intro fuel
+  match hr : prog.run fuel with
+  | .halts σ am => exact absurd ⟨fuel, σ, am, hr⟩ h1
+  | .divByZero => exact absurd ⟨fuel, hr⟩ h2
+  | .outOfBounds => exact absurd ⟨fuel, hr⟩ h3
+  | .outOfFuel => rfl
+
+/-- Wrapper for the well-formed case — included for parallelism with the
+    other `_of_wellFormed` theorems, even though the hypothesis is unused. -/
+theorem program_run_exhaustive_of_wellFormed
+    (prog : Program) (_htcs : prog.wellFormed = true) :
+    (∃ fuel σ_src am_src, prog.run fuel = .halts σ_src am_src) ∨
+    (∃ fuel, prog.run fuel = .divByZero) ∨
+    (∃ fuel, prog.run fuel = .outOfBounds) ∨
+    (∀ fuel, prog.run fuel = .outOfFuel) :=
+  program_run_exhaustive_pure prog
+
+/-- **Driver-to-theorem bridge: ARM behavior exhaustion.**
+
+    Driver wrapper for `arm_behavior_exhaustive`.  If the driver returns
+    `.ok r`, the compiled ARM program either reaches `haltFinal`, `divS`,
+    `boundsS`, or diverges.  Same four-case split, lifted from
+    `verifiedGenerateAsm = .ok r` to `compileProgramAst prog noOpt = .ok r`. -/
+theorem compileProgramAst_arm_behavior_exhaustive
+    {prog : Program} {noOpt : Bool} {r : VerifiedAsmResult}
+    (hDriver : compileProgramAst prog noOpt = .ok r) :
+    (∃ s', ArmSteps r.bodyFlat (r.initArmState) s' ∧ s'.pc = r.haltFinal) ∨
+    (∃ s', ArmSteps r.bodyFlat (r.initArmState) s' ∧ s'.pc = r.divS) ∨
+    (∃ s', ArmSteps r.bodyFlat (r.initArmState) s' ∧ s'.pc = r.boundsS) ∨
+    ArmDiverges r.bodyFlat (r.initArmState) := by
+  unfold compileProgramAst at hDriver
+  split at hDriver
+  · rename_i hwf
+    exact arm_behavior_exhaustive prog hwf _ hDriver
+  · simp at hDriver
+
+/-- **Driver-to-theorem bridge: source-run exhaustion.**
+
+    Driver wrapper for `program_run_exhaustive`.  If the driver returns
+    `.ok r`, then for some fuel the source `prog.run` lands in exactly one
+    of: clean halt, div-by-zero, out-of-bounds, or out-of-fuel at every
+    fuel.  Source-side dual of `compileProgramAst_arm_behavior_exhaustive`. -/
+theorem compileProgramAst_program_run_exhaustive
+    {prog : Program} {noOpt : Bool} {r : VerifiedAsmResult}
+    (hDriver : compileProgramAst prog noOpt = .ok r) :
+    (∃ fuel σ_src am_src, prog.run fuel = .halts σ_src am_src) ∨
+    (∃ fuel, prog.run fuel = .divByZero) ∨
+    (∃ fuel, prog.run fuel = .outOfBounds) ∨
+    (∀ fuel, prog.run fuel = .outOfFuel) := by
+  unfold compileProgramAst at hDriver
+  split at hDriver
+  · rename_i hwf
+    exact program_run_exhaustive prog hwf _ hDriver
+  · simp at hDriver
+
 end Phase6Main
