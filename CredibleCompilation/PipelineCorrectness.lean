@@ -833,6 +833,18 @@ theorem generateAsm_total (prog : Program) (htcs : prog.wellFormed = true) :
     ∃ asm, verifiedGenerateAsm prog.tyCtx prog.compileToTAC = .ok asm :=
   generateAsm_total_with_passes prog htcs ([] : List (String × (Prog → ECertificate)))
 
+/-- **Driver totality.**  Well-formedness of the source `Program` suffices
+    for the compiler driver to succeed: `compileProgramAst` returns
+    `.ok asm` for some `asm : VerifiedAsmResult`.  The proof unfolds
+    the driver, takes the `wellFormed` branch, and applies
+    `generateAsm_total_with_passes` to the resulting pass list. -/
+theorem compileProgramAst_total (prog : Program) (htcs : prog.wellFormed = true)
+    (noOpt : Bool) :
+    ∃ asm, compileProgramAst prog noOpt = .ok asm := by
+  unfold compileProgramAst
+  simp [htcs]
+  exact generateAsm_total_with_passes prog htcs _
+
 -- ============================================================
 -- § 8. Phase 6 — ARM behavior exhaustion (SKELETON)
 -- ============================================================
