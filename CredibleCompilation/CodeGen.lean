@@ -2,6 +2,7 @@ import Mathlib.Data.List.Nodup
 import CredibleCompilation.WhileLang
 import CredibleCompilation.Parser
 import CredibleCompilation.ConstPropOpt
+import CredibleCompilation.CopyPropOpt
 import CredibleCompilation.CSEOpt
 import CredibleCompilation.LICMOpt
 import CredibleCompilation.ConstHoistOpt
@@ -6555,7 +6556,14 @@ def licmClusterPasses (tyCtx : TyCtx) : List (String × (Prog → ECertificate))
     ("CSE", CSEOpt.optimize tyCtx),
     ("DAE", DAEOpt.optimize tyCtx) ]
 
-/-- Suffix: late FMAFusion, then cleanup + register allocation. -/
+/-- Suffix: late FMAFusion, then cleanup + register allocation.
+    CopyProp is intentionally NOT included here. Empirically (see commit
+    history), TAC-level copy propagation extends live ranges of the
+    surviving variable past where the eliminated copy's uses lived, which
+    fights the Stage 1 Chaitin spill heuristic and causes regressions on
+    heavy kernels (-17% on k18, -3% on k08). The pass exists in
+    CopyPropOpt.lean if needed for experimentation; coalescing inside
+    RegAlloc would be the next thing to try if copy elimination is wanted. -/
 def suffixPasses (tyCtx : TyCtx) : List (String × (Prog → ECertificate)) :=
   [ ("FMAFusion", FMAFusionOpt.optimize tyCtx),
     ("DCE", DCEOpt.optimize tyCtx),
