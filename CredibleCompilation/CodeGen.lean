@@ -6459,6 +6459,19 @@ def applyPasses (tyCtx : TyCtx) : List (String × (Prog → ECertificate)) → P
       | .error _ => p
     applyPasses tyCtx rest p'
 
+/-- Apply `passes` repeatedly, stopping when either the program code is
+    unchanged after a full iteration (fixed point) or `maxIter` iterations
+    have run, whichever comes first. Each pass inside is certificate-checked
+    via `applyPasses`. -/
+def applyPassesUntilFixedOrN (tyCtx : TyCtx)
+    (passes : List (String × (Prog → ECertificate))) :
+    Nat → Prog → Prog
+  | 0, p => p
+  | n + 1, p =>
+    let p' := applyPasses tyCtx passes p
+    if p'.code == p.code then p'
+    else applyPassesUntilFixedOrN tyCtx passes n p'
+
 /-- Previous (legacy) optimization pass list, kept for comparison. -/
 def previousPasses (tyCtx : TyCtx) : List (String × (Prog → ECertificate)) :=
   [ ("DCE", DCEOpt.optimize tyCtx),
@@ -6525,6 +6538,44 @@ def standardPasses (tyCtx : TyCtx) : List (String × (Prog → ECertificate)) :=
     ("Peephole", PeepholeOpt.optimize tyCtx),
     ("RegAlloc", RegAllocOpt.optimize tyCtx) ]
 
+/-- Front-load: ConstProp/DCE/CSE/ConstProp/DAE before the LICM cluster. -/
+def prefixPasses (tyCtx : TyCtx) : List (String × (Prog → ECertificate)) :=
+  [ ("ConstProp", ConstPropOpt.optimize tyCtx),
+    ("DCE", DCEOpt.optimize tyCtx),
+    ("CSE", CSEOpt.optimize tyCtx),
+    ("ConstProp", ConstPropOpt.optimize tyCtx),
+    ("DAE", DAEOpt.optimize tyCtx) ]
+
+/-- One iteration of the LICM cluster: hoist consts one loop level, then
+    canonicalize copies and kill writes the redundancy passes have made dead. -/
+def licmClusterPasses (tyCtx : TyCtx) : List (String × (Prog → ECertificate)) :=
+  [ ("LICM", LICMOpt.optimize tyCtx),
+    ("ConstProp", ConstPropOpt.optimize tyCtx),
+    ("ConstHoist", ConstHoistOpt.optimize tyCtx),
+    ("CSE", CSEOpt.optimize tyCtx),
+    ("DAE", DAEOpt.optimize tyCtx) ]
+
+/-- Suffix: late FMAFusion, then cleanup + register allocation. -/
+def suffixPasses (tyCtx : TyCtx) : List (String × (Prog → ECertificate)) :=
+  [ ("FMAFusion", FMAFusionOpt.optimize tyCtx),
+    ("DCE", DCEOpt.optimize tyCtx),
+    ("Peephole", PeepholeOpt.optimize tyCtx),
+    ("RegAlloc", RegAllocOpt.optimize tyCtx) ]
+
+/-- Standard pipeline with a fixed-point LICM cluster.
+
+    Runs `prefixPasses`, then iterates `licmClusterPasses` until the program
+    code is unchanged after a full iteration or 5 iterations have run
+    (whichever comes first), then runs `suffixPasses`.
+
+    Equivalent to `applyPasses tyCtx (standardPasses tyCtx)` when no further
+    code change occurs after the first cluster iteration; can be more or less
+    work depending on how quickly a fixed point is reached. -/
+def applyStandardPipelineFixpoint (tyCtx : TyCtx) (p : Prog) : Prog :=
+  let p := applyPasses tyCtx (prefixPasses tyCtx) p
+  let p := applyPassesUntilFixedOrN tyCtx (licmClusterPasses tyCtx) 5 p
+  applyPasses tyCtx (suffixPasses tyCtx) p
+
 /-- **Verified core of the compiler driver.**
 
     From a parsed `Program` AST, runs the post-parse compilation pipeline:
@@ -6544,11 +6595,28 @@ def compileProgramAst (prog : Program) (noOpt : Bool := false) :
   else
     .error "program is not well-formed"
 
+/-- Driver-core variant that runs `applyStandardPipelineFixpoint` instead of
+    the unrolled `applyPasses ... standardPasses`. Same shape and contract as
+    `compileProgramAst`, but with fixed-point LICM cluster iteration.
+
+    To reinstall the unrolled pipeline, switch `compilePipeline` /
+    `compileToAsmWith` to call `compileProgramAst` instead of this. -/
+def compileProgramAstFixpoint (prog : Program) (noOpt : Bool := false) :
+    Except String VerifiedAsmResult :=
+  if prog.wellFormed then
+    let opt :=
+      if noOpt then prog.compileToTAC
+      else applyStandardPipelineFixpoint prog.tyCtx prog.compileToTAC
+    verifiedGenerateAsm prog.tyCtx opt
+  else
+    .error "program is not well-formed"
+
 def compileToAsmWith (input : String) (noOpt : Bool) : Except String String := do
   let prog ← parseProgram input
-  let r ← compileProgramAst prog noOpt
-  let opt := applyPasses prog.tyCtx
-    (if noOpt then [] else standardPasses prog.tyCtx) prog.compileToTAC
+  let r ← compileProgramAstFixpoint prog noOpt
+  let opt :=
+    if noOpt then prog.compileToTAC
+    else applyStandardPipelineFixpoint prog.tyCtx prog.compileToTAC
   formatVerifiedAsm r opt
 
 /-- **Structured compilation pipeline.**  Each stage maps directly to a
@@ -6580,10 +6648,11 @@ def compilePipeline (input : String) (noOpt : Bool := false) :
   -- Stage 1: parse (unverified)
   let prog ← parseProgram input
   -- Stages 2-5: verified core (well-formedness, AST→TAC, optimizations, verified ASM)
-  let r ← compileProgramAst prog noOpt
+  let r ← compileProgramAstFixpoint prog noOpt
   -- Stage 6: wrap + pretty-print (unverified)
-  let opt := applyPasses prog.tyCtx
-    (if noOpt then [] else standardPasses prog.tyCtx) prog.compileToTAC
+  let opt :=
+    if noOpt then prog.compileToTAC
+    else applyStandardPipelineFixpoint prog.tyCtx prog.compileToTAC
   formatVerifiedAsm r opt
 
 def compileToAsm (input : String) : Except String String :=

@@ -35,10 +35,11 @@ def compileFileToFile (inputFile outputFile : String) (noOpt : Bool) : IO UInt32
   let tac := prog.compileToTAC
   IO.eprintln s!"  TAC size: {tac.size}"
   -- Stage 4: optimizations (verified, certificate-checked)
-  IO.eprintln s!"[5/6] Applying {if noOpt then 0 else (standardPasses tyCtx).length} \
-    certificate-checked optimization passes..."
-  let optPasses := if noOpt then [] else standardPasses tyCtx
-  let opt := applyPasses tyCtx optPasses tac
+  IO.eprintln s!"[5/6] Applying optimization passes \
+    (prefix + LICM cluster fixed-point ≤5 + suffix)..."
+  let opt :=
+    if noOpt then tac
+    else applyStandardPipelineFixpoint tyCtx tac
   IO.eprintln s!"  Optimized TAC size: {opt.size}"
   -- Stage 5: TAC → verified ASM core (verified)
   IO.eprintln s!"[6/6] TAC → verified ASM (verifiedGenerateAsm) + format & write..."
