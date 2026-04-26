@@ -95,7 +95,7 @@ while (j <= 7) {
 
 fw := 0.175;
 rep := 1;
-while (rep <= 10200000) {
+while (rep <= 8600000) {
   j := 2;
   while (j <= 6) {
     k := 2;

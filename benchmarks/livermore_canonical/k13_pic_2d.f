@@ -92,7 +92,7 @@ C
 C
 C     Kernel 13 body (verbatim from canonical lines 213-231)
 C
-      DO 500 REP = 1, 28000000
+      DO 500 REP = 1, 33800000
          DO 13 K = 1, N
             I1 = P(1,K)
             J1 = P(2,K)

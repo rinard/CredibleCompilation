@@ -83,7 +83,7 @@ while (k3 <= 2) {
 };
 
 rep := 1;
-while (rep <= 13300000) {
+while (rep <= 22600000) {
   nl1 := 1;
   nl2 := 2;
   fw := 2.0;

@@ -9,7 +9,7 @@
 
 #define NZ    101
 #define NG    7
-#define NREPS 4300000
+#define NREPS 6600000
 
 #define VY(k,j) vy[((j)-1)*101 + (k)]
 #define VH(k,j) vh[((j)-1)*101 + (k)]

@@ -9,7 +9,7 @@
 #include "signel.h"
 
 #define N     101
-#define NREPS 58000000
+#define NREPS 77700000
 
 /* 1-based Fortran column-major: PX(i,j) with dims (25,101) */
 #define PX(i,j) px[((j)-1)*25 + (i)]

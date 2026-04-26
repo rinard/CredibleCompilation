@@ -91,7 +91,7 @@ C
 C
 C     Kernel 18 body (canonical lines 438-466)
 C
-      DO 500 REP = 1, 2570000
+      DO 500 REP = 1, 3840000
          T  = 0.003700D0
          S  = 0.004100D0
          KN = 6

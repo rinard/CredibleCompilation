@@ -9,7 +9,7 @@
 #include "signel.h"
 
 #define N     101
-#define NREPS 2570000
+#define NREPS 3840000
 
 #define ZA(j,k) za[((k)-1)*101 + (j)]
 #define ZB(j,k) zb[((k)-1)*101 + (j)]

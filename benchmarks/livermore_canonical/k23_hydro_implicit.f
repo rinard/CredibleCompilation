@@ -79,7 +79,7 @@ C
       N = 100
       FW = 0.175D0
 C
-      DO 500 REP = 1, 10200000
+      DO 500 REP = 1, 8600000
          DO 300 J = 2, 6
             DO 200 K = 2, N
                QA = ZA(K,J+1)*ZR(K,J) + ZA(K,J-1)*ZB(K,J)
