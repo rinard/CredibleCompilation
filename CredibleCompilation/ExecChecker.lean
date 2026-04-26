@@ -653,6 +653,16 @@ def Expr.simplifyDeepFast : Nat → FastVarMap → Expr → Expr
   | 0, m, e => e.simplifyFast m
   | n + 1, m, e => (e.simplifyFast m).simplifyDeepFast n m
 
+/-- Like `simplifyDeepFast` but stops as soon as a `simplifyFast` pass produces
+    no change. Returns the same value as `simplifyDeepFast` once `simplify` has
+    reached its fixed point — which it always does in ≤ `n` steps for the fuel
+    we use — but typically in 1-3 iterations instead of full `fuel`. -/
+def Expr.simplifyDeepFastEarly : Nat → FastVarMap → Expr → Expr
+  | 0, m, e => e.simplifyFast m
+  | n + 1, m, e =>
+    let e' := e.simplifyFast m
+    if e' == e then e' else e'.simplifyDeepFastEarly n m
+
 /-- `simplifyDeepFast` with `FastVarMap.ofList` equals `simplifyDeep`. -/
 theorem Expr.simplifyDeepFast_eq_simplifyDeep (n : Nat) (e : Expr) (inv : EInv) :
     e.simplifyDeepFast n (FastVarMap.ofList inv) = e.simplifyDeep n inv := by
@@ -693,6 +703,17 @@ def checkInvAtom (inv_pre : EInv) (instr : TAC) (atom : Var × Expr) : Bool :=
   let rhs := (atom.2.substSym ss).simplifyDeep fuel inv_pre
   lhs == rhs
 
+/-- HashMap-backed variant of `checkInvAtom` taking a precomputed `FastVarMap`
+    plus the fuel. Equivalent to `checkInvAtom inv_pre instr atom` when
+    `invMap = FastVarMap.ofList inv_pre` and `fuel = sdFuel inv_pre`, but
+    avoids re-building the map per atom. -/
+def checkInvAtomFast (invMap : FastVarMap) (fuel : Nat) (instr : TAC)
+    (atom : Var × Expr) : Bool :=
+  let (ss, _) := execSymbolic ([] : SymStore) ([] : SymArrayMem) instr
+  let lhs := (ssGet ss atom.1).simplifyDeepFastEarly fuel invMap
+  let rhs := (atom.2.substSym ss).simplifyDeepFastEarly fuel invMap
+  lhs == rhs
+
 /-- Compute reachable PCs from PC 0 via successor edges. -/
 partial def reachable (prog : Prog) : Array Bool :=
   let rec go (visited : Array Bool) (worklist : List Nat) : Array Bool :=
@@ -726,14 +747,22 @@ def compactProg (prog : Prog) (reached : Array Bool) : Prog × Array Nat × Arra
      observable := prog.observable, arrayDecls := prog.arrayDecls },
    origMap, revMap)
 
-/-- **Condition 2b**: Invariants are preserved by both programs. -/
+/-- **Condition 2b**: Invariants are preserved by both programs.
+
+    The pre-invariant `inv[pc]` is shared across all atoms of all successors,
+    so we materialize a `FastVarMap` once per pc and reuse it for every
+    `checkInvAtomFast` call. This collapses the per-atom O(|inv|²) cost of
+    list-based `simplifyDeep` to O(|inv|). -/
 def checkInvariantsPreservedExec (cert : ECertificate) : Bool :=
   let checkProg (prog : Prog) (inv : Array EInv) : Bool :=
     (List.range prog.size).all fun pc =>
       match prog[pc]? with
       | some instr =>
+        let inv_pre := inv.getD pc ([] : EInv)
+        let invMap := FastVarMap.ofList inv_pre
+        let fuel := sdFuel inv_pre
         (instr.successors pc).all fun pc' =>
-          (inv.getD pc' ([] : EInv)).all (checkInvAtom (inv.getD pc ([] : EInv)) instr)
+          (inv.getD pc' ([] : EInv)).all (checkInvAtomFast invMap fuel instr)
       | none => true
   checkProg cert.orig cert.inv_orig &&
   checkProg cert.trans cert.inv_trans
@@ -778,6 +807,69 @@ def computeNextPC (instr : TAC) (pc : Label) (ss : SymStore) (inv : EInv) : Opti
     | none       => none
   | .halt => none
 
+/-- HashMap-backed variants of `BoolExpr.normalize` / `BoolExpr.symEval` and
+    the call sites that thread the same `inv` through a recursive walk.
+    Each takes a precomputed `FastVarMap` and `fuel` instead of an `EInv`. -/
+def BoolExpr.normalizeFast (ss : SymStore) (invMap : FastVarMap) (fuel : Nat) :
+    BoolExpr → BoolExpr
+  | .lit b => .lit b
+  | .bvar x =>
+    match (ssGet ss x).simplifyDeepFastEarly fuel invMap with
+    | .blit b => .lit b
+    | e'      => .bexpr e'
+  | .cmp op a b =>
+    match (a.substSym' ss).simplifyDeepFastEarly fuel invMap,
+          (b.substSym' ss).simplifyDeepFastEarly fuel invMap with
+    | .lit va, .lit vb => .lit (op.eval va vb)
+    | a', b' => .cmp op a' b'
+  | .not e => match e.normalizeFast ss invMap fuel with
+    | .lit b => .lit (!b)
+    | .not inner => inner
+    | e' => .not e'
+  | .fcmp op a b =>
+    match (a.substSym' ss).simplifyDeepFastEarly fuel invMap,
+          (b.substSym' ss).simplifyDeepFastEarly fuel invMap with
+    | .flit va, .flit vb => .lit (FloatCmpOp.eval op va vb)
+    | a', b' => .fcmp op a' b'
+  | .bexpr e =>
+    match (e.substSym' ss).simplifyDeepFastEarly fuel invMap with
+    | .blit b => .lit b
+    | e'      => .bexpr e'
+
+def BoolExpr.symEvalFast (ss : SymStore) (invMap : FastVarMap) (fuel : Nat) :
+    BoolExpr → Option Bool
+  | .lit b => some b
+  | .bvar x =>
+    match (ssGet ss x).simplifyDeepFastEarly fuel invMap with
+    | .blit b => some b
+    | _ => none
+  | .cmp op a b =>
+    match (a.substSym' ss).simplifyDeepFastEarly fuel invMap,
+          (b.substSym' ss).simplifyDeepFastEarly fuel invMap with
+    | .lit va, .lit vb => some (op.eval va vb)
+    | _, _ => none
+  | .not e => e.symEvalFast ss invMap fuel |>.map (!·)
+  | .fcmp _op _a _b => none
+  | .bexpr e =>
+    match (e.substSym' ss).simplifyDeepFastEarly fuel invMap with
+    | .blit b => some b
+    | _ => none
+
+def computeNextPCFast (instr : TAC) (pc : Label) (ss : SymStore)
+    (invMap : FastVarMap) (fuel : Nat) : Option Label :=
+  match instr with
+  | .const _ _ | .copy _ _ | .binop _ _ _ _ | .boolop _ _ => some (pc + 1)
+  | .fbinop _ _ _ _ | .intToFloat _ _ | .floatToInt _ _ | .floatUnary _ _ _ | .fternop _ _ _ _ _ => some (pc + 1)
+  | .arrLoad _ _ _ _ | .arrStore _ _ _ _ => some (pc + 1)
+  | .print _ _ | .printInt _ | .printBool _ | .printFloat _ | .printString _ => some (pc + 1)
+  | .goto l => some l
+  | .ifgoto b l =>
+    match b.symEvalFast ss invMap fuel with
+    | some true  => some l
+    | some false => some (pc + 1)
+    | none       => none
+  | .halt => none
+
 /-- Check that an arrLoad/arrStore instruction's index doesn't alias any existing SAM entry
     for the same array.  Uses simplification under the invariant to compare indices. -/
 def checkInstrAliasOk (instr : TAC) (ss : SymStore) (sam : SymArrayMem) (inv : EInv) : Bool :=
@@ -787,6 +879,18 @@ def checkInstrAliasOk (instr : TAC) (ss : SymStore) (sam : SymArrayMem) (inv : E
     sam.all fun (a, i, _) =>
       !(a == arr) || (i == idx_sym) ||
       match i.simplifyDeep (sdFuel inv) inv, idx_sym.simplifyDeep (sdFuel inv) inv with
+      | .lit n, .lit m => !(n == m)
+      | _, _ => false
+  | _ => true
+
+def checkInstrAliasOkFast (instr : TAC) (ss : SymStore) (sam : SymArrayMem)
+    (invMap : FastVarMap) (fuel : Nat) : Bool :=
+  match instr with
+  | .arrLoad _ arr idx _ | .arrStore arr idx _ _ =>
+    let idx_sym := ssGet ss idx
+    sam.all fun (a, i, _) =>
+      !(a == arr) || (i == idx_sym) ||
+      match i.simplifyDeepFastEarly fuel invMap, idx_sym.simplifyDeepFastEarly fuel invMap with
       | .lit n, .lit m => !(n == m)
       | _, _ => false
   | _ => true
@@ -816,6 +920,35 @@ def checkOrigPath (orig : Prog) (ss : SymStore) (sam : SymArrayMem) (inv : EInv)
       checkOrigPath orig ss' sam' inv nextPC rest pc_next none
     | none => false
 
+/-- HashMap-backed mirror of `checkOrigPath`. The caller materializes
+    `invMap = FastVarMap.ofList inv` and `fuel = sdFuel inv` once and threads
+    them through the recursion, so we never rebuild the map per orig step. -/
+def checkOrigPathFast (orig : Prog) (ss : SymStore) (sam : SymArrayMem)
+    (invMap : FastVarMap) (fuel : Nat)
+    (pc : Label) (labels : List Label) (pc_next : Label)
+    (branchInfo : Option (BoolExpr × Bool) := none) : Bool :=
+  match labels with
+  | [] => pc == pc_next
+  | nextPC :: rest =>
+    match orig[pc]? with
+    | some instr =>
+      let pcOk := match computeNextPCFast instr pc ss invMap fuel with
+        | some pc' => pc' == nextPC
+        | none =>
+          match branchInfo, instr with
+          | some (origCond, true),  .ifgoto b l =>
+            b.normalizeFast ss invMap fuel == origCond.normalizeFast ss invMap fuel
+              && nextPC == l
+          | some (origCond, false), .ifgoto b _ =>
+            b.normalizeFast ss invMap fuel == origCond.normalizeFast ss invMap fuel
+              && nextPC == pc + 1
+          | _, _ => false
+      let aliasOk := checkInstrAliasOkFast instr ss sam invMap fuel
+      let (ss', sam') := execSymbolic ss sam instr
+      pcOk && aliasOk &&
+      checkOrigPathFast orig ss' sam' invMap fuel nextPC rest pc_next none
+    | none => false
+
 /-- Check expression relation consistency via symbolic execution.
     For every `(e_o, e_t)` pair in `rel_post`, the original-side expression
     after symbolic execution must agree with the transformed symbolic execution
@@ -834,8 +967,8 @@ def checkRelConsistency
   let invMap := FastVarMap.ofList inv_orig
   let fuel := sdFuel inv_orig
   let pairCheck := rel_post.all fun (e_o, e_t) =>
-    let origVal := e_o.substSymFast origSSMap |>.simplifyDeepFast fuel invMap
-    let transVal := (e_t.substSymFast transSSMap).substSymFast preSubstMap |>.simplifyDeepFast fuel invMap
+    let origVal := e_o.substSymFast origSSMap |>.simplifyDeepFastEarly fuel invMap
+    let transVal := (e_t.substSymFast transSSMap).substSymFast preSubstMap |>.simplifyDeepFastEarly fuel invMap
     origVal == transVal
   -- Free-variable coverage: for each (_, e_t) in rel_post, all free variables of
   -- (e_t.substSym transSS) must have a pair in rel_pre.
@@ -851,12 +984,16 @@ def checkRelConsistency
   let amCheck := origSAM.length == transSAM.length &&
     (origSAM.zip transSAM).all fun ((a_o, i_o, v_o), (a_t, i_t, v_t)) =>
       a_o == a_t &&
-      i_o.simplifyDeepFast fuel invMap == (i_t.substSymFast preSubstMap).simplifyDeepFast fuel invMap &&
-      v_o.simplifyDeepFast fuel invMap == (v_t.substSymFast preSubstMap).simplifyDeepFast fuel invMap
+      i_o.simplifyDeepFastEarly fuel invMap == (i_t.substSymFast preSubstMap).simplifyDeepFastEarly fuel invMap &&
+      v_o.simplifyDeepFastEarly fuel invMap == (v_t.substSymFast preSubstMap).simplifyDeepFastEarly fuel invMap
   pairCheck && fvCheck && amFvCheck && amCheck
 
 /-- **Condition 3**: Every transition in the transformed program has a
-    corresponding original-program path with consistent variable effects. -/
+    corresponding original-program path with consistent variable effects.
+
+    Materializes the `inv_orig[ic.pc_orig]` `FastVarMap` once per pc_t and
+    threads it through `checkOrigPathFast`. `checkRelConsistency` already
+    builds its own internal map, so it stays as-is. -/
 def checkAllTransitionsExec (cert : ECertificate) : Bool :=
   (List.range cert.trans.size).all fun pc_t =>
     match cert.trans[pc_t]? with
@@ -864,6 +1001,9 @@ def checkAllTransitionsExec (cert : ECertificate) : Bool :=
     | some instr =>
       match cert.instrCerts[pc_t]? with
       | some ic =>
+        let inv_orig := cert.inv_orig.getD ic.pc_orig ([] : EInv)
+        let invMap := FastVarMap.ofList inv_orig
+        let fuel := sdFuel inv_orig
         (instr.successors pc_t).all fun pc_t' =>
           let ic' := cert.instrCerts.getD pc_t' default
           let branchInfo := match instr with
@@ -876,10 +1016,10 @@ def checkAllTransitionsExec (cert : ECertificate) : Bool :=
           ic.transitions.any fun tc =>
             tc.rel == ic.rel &&
             tc.rel_next == ic'.rel &&
-            checkOrigPath cert.orig ([] : SymStore) ([] : SymArrayMem) (cert.inv_orig.getD ic.pc_orig ([] : EInv))
+            checkOrigPathFast cert.orig ([] : SymStore) ([] : SymArrayMem) invMap fuel
               ic.pc_orig tc.origLabels ic'.pc_orig branchInfo &&
             checkRelConsistency cert.orig ic.pc_orig tc.origLabels instr
-              (cert.inv_orig.getD ic.pc_orig ([] : EInv))
+              inv_orig
               tc.rel tc.rel_next
       | none => false
     | none => true

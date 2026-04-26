@@ -196,34 +196,49 @@ def transfer (st : CSEState) (instr : TAC) : CSEState :=
 -- § 3. Forward analysis (worklist)
 -- ============================================================
 
+/-- One propagate step. `inWl[pc']` tracks whether pc' is already in the
+    worklist; we skip re-adding it. Equality-after-merge uses a length compare:
+    `availMerge`/`constMerge` produce a subset of `oldAv`/`oldCm` (filter), so
+    equal length implies equal as a list — saves an O(n²) per-edge check. -/
 private def propagate (prog : Prog) (states : Array (Option CSEState))
-    (pc : Nat) : Array (Option CSEState) × List Nat :=
+    (inWl : Array Bool) (pc : Nat) :
+    Array (Option CSEState) × Array Bool × List Nat :=
+  let inWl := inWl.set! pc false
   match prog[pc]?, states[pc]? with
   | some instr, some (some st) =>
     let out := transfer st instr
     let succs := instr.successors pc
-    succs.foldl (fun (arr, wl) pc' =>
+    succs.foldl (fun (arr, iw, wl) pc' =>
       if pc' < arr.size then
         match arr[pc']? with
         | some none | none =>
-          (arr.set! pc' (some out), pc' :: wl)
+          let arr' := arr.set! pc' (some out)
+          if iw[pc']? == some true then (arr', iw, wl)
+          else (arr', iw.set! pc' true, pc' :: wl)
         | some (some (oldAv, oldCm)) =>
           let (outAv, outCm) := out
           let mergedAv := availMerge oldAv outAv
           let mergedCm := constMerge oldCm outCm
-          if availBeq mergedAv oldAv && constBeq mergedCm oldCm then (arr, wl)
-          else (arr.set! pc' (some (mergedAv, mergedCm)), pc' :: wl)
-      else (arr, wl)
-    ) (states, [])
-  | _, _ => (states, [])
+          if mergedAv.length == oldAv.length && mergedCm.length == oldCm.length
+          then (arr, iw, wl)
+          else
+            let arr' := arr.set! pc' (some (mergedAv, mergedCm))
+            if iw[pc']? == some true then (arr', iw, wl)
+            else (arr', iw.set! pc' true, pc' :: wl)
+      else (arr, iw, wl)
+    ) (states, inWl, [])
+  | _, _ => (states, inWl, [])
 
+/-- Worklist driver. LIFO order (`newWork ++ rest`) keeps each pop O(1) instead
+    of paying O(|rest|) per `++`, and tends to converge dataflow in fewer
+    iterations on natural CFGs. -/
 private partial def analyzeLoop (prog : Prog) (states : Array (Option CSEState))
-    (worklist : List Nat) : Array (Option CSEState) :=
+    (inWl : Array Bool) (worklist : List Nat) : Array (Option CSEState) :=
   match worklist with
   | [] => states
   | pc :: rest =>
-    let (states', newWork) := propagate prog states pc
-    analyzeLoop prog states' (rest ++ newWork)
+    let (states', inWl', newWork) := propagate prog states inWl pc
+    analyzeLoop prog states' inWl' (newWork ++ rest)
 
 /-- Forward available-expression analysis.
     Returns `Option CSEState` per PC (`none` = unreachable). -/
@@ -231,7 +246,8 @@ def analyze (prog : Prog) : Array (Option CSEState) :=
   if prog.size == 0 then #[]
   else
     let init := (Array.replicate prog.size (none : Option CSEState)).set! 0 (some ([], []))
-    analyzeLoop prog init (0 :: [])
+    let inWl := (Array.replicate prog.size false).set! 0 true
+    analyzeLoop prog init inWl (0 :: [])
 
 -- ============================================================
 -- § 4. Transformation
