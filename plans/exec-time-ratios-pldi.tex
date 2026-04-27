@@ -1,0 +1,45 @@
+\begin{table}
+  \centering
+  \small
+  \setlength{\tabcolsep}{4pt}
+  \begin{tabular}{@{}l r r r r r r r@{}}
+    \toprule
+    & \multicolumn{4}{c}{Wall-clock (s)} & \multicolumn{3}{c}{Ratio Axon-O / F-O\textit{n}} \\
+    \cmidrule(lr){2-5} \cmidrule(lr){6-8}
+    Kernel & Axon-O & F-O0 & F-O1 & F-O2 & F-O0 & F-O1 & F-O2 \\
+    \midrule
+    k01\_hydro                 &  19.91 & 73.23 & 13.41 & 13.92 &  0.27 &  1.49 &  1.43 \\
+    k02\_iccg                  &  20.96 & 69.51 & 22.58 & 15.59 &  0.30 &  0.93 &  1.34 \\
+    k03\_dot                   &  20.09 & 27.60 & 14.71 & 18.66 &  0.73 &  1.37 &  1.08 \\
+    k04\_banded                &  19.76 & 65.62 & 25.07 & 17.85 &  0.30 &  0.79 &  1.11 \\
+    k05\_tridiag               &  20.00 & 51.77 & 34.88 & 18.81 &  0.39 &  0.57 &  1.06 \\
+    k06\_recurrence            &  19.47 & 34.01 & 37.88 & 17.88 &  0.57 &  0.51 &  1.09 \\
+    k07\_eos                   &  20.60 & 53.34 & 16.79 &  5.20 &  0.39 &  1.23 &  3.96 \\
+    k08\_adi                   &  19.35 & 69.20 &  9.96 &  4.16 &  0.28 &  1.94 &  4.65 \\
+    k09\_integrate             &  19.66 & 32.67 &  8.22 &  4.91 &  0.60 &  2.39 &  4.01 \\
+    k10\_diff\_predict         &  19.55 & 45.13 &  5.87 &  4.88 &  0.43 &  3.33 &  4.01 \\
+    k11\_prefix\_sum           &  19.87 & 45.00 & 61.69 & 17.19 &  0.44 &  0.32 &  1.16 \\
+    k12\_first\_diff           &  19.97 & 53.64 & 12.12 &  5.28 &  0.37 &  1.65 &  3.78 \\
+    k13\_pic\_2d               &  19.37 & 18.48 &  3.39 &  3.67 &  1.05 &  5.72 &  5.28 \\
+    k14\_pic\_1d               &  19.88 & 30.55 & 14.03 & 12.05 &  0.65 &  1.42 &  1.65 \\
+    k15\_casual                &  19.45 & 40.70 &  2.75 &  2.93 &  0.48 &  7.07 &  6.65 \\
+    k16\_monte\_carlo          &  19.20 & 15.66 &  5.07 &  4.41 &  1.23 &  3.78 &  4.35 \\
+    k17\_implicit\_cond        &  18.99 & 42.61 & 12.31 &  9.86 &  0.45 &  1.54 &  1.93 \\
+    k18\_hydro\_2d             &  19.57 & 53.38 &  6.79 &  2.93 &  0.37 &  2.88 &  6.69 \\
+    k19\_linear\_recur         &  19.91 & 29.05 &  9.83 &  7.15 &  0.69 &  2.03 &  2.79 \\
+    k20\_discrete\_ord         &  20.35 & 23.02 & 34.34 & 26.16 &  0.88 &  0.59 &  0.78 \\
+    k21\_matmul                &  20.20 & 54.62 &  6.85 &  4.03 &  0.37 &  2.95 &  5.01 \\
+    k22\_planck                &  19.97 & 14.17 &  9.38 &  9.33 &  1.41 &  2.13 &  2.14 \\
+    k23\_hydro\_implicit       &  19.31 & 27.50 & 16.82 &  6.97 &  0.70 &  1.15 &  2.77 \\
+    k24\_find\_min             &  20.17 & 25.16 & 112.18 & 103.75 &  0.80 &  0.18 &  0.19 \\
+    \midrule
+    \textbf{Geomean} & & & & & \textbf{0.53} & \textbf{1.44} & \textbf{2.18} \\
+    \bottomrule
+  \end{tabular}
+  \caption{Execution time and Axon-O / F-O\textit{n} ratios across
+           the canonical Livermore Loops, best of 5 on Apple~M-series.
+           Iteration counts are calibrated so Axon-O lands near 20\,s.
+           Ratio $<$\,1 means Axon-O is faster than that gfortran level;
+           $>$\,1 means slower. F-O\textit{n} is gfortran~15.2.0.}
+  \label{tab:exec-time-ratios}
+\end{table}
