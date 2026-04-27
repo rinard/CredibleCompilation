@@ -3,6 +3,7 @@ import CredibleCompilation.WhileLang
 import CredibleCompilation.Parser
 import CredibleCompilation.ConstPropOpt
 import CredibleCompilation.CopyPropOpt
+import CredibleCompilation.RematConstOpt
 import CredibleCompilation.CSEOpt
 import CredibleCompilation.LICMOpt
 import CredibleCompilation.ConstHoistOpt
