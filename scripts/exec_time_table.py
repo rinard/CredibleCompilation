@@ -95,63 +95,80 @@ def main():
 
     out = []
     if args.ratios:
-        # Compute per-kernel ratios + geomean over the three ratio columns.
-        log_sums = [0.0, 0.0, 0.0]   # for F-O0, F-O1, F-O2
-        counts = [0, 0, 0]
+        # Per-kernel ratios + geomean. 5 ratio columns:
+        #   A-O/F-O0, A-O/F-O1, A-O/F-O2, A-O/Axon, Axon/A-O
+        log_sums = [0.0]*5
+        counts = [0]*5
         rows = []
         for name, (f0, f1, f2, wl, wlopt) in ordered:
             try:
-                ao = float(wlopt)
-                xs = [float(f0), float(f1), float(f2)]
+                ao  = float(wlopt)
+                ax  = float(wl)
+                xs  = [float(f0), float(f1), float(f2)]
             except ValueError:
-                rows.append((name, wlopt, f0, f1, f2, "—", "—", "—"))
+                rows.append((name, wlopt, wl, f0, f1, f2, *(["—"]*5)))
                 continue
             rs = []
+            # A-O / F-O{0,1,2}
             for i, x in enumerate(xs):
                 if x > 0:
                     r = ao / x
                     rs.append(f"{r:.2f}")
-                    log_sums[i] += math.log(r)
-                    counts[i] += 1
+                    log_sums[i] += math.log(r); counts[i] += 1
                 else:
                     rs.append("—")
-            rows.append((name, wlopt, f0, f1, f2, *rs))
+            # A-O / Axon
+            if ax > 0:
+                r = ao / ax;  rs.append(f"{r:.2f}")
+                log_sums[3] += math.log(r); counts[3] += 1
+            else:
+                rs.append("—")
+            # Axon / A-O
+            if ao > 0:
+                r = ax / ao;  rs.append(f"{r:.2f}")
+                log_sums[4] += math.log(r); counts[4] += 1
+            else:
+                rs.append("—")
+            rows.append((name, wlopt, wl, f0, f1, f2, *rs))
 
-        gms = []
-        for s, c in zip(log_sums, counts):
-            gms.append(f"{math.exp(s / c):.2f}" if c else "—")
+        gms = [f"{math.exp(s/c):.2f}" if c else "—"
+               for s, c in zip(log_sums, counts)]
 
-        out.append(r"\begin{table}")
+        out.append(r"\begin{table*}")
         out.append(r"  \centering")
         out.append(r"  \small")
         out.append(r"  \setlength{\tabcolsep}{4pt}")
-        out.append(r"  \begin{tabular}{@{}l r r r r r r r@{}}")
+        out.append(r"  \begin{tabular}{@{}l r r r r r r r r r r@{}}")
         out.append(r"    \toprule")
-        out.append(r"    & \multicolumn{4}{c}{Wall-clock (s)} & \multicolumn{3}{c}{Ratio Axon-O / F-O\textit{n}} \\")
-        out.append(r"    \cmidrule(lr){2-5} \cmidrule(lr){6-8}")
-        out.append(r"    Kernel & Axon-O & F-O0 & F-O1 & F-O2 & F-O0 & F-O1 & F-O2 \\")
+        out.append(r"    & \multicolumn{5}{c}{Wall-clock (s)} & \multicolumn{3}{c}{Ratio Axon-O / F-O\textit{n}} & \multicolumn{2}{c}{Axon$\leftrightarrow$Axon-O} \\")
+        out.append(r"    \cmidrule(lr){2-6} \cmidrule(lr){7-9} \cmidrule(lr){10-11}")
+        out.append(r"    Kernel & Axon-O & Axon & F-O0 & F-O1 & F-O2 & F-O0 & F-O1 & F-O2 & {\small Axon-O / Axon} & {\small Axon / Axon-O} \\")
         out.append(r"    \midrule")
-        for (name, ao, f0, f1, f2, r0, r1, r2) in rows:
+        for (name, ao, ax, f0, f1, f2, r0, r1, r2, raxo, raxoinv) in rows:
             out.append(
                 f"    {pretty_kernel(name):<26} & "
-                f"{fmt(ao):>6} & "
+                f"{fmt(ao):>6} & {fmt(ax):>7} & "
                 f"{fmt(f0):>5} & {fmt(f1):>5} & {fmt(f2):>5} & "
-                f"{r0:>5} & {r1:>5} & {r2:>5} \\\\"
+                f"{r0:>5} & {r1:>5} & {r2:>5} & "
+                f"{raxo:>5} & {raxoinv:>5} \\\\"
             )
         out.append(r"    \midrule")
         out.append(
-            f"    \\textbf{{Geomean}} & & & & & "
-            f"\\textbf{{{gms[0]}}} & \\textbf{{{gms[1]}}} & \\textbf{{{gms[2]}}} \\\\"
+            f"    \\textbf{{Geomean}} & & & & & & "
+            f"\\textbf{{{gms[0]}}} & \\textbf{{{gms[1]}}} & \\textbf{{{gms[2]}}} & "
+            f"\\textbf{{{gms[3]}}} & \\textbf{{{gms[4]}}} \\\\"
         )
         out.append(r"    \bottomrule")
         out.append(r"  \end{tabular}")
-        out.append(r"  \caption{Execution time and Axon-O / F-O\textit{n} ratios across")
-        out.append(r"           the canonical Livermore Loops, best of " + str(args.runs) + r" on Apple~M-series.")
-        out.append(r"           Iteration counts are calibrated so Axon-O lands near 20\,s.")
-        out.append(r"           Ratio $<$\,1 means Axon-O is faster than that gfortran level;")
-        out.append(r"           $>$\,1 means slower. F-O\textit{n} is gfortran~15.2.0.}")
+        out.append(r"  \caption{Execution time and ratios across the canonical Livermore Loops,")
+        out.append(r"           best of " + str(args.runs) + r" on Apple~M-series. Iteration counts are calibrated")
+        out.append(r"           so Axon-O lands near 20\,s. ``Axon-O / F-O\textit{n}'' is the slowdown of")
+        out.append(r"           our optimized verified compiler vs gfortran at level $n$ ($<$\,1 = faster).")
+        out.append(r"           ``Axon-O / Axon'' shows the residual cost of optimization vs the no-opt")
+        out.append(r"           verified compiler; ``Axon / Axon-O'' is the inverse and gives the speedup")
+        out.append(r"           the optimization pipeline buys. F-O\textit{n} is gfortran~15.2.0.}")
         out.append(r"  \label{tab:exec-time-ratios}")
-        out.append(r"\end{table}")
+        out.append(r"\end{table*}")
     else:
         out.append(r"\begin{table}")
         out.append(r"  \centering")
