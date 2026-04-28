@@ -18,8 +18,19 @@ from collections import defaultdict
 
 OPT_DIR = "/Users/mr/CredibleCompilation/CredibleCompilation"
 
-# Files to include. RematConstOpt is an unused stub; BoundsOptCert is a
-# soundness-proof file (not cert generation). Both excluded.
+# Files to include = the 9 distinct passes wired into the standard
+# pipeline (CodeGen.lean: prefixPasses + licmClusterPasses + suffixPasses).
+#
+#   prefix : ConstProp, DCE, CSE, ConstProp, DAE
+#   cluster: LICM, ConstProp, ConstHoist, CSE, DAE
+#   suffix : FMAFusion, DCE, Peephole, RegAlloc
+#
+# Excluded:
+#   CopyPropOpt.lean    -- explicitly NOT wired in; comment in CodeGen.lean
+#                          notes -17 % k18 regression.
+#   BoundsOpt.lean      -- not in standardPasses.
+#   BoundsOptCert.lean  -- soundness proofs, not cert generation.
+#   RematConstOpt.lean  -- unused stub (file header documents this).
 PASSES = [
     "DCEOpt.lean",
     "ConstPropOpt.lean",
@@ -30,8 +41,6 @@ PASSES = [
     "PeepholeOpt.lean",
     "FMAFusionOpt.lean",
     "RegAllocOpt.lean",
-    "CopyPropOpt.lean",
-    "BoundsOpt.lean",     # no cert section in this file
 ]
 
 SECTION_RE = re.compile(r"^--\s+§\s*\d+\.\s*(.+?)\s*$")
@@ -105,32 +114,49 @@ def main():
         total = impl + cert + entry
         rows.append((fname, impl, cert, entry, total))
 
-    # Print
+    # Print. Columns:
+    #   impl, cert, entry      — primary buckets (NCNB)
+    #   total                  — impl + cert + entry
+    #   impl+cert              — bucketing-independent of "entry" placement
+    #                            (LICMOpt has 0 entry because its optimize()
+    #                             lives in the certificate section)
+    #   cert/impl              — ratio of cert-side bookkeeping to the
+    #                            optimisation logic itself
     width = max(len(r[0]) for r in rows)
-    print(f"{'file':<{width}}  {'impl':>6}  {'cert':>6}  {'entry':>6}  "
-          f"{'total':>6}  {'%cert':>6}")
-    print(f"{'-'*width}  {'-'*6:>6}  {'-'*6:>6}  {'-'*6:>6}  "
-          f"{'-'*6:>6}  {'-'*6:>6}")
+    header = (f"{'file':<{width}}  {'impl':>6}  {'cert':>6}  {'entry':>6}  "
+              f"{'total':>6}  {'impl+cert':>10}  {'cert/impl':>10}")
+    sep = (f"{'-'*width}  {'-'*6}  {'-'*6}  {'-'*6}  "
+           f"{'-'*6}  {'-'*10}  {'-'*10}")
+    print(header)
+    print(sep)
+
     sum_impl = sum_cert = sum_entry = sum_total = 0
     # Sort by total descending for readability
     rows.sort(key=lambda r: -r[4])
     for fname, impl, cert, entry, total in rows:
-        cert_ratio = (100.0 * (cert + entry) / total) if total else 0.0
+        impl_plus_cert = impl + cert
+        ratio = (cert / impl) if impl else float('inf')
+        ratio_str = f"{ratio:>9.2f}" if impl else "       inf"
         print(f"{fname:<{width}}  {impl:>6}  {cert:>6}  {entry:>6}  "
-              f"{total:>6}  {cert_ratio:>5.1f}%")
-        sum_impl += impl; sum_cert += cert; sum_entry += entry; sum_total += total
-    cert_ratio = (100.0 * (sum_cert + sum_entry) / sum_total) if sum_total else 0.0
-    print(f"{'-'*width}  {'-'*6:>6}  {'-'*6:>6}  {'-'*6:>6}  "
-          f"{'-'*6:>6}  {'-'*6:>6}")
+              f"{total:>6}  {impl_plus_cert:>10}  {ratio_str}")
+        sum_impl += impl; sum_cert += cert
+        sum_entry += entry; sum_total += total
+
+    print(sep)
+    sum_ipc = sum_impl + sum_cert
+    sum_ratio = (sum_cert / sum_impl) if sum_impl else float('inf')
+    sum_ratio_str = f"{sum_ratio:>9.2f}" if sum_impl else "       inf"
     print(f"{'TOTAL':<{width}}  {sum_impl:>6}  {sum_cert:>6}  {sum_entry:>6}  "
-          f"{sum_total:>6}  {cert_ratio:>5.1f}%")
+          f"{sum_total:>6}  {sum_ipc:>10}  {sum_ratio_str}")
     print()
     print("Bucketing rule: cert = section titles containing one of "
           "{Certificate, Cert, Expression relation, Orig-path}. "
           "entry = 'Main entry point' / 'Entry point'. "
           "impl = everything else (incl. prelude before first § marker). "
-          "Excluded: RematConstOpt.lean (unused stub), "
-          "BoundsOptCert.lean (soundness proofs, not cert generation).")
+          "Included: only passes wired into standardPasses "
+          "(prefix + licmCluster + suffix). "
+          "Excluded: CopyPropOpt (intentionally not wired), BoundsOpt, "
+          "BoundsOptCert (proofs), RematConstOpt (stub).")
 
 if __name__ == "__main__":
     main()
