@@ -583,6 +583,70 @@ theorem while_to_arm_divergence_preservation
   exact whileToTAC_refinement prog htcs .diverges hdiv_init
 
 -- ============================================================
+-- § 6a. Structural lemmas: fixpoint-cluster pipelines = applyPasses
+-- ============================================================
+
+/-- `applyPasses` distributes over list append: running passes `l₁ ++ l₂` is the
+    same as running `l₁` then `l₂`.  Used to flatten the
+    `prefix → cluster → suffix` composition in
+    `applyStandardPipelineFixpoint` into a single `applyPasses` call. -/
+theorem applyPasses_append (tyCtx : TyCtx)
+    (l₁ l₂ : List (String × (Prog → ECertificate))) (p : Prog) :
+    applyPasses tyCtx (l₁ ++ l₂) p
+      = applyPasses tyCtx l₂ (applyPasses tyCtx l₁ p) := by
+  induction l₁ generalizing p with
+  | nil => simp [applyPasses]
+  | cons head tail ih =>
+    obtain ⟨name, pass⟩ := head
+    simp only [List.cons_append, applyPasses]
+    exact ih _
+
+/-- The bounded fixed-point iterator is equal to `applyPasses` over a
+    suitable concatenation of the cluster's pass list (k copies for some
+    `k ≤ n + 1`).  We do not commit to `k`; we just need the existential
+    so downstream theorems about `applyPasses` apply. -/
+theorem applyPassesUntilFixedOrN_eq_applyPasses (tyCtx : TyCtx)
+    (passes : List (String × (Prog → ECertificate)))
+    (n : Nat) (p : Prog) :
+    ∃ allPasses,
+      applyPassesUntilFixedOrN tyCtx passes n p
+        = applyPasses tyCtx allPasses p := by
+  induction n generalizing p with
+  | zero =>
+    refine ⟨[], ?_⟩
+    simp [applyPassesUntilFixedOrN, applyPasses]
+  | succ n' ih =>
+    rw [applyPassesUntilFixedOrN]
+    by_cases h : (applyPasses tyCtx passes p).code = p.code
+    · -- Fixed point reached after one cluster iteration.
+      simp [h]
+      exact ⟨passes, rfl⟩
+    · -- Not yet a fixed point; recurse.
+      simp [h]
+      obtain ⟨tailPasses, hTail⟩ := ih (applyPasses tyCtx passes p)
+      refine ⟨passes ++ tailPasses, ?_⟩
+      rw [applyPasses_append, hTail]
+
+/-- `applyStandardPipelineFixpoint` is `applyPasses` over a single
+    concatenated pass list (program-dependent — the cluster portion's
+    length depends on how many iterations the fixed-point reached).
+    With this, every theorem about `applyPasses tyCtx _ prog.compileToTAC`
+    discharges the corresponding goal about `applyStandardPipelineFixpoint`. -/
+theorem applyStandardPipelineFixpoint_eq_applyPasses (tyCtx : TyCtx) (p : Prog) :
+    ∃ allPasses,
+      applyStandardPipelineFixpoint tyCtx p
+        = applyPasses tyCtx allPasses p := by
+  obtain ⟨clusterPasses, hCluster⟩ :=
+    applyPassesUntilFixedOrN_eq_applyPasses tyCtx (licmClusterPasses tyCtx) 5
+      (applyPasses tyCtx (prefixPasses tyCtx) p)
+  refine ⟨prefixPasses tyCtx ++ clusterPasses ++ suffixPasses tyCtx, ?_⟩
+  show applyPasses tyCtx (suffixPasses tyCtx)
+        (applyPassesUntilFixedOrN tyCtx (licmClusterPasses tyCtx) 5
+          (applyPasses tyCtx (prefixPasses tyCtx) p))
+       = applyPasses tyCtx (prefixPasses tyCtx ++ clusterPasses ++ suffixPasses tyCtx) p
+  rw [applyPasses_append, applyPasses_append, hCluster]
+
+-- ============================================================
 -- § 6b. Connecting the driver to top-level correctness
 -- ============================================================
 
@@ -604,9 +668,8 @@ theorem compileProgramAst_correctness
     (hDriver : compileProgramAst prog noOpt = .ok r)
     {σ_opt : Store} {am_opt : ArrayMem}
     (hHalt : haltsWithResult
-              (applyPasses prog.tyCtx
-                (if noOpt then [] else standardPasses prog.tyCtx)
-                prog.compileToTAC)
+              (if noOpt then prog.compileToTAC
+               else applyStandardPipelineFixpoint prog.tyCtx prog.compileToTAC)
               0 (Store.typedInit prog.tyCtx) σ_opt ArrayMem.init am_opt) :
     ∃ fuel σ_src am_src s',
       prog.interp fuel = some (σ_src, am_src) ∧
@@ -618,7 +681,17 @@ theorem compileProgramAst_correctness
   unfold compileProgramAst at hDriver
   split at hDriver
   · rename_i hwf
-    exact while_to_arm_correctness prog hwf _ hDriver hHalt
+    cases noOpt with
+    | true =>
+      simp at hDriver hHalt
+      exact while_to_arm_correctness prog hwf
+        ([] : List (String × (Prog → ECertificate))) hDriver hHalt
+    | false =>
+      simp at hDriver hHalt
+      obtain ⟨allPasses, heq⟩ :=
+        applyStandardPipelineFixpoint_eq_applyPasses prog.tyCtx prog.compileToTAC
+      rw [heq] at hDriver hHalt
+      exact while_to_arm_correctness prog hwf allPasses hDriver hHalt
   · simp at hDriver
 
 /-- **Driver-to-theorem bridge: division-by-zero.**
@@ -630,9 +703,8 @@ theorem compileProgramAst_div_preservation
     {prog : Program} {noOpt : Bool} {r : VerifiedAsmResult}
     (hDriver : compileProgramAst prog noOpt = .ok r)
     {σ_err : Store} {am_err : ArrayMem}
-    (hErr : (applyPasses prog.tyCtx
-              (if noOpt then [] else standardPasses prog.tyCtx)
-              prog.compileToTAC) ⊩
+    (hErr : (if noOpt then prog.compileToTAC
+             else applyStandardPipelineFixpoint prog.tyCtx prog.compileToTAC) ⊩
         Cfg.run 0 (Store.typedInit prog.tyCtx)
           ArrayMem.init ⟶* Cfg.errorDiv σ_err am_err) :
     (∃ fuel, prog.body.unsafeDiv fuel prog.initStore ArrayMem.init prog.arrayDecls) ∧
@@ -643,7 +715,17 @@ theorem compileProgramAst_div_preservation
   unfold compileProgramAst at hDriver
   split at hDriver
   · rename_i hwf
-    exact while_to_arm_div_preservation prog hwf _ hDriver hErr
+    cases noOpt with
+    | true =>
+      simp at hDriver hErr
+      exact while_to_arm_div_preservation prog hwf
+        ([] : List (String × (Prog → ECertificate))) hDriver hErr
+    | false =>
+      simp at hDriver hErr
+      obtain ⟨allPasses, heq⟩ :=
+        applyStandardPipelineFixpoint_eq_applyPasses prog.tyCtx prog.compileToTAC
+      rw [heq] at hDriver hErr
+      exact while_to_arm_div_preservation prog hwf allPasses hDriver hErr
   · simp at hDriver
 
 /-- **Driver-to-theorem bridge: array-bounds error.** -/
@@ -651,9 +733,8 @@ theorem compileProgramAst_bounds_preservation
     {prog : Program} {noOpt : Bool} {r : VerifiedAsmResult}
     (hDriver : compileProgramAst prog noOpt = .ok r)
     {σ_err : Store} {am_err : ArrayMem}
-    (hErr : (applyPasses prog.tyCtx
-              (if noOpt then [] else standardPasses prog.tyCtx)
-              prog.compileToTAC) ⊩
+    (hErr : (if noOpt then prog.compileToTAC
+             else applyStandardPipelineFixpoint prog.tyCtx prog.compileToTAC) ⊩
         Cfg.run 0 (Store.typedInit prog.tyCtx)
           ArrayMem.init ⟶* Cfg.errorBounds σ_err am_err) :
     (∃ fuel, prog.body.unsafeBounds fuel prog.initStore ArrayMem.init prog.arrayDecls) ∧
@@ -664,7 +745,17 @@ theorem compileProgramAst_bounds_preservation
   unfold compileProgramAst at hDriver
   split at hDriver
   · rename_i hwf
-    exact while_to_arm_bounds_preservation prog hwf _ hDriver hErr
+    cases noOpt with
+    | true =>
+      simp at hDriver hErr
+      exact while_to_arm_bounds_preservation prog hwf
+        ([] : List (String × (Prog → ECertificate))) hDriver hErr
+    | false =>
+      simp at hDriver hErr
+      obtain ⟨allPasses, heq⟩ :=
+        applyStandardPipelineFixpoint_eq_applyPasses prog.tyCtx prog.compileToTAC
+      rw [heq] at hDriver hErr
+      exact while_to_arm_bounds_preservation prog hwf allPasses hDriver hErr
   · simp at hDriver
 
 /-- **Driver-to-theorem bridge: divergence.**
@@ -676,15 +767,24 @@ theorem compileProgramAst_divergence_preservation
     (hDriver : compileProgramAst prog noOpt = .ok r)
     {f : Nat → Cfg}
     (hDiv : IsInfiniteExec
-      (applyPasses prog.tyCtx
-        (if noOpt then [] else standardPasses prog.tyCtx)
-        prog.compileToTAC) f)
+      (if noOpt then prog.compileToTAC
+       else applyStandardPipelineFixpoint prog.tyCtx prog.compileToTAC) f)
     (hf0 : f 0 = Cfg.run 0 (Store.typedInit prog.tyCtx) ArrayMem.init) :
     ∀ fuel, prog.interp fuel = none := by
   unfold compileProgramAst at hDriver
   split at hDriver
   · rename_i hwf
-    exact while_to_arm_divergence_preservation prog hwf _ hDiv hf0
+    cases noOpt with
+    | true =>
+      simp at hDriver hDiv
+      exact while_to_arm_divergence_preservation prog hwf
+        ([] : List (String × (Prog → ECertificate))) hDiv hf0
+    | false =>
+      simp at hDriver hDiv
+      obtain ⟨allPasses, heq⟩ :=
+        applyStandardPipelineFixpoint_eq_applyPasses prog.tyCtx prog.compileToTAC
+      rw [heq] at hDriver hDiv
+      exact while_to_arm_divergence_preservation prog hwf allPasses hDiv hf0
   · simp at hDriver
 
 -- ============================================================
@@ -843,7 +943,17 @@ theorem compileProgramAst_total (prog : Program) (htcs : prog.wellFormed = true)
     ∃ asm, compileProgramAst prog noOpt = .ok asm := by
   unfold compileProgramAst
   simp [htcs]
-  exact generateAsm_total_with_passes prog htcs _
+  cases noOpt with
+  | true =>
+    simp
+    exact generateAsm_total_with_passes prog htcs
+      ([] : List (String × (Prog → ECertificate)))
+  | false =>
+    simp
+    obtain ⟨allPasses, heq⟩ :=
+      applyStandardPipelineFixpoint_eq_applyPasses prog.tyCtx prog.compileToTAC
+    rw [heq]
+    exact generateAsm_total_with_passes prog htcs allPasses
 
 -- ============================================================
 -- § 8. Phase 6 — ARM behavior exhaustion (SKELETON)
@@ -1862,7 +1972,17 @@ theorem compileProgramAst_arm_halts_implies_program_halts
   unfold compileProgramAst at hDriver
   split at hDriver
   · rename_i hwf
-    exact arm_halts_implies_program_halts prog hwf _ hDriver hArm hPC
+    cases noOpt with
+    | true =>
+      simp at hDriver
+      exact arm_halts_implies_program_halts prog hwf
+        ([] : List (String × (Prog → ECertificate))) hDriver hArm hPC
+    | false =>
+      simp at hDriver
+      obtain ⟨allPasses, heq⟩ :=
+        applyStandardPipelineFixpoint_eq_applyPasses prog.tyCtx prog.compileToTAC
+      rw [heq] at hDriver
+      exact arm_halts_implies_program_halts prog hwf allPasses hDriver hArm hPC
   · simp at hDriver
 
 /-- **Driver-to-theorem bridge: ARM div-by-zero sentinel implies source unsafe (division).** -/
@@ -1876,7 +1996,17 @@ theorem compileProgramAst_arm_div_implies_program_unsafe_div
   unfold compileProgramAst at hDriver
   split at hDriver
   · rename_i hwf
-    exact arm_div_implies_program_unsafe_div prog hwf _ hDriver hArm hPC
+    cases noOpt with
+    | true =>
+      simp at hDriver
+      exact arm_div_implies_program_unsafe_div prog hwf
+        ([] : List (String × (Prog → ECertificate))) hDriver hArm hPC
+    | false =>
+      simp at hDriver
+      obtain ⟨allPasses, heq⟩ :=
+        applyStandardPipelineFixpoint_eq_applyPasses prog.tyCtx prog.compileToTAC
+      rw [heq] at hDriver
+      exact arm_div_implies_program_unsafe_div prog hwf allPasses hDriver hArm hPC
   · simp at hDriver
 
 /-- **Driver-to-theorem bridge: ARM bounds sentinel implies source unsafe (bounds).** -/
@@ -1890,7 +2020,17 @@ theorem compileProgramAst_arm_bounds_implies_program_unsafe_bounds
   unfold compileProgramAst at hDriver
   split at hDriver
   · rename_i hwf
-    exact arm_bounds_implies_program_unsafe_bounds prog hwf _ hDriver hArm hPC
+    cases noOpt with
+    | true =>
+      simp at hDriver
+      exact arm_bounds_implies_program_unsafe_bounds prog hwf
+        ([] : List (String × (Prog → ECertificate))) hDriver hArm hPC
+    | false =>
+      simp at hDriver
+      obtain ⟨allPasses, heq⟩ :=
+        applyStandardPipelineFixpoint_eq_applyPasses prog.tyCtx prog.compileToTAC
+      rw [heq] at hDriver
+      exact arm_bounds_implies_program_unsafe_bounds prog hwf allPasses hDriver hArm hPC
   · simp at hDriver
 
 /-- **Driver-to-theorem bridge: ARM divergence implies source divergence.** -/
@@ -1902,7 +2042,17 @@ theorem compileProgramAst_arm_diverges_implies_program_diverges
   unfold compileProgramAst at hDriver
   split at hDriver
   · rename_i hwf
-    exact arm_diverges_implies_program_diverges prog hwf _ hDriver hDiv
+    cases noOpt with
+    | true =>
+      simp at hDriver
+      exact arm_diverges_implies_program_diverges prog hwf
+        ([] : List (String × (Prog → ECertificate))) hDriver hDiv
+    | false =>
+      simp at hDriver
+      obtain ⟨allPasses, heq⟩ :=
+        applyStandardPipelineFixpoint_eq_applyPasses prog.tyCtx prog.compileToTAC
+      rw [heq] at hDriver
+      exact arm_diverges_implies_program_diverges prog hwf allPasses hDriver hDiv
   · simp at hDriver
 
 end Phase7Skeleton
@@ -4120,7 +4270,17 @@ theorem compileProgramAst_arm_behavior_exhaustive
   unfold compileProgramAst at hDriver
   split at hDriver
   · rename_i hwf
-    exact arm_behavior_exhaustive prog hwf _ hDriver
+    cases noOpt with
+    | true =>
+      simp at hDriver
+      exact arm_behavior_exhaustive prog hwf
+        ([] : List (String × (Prog → ECertificate))) hDriver
+    | false =>
+      simp at hDriver
+      obtain ⟨allPasses, heq⟩ :=
+        applyStandardPipelineFixpoint_eq_applyPasses prog.tyCtx prog.compileToTAC
+      rw [heq] at hDriver
+      exact arm_behavior_exhaustive prog hwf allPasses hDriver
   · simp at hDriver
 
 /-- **Driver-to-theorem bridge: source-run exhaustion.**
@@ -4139,7 +4299,17 @@ theorem compileProgramAst_program_run_exhaustive
   unfold compileProgramAst at hDriver
   split at hDriver
   · rename_i hwf
-    exact program_run_exhaustive prog hwf _ hDriver
+    cases noOpt with
+    | true =>
+      simp at hDriver
+      exact program_run_exhaustive prog hwf
+        ([] : List (String × (Prog → ECertificate))) hDriver
+    | false =>
+      simp at hDriver
+      obtain ⟨allPasses, heq⟩ :=
+        applyStandardPipelineFixpoint_eq_applyPasses prog.tyCtx prog.compileToTAC
+      rw [heq] at hDriver
+      exact program_run_exhaustive prog hwf allPasses hDriver
   · simp at hDriver
 
 end Phase6Main

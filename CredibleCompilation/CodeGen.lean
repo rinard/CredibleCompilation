@@ -6585,17 +6585,13 @@ def applyStandardPipelineFixpoint (tyCtx : TyCtx) (p : Prog) : Prog :=
   let p := applyPassesUntilFixedOrN tyCtx (licmClusterPasses tyCtx) 5 p
   applyPasses tyCtx (suffixPasses tyCtx) p
 
-/-- **Verified core of the compiler driver.**
+/-- **Legacy unrolled-passes driver core.**
 
-    From a parsed `Program` AST, runs the post-parse compilation pipeline:
-    well-formedness check, AST → TAC, optimization passes (or none if `noOpt`),
-    verified ARM codegen.  Returns a `VerifiedAsmResult` carrying the proof
-    payload (`GenAsmSpec`), or an error string if the program is not well-formed.
-
-    This is the function the connecting top-level theorem
-    `compileProgramAst_correctness` (in `PipelineCorrectness.lean`) reasons
-    about: it bridges the driver's call sequence to `while_to_arm_correctness`. -/
-def compileProgramAst (prog : Program) (noOpt : Bool := false) :
+    Same shape as the production driver `compileProgramAst`, but uses the
+    unrolled `applyPasses tyCtx (standardPasses tyCtx)` pipeline instead
+    of `applyStandardPipelineFixpoint`.  Retained because some top-level
+    theorems historically reasoned about this form. -/
+def compileProgramAstOld (prog : Program) (noOpt : Bool := false) :
     Except String VerifiedAsmResult :=
   if prog.wellFormed then
     verifiedGenerateAsm prog.tyCtx
@@ -6604,13 +6600,19 @@ def compileProgramAst (prog : Program) (noOpt : Bool := false) :
   else
     .error "program is not well-formed"
 
-/-- Driver-core variant that runs `applyStandardPipelineFixpoint` instead of
-    the unrolled `applyPasses ... standardPasses`. Same shape and contract as
-    `compileProgramAst`, but with fixed-point LICM cluster iteration.
+/-- **Verified core of the compiler driver.**
 
-    To reinstall the unrolled pipeline, switch `compilePipeline` /
-    `compileToAsmWith` to call `compileProgramAst` instead of this. -/
-def compileProgramAstFixpoint (prog : Program) (noOpt : Bool := false) :
+    From a parsed `Program` AST, runs the post-parse compilation pipeline:
+    well-formedness check, AST → TAC, optimization passes (or none if `noOpt`),
+    verified ARM codegen.  Returns a `VerifiedAsmResult` carrying the proof
+    payload (`GenAsmSpec`), or an error string if the program is not well-formed.
+
+    Optimization uses `applyStandardPipelineFixpoint` (front-load prefix →
+    LICM cluster fixed-point ≤5 → suffix), matching what `compilePipeline`
+    and `compileToAsmWith` actually run.  The connecting top-level theorems
+    `compileProgramAst_correctness`, `compileProgramAst_total`,
+    `compileProgramAst_arm_*` reason about this function. -/
+def compileProgramAst (prog : Program) (noOpt : Bool := false) :
     Except String VerifiedAsmResult :=
   if prog.wellFormed then
     let opt :=
@@ -6622,7 +6624,7 @@ def compileProgramAstFixpoint (prog : Program) (noOpt : Bool := false) :
 
 def compileToAsmWith (input : String) (noOpt : Bool) : Except String String := do
   let prog ← parseProgram input
-  let r ← compileProgramAstFixpoint prog noOpt
+  let r ← compileProgramAst prog noOpt
   let opt :=
     if noOpt then prog.compileToTAC
     else applyStandardPipelineFixpoint prog.tyCtx prog.compileToTAC
@@ -6657,7 +6659,7 @@ def compilePipeline (input : String) (noOpt : Bool := false) :
   -- Stage 1: parse (unverified)
   let prog ← parseProgram input
   -- Stages 2-5: verified core (well-formedness, AST→TAC, optimizations, verified ASM)
-  let r ← compileProgramAstFixpoint prog noOpt
+  let r ← compileProgramAst prog noOpt
   -- Stage 6: wrap + pretty-print (unverified)
   let opt :=
     if noOpt then prog.compileToTAC
