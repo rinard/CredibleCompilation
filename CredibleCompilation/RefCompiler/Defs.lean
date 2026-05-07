@@ -343,6 +343,33 @@ theorem FragExec.single_arrLoad_float {p : Prog} {pc : Nat} {σ : Store} {am : A
   simp [Value.ofBitVec] at this
   exact this
 
+theorem FragExec.single_arrLoad_bool {p : Prog} {pc : Nat} {σ : Store} {am : ArrayMem}
+    {x : Var} {arr : ArrayName} {idx : Var} {idxVal : BitVec 64}
+    (h : p[pc]? = some (.arrLoad x arr idx .bool))
+    (hidx : σ idx = .int idxVal)
+    (hbounds : idxVal < p.arraySizeBv arr) :
+    FragExec p pc σ (pc + 1) (σ[x ↦ .bool (am.read arr idxVal != 0)]) am am := by
+  have := Steps.single (Step.arrLoad (am := am) h hidx hbounds)
+  simp [Value.ofBitVec] at this
+  exact this
+
+theorem FragExec.single_arrStore_bool {p : Prog} {pc : Nat} {σ : Store} {am : ArrayMem}
+    {arr : ArrayName} {idx val : Var} {idxVal : BitVec 64} {b : Bool}
+    (h : p[pc]? = some (.arrStore arr idx val .bool))
+    (hidx : σ idx = .int idxVal) (hval : σ val = .bool b)
+    (hbounds : idxVal < p.arraySizeBv arr) :
+    FragExec p pc σ (pc + 1) σ am (am.write arr idxVal (if b then 1 else 0)) := by
+  have hty : (σ val).typeOf = .bool := by rw [hval]; simp [Value.typeOf]
+  have := Steps.single (Step.arrStore (am := am) h hidx hty hbounds)
+  simp [hval, Value.toBits] at this
+  exact this
+
+theorem FragExec.single_boolop {p : Prog} {pc : Nat} {σ : Store} {am : ArrayMem}
+    {x : Var} {be : BoolExpr}
+    (h : p[pc]? = some (.boolop x be)) :
+    FragExec p pc σ (pc + 1) (σ[x ↦ .bool (be.eval σ am)]) am am :=
+  Steps.single (Step.boolop h)
+
 theorem FragExec.single_print {p : Prog} {pc : Nat} {σ : Store} {am : ArrayMem}
     {fmt : String} {vs : List Var}
     (h : p[pc]? = some (.print fmt vs)) :
@@ -419,3 +446,67 @@ theorem Store.update_isFTmp_ne {σ : Store} {t : Var} {v : Value}
 theorem Store.update_ftmpName_ne {σ : Store} {k j : Nat} {v : Value}
     (hne : j ≠ k) : (σ[ftmpName k ↦ v]) (ftmpName j) = σ (ftmpName j) :=
   Store.update_other σ (ftmpName k) (ftmpName j) v (ftmpName_ne hne)
+
+theorem Store.update_isBTmp_ne {σ : Store} {t : Var} {v : Value}
+    {w : Var} (ht : t.isBTmp = true) (hw : w.isBTmp = false) :
+    (σ[t ↦ v]) w = σ w :=
+  Store.update_other σ t w v (fun heq => by rw [heq] at hw; simp [hw] at ht)
+
+private theorem btmpName_injective : Function.Injective btmpName := by
+  intro k j h
+  have h2 := String.ext_iff.mp h
+  simp only [btmpName, String.toList_append] at h2
+  have h3 := List.append_cancel_left h2
+  exact Nat_toString_injective (String.ext_iff.mpr h3)
+
+theorem btmpName_ne {k j : Nat} (h : k ≠ j) : btmpName k ≠ btmpName j :=
+  fun heq => h (btmpName_injective heq)
+
+theorem btmpName_isBTmp (k : Nat) : (btmpName k).isBTmp = true :=
+  btmpName_isBTmp_wt k
+
+/-- `btmpName k` is NOT a regular int temp (different prefix). -/
+theorem btmpName_not_isTmp (k : Nat) : (btmpName k).isTmp = false := by
+  simp only [String.isTmp, btmpName, String.toList_append]
+  show (match '_' :: '_' :: 'b' :: 't' :: (toString k).toList with
+    | '_' :: '_' :: 't' :: _ => true | _ => false) = false
+  rfl
+
+/-- `btmpName k` is NOT a float temp (different prefix). -/
+theorem btmpName_not_isFTmp (k : Nat) : (btmpName k).isFTmp = false := by
+  simp only [String.isFTmp, btmpName, String.toList_append]
+  show (match '_' :: '_' :: 'b' :: 't' :: (toString k).toList with
+    | '_' :: '_' :: 'f' :: 't' :: _ => true | _ => false) = false
+  rfl
+
+/-- `tmpName k` is NOT a bool temp. -/
+theorem tmpName_not_isBTmp (k : Nat) : (tmpName k).isBTmp = false := by
+  simp only [String.isBTmp, tmpName, String.toList_append]
+  show (match '_' :: '_' :: 't' :: (toString k).toList with
+    | '_' :: '_' :: 'b' :: 't' :: _ => true | _ => false) = false
+  rfl
+
+/-- `ftmpName k` is NOT a bool temp. -/
+theorem ftmpName_not_isBTmp (k : Nat) : (ftmpName k).isBTmp = false := by
+  simp only [String.isBTmp, ftmpName, String.toList_append]
+  show (match '_' :: '_' :: 'f' :: 't' :: (toString k).toList with
+    | '_' :: '_' :: 'b' :: 't' :: _ => true | _ => false) = false
+  rfl
+
+/-- `tmpName` and `btmpName` never collide. -/
+theorem tmpName_ne_btmpName {k j : Nat} : tmpName k ≠ btmpName j := by
+  intro h
+  have ht : (tmpName k).isTmp = true := tmpName_isTmp k
+  have hb : (btmpName j).isTmp = false := btmpName_not_isTmp j
+  rw [h] at ht; simp_all
+
+/-- `ftmpName` and `btmpName` never collide. -/
+theorem ftmpName_ne_btmpName {k j : Nat} : ftmpName k ≠ btmpName j := by
+  intro h
+  have hf : (ftmpName k).isFTmp = true := ftmpName_isFTmp k
+  have hb : (btmpName j).isFTmp = false := btmpName_not_isFTmp j
+  rw [h] at hf; simp_all
+
+theorem Store.update_btmpName_ne {σ : Store} {k j : Nat} {v : Value}
+    (hne : j ≠ k) : (σ[btmpName k ↦ v]) (btmpName j) = σ (btmpName j) :=
+  Store.update_other σ (btmpName k) (btmpName j) v (btmpName_ne hne)

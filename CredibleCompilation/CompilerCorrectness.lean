@@ -65,6 +65,7 @@ def Stmt.allVars : Stmt → List Var
 
 def Stmt.tmpFree (s : Stmt) : Prop := ∀ v ∈ s.allVars, v.isTmp = false
 def Stmt.ftmpFree (s : Stmt) : Prop := ∀ v ∈ s.allVars, v.isFTmp = false
+def Stmt.btmpFree (s : Stmt) : Prop := ∀ v ∈ s.allVars, v.isBTmp = false
 
 /-- A statement contains no goto/ifgoto. -/
 def Stmt.noGoto : Stmt → Prop
@@ -1516,6 +1517,15 @@ private theorem noTmpDecls_not_ftmp {decls : List (Var × VarTy)} {v : Var} {ty 
     have := lookup_none_of_isFTmp_wt hnt hv
     simp [this] at hlook
 
+private theorem noTmpDecls_not_btmp {decls : List (Var × VarTy)} {v : Var} {ty : VarTy}
+    (hnt : Program.noTmpDecls decls = true) (hlook : decls.lookup v = some ty) :
+    v.isBTmp = false := by
+  cases hv : v.isBTmp with
+  | false => rfl
+  | true =>
+    have := lookup_none_of_isBTmp_wt hnt hv
+    simp [this] at hlook
+
 /-- All variables in a well-typed arithmetic expression are declared. -/
 private theorem checkExpr_declared {lookup : Var → Option VarTy}
     {arrayDecls : List (ArrayName × Nat × VarTy)} {ty : VarTy}
@@ -1867,6 +1877,16 @@ theorem Program.typeCheck_ftmpFree (prog : Program) (h : prog.typeCheck = true) 
   intro v hv
   obtain ⟨ty, hlook⟩ := checkStmt_declared hchk v hv
   exact noTmpDecls_not_ftmp hnt hlook
+
+/-- A type-checked program's body has no btmp-prefixed variables. -/
+theorem Program.typeCheck_btmpFree (prog : Program) (h : prog.typeCheck = true) :
+    prog.body.btmpFree := by
+  unfold Program.typeCheck at h; simp only [Bool.and_eq_true] at h
+  have hnt := h.1.2
+  have hchk := h.2
+  intro v hv
+  obtain ⟨ty, hlook⟩ := checkStmt_declared hchk v hv
+  exact noTmpDecls_not_btmp hnt hlook
 
 /-- A statement that passes checkNoGoto has no goto/ifgoto. -/
 private theorem checkNoGoto_sound {s : Stmt}

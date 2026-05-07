@@ -2705,11 +2705,11 @@ private theorem compileBool_noRegVar (b : SBool) (offset nextTmp : Nat)
       rcases hmem with h | rfl
       · exact hi_i instr h v hv
       · simp [TAC.vars] at hv; rcases hv with rfl | rfl
-        · exact tmpName_noRegVar _
+        · exact btmpName_noRegVar _
         · exact hi_r
     · intro v hv
       simp [BoolExpr.vars, Expr.freeVars] at hv; subst hv
-      exact tmpName_noRegVar _
+      exact btmpName_noRegVar _
   | fcmp _ a b =>
     simp only [Program.SBool.noReservedVars, Bool.and_eq_true] at hSrc
     simp only [compileBool]
@@ -3023,16 +3023,19 @@ private theorem compileStmt_noRegVar (s : Stmt) (offset nextTmp : Nat)
       (compileExpr idx offset nextTmp).2.2 hSrc.2
     intro instr hmem v hv
     simp only [compileStmt, List.mem_append, List.mem_cons, List.mem_nil_iff, or_false] at hmem
-    rcases hmem with ((hi | hb) | (rfl | rfl | rfl | rfl)) | rfl
+    rcases hmem with (hi | hb) | rfl | rfl
     · exact hi_i instr hi v hv
     · exact hb_i instr hb v hv
-    · simp [TAC.vars] at hv; exact hb_be v hv
-    · simp [TAC.vars] at hv; subst hv; exact tmpName_noRegVar _
-    · simp [TAC.vars] at hv
-    · simp [TAC.vars] at hv; subst hv; exact tmpName_noRegVar _
-    · simp [TAC.vars] at hv; rcases hv with rfl | rfl
+    · -- boolop tBool be: vars = tBool :: be.vars
+      simp [TAC.vars] at hv
+      rcases hv with rfl | hbv
+      · exact btmpName_noRegVar _
+      · exact hb_be v hbv
+    · -- arrStore arr vIdx tBool .bool: vars = [vIdx, tBool]
+      simp [TAC.vars] at hv
+      rcases hv with rfl | rfl
       · exact hi_r
-      · exact tmpName_noRegVar _
+      · exact btmpName_noRegVar _
 
 -- ──────────────────────────────────────────────────────────────
 -- § 5b-pre5. compileToTAC output has noRegVar on all vars
