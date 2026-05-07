@@ -645,18 +645,40 @@ private partial def resolveSBool (lookupVar : Var → Option VarTy)
   | .barrRead arr idx => .barrRead arr (resolveSExpr lookupVar lookupArr idx)
   | .fcmp op a b => .fcmp op (resolveSExpr lookupVar lookupArr a) (resolveSExpr lookupVar lookupArr b)
 
-/-- Resolve types in a Stmt: convert `.assign` to `.fassign`, `.arrWrite` to `.farrWrite`. -/
+/-- Try to view a (resolved) SExpr as a SBool when the destination is bool-typed.
+    Handles only the syntactic forms that the statement parser produces for
+    `t := flags[i]` / `flags[0] := flags[3]`-style writes (the parser commits
+    to SExpr before the type is known). Other forms are left to the
+    well-formedness check to reject. -/
+private def sExprToSBool (lookupVar : Var → Option VarTy)
+    (lookupArr : ArrayName → Option VarTy) : SExpr → Option SBool
+  | .var x => if lookupVar x == some .bool then some (.bvar x) else none
+  | .arrRead arr idx => if lookupArr arr == some .bool then some (.barrRead arr idx) else none
+  | _ => none
+
+/-- Resolve types in a Stmt: convert `.assign` to `.fassign`, `.arrWrite` to `.farrWrite`.
+    Also reroute bool-typed `.assign`/`.arrWrite` to `.bassign`/`.barrWrite` when the
+    parser-emitted SExpr value can be re-viewed as a SBool (a `.bvar` or `.barrRead`). -/
 private partial def resolveStmt (lookupVar : Var → Option VarTy)
     (lookupArr : ArrayName → Option VarTy) : Stmt → Stmt
   | .skip => .skip
   | .assign x e =>
     let e' := resolveSExpr lookupVar lookupArr e
-    if lookupVar x == some .float then .fassign x e' else .assign x e'
+    if lookupVar x == some .float then .fassign x e'
+    else if lookupVar x == some .bool then
+      match sExprToSBool lookupVar lookupArr e' with
+      | some b => .bassign x b
+      | none => .assign x e'
+    else .assign x e'
   | .bassign x b => .bassign x (resolveSBool lookupVar lookupArr b)
   | .arrWrite arr idx val =>
     let idx' := resolveSExpr lookupVar lookupArr idx
     let val' := resolveSExpr lookupVar lookupArr val
     if lookupArr arr == some .float then .farrWrite arr idx' val'
+    else if lookupArr arr == some .bool then
+      match sExprToSBool lookupVar lookupArr val' with
+      | some bval => .barrWrite arr idx' bval
+      | none => .arrWrite arr idx' val'
     else .arrWrite arr idx' val'
   | .barrWrite arr idx bval =>
     .barrWrite arr (resolveSExpr lookupVar lookupArr idx) (resolveSBool lookupVar lookupArr bval)
