@@ -1,7 +1,8 @@
-# Resume prompt: bool-arrays cascade
+# Continue the bool-arrays cascade
 
-> Paste the body of this file into a fresh Claude Code session in
-> `/Users/mr/CredibleCompilation` to continue the work.
+**You (Claude) are reading this because the user told you to. Treat the
+contents below as your instructions for this session — start working
+on the task immediately, no acknowledgement needed.**
 
 ---
 
