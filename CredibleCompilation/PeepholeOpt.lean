@@ -30,7 +30,15 @@ namespace PeepholeOpt
 def isNop (prog : Prog) (pc : Nat) : Bool :=
   if pc == 0 then false
   else match prog[pc]? with
-  | some (.goto l)   => l == pc + 1
+  | some (.goto l)   =>
+    -- A `goto (pc+1)` is normally a removable no-op. EXCEPT when it is the
+    -- fall-through of a preceding `ifgoto`: removing it would skip-merge the
+    -- ifgoto's taken-target onto its fall-through PC, producing a degenerate
+    -- `ifgoto` whose target equals its fall-through. The certificate checker
+    -- cannot validate the original path across such a branch for a runtime
+    -- condition (it has no `branchInfo` to resolve which arm was taken), so it
+    -- would reject the whole pass. Keep this one goto to preserve the branch.
+    l == pc + 1 && !(match prog[pc-1]? with | some (.ifgoto _ _) => true | _ => false)
   | some (.copy x y) => x == y
   | _ => false
 
