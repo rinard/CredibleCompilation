@@ -270,8 +270,10 @@ def BinOp.eval : BinOp → BitVec 64 → BitVec 64 → BitVec 64
   | .band, a, b => a &&& b
   | .bor,  a, b => a ||| b
   | .bxor, a, b => a ^^^ b
-  | .shl,  a, b => a <<< b
-  | .shr,  a, b => BitVec.sshiftRight a b.toNat
+  -- Shift amount masked to 6 bits to match real AArch64 (`lsl`/`asr` use only the
+  -- low 6 bits of the amount register); see ArmSemantics `lslR`/`asrR`.
+  | .shl,  a, b => a <<< (b.toNat % 64)
+  | .shr,  a, b => BitVec.sshiftRight a (b.toNat % 64)
 
 /-- An operation is safe if it will not cause the program to get stuck.
     Only `div` and `mod` can fault — when the divisor is zero. -/

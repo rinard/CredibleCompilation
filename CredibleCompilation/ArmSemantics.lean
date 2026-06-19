@@ -129,13 +129,17 @@ inductive ArmStep (prog : ArmProg) : ArmState → ArmState → Prop where
     prog[s.pc]? = some (.eorR rd rn rm) →
     ArmStep prog s (s.setReg rd (s.regs rn ^^^ s.regs rm) |>.nextPC)
 
+  -- AArch64 `lsl`/`asr` by a register use only the low 6 bits of the amount
+  -- (mod 64). Modelling the full amount was unfaithful to hardware and caused a
+  -- miscompile for runtime shift amounts ≥ 64; the masked amount matches both
+  -- real ARM and `BinOp.eval` for shl/shr.
   | lslR (rd rn rm : ArmReg) :
     prog[s.pc]? = some (.lslR rd rn rm) →
-    ArmStep prog s (s.setReg rd (s.regs rn <<< s.regs rm) |>.nextPC)
+    ArmStep prog s (s.setReg rd (s.regs rn <<< ((s.regs rm).toNat % 64)) |>.nextPC)
 
   | asrR (rd rn rm : ArmReg) :
     prog[s.pc]? = some (.asrR rd rn rm) →
-    ArmStep prog s (s.setReg rd (BitVec.sshiftRight (s.regs rn) (s.regs rm).toNat) |>.nextPC)
+    ArmStep prog s (s.setReg rd (BitVec.sshiftRight (s.regs rn) ((s.regs rm).toNat % 64)) |>.nextPC)
 
   | branch (lbl : Nat) :
     prog[s.pc]? = some (.b lbl) →

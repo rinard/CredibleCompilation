@@ -1118,9 +1118,9 @@ private def armStepResult (s : ArmState) (i : ArmInstr) : ArmState :=
   | .eorImm rd rn imm => s.setReg rd (s.regs rn ^^^ imm) |>.nextPC
   | .orrR rd rn rm => s.setReg rd (s.regs rn ||| s.regs rm) |>.nextPC
   | .eorR rd rn rm => s.setReg rd (s.regs rn ^^^ s.regs rm) |>.nextPC
-  | .lslR rd rn rm => s.setReg rd (s.regs rn <<< s.regs rm) |>.nextPC
+  | .lslR rd rn rm => s.setReg rd (s.regs rn <<< ((s.regs rm).toNat % 64)) |>.nextPC
   | .asrR rd rn rm =>
-      s.setReg rd (BitVec.sshiftRight (s.regs rn) (s.regs rm).toNat) |>.nextPC
+      s.setReg rd (BitVec.sshiftRight (s.regs rn) ((s.regs rm).toNat % 64)) |>.nextPC
   | .b lbl => { s with pc := lbl }
   | .printCall _ => s.havocCallerSaved (havocRegsFn s) (havocFRegsFn s) |>.nextPC
   | .callPrintI => s.havocCallerSaved (havocRegsFn s) (havocFRegsFn s) |>.nextPC

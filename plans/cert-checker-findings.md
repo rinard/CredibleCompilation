@@ -5,6 +5,93 @@ Compilation compiler (While → certificate-checked optimization passes → veri
 ARM64 codegen), for the paper's evaluation/findings section. Branch
 `fix/cert-checker-completeness`.
 
+## ⚠ Most significant finding: unfaithful ARM shift semantics — FIXED (commit pending)
+
+A single unfaithful definition in the **trusted target-ISA operational semantics**
+produced BOTH a real miscompilation AND an apparent certificate-checker soundness
+hole. This is the campaign's headline result and a clean methodological story.
+
+### The defect
+
+The shift amount was modelled as the **full** 64-bit value in three places that
+must agree, while **real AArch64 `lsl`/`asr`/`lsr` use only the low 6 bits of the
+amount register (amount mod 64)**:
+
+- `Core.lean` `BinOp.eval`: `shl a b = a <<< b`, `shr a b = sshiftRight a b.toNat`.
+- `ArmSemantics.lean` relational `ArmStep`: `lslR … = rn <<< rm`,
+  `asrR … = sshiftRight rn (rm).toNat`.
+- `PipelineCorrectness.lean` executable `armStepResult`: the same.
+
+Because all three used the full amount, the verified codegen proof related
+TAC→ARM-model faithfully — but the model was wrong about the hardware it claims to
+describe.
+
+### Manifestation 1 — a real miscompile (binary ≠ verified semantics)
+
+Reproduced from ordinary source (the front end imposes no `& 63` on shift amounts):
+```
+x := 12345; a := 0; i := 0; while (i<7){ a := a+10; i := i+1 };  -- a = 70 at runtime
+r := x >> a
+```
+Old verified TAC semantics: `sshiftRight 12345 70 = 0` (shifted past width → sign
+bits). Assembled binary: **192** = `asr(12345, 70 & 63 = 6)`. The binary disagreed
+with the verified semantics for any **runtime** shift amount ≥ 64. (Constant
+amounts ≥ 64 are folded at compile time and were already correct; only *runtime*
+amounts in a register expose it.)
+
+### Manifestation 2 — an apparent checker soundness hole (same root cause)
+
+`BinOp.eval` is also used by the checker's constant folding inside
+`simplify`/`checkRelConsistency`. When an optimization moves a value ≥ 64 into the
+amount position (here: a register-reuse pattern where the dividend/operand and the
+shift amount were swapped), the checker folded BOTH `shr a b` and `shr b a` to `0`
+(each shifted out under the full-amount semantics) and therefore deemed the swapped
+program equivalent → it **accepted a non-equivalent transform**. The masked binary
+then computed two different nonzero values, and the divergence surfaced. The
+checker's acceptance was *sound relative to its (wrong) model* — exactly the
+diagnosis: not a checker-logic bug, a semantics bug.
+
+### How it was found
+
+The overnight **certificate-mutation soundness campaign** (`certmutate`) corrupts a
+valid certificate's transformed program and requires the checker to reject; an
+accept whose codegen output diverges is flagged. On random program seed 30 it
+flagged a `swap` of a `shr` that the checker accepted but whose binary diverged.
+The key diagnostic principle — *the checker is proven sound against the TAC
+operational semantics, so accept + divergent-binary ⇒ a TAC-vs-ASM semantics
+mismatch* — localized it to shift-amount masking; it then reproduced from plain
+source. **Differential testing (While vs C/Fortran) cannot find this**: C shift by
+≥ width is undefined, so the generators mask amounts (`& 63`) and there is no
+oracle for the divergent case. Mutation testing manufactured the out-of-distribution
+input fuzzers under-sample.
+
+### The fix (hardware-faithful masking)
+
+Mask the amount to its low 6 bits (`mod 64`) in all three places, so the source
+language, the trusted ARM model, and the executable model all match real AArch64:
+- `BinOp.eval`: `shl a b = a <<< (b.toNat % 64)`, `shr a b = sshiftRight a (b.toNat % 64)`.
+- `ArmStep` `lslR`/`asrR` and `armStepResult`: same `% 64`.
+
+Proof impact was minimal: the codegen correctness cases for `lslR`/`asrR` are `rfl`
+and stay `rfl` because all three masks are syntactically identical; **full `lake
+build` green (3139 jobs, 0 `sorry`)**. This changes the *source-language* meaning of
+`>>`/`<<` to the hardware-faithful `shift by (amount mod 64)`, consistent with the
+project's "data types identical to hardware" design.
+
+Verified after the fix: the runtime-amount program now yields the consistent masked
+result (`192`) under *both* the verified semantics and the binary; the seed-30
+soundness hole is resolved (the swap is now correctly **rejected** — accepted
+mutations dropped 40→38); the 81 differential tests still pass.
+
+### Lesson for the paper
+
+A bug in the *trusted* target-ISA semantics is invisible to a verified compiler's
+proofs (the compiler was provably correct against the flawed model) and to
+differential testing (no oracle). It surfaced only because **certificate-mutation
+soundness testing** generates out-of-distribution programs and cross-checks the
+checker's TAC-level verdict against the actually-assembled binary — turning a
+model/hardware mismatch into an observable divergence.
+
 ## Headline result
 
 Across the entire campaign — 81 hand-written differential tests, ~80 generated
@@ -12,8 +99,14 @@ families, thousands of random Csmith/swarm/boundary/SPE programs, EMI
 (Orion/Athena/Hermes) and metamorphic mutants, and a certificate-mutation
 soundness campaign — we found:
 
-- **0 miscompilations.** Every program the compiler accepted produced output
-  identical to the C and Fortran references.
+- **0 miscompilations under differential testing.** Every program the compiler
+  accepted produced output identical to the C and Fortran references. (Differential
+  testing cannot see the shift bug above: C shift-by-≥-width is undefined, so the
+  generators mask shift amounts and there is no oracle for the divergent case.)
+- **1 miscompilation found by soundness testing** — the unfaithful ARM shift
+  semantics above — relative to the verified TAC semantics. It is reachable from
+  ordinary source (`x >> a` with runtime `a ≥ 64`) and stems from the *trusted*
+  ARM operational-semantics model, not the verified compiler logic.
 - **0 soundness holes in the certificate checker.** A campaign that corrupted
   valid certificates in behaviour-changing ways (const-bump, op-flip,
   operand-swap, jump-retarget) had the checker **reject every one** (2806+
