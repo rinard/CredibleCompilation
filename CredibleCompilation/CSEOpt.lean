@@ -241,13 +241,30 @@ private partial def analyzeLoop (prog : Prog) (states : Array (Option CSEState))
     analyzeLoop prog states' inWl' (newWork ++ rest)
 
 /-- Forward available-expression analysis.
-    Returns `Option CSEState` per PC (`none` = unreachable). -/
+    Returns `Option CSEState` per PC (`none` = unreachable).
+
+    Two phases, mirroring `ConstProp.analyze`. Phase 1 is the usual reachable
+    forward analysis from PC 0. Phase 2 seeds every still-unreachable PC with the
+    `top` state (empty available set, empty const map) and re-propagates. A merge
+    fed by a physically-dead edge must intersect with that edge's contribution;
+    if phase 1 never visited the dead predecessor, the merge keeps available
+    expressions that are not in fact available on that edge, and the certificate's
+    `invariants_preserved` check fails on the physical dead edge. Phase 2
+    propagates the dead edge too, so the merge correctly drops those expressions.
+    Correctness-safe: it only removes (never adds) available expressions, so CSE
+    becomes slightly less aggressive at such merges but every cert stays valid. -/
 def analyze (prog : Prog) : Array (Option CSEState) :=
   if prog.size == 0 then #[]
   else
     let init := (Array.replicate prog.size (none : Option CSEState)).set! 0 (some ([], []))
     let inWl := (Array.replicate prog.size false).set! 0 true
-    analyzeLoop prog init inWl (0 :: [])
+    let reached := analyzeLoop prog init inWl (0 :: [])
+    let deadPCs := (List.range prog.size).filter fun pc =>
+      match reached[pc]? with | some none => true | _ => false
+    let seeded := deadPCs.foldl (fun arr pc => arr.set! pc (some ([], []))) reached
+    let inWl2 := deadPCs.foldl (fun arr pc => arr.set! pc true)
+      (Array.replicate prog.size false)
+    analyzeLoop prog seeded inWl2 deadPCs
 
 -- ============================================================
 -- § 4. Transformation
