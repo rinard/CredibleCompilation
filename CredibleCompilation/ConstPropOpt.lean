@@ -134,12 +134,30 @@ private partial def analyzeLoop (prog : Prog) (consts : Array (Option ConstMap))
     analyzeLoop prog consts' (rest ++ newWork)
 
 /-- Forward constant propagation analysis.
-    Returns `Option ConstMap` per PC (`none` = unreachable). -/
+    Returns `Option ConstMap` per PC (`none` = unreachable).
+
+    Two phases. Phase 1 is the usual reachable forward analysis from PC 0. Phase 2
+    seeds every still-unreachable PC with the `top` (empty) const map and
+    re-propagates. This is required for certificate validity WITHOUT compaction:
+    the checker validates EVERY physical transition, including those leaving a
+    statically-unreachable PC (e.g. `mn := 9` in a constant-false branch). If such
+    a dead edge's effect never reached the merge, the merge would keep the live
+    edge's constant (`mn = 4`) and the certificate would assert an invariant that
+    fails on the physical dead edge. Phase 2 propagates the dead edge too, so the
+    merge is weakened (here `mn` becomes unknown) and every invariant holds on all
+    physical predecessors. The branch fold itself is unaffected (it only needs the
+    condition constant at the reachable `ifgoto`); the single-pass cross-merge
+    precision lost here is recovered by DCE removing the dead arm and the LICM
+    cluster re-running ConstProp on the cleaned program. -/
 def analyze (prog : Prog) : Array (Option ConstMap) :=
   if prog.size == 0 then #[]
   else
     let init := (Array.replicate prog.size (none : Option ConstMap)).set! 0 (some [])
-    analyzeLoop prog init (0 :: [])
+    let reached := analyzeLoop prog init (0 :: [])
+    let deadPCs := (List.range prog.size).filter fun pc =>
+      match reached[pc]? with | some none => true | _ => false
+    let seeded := deadPCs.foldl (fun arr pc => arr.set! pc (some [])) reached
+    analyzeLoop prog seeded deadPCs
 
 -- ============================================================
 -- § 5. Program transformation

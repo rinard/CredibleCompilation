@@ -245,7 +245,15 @@ partial def computeRels (prog : Prog) (deadPCs : Array Bool)
     let allVars := _root_.collectAllVars prog prog
     let idRel : EExprRel := allVars.map fun v => (.var v, .var v)
     let init := (Array.replicate prog.size (none : Option EExprRel)).set! 0 (some idRel)
-    let result := relLoop prog deadPCs consts init (0 :: ([] : List Nat))
+    let reached := relLoop prog deadPCs consts init (0 :: ([] : List Nat))
+    -- Second phase (mirrors `ConstPropOpt.analyze`): seed every still-unreachable
+    -- PC with `idRel` (the identity/top relation) and re-propagate, so the
+    -- relation is consistent across EVERY physical edge — including those leaving
+    -- a statically-dead PC, which the certificate checker still validates.
+    let deadUnreached := (List.range prog.size).filter fun pc =>
+      match reached[pc]? with | some none => true | _ => false
+    let seeded := deadUnreached.foldl (fun arr pc => arr.set! pc (some idRel)) reached
+    let result := relLoop prog deadPCs consts seeded deadUnreached
     result.map fun
       | some rel => rel
       | none => ([] : EExprRel)
