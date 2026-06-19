@@ -177,7 +177,12 @@ def buildInstrCerts (origProg : Prog) (origMap : Array Nat)
       let origTarget := match origProg[myPcOrig]? with
         | some (.goto l) => l
         | _ => myPcOrig + 1
-      let finalOrigTarget := skipArr.getD origTarget origTarget
+      -- If the target is itself a fused (removed) fmul, do NOT skip past it: that
+      -- fmul anchors the following fused instruction's `pc_orig` (see
+      -- `buildPcOrigMap`), so the path must END there, not overshoot to the fadd.
+      let finalOrigTarget :=
+        if removed.getD origTarget false then origTarget
+        else skipArr.getD origTarget origTarget
       { pc_orig := myPcOrig, rel := baseRel,
         transitions := [{ origLabels := buildPath origTarget finalOrigTarget,
                           rel := baseRel, rel_next := baseRel }] }
@@ -185,7 +190,9 @@ def buildInstrCerts (origProg : Prog) (origMap : Array Nat)
       let origTaken := match origProg[myPcOrig]? with
         | some (.ifgoto _ l) => l
         | _ => myPcOrig
-      let takenFinal := skipArr.getD origTaken origTaken
+      let takenFinal :=
+        if removed.getD origTaken false then origTaken
+        else skipArr.getD origTaken origTaken
       { pc_orig := myPcOrig, rel := baseRel,
         transitions := [{ origLabels := buildPath origTaken takenFinal,
                           rel := baseRel, rel_next := baseRel },
