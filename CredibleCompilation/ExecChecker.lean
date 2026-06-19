@@ -1341,7 +1341,26 @@ theorem checkRelConsistencyFromMap_eq
 
     Materializes the `inv_orig[ic.pc_orig]` `FastVarMap` once per pc_t and
     threads it through `checkOrigPathFast`. `checkRelConsistency` already
-    builds its own internal map, so it stays as-is. -/
+    builds its own internal map, so it stays as-is.
+
+    KNOWN COMPLETENESS GAP (sound, not complete). This checks EVERY structural
+    successor of each transformed instruction. For an `ifgoto` whose guard is
+    statically determined by `inv_orig`, one successor edge is dead — it is
+    never executed in either program — yet this check still demands a valid
+    original-program path for it, which cannot exist (the original never takes
+    that branch). So a transform that hands the checker an UNFOLDED determined
+    `ifgoto` is rejected even though it is correct. This is not specific to any
+    one pass; it surfaces at RegAlloc only because RegAlloc is the last pass and
+    (correctly) does not fold branches — by the time the pipeline reaches it, the
+    front end + ConstProp have folded every determined `ifgoto`, so real programs
+    never hit this. It can be triggered with a synthetic input (e.g. an EMI
+    mutant with a deep chain of constant-determined `ifgoto`s whose dead arms
+    reassign live vars). The principled fix is to skip a successor edge proven
+    dead by the (already-validated) invariant, which requires strengthening
+    `checkAllTransitionsProp` with a `σ_t ⊨ inv_trans` hypothesis and threading
+    it through the master simulation — deferred. `checkAllTransitionsProp`
+    (PropChecker) only quantifies over ACTUAL trans steps, so the soundness
+    direction never needs the dead edge; only this executable check is stricter. -/
 def checkAllTransitionsExec (cert : ECertificate) : Bool :=
   (List.range cert.trans.size).all fun pc_t =>
     match cert.trans[pc_t]? with
