@@ -92,6 +92,44 @@ soundness testing** generates out-of-distribution programs and cross-checks the
 checker's TAC-level verdict against the actually-assembled binary — turning a
 model/hardware mismatch into an observable divergence.
 
+## Certificate-failure fuzzing campaign (`stress/certfuzz.sh`)
+
+A dedicated campaign that, per random program, runs `certaudit` and **catalogues
+every certificate rejection by `(pass, sub-check)`**, saving the first program for
+each novel combination, with lighter differential + soundness checks interleaved.
+Distinct `(pass, sub-check)` combinations observed on random int programs:
+
+| combination | cause | status |
+|---|---|---|
+| `RegAlloc:[all_transitions]` | determined-`ifgoto` dead edge (`origPath=false`) | documented gap; **reachable on random programs**, not only synthetic mutants |
+| `LICM:[all_transitions]`, `LICM:[all_transitions, div_preservation]` | over-aggressive hoist on large adversarial programs | imprecision, correctness-safe; div minimal repro already fixed |
+| `CSE:[invariants_preserved]` | dead-edge merge kept unavailable expressions | **FIXED** (two-phase `analyze`, commit 789b792) |
+| `CSE:[all_transitions]` | same dead-edge gap as RegAlloc/LICM | shared `checkAllTransitions` gap |
+
+No miscompiles and no soundness holes were found by the campaign (the shift bug
+above predates it and is fixed). All remaining rejections are **completeness gaps**
+(a correct optimization dropped), not soundness holes.
+
+### CSE dead-edge fix (commit 789b792)
+
+`CSEOpt.analyze` seeded only PC 0, so a merge fed by a physically-dead edge phase 1
+never visited kept available expressions not in fact available there, failing
+`invariants_preserved`. Applied the same two-phase fix as `ConstProp.analyze` /
+`DAE.computeRels`: after the reachable pass, seed unreachable PCs with the top state
+and re-propagate so the merge intersects with the dead edge and drops those
+expressions. Untrusted pass; 3139 jobs green; 81/81 differential tests.
+
+### Dominant open item: `checkAllTransitions` dead-edge gap
+
+`RegAlloc/LICM/CSE:[all_transitions]` share one root: `checkAllTransitions` requires
+`origPath` (and `relConsist`) on *every* physical transition, including
+invariant-dead edges (a determined `ifgoto`'s untaken arm). The passes legitimately
+do not fold those branches, so the dead edge is checked and fails. This is the one
+*trusted-checker* fix remaining (skip edges the invariant proves unreachable, then
+re-prove `checkAllTransitionsExec_sound`); correctness-safe today since the dropped
+transforms are never miscompiles. Adding folding passes around the failing pass is a
+band-aid (changes the program, not the gap) and was deliberately reverted earlier.
+
 ## Headline result
 
 Across the entire campaign — 81 hand-written differential tests, ~80 generated
