@@ -113,19 +113,32 @@ def Expr.simplify (inv : EInv) : Expr → Expr
     match a.simplify inv, b.simplify inv with
     | .lit na, .lit nb => .lit (op.eval na nb)
     | a', b'           => Expr.reassoc op a' b'
-  | .tobool e       => .tobool e
-  | .cmpE op a b    => .cmpE op a b
-  | .cmpLitE op a n => .cmpLitE op a n
-  | .notE e         => .notE e
-  | .andE a b       => .andE a b
-  | .orE a b        => .orE a b
+  -- Recurse into the boolean-expr-as-Expr constructors so that invariant
+  -- substitution reaches variables *inside* comparisons. Without this, a
+  -- variable holding a comparison result (e.g. `done := x == y`) cannot have
+  -- its operands resolved via the invariant, while `substSymFast` (used on the
+  -- transformed side) does recurse — the asymmetry causes spurious
+  -- `checkRelConsistency` rejections (e.g. LICM hoisting around a bool flag).
+  | .tobool e       => .tobool (e.simplify inv)
+  | .cmpE op a b    => .cmpE op (a.simplify inv) (b.simplify inv)
+  | .cmpLitE op a n => .cmpLitE op (a.simplify inv) n
+  | .notE e         => .notE (e.simplify inv)
+  | .andE a b       => .andE (a.simplify inv) (b.simplify inv)
+  | .orE a b        => .orE (a.simplify inv) (b.simplify inv)
   | .arrRead arr idx => .arrRead arr (idx.simplify inv)
   | .flit n         => .flit n
   | .fbin op a b    =>
     let a' := a.simplify inv; let b' := b.simplify inv
-    match op, a' with
-    | .fadd, .fbin .fmul _ _ => .fbin .fadd b' a'  -- normalize: fmul on right
-    | _, _ => .fbin op a' b'
+    match op, a', b' with
+    -- normalize a lone `fmul` operand onto the right (helps FMA matching).
+    -- When BOTH operands are `fmul`, do NOT swap: swapping would put an `fmul`
+    -- back on the left and re-fire on the next iteration, so the normal form
+    -- would oscillate by iteration parity and break confluence (equal
+    -- expressions reached via different var-unfold depths would not compare
+    -- equal). Keeping both-fmul in original order is an immediate fixed point.
+    | .fadd, .fbin .fmul _ _, .fbin .fmul _ _ => .fbin .fadd a' b'
+    | .fadd, .fbin .fmul _ _, _ => .fbin .fadd b' a'
+    | _, _, _ => .fbin op a' b'
   | .fcmpE op a b   => .fcmpE op (a.simplify inv) (b.simplify inv)
   | .intToFloat e   => .intToFloat (e.simplify inv)
   | .floatToInt e   => .floatToInt (e.simplify inv)
@@ -575,19 +588,23 @@ def Expr.simplifyFast (m : FastVarMap) : Expr → Expr
     match a.simplifyFast m, b.simplifyFast m with
     | .lit na, .lit nb => .lit (op.eval na nb)
     | a', b'           => Expr.reassoc op a' b'
-  | .tobool e       => .tobool e
-  | .cmpE op a b    => .cmpE op a b
-  | .cmpLitE op a n => .cmpLitE op a n
-  | .notE e         => .notE e
-  | .andE a b       => .andE a b
-  | .orE a b        => .orE a b
+  -- See `Expr.simplify`: recurse so invariant substitution reaches inside comparisons.
+  | .tobool e       => .tobool (e.simplifyFast m)
+  | .cmpE op a b    => .cmpE op (a.simplifyFast m) (b.simplifyFast m)
+  | .cmpLitE op a n => .cmpLitE op (a.simplifyFast m) n
+  | .notE e         => .notE (e.simplifyFast m)
+  | .andE a b       => .andE (a.simplifyFast m) (b.simplifyFast m)
+  | .orE a b        => .orE (a.simplifyFast m) (b.simplifyFast m)
   | .arrRead arr idx => .arrRead arr (idx.simplifyFast m)
   | .flit n         => .flit n
   | .fbin op a b    =>
     let a' := a.simplifyFast m; let b' := b.simplifyFast m
-    match op, a' with
-    | .fadd, .fbin .fmul _ _ => .fbin .fadd b' a'  -- normalize: fmul on right
-    | _, _ => .fbin op a' b'
+    match op, a', b' with
+    -- See `Expr.simplify`: both-fmul must NOT swap, to keep the normal form
+    -- confluent (no parity oscillation).
+    | .fadd, .fbin .fmul _ _, .fbin .fmul _ _ => .fbin .fadd a' b'
+    | .fadd, .fbin .fmul _ _, _ => .fbin .fadd b' a'
+    | _, _, _ => .fbin op a' b'
   | .fcmpE op a b   => .fcmpE op (a.simplifyFast m) (b.simplifyFast m)
   | .intToFloat e   => .intToFloat (e.simplifyFast m)
   | .floatToInt e   => .floatToInt (e.simplifyFast m)
@@ -735,7 +752,12 @@ theorem Expr.simplifyFast_eq_simplify (e : Expr) (inv : EInv) :
   | lit _ | blit _ | flit _ => rfl
   | var v => exact FastVarMap.ofList_getD_eq_lookupExpr inv v
   | bin op a b iha ihb => simp only [simplifyFast, simplify, iha, ihb]
-  | tobool _ | cmpE _ _ _ | cmpLitE _ _ _ | notE _ | andE _ _ | orE _ _ => rfl
+  | tobool _ ih => simp only [simplifyFast, simplify, ih]
+  | cmpE op a b iha ihb => simp only [simplifyFast, simplify, iha, ihb]
+  | cmpLitE op a n ih => simp only [simplifyFast, simplify, ih]
+  | notE _ ih => simp only [simplifyFast, simplify, ih]
+  | andE a b iha ihb => simp only [simplifyFast, simplify, iha, ihb]
+  | orE a b iha ihb => simp only [simplifyFast, simplify, iha, ihb]
   | arrRead arr idx ih => simp only [simplifyFast, simplify, ih]
   | fbin op a b iha ihb => simp only [simplifyFast, simplify, iha, ihb]
   | fcmpE op a b iha ihb => simp only [simplifyFast, simplify, iha, ihb]

@@ -199,15 +199,19 @@ def optimize (tyCtx : TyCtx) (prog : Prog) : ECertificate :=
   let consts := analyze prog
   let trans := transformProg prog consts
   let inv := buildInvariants consts
-  -- Compact: remove unreachable PCs using trans reachability
-  let reached := _root_.reachable trans
-  let (orig, origMap, _) := _root_.compactProg prog reached
-  let (trans, _, _) := _root_.compactProg trans reached
-  -- Remap invariants to compacted PCs
-  let inv := origMap.map fun pc => inv.getD pc ([] : EInv)
-  let instrCerts := _root_.buildInstrCerts1to1 trans (_root_.collectAllVars orig trans)
+  -- NOTE: We deliberately do NOT compact away unreachable PCs here. `transformProg`
+  -- is a structure-preserving rewrite (one trans instruction per orig instruction,
+  -- folding `ifgoto`→`goto` in place), so `trans` is aligned 1-to-1 with the input
+  -- `prog`. Keeping `orig := prog` (uncompacted) is required by the pipeline driver
+  -- (`applyPass`), which only accepts a certificate whose `orig.code` equals the
+  -- program it was handed. Compacting `orig` made `orig.code ≠ prog.code` precisely
+  -- when folding created unreachable code (a constant branch) — ConstProp's signature
+  -- case — causing the whole certificate to be rejected and the optimization silently
+  -- dropped. Dead-code removal is left to the separate, independently-certified DCE
+  -- pass that runs immediately after ConstProp in the pipeline.
+  let instrCerts := _root_.buildInstrCerts1to1 trans (_root_.collectAllVars prog trans)
   let haltCerts := _root_.buildHaltCerts instrCerts trans
-  { orig := orig
+  { orig := prog
     trans := trans
     tyCtx := tyCtx
     inv_orig := inv

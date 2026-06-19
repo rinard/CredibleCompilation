@@ -262,12 +262,12 @@ theorem Expr.simplify_sound (inv : EInv) (e : Expr) (σ : Store) (am : ArrayMem)
       rw [Expr.reassoc_sound]
       simp only [Expr.eval]
       rw [iha, ihb]
-  | tobool _ => rfl
-  | cmpE _ _ _ => rfl
-  | cmpLitE _ _ _ => rfl
-  | notE _ => rfl
-  | andE _ _ => rfl
-  | orE _ _ => rfl
+  | tobool e ih => simp only [Expr.simplify, Expr.eval]; rw [ih]
+  | cmpE op a b iha ihb => simp only [Expr.simplify, Expr.eval]; rw [iha, ihb]
+  | cmpLitE op a n ih => simp only [Expr.simplify, Expr.eval]; rw [ih]
+  | notE e ih => simp only [Expr.simplify, Expr.eval]; rw [ih]
+  | andE a b iha ihb => simp only [Expr.simplify, Expr.eval]; rw [iha, ihb]
+  | orE a b iha ihb => simp only [Expr.simplify, Expr.eval]; rw [iha, ihb]
   | arrRead arr idx ih =>
     simp only [Expr.simplify, Expr.eval]
     rw [ih]
@@ -275,7 +275,10 @@ theorem Expr.simplify_sound (inv : EInv) (e : Expr) (σ : Store) (am : ArrayMem)
   | fbin op _ _ iha ihb =>
     simp only [Expr.simplify]
     split
-    · -- fadd with fmul on left → swapped by normalization
+    · -- fadd, both operands fmul → kept in original order (no swap)
+      simp only [Expr.eval]
+      rw [iha, ihb]
+    · -- fadd with a lone fmul on left → swapped by normalization
       simp only [Expr.eval]
       rw [iha, ihb, FloatBinOp.fadd_comm]
     · -- all other cases → unchanged
