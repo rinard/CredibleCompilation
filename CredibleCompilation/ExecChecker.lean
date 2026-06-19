@@ -1478,7 +1478,19 @@ def checkDivPreservationExec (cert : ECertificate) : Bool :=
         -- add/sub/mul are always safe so operand mapping is not required.
         match op with
         | .div | .mod =>
-          relFindOrigVar ic.rel y == some y' &&
+          -- Dividend correspondence. Like the divisor it has a hoisted-constant
+          -- fallback: the dividend never causes a div-by-zero trap, so all we need
+          -- is that the trans dividend and the orig dividend hold the SAME value —
+          -- either both the same renamed variable, or both the same literal (the
+          -- relation maps trans `y` to a literal `c` and the orig invariant proves
+          -- the orig dividend `y'` equals that same `c`).
+          (relFindOrigVar ic.rel y == some y' ||
+           (match (cert.inv_orig.getD ic.pc_orig ([] : EInv)).find? (fun (v, _) => v == y') with
+            | some (_, .lit c) =>
+              match relFindOrigExpr ic.rel y with
+              | some (.lit c') => c == c'
+              | _ => false
+            | _ => false)) &&
           (relFindOrigVar ic.rel z == some z' ||
            -- Fallback for hoisted constants: the relation maps the trans divisor
            -- to a non-zero literal (preventing trans errors), AND the orig invariant
@@ -1519,7 +1531,13 @@ def checkDivPreservationFromMaps (cert : ECertificate)
         op == op' &&
         match op with
         | .div | .mod =>
-          relFindOrigVar ic.rel y == some y' &&
+          (relFindOrigVar ic.rel y == some y' ||
+           (match (invMapAt invMaps_orig ic.pc_orig).1.getD y' (.var y') with
+            | .lit c =>
+              match relFindOrigExpr ic.rel y with
+              | some (.lit c') => c == c'
+              | _ => false
+            | _ => false)) &&
           (relFindOrigVar ic.rel z == some z' ||
            ((match relFindOrigExpr ic.rel z with
              | some (.lit c) => c != 0 | _ => false) &&
