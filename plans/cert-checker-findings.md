@@ -268,10 +268,17 @@ the checker accepts the new certificate, and differential output stays correct.
 | B4 | FMAFusion | **`origLabels` off-by-one for a jump targeting a fused `fmul`.** `buildPcOrigMap` anchors a fused instruction's `pc_orig` on the *removed* `fmul`, but a `goto`/`ifgoto` targeting that fmul used `skipArr` to skip *past* it to the `fadd`, so the jump's path overshot the successor's `pc_orig` by one → `all_transitions` (`origPath`) failure. | When a jump target is itself a removed (fused) fmul, do not skip it. | `certaudit` (flt_accum) + `all_transitions` diagnostic | 1d1b1c3 |
 | B5 | CSE | **Dead-edge merge kept unavailable expressions.** `CSEOpt.analyze` (available-expression worklist) seeded only PC 0, so a merge fed by a physically-dead edge phase 1 never visited kept available expressions not actually available there → `invariants_preserved` rejection. | Same two-phase fix as B2: after the reachable pass, seed unreachable PCs with the top state and re-propagate so merges intersect with the dead edge. | `certaudit` cert-failure campaign | 789b792 |
 | B6 | LICM | **Imprecise + dead-unaware certificate relation.** (i) The per-PC relation used a PC-linear scan + global override, over-claiming hoisted-var coverage at branch targets a control edge could reach without the hoist → `relConsist` free-variable-coverage rejection. (ii) A hoisted variable *dead after the loop* carries the hoisted literal on the in-loop path but the original value on an immediate loop-exit path; an identity rel pair cannot express that sound divergence → `relConsist` rejection. **Reduced LICM's random-program rejection rate ~9/40 → 3/40 with the full hoist preserved.** | (i) CFG-correct forward MUST dataflow (`hoistedSetAt`, intersection at joins). (ii) Filter the relation to LIVE variables (`DAEOpt.analyzeLiveness`), dropping the dead var exactly where it diverges. No optimization dropped; checker untouched. | `certaudit` cert-failure campaign + relation-pair diagnostic | 1775d35 |
+| B7 | CSE | **Nested common subexpressions not matched.** `findAvail` compared a candidate against stored available expressions without expanding the stored entry's `invExpr` through the available set, so a nested redundancy like `(a+i)*(b+i)` recomputed via fresh temps did not match the available product (it was certifiable, just not *found*). | Expand a stored entry's `invExpr` through the available set before comparing. `opt_cse_loop` now computes the product once (1 `mul`, was 2). | `certaudit` / missed-optimization probe | c778787 |
+| B8 | LICM | **Non-dominating preheader (closed the B6 residual).** When the loop header is reached by a path that bypasses the inserted preheader (non-fall-through entry, or a nested-loop structure), the hoisted `const` never runs there; the variable is then live where it is not established and the relation's identity fallback mismatches the original literal → `relConsist` rejection (the hoist is genuinely broken on that path). | `dominatingHoists`: keep a hoist only if its var is established (`hoistedSetAt`) at every PC where it is live (`analyzeLiveness`), to a fixpoint. Drops only the broken non-dominating hoists; every certifiable hoist kept. **0 LICM rejections in a 71-seed scan afterward (was ~3/40).** | `certaudit` cert-failure scan + dominance dump | 76a05e2 |
+| B9 | DAE | **Asserted a removed store's value.** Eliminating a dead store `x := c` replaces it with a `goto`, so trans never establishes `x` — yet `computeRels` added `(.lit c, .var x)` claiming trans `x = c`. False once the store is deleted, and the trans-side `x` is uncovered by `rel_pre` → `checkRelConsistency` free-variable-coverage rejection (it passed the value check only because the orig invariant still folds `x→c`). | Since `x` is dead, orig/trans legitimately diverge on it: drop every `x` entry and assert nothing; `x` re-enters as identity at its next live definition. Dead-store elimination unchanged. | 261-program `certaudit` sweep (sole rejection) | 4322e60 |
 
 B1's fix exposed B2 (ConstProp now folds, so programs reach DAE with the dead
 edges that trigger B2) and reshaped the pipeline so several earlier RegAlloc
-rejections disappeared — illustrating how completeness fixes cascade.
+rejections disappeared — illustrating how completeness fixes cascade. B6/B8 (LICM)
+and B9 (DAE) share a single root with B2: a per-PC relation that names a variable
+on a control edge where the transformed program does not actually carry its value —
+fixed each time by restricting the relation to what is *established and live* on that
+edge, never by weakening the checker.
 
 ### C. (Resolved) — the determined-`ifgoto` dead-edge gap
 
@@ -577,30 +584,25 @@ that pass — the program still compiles correctly) or a non-correctness limitat
 
 ### A. Certificate-check failures still observed (completeness gaps)
 
-1. **`LICM:[all_transitions]` residual (~3/40 random loop-heavy programs).**
-   Root cause: **unreachable preheader**. LICM inserts the hoisted `const`s
-   immediately before the loop header and relies on a fall-through into them. When the
-   header's predecessor is a `goto` (not fall-through) and the loop's entry edge is not
-   a plain forward jump, the inserted preheader block ends up with **no predecessors**
-   — the hoisted consts never execute, so the transformation is *broken* and the
-   checker **correctly rejects it** (not a checker weakness). Fix requires `buildTrans`
-   to redirect **all** loop-entry edges to the preheader (or to hoist only when the
-   preheader is provably reachable); the obvious "redirect forward-goto entries" patch
-   was insufficient (the entry edge in the failing case is reached by a more complex
-   path). The dominant LICM sub-causes (branch-target coverage and goto-relocation /
-   dead-variable divergence) are fixed (commit 1775d35); this is the residual.
+**Status: none observed.** A 261-program `certaudit` sweep (random seeds 100–360, all 25
+passes) plus an 80-program RegAlloc-targeted scan found **zero** certificate rejections
+across every pass after the fixes below. The three items previously listed here are all
+resolved:
 
-2. **`RegAlloc:[all_transitions]` (rare, ~1 in 30–60).** Register shared between two
-   original variables that are provably *equal-valued* (copy/value-numbering related)
-   or non-interfering; the relation built by `computeOrigRels` records only the
-   last-defined occupant, so at a later read of the *other* variable it names the wrong
-   one and `checkRelConsistency` rejects. Sound transform (0 miscompiles), uncertifiable
-   relation. Fix: make the relation track the variable each register holds per-PC, or
-   record the value-equality as a (checker-validated) invariant.
+1. **`LICM:[all_transitions]` residual — RESOLVED (B8, commit 76a05e2).** Was the
+   *non-dominating preheader* case (header reached by a path bypassing the inserted
+   preheader). Closed by `dominatingHoists`, which keeps a hoist only where its variable
+   is established at every PC it is live. 0 LICM rejections in a 71-seed scan afterward.
 
-3. **`RegAlloc:[all_transitions, bool_vars_covered]` (rare).** A separate RegAlloc
-   sub-check (boolean-variable coverage) co-occurring with the above; not yet
-   independently diagnosed.
+2 & 3. **`RegAlloc:[all_transitions]` and `[…, bool_vars_covered]` — RESOLVED, and it was
+   a real allocator soundness bug, not a completeness gap (commit b969cf5).** The checker
+   was correctly refusing an *unsound* register allocation: a dead store sharing a
+   register with a value live across it, because `buildInterference` recorded an edge
+   only when two vars are both live-out — missing the def-vs-liveOut case. Fixed in the
+   interference graph; both former sub-checks now certify. See the dedicated finding
+   *"The checker caught a real register-allocation soundness bug."* (This supersedes the
+   earlier "occupant-tracking relation" hypothesis recorded in prior drafts — the
+   relation was fine; the allocation was wrong.)
 
 4. **`bounds_preservation` — no standalone open failure.** (Correction of an earlier
    stale note.) Bounds-check elision **is active**: `verifiedBoundsSafe` (Phase 6 in
