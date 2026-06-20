@@ -265,3 +265,78 @@ defects were completeness gaps that silently dropped sound optimizations, which 
 root-caused and fixed (three in the verified checker, with proofs re-discharged;
 four in untrusted passes), recovering the lost optimizations while the verified
 checker guaranteed correctness throughout.*
+
+## Design-point finding: the optimization-aggressiveness ↔ certifiability tension (LICM)
+
+A core design tension in credible compilation, surfaced sharply by LICM: **the more
+aggressively a pass optimizes, the lower the probability its certificate validates.**
+A larger / more structurally complex transformation produces a larger proof
+obligation, and the certificate checker — being a fixed, verified, necessarily
+incomplete decision procedure — is more likely to be unable to discharge it. Crucially
+this is *not* a soundness issue (every LICM output was a correct program; the 3-way
+differential campaign found 0 miscompiles): it is a **completeness** tension. The
+transformation is correct; the certificate just cannot be shown valid.
+
+### Concrete instance
+
+LICM hoists loop-invariant `const`s into a loop preheader. On large, multi-loop,
+branchy programs its certificate was rejected by `checkAllTransitions`:
+- `relConsist` free-variable coverage failed at branch targets, because the
+  certificate's per-PC relation (built by a PC-linear scan plus a coarse
+  "after the last hoisted PC, assume all hoisted vars set" override) claimed a
+  hoisted variable was established at a target that a branch could reach *without*
+  passing the hoist — i.e. the relation over-claimed relative to the real CFG.
+- A secondary goto-relocation case (`relConsist` on a back-edge/exit `goto` whose
+  target moved when instructions were inserted).
+
+The hoists themselves are sound (the preheader dominates the loop); only the
+*certificate's relation* was imprecise about which hoisted vars are established where.
+
+### Three ways to resolve the tension — and the design principle
+
+We explored, in order, three points on the trade-off curve:
+
+1. **Identity fallback (all-or-nothing).** If the full transformation's certificate
+   fails, emit no transformation. *Rejected:* throws away every optimization on the
+   program, including the many that would certify — the worst point on the curve.
+
+2. **Conservative reduction (self-certifying pass).** Have the pass validate its own
+   certificate and greedily drop individual optimizations until what remains
+   certifies (for LICM: drop hoisted invariants one at a time). This *eliminates the
+   cert failures and stays operational* — e.g. one program kept 58 of 78 hoists and
+   newly certified, where the baseline (rejected → pipeline-skipped) had applied
+   none. It is bounded and correct (81/81 differential tests pass). **But it resolves
+   the tension by *moving down the optimization axis*: it reduces the number of
+   optimizations specifically to make the check pass.** That is the wrong default —
+   the optimizer is being weakened to fit a fixed checker, and the chosen subset is
+   not even guaranteed maximal.
+
+3. **Richer / more precise certificates (the intended design point).** Keep the full
+   optimization and make the *certificate generation* precise enough to discharge it
+   — invest on the *certifiability axis* instead of the optimization axis. For LICM
+   this means replacing the coarse relation heuristic with a CFG-correct forward
+   must-analysis (the set of hoisted vars established on *every* path to each PC,
+   intersection at joins), so the relation neither over- nor under-claims and
+   `relConsist` succeeds for every sound hoist with **zero reduction in
+   optimizations**. A prototype of this dataflow removed the dominant `ifgoto`-target
+   coverage failures without dropping any hoist; completing it (the `const` and
+   goto-relocation residuals) is the remaining work.
+
+**The principle:** the right response to "aggressive optimization fails to certify"
+is to make the certificate *match the optimizer* (precise, CFG-aware relation and
+invariant generation), not to make the optimizer *match the checker* (drop
+optimizations). Reduction (option 2) is a sound, always-available *fallback of last
+resort* — it guarantees a valid certificate by construction and never reduces below
+the pipeline's existing rejected-then-skipped behavior — but it must not be the
+design point, because it trades away exactly the optimization power the pass exists
+to provide. The goal is: **keep every optimization that can be certified, and raise
+the certificate's precision until "can be certified" covers everything the optimizer
+soundly does** — never lower the optimizer to clear the check.
+
+This tension generalizes beyond LICM (e.g. RegAlloc register sharing of
+provably-equal or non-interfering variables has the same shape: a sound transform
+whose justifying fact — value equality, path infeasibility — the relation does not
+yet express), and it is intrinsic to the credible-compilation architecture: a fixed
+verified checker can never be complete, so every optimizer sits somewhere on this
+curve and the engineering goal is to push the certifiability axis outward, not the
+optimization axis inward.
