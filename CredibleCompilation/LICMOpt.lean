@@ -266,13 +266,47 @@ private def buildInstrCerts (trans : Prog) (origPCMap : Array Nat)
     | none => default
   arr.toArray
 
+/-- Keep only hoists whose preheader DOMINATES the hoisted const's original slot.
+    In the built `trans` the var must be established (`hoistedSetAt`, the CFG-correct
+    must-analysis) at the trans position of its now-`goto`-replaced original const.
+    A non-dominating hoist — the loop header is reached by a path that bypasses the
+    inserted preheader (e.g. a non-fall-through entry, or a nested-loop structure) —
+    is *unsound to certify*: the relation cannot assert the hoisted value at the
+    in-loop slot, so `checkRelConsistency` rejects. Such a hoist produces a broken
+    transformation anyway (the consts never run on that path), so dropping it loses
+    no real optimization while leaving every dominating (certifiable) hoist intact.
+    Iterated to a fixpoint: removing one hoist can change the dominance of another. -/
+partial def dominatingHoists (prog : Prog)
+    (hoistable : List (Nat × Nat × Var × Value)) : List (Nat × Nat × Var × Value) :=
+  if hoistable.isEmpty then hoistable
+  else
+    let trans := buildTrans prog hoistable
+    let pcMap := computePCMap prog.size hoistable
+    let origPCMap := buildOrigPCMap prog.size pcMap trans.size hoistable
+    let hset := hoistedSetAt trans origPCMap
+    let liveOut := DAEOpt.analyzeLiveness trans
+    -- A hoist of `x` is certifiable iff at EVERY PC where `x` is live, `x` is also
+    -- established (`hset`) — i.e. the preheader dominates `x`'s whole live range, so
+    -- the relation always carries `(lit, x)` and never falls back to a mismatching
+    -- identity. Anywhere `x` is live but not must-set, the relation cannot assert its
+    -- hoisted value and `checkRelConsistency` rejects.
+    let dominates := fun (x : Var) =>
+      (List.range trans.size).all fun tpc =>
+        let live := match trans[tpc]? with
+          | some i => DAEOpt.livenessTransfer i (liveOut.getD tpc ([] : List Var))
+          | none   => ([] : List Var)
+        !(live.contains x) || (hset.getD tpc ([] : List Var)).contains x
+    let kept := hoistable.filter fun (_, _, x, _) => dominates x
+    if kept.length == hoistable.length then hoistable
+    else dominatingHoists prog kept
+
 def numHoistable (prog : Prog) : Nat :=
   let inLoop := findLoopPCs prog
   (findHoistable prog inLoop).length
 
 def optimize (tyCtx : TyCtx) (prog : Prog) : ECertificate :=
   let inLoop := findLoopPCs prog
-  let hoistable := findHoistable prog inLoop
+  let hoistable := dominatingHoists prog (findHoistable prog inLoop)
   if hoistable.isEmpty then
     -- Nothing to hoist: valid identity certificate
     let allVars := _root_.collectAllVars prog prog
