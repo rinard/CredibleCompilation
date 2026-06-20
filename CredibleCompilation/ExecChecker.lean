@@ -1336,6 +1336,19 @@ theorem checkRelConsistencyFromMap_eq
       = checkRelConsistency orig pc_orig origLabels transInstr inv_orig rel_pre rel_post := by
   rfl
 
+/-- A physical successor `pc_t'` of `instr` (at `pc_t`) is *statically dead* when the
+    trans-side invariant determines control to flow to a different successor
+    `pc_det ≠ pc_t'`. `computeNextPCFast` returns `some pc_det` exactly when the
+    branch condition is constant under the invariant; an `ifgoto` whose condition the
+    invariant fixes has one live edge and one dead edge. No execution from a state
+    satisfying `inv_trans` takes a dead edge, so its transition need not be certified.
+    For non-branch instructions and undetermined branches this is always `false`. -/
+def isDeadSuccExec (instr : TAC) (pc_t pc_t' : Label)
+    (invMapT : FastVarMap) (fuelT : Nat) : Bool :=
+  match computeNextPCFast instr pc_t ([] : SymStore) invMapT fuelT with
+  | some pc_det => pc_det != pc_t'
+  | none        => false
+
 /-- **Condition 3**: Every transition in the transformed program has a
     corresponding original-program path with consistent variable effects.
 
@@ -1343,24 +1356,15 @@ theorem checkRelConsistencyFromMap_eq
     threads it through `checkOrigPathFast`. `checkRelConsistency` already
     builds its own internal map, so it stays as-is.
 
-    KNOWN COMPLETENESS GAP (sound, not complete). This checks EVERY structural
-    successor of each transformed instruction. For an `ifgoto` whose guard is
-    statically determined by `inv_orig`, one successor edge is dead — it is
-    never executed in either program — yet this check still demands a valid
-    original-program path for it, which cannot exist (the original never takes
-    that branch). So a transform that hands the checker an UNFOLDED determined
-    `ifgoto` is rejected even though it is correct. This is not specific to any
-    one pass; it surfaces at RegAlloc only because RegAlloc is the last pass and
-    (correctly) does not fold branches — by the time the pipeline reaches it, the
-    front end + ConstProp have folded every determined `ifgoto`, so real programs
-    never hit this. It can be triggered with a synthetic input (e.g. an EMI
-    mutant with a deep chain of constant-determined `ifgoto`s whose dead arms
-    reassign live vars). The principled fix is to skip a successor edge proven
-    dead by the (already-validated) invariant, which requires strengthening
-    `checkAllTransitionsProp` with a `σ_t ⊨ inv_trans` hypothesis and threading
-    it through the master simulation — deferred. `checkAllTransitionsProp`
-    (PropChecker) only quantifies over ACTUAL trans steps, so the soundness
-    direction never needs the dead edge; only this executable check is stricter. -/
+    Statically-dead successor edges are skipped via `isDeadSuccExec`: when the
+    trans-side invariant `inv_trans` determines an `ifgoto`'s guard, the other
+    successor is never executed from a state satisfying `inv_trans`, so demanding a
+    valid original path for it (which cannot exist — the original never takes that
+    branch) would reject correct transforms that hand the checker an UNFOLDED
+    determined `ifgoto`. This is sound because `checkAllTransitionsProp` assumes
+    `σ_t ⊨ inv_trans` and `computeNextPC` soundness shows no such run takes the dead
+    edge. (Previously a known completeness gap; surfaced at RegAlloc, the last pass,
+    which correctly does not fold branches.) -/
 def checkAllTransitionsExec (cert : ECertificate) : Bool :=
   (List.range cert.trans.size).all fun pc_t =>
     match cert.trans[pc_t]? with
@@ -1371,7 +1375,14 @@ def checkAllTransitionsExec (cert : ECertificate) : Bool :=
         let inv_orig := cert.inv_orig.getD ic.pc_orig ([] : EInv)
         let invMap := FastVarMap.ofList inv_orig
         let fuel := sdFuel inv_orig
+        -- Trans-side invariant at this PC: if it determines a branch, the other
+        -- physical successor is statically dead and its transition need not be
+        -- certified (no actual run from a state satisfying `inv_trans` takes it).
+        let inv_trans := cert.inv_trans.getD pc_t ([] : EInv)
+        let invMapT := FastVarMap.ofList inv_trans
+        let fuelT := sdFuel inv_trans
         (instr.successors pc_t).all fun pc_t' =>
+          isDeadSuccExec instr pc_t pc_t' invMapT fuelT ||
           let ic' := cert.instrCerts.getD pc_t' default
           let branchInfo := match instr with
             | .ifgoto b l =>
@@ -1405,7 +1416,11 @@ def checkAllTransitionsFromMaps (cert : ECertificate)
       match cert.instrCerts[pc_t]? with
       | some ic =>
         let (invMap, fuel) := invMapAt invMaps_orig ic.pc_orig
+        let inv_trans := cert.inv_trans.getD pc_t ([] : EInv)
+        let invMapT := FastVarMap.ofList inv_trans
+        let fuelT := sdFuel inv_trans
         (instr.successors pc_t).all fun pc_t' =>
+          isDeadSuccExec instr pc_t pc_t' invMapT fuelT ||
           let ic' := cert.instrCerts.getD pc_t' default
           let branchInfo := match instr with
             | .ifgoto b l =>

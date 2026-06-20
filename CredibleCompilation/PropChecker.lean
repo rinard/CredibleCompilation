@@ -76,6 +76,7 @@ def checkTransitionRelProp (Γ : TyCtx) (p_orig p_trans : Prog)
 
 def checkAllTransitionsProp (Γ : TyCtx) (cert : PCertificate) : Prop :=
   ∀ pc_t : Label, ∀ σ_t σ_t' : Store, ∀ pc_t' : Label, ∀ am_t am_t' : ArrayMem,
+    cert.inv_trans pc_t σ_t am_t →
     (cert.trans ⊩ Cfg.run pc_t σ_t am_t ⟶ Cfg.run pc_t' σ_t' am_t') →
     let ic := cert.instrCerts pc_t; let ic' := cert.instrCerts pc_t'
     ∃ tc ∈ ic.transitions, tc.storeRel = ic.storeRel ∧ tc.storeRel_next = ic'.storeRel ∧
@@ -258,7 +259,7 @@ theorem step_sim {cert : PCertificate} (hvalid : PCertificateValid cert)
       (cert.orig ⊩ Cfg.run pc_o σ_o am_o ⟶* Cfg.run pc_o' σ_o' am_o') ∧
       PSimRel cert pc_t' σ_t' am_t' pc_o' σ_o' am_o' := by
   obtain ⟨hpc_orig, hrel_cons, ham_eq, hinv_t, hinv_o, hts_o⟩ := hsim
-  have hall := hvalid.transitions pc_t σ_t σ_t' pc_t' am_t am_t' hstep
+  have hall := hvalid.transitions pc_t σ_t σ_t' pc_t' am_t am_t' hinv_t hstep
   simp only at hall
   obtain ⟨tc, _, hrel1, hrel2, htrans⟩ := hall
   have hrel_tc : tc.storeRel σ_o am_o σ_t am_t := hrel1 ▸ hrel_cons

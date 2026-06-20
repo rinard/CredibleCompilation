@@ -3231,14 +3231,19 @@ private theorem transRel_sound (dc : ECertificate)
       rw [horigSAM_nil] at hsamCoh_final
       rw [ham_t'_eq, samCoherent_nil_am_eq hsamCoh_final]
 
-/-- Extract Bool information from checkAllTransitionsExec for a specific step. -/
+/-- Extract Bool information from checkAllTransitionsExec for a specific step.
+    Either the successor edge is statically dead (its transition is skipped) or a
+    satisfying transition certificate exists. -/
 private theorem extractTransCheck (dc : ECertificate)
     (h : checkAllTransitionsExec dc = true)
     (pc_t pc_t' : Label) (instr : TAC)
     (hinstr : dc.trans[pc_t]? = some instr)
     (hne : instr ≠ .halt)
     (hsucc : pc_t' ∈ instr.successors pc_t) :
-    ∃ dic, dc.instrCerts[pc_t]? = some dic ∧
+    (isDeadSuccExec instr pc_t pc_t'
+        (FastVarMap.ofList (dc.inv_trans.getD pc_t ([] : EInv)))
+        (sdFuel (dc.inv_trans.getD pc_t ([] : EInv))) = true) ∨
+    (∃ dic, dc.instrCerts[pc_t]? = some dic ∧
     ∃ dtc ∈ dic.transitions,
       dtc.rel = dic.rel ∧
       dtc.rel_next = (dc.instrCerts.getD pc_t' default).rel ∧
@@ -3248,7 +3253,7 @@ private theorem extractTransCheck (dc : ECertificate)
       checkRelConsistency
         dc.orig dic.pc_orig dtc.origLabels instr
         (dc.inv_orig.getD dic.pc_orig ([] : EInv))
-        dtc.rel dtc.rel_next = true := by
+        dtc.rel dtc.rel_next = true) := by
   have hbound := bound_of_getElem? hinstr
   unfold checkAllTransitionsExec at h; rw [List.all_eq_true] at h
   have hpc := h pc_t (List.mem_range.mpr hbound)
@@ -3263,18 +3268,19 @@ private theorem extractTransCheck (dc : ECertificate)
     | some dic =>
       simp only [hdic] at hpc; rw [List.all_eq_true] at hpc
       have hitem := hpc pc_t' hsucc
-      rw [List.any_eq_true] at hitem
-      obtain ⟨dtc, hdtc_mem, hdtc_check⟩ := hitem
-      -- Decompose: tc.rel == ic.rel && tc.rel_next == ic'.rel && path && relcheck
-      rw [Bool.and_eq_true] at hdtc_check
-      obtain ⟨h123, hrel_check⟩ := hdtc_check
-      rw [Bool.and_eq_true] at h123
-      obtain ⟨h12, hpath⟩ := h123
-      rw [Bool.and_eq_true] at h12
-      obtain ⟨hrel_eq, hrel_next_eq⟩ := h12
-      rw [checkOrigPathFast_eq_checkOrigPath] at hpath
-      refine ⟨dic, rfl, dtc, hdtc_mem,
-        beq_iff_eq.mp hrel_eq, beq_iff_eq.mp hrel_next_eq, hpath, hrel_check⟩
+      rcases Bool.or_eq_true _ _ |>.mp hitem with hdead | hany
+      · exact Or.inl hdead
+      · rw [List.any_eq_true] at hany
+        obtain ⟨dtc, hdtc_mem, hdtc_check⟩ := hany
+        rw [Bool.and_eq_true] at hdtc_check
+        obtain ⟨h123, hrel_check⟩ := hdtc_check
+        rw [Bool.and_eq_true] at h123
+        obtain ⟨h12, hpath⟩ := h123
+        rw [Bool.and_eq_true] at h12
+        obtain ⟨hrel_eq, hrel_next_eq⟩ := h12
+        rw [checkOrigPathFast_eq_checkOrigPath] at hpath
+        exact Or.inr ⟨dic, rfl, dtc, hdtc_mem,
+          beq_iff_eq.mp hrel_eq, beq_iff_eq.mp hrel_next_eq, hpath, hrel_check⟩
   | _ =>
     intro hpc
     cases hdic : dc.instrCerts[pc_t]? with
@@ -3282,17 +3288,19 @@ private theorem extractTransCheck (dc : ECertificate)
     | some dic =>
       simp only [hdic] at hpc; rw [List.all_eq_true] at hpc
       have hitem := hpc pc_t' hsucc
-      rw [List.any_eq_true] at hitem
-      obtain ⟨dtc, hdtc_mem, hdtc_check⟩ := hitem
-      rw [Bool.and_eq_true] at hdtc_check
-      obtain ⟨h123, hrel_check⟩ := hdtc_check
-      rw [Bool.and_eq_true] at h123
-      obtain ⟨h12, hpath⟩ := h123
-      rw [Bool.and_eq_true] at h12
-      obtain ⟨hrel_eq, hrel_next_eq⟩ := h12
-      rw [checkOrigPathFast_eq_checkOrigPath] at hpath
-      refine ⟨dic, rfl, dtc, hdtc_mem,
-        beq_iff_eq.mp hrel_eq, beq_iff_eq.mp hrel_next_eq, hpath, hrel_check⟩
+      rcases Bool.or_eq_true _ _ |>.mp hitem with hdead | hany
+      · exact Or.inl hdead
+      · rw [List.any_eq_true] at hany
+        obtain ⟨dtc, hdtc_mem, hdtc_check⟩ := hany
+        rw [Bool.and_eq_true] at hdtc_check
+        obtain ⟨h123, hrel_check⟩ := hdtc_check
+        rw [Bool.and_eq_true] at h123
+        obtain ⟨h12, hpath⟩ := h123
+        rw [Bool.and_eq_true] at h12
+        obtain ⟨hrel_eq, hrel_next_eq⟩ := h12
+        rw [checkOrigPathFast_eq_checkOrigPath] at hpath
+        exact Or.inr ⟨dic, rfl, dtc, hdtc_mem,
+          beq_iff_eq.mp hrel_eq, beq_iff_eq.mp hrel_next_eq, hpath, hrel_check⟩
 
 /-- Relate getD to getElem? for arrays. -/
 private theorem array_getD_of_getElem? {α : Type} {arr : Array α} {n : Nat} {val d : α}
@@ -3344,6 +3352,80 @@ private theorem checkOrigPathBoundsOk_extract (dc : ECertificate)
       | _ => simp [TAC.isScalar]
     · intro x y z; constructor <;> (intro heq; have := List.all_eq_true.mp htc l hmem_l; rw [heq] at this; simp at this)
 
+/-- When `computeNextPC` statically resolves an instruction's successor (the branch
+    guard is constant under `inv`, or the instruction is unconditional), any actual
+    run-step from a state satisfying `inv` lands at exactly that successor. Used to
+    show no run takes a statically-dead `ifgoto` edge. -/
+private theorem step_target_eq_computeNextPC {p : Prog} {pc pc' : Label}
+    {σ σ' : Store} {am am' : ArrayMem} {instr : TAC} {inv : EInv} {pc_det : Label}
+    (hinstr : p[pc]? = some instr)
+    (hstep : Step p (Cfg.run pc σ am) (Cfg.run pc' σ' am'))
+    (hinv : EInv.toProp inv σ am)
+    (hcn : computeNextPC instr pc ([] : SymStore) inv = some pc_det) :
+    pc' = pc_det := by
+  have hrepr : ∀ v, (ssGet ([] : SymStore) v).eval σ am = σ v := fun _ => rfl
+  cases hstep with
+  | const h => rw [hinstr] at h; injection h with he; subst he
+               simp only [computeNextPC, Option.some.injEq] at hcn; omega
+  | copy h => rw [hinstr] at h; injection h with he; subst he
+              simp only [computeNextPC, Option.some.injEq] at hcn; omega
+  | binop h _ _ _ => rw [hinstr] at h; injection h with he; subst he
+                     simp only [computeNextPC, Option.some.injEq] at hcn; omega
+  | boolop h => rw [hinstr] at h; injection h with he; subst he
+                simp only [computeNextPC, Option.some.injEq] at hcn; omega
+  | goto h => rw [hinstr] at h; injection h with he; subst he
+              simp only [computeNextPC, Option.some.injEq] at hcn; omega
+  | arrLoad h _ _ => rw [hinstr] at h; injection h with he; subst he
+                     simp only [computeNextPC, Option.some.injEq] at hcn; omega
+  | arrStore h _ _ _ => rw [hinstr] at h; injection h with he; subst he
+                        simp only [computeNextPC, Option.some.injEq] at hcn; omega
+  | fbinop h _ _ => rw [hinstr] at h; injection h with he; subst he
+                    simp only [computeNextPC, Option.some.injEq] at hcn; omega
+  | intToFloat h _ => rw [hinstr] at h; injection h with he; subst he
+                      simp only [computeNextPC, Option.some.injEq] at hcn; omega
+  | floatToInt h _ => rw [hinstr] at h; injection h with he; subst he
+                      simp only [computeNextPC, Option.some.injEq] at hcn; omega
+  | floatUnary h _ => rw [hinstr] at h; injection h with he; subst he
+                      simp only [computeNextPC, Option.some.injEq] at hcn; omega
+  | fternop h _ _ _ => rw [hinstr] at h; injection h with he; subst he
+                       simp only [computeNextPC, Option.some.injEq] at hcn; omega
+  | print h => rw [hinstr] at h; injection h with he; subst he
+               simp only [computeNextPC, Option.some.injEq] at hcn; omega
+  | printInt h => rw [hinstr] at h; injection h with he; subst he
+                  simp only [computeNextPC, Option.some.injEq] at hcn; omega
+  | printBool h => rw [hinstr] at h; injection h with he; subst he
+                   simp only [computeNextPC, Option.some.injEq] at hcn; omega
+  | printFloat h => rw [hinstr] at h; injection h with he; subst he
+                    simp only [computeNextPC, Option.some.injEq] at hcn; omega
+  | printString h => rw [hinstr] at h; injection h with he; subst he
+                     simp only [computeNextPC, Option.some.injEq] at hcn; omega
+  | iftrue h hb =>
+    rw [hinstr] at h; injection h with he; subst he
+    simp only [computeNextPC] at hcn
+    split at hcn <;>
+      first
+      | (simp only [Option.some.injEq] at hcn; omega)
+      | (rename_i heq
+         have hs := BoolExpr.symEval_sound _ ([] : SymStore) inv σ σ am hrepr hinv true heq
+         rw [hb] at hs; exact absurd hs (by decide))
+      | (rename_i heq
+         have hs := BoolExpr.symEval_sound _ ([] : SymStore) inv σ σ am hrepr hinv false heq
+         rw [hb] at hs; exact absurd hs (by decide))
+      | simp at hcn
+  | iffall h hb =>
+    rw [hinstr] at h; injection h with he; subst he
+    simp only [computeNextPC] at hcn
+    split at hcn <;>
+      first
+      | (simp only [Option.some.injEq] at hcn; omega)
+      | (rename_i heq
+         have hs := BoolExpr.symEval_sound _ ([] : SymStore) inv σ σ am hrepr hinv true heq
+         rw [hb] at hs; exact absurd hs (by decide))
+      | (rename_i heq
+         have hs := BoolExpr.symEval_sound _ ([] : SymStore) inv σ σ am hrepr hinv false heq
+         rw [hb] at hs; exact absurd hs (by decide))
+      | simp at hcn
+
 /-- **Condition 3**: checkAllTransitionsExec → checkAllTransitionsProp -/
 theorem checkAllTransitionsExec_sound (dc : ECertificate)
     (hwtp : WellTypedProg dc.tyCtx dc.orig)
@@ -3358,15 +3440,27 @@ theorem checkAllTransitionsExec_sound (dc : ECertificate)
     (hboolvarscov : checkBoolVarsCoveredExec dc = true)
     (h : checkAllTransitionsExec dc = true) :
     checkAllTransitionsProp dc.tyCtx (toPCertificate dc) := by
-  intro pc_t σ_t σ_t' pc_t' am_t am_t' hstep
+  intro pc_t σ_t σ_t' pc_t' am_t am_t' hinv_t hstep
   obtain ⟨instr, hinstr⟩ := step_run_instr hstep
   have hne_halt : instr ≠ .halt := by
     intro heq; subst heq
     exact Cfg.noConfusion (Step.deterministic (Step.halt hinstr) hstep)
   have hsucc := step_successor hstep hinstr
-  -- Extract Bool-level information
-  obtain ⟨dic, hdic, dtc, hdtc_mem, hrel_eq, hrel_next_eq, hpath, hrelcheck⟩ :=
-    extractTransCheck dc h pc_t pc_t' instr hinstr hne_halt hsucc
+  -- Extract Bool-level information; either the edge is statically dead (skipped) or
+  -- a transition certificate exists. A dead edge is vacuous: `inv_trans` determines
+  -- control elsewhere, so no run from `σ_t ⊨ inv_trans` takes it.
+  rcases extractTransCheck dc h pc_t pc_t' instr hinstr hne_halt hsucc with hdead | hex
+  · exfalso
+    unfold isDeadSuccExec at hdead
+    rw [computeNextPCFast_eq_computeNextPC] at hdead
+    cases hcn : computeNextPC instr pc_t ([] : SymStore) (dc.inv_trans.getD pc_t ([] : EInv)) with
+    | none => rw [hcn] at hdead; simp at hdead
+    | some pc_det =>
+      rw [hcn] at hdead
+      have hne' : pc_det ≠ pc_t' := by simpa using hdead
+      have hinv_t' : EInv.toProp (dc.inv_trans.getD pc_t ([] : EInv)) σ_t am_t := hinv_t
+      exact hne' (step_target_eq_computeNextPC hinstr hstep hinv_t' hcn).symm
+  obtain ⟨dic, hdic, dtc, hdtc_mem, hrel_eq, hrel_next_eq, hpath, hrelcheck⟩ := hex
   -- The tc in toPCertificate's transitions that corresponds to dtc
   let tc : PTransCorr :=
     { origLabels := dtc.origLabels
