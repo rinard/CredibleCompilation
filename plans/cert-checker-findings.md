@@ -535,7 +535,7 @@ that pass — the program still compiles correctly) or a non-correctness limitat
 |---|---|
 | Soundness (miscompiles / checker holes) | **clean** — 0 found; the one real miscompile + the one trusted gap fixed & proved |
 | Trusted base (checker proofs, ARM model) | **sound**, 0 `sorry`, full build 3139 jobs |
-| LICM completeness | dominant sub-causes **fixed**; ~3/40 unreachable-preheader residual open |
+| LICM completeness | **all known cert failures fixed** (dataflow + liveness filter + dominating-hoist filter); 0 rejections in 71-seed scan |
 | RegAlloc completeness | 2 rare cases open (occupant-tracking; bool coverage) |
 | BoundsOpt | bounds-check elision **active** (Phase 6 `verifiedBoundsSafe`); `bounds_preservation` is a general cert condition that passes |
 | Performance | O(n^2.5) checker; pipeline schedule fixed ×4 LICM |
