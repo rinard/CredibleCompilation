@@ -265,20 +265,16 @@ where
   relTransfer (rel : EExprRel) (pc : Nat) (instr : TAC)
       (deadPCs : Array Bool) (consts : Array (Option ConstPropOpt.ConstMap)) : EExprRel :=
     if deadPCs.getD pc false then
-      -- Dead assignment to x: add (.lit c, .var x) for trans-side constant c
+      -- Dead assignment to x: DAE deletes the store in `trans` (it becomes a `goto`),
+      -- while `orig` still performs it. So after this PC, orig `x` holds `c` but trans
+      -- `x` holds its old value — they DIVERGE. Because `x` is dead (never observed),
+      -- this is sound, but the relation must not claim anything about `x`: drop every
+      -- `x` entry and add none. (A previous version asserted `(.lit c, .var x)` — trans
+      -- `x = c` — which is false once the establishing store is removed, and whose
+      -- trans-side `x` is then uncovered by `rel_pre`, so the checker rejected it. `x`
+      -- re-enters the relation as identity at its next LIVE definition, below.)
       match instrDef instr with
-      | some x =>
-        match transConstValue consts pc x with
-        | some (.int n) =>
-          let rel' := rel.filter fun (_, et) => et != .var x
-          (.lit n, .var x) :: rel'
-        | some (.bool b) =>
-          let rel' := rel.filter fun (_, et) => et != .var x
-          (.blit b, .var x) :: rel'
-        | some (.float f) =>
-          let rel' := rel.filter fun (_, et) => et != .var x
-          (.flit f, .var x) :: rel'
-        | none => rel  -- shouldn't happen: findDeadPCs already checked
+      | some x => rel.filter fun (_, et) => et != .var x
       | none => rel
     else
       -- Live instruction: if it writes to x, replace non-identity entries with identity
