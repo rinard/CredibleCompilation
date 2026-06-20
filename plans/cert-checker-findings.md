@@ -499,11 +499,16 @@ that pass — the program still compiles correctly) or a non-correctness limitat
    sub-check (boolean-variable coverage) co-occurring with the above; not yet
    independently diagnosed.
 
-4. **`bounds_preservation` is currently unreachable**, not because it passes but
-   because **BoundsOpt's bounds-check elision is disabled** (see
-   `plans/certified-interval-pangolin.md`). With elision off, no bounds check is ever
-   removed, so the sub-check never runs. (It *does* appear transiently when LICM hoists
-   array-indexing consts — `LICM:[…, bounds_preservation]` — folded into class 1.)
+4. **`bounds_preservation` — no standalone open failure.** (Correction of an earlier
+   stale note.) Bounds-check elision **is active**: `verifiedBoundsSafe` (Phase 6 in
+   `CodeGen`) computes a real per-PC decision from `BoundsOpt`'s interval analysis and
+   the verified codegen *does* drop the check for provably-in-bounds accesses (verified
+   directly: a `while (i<16) A[i]…` loop elides both accesses). The
+   `checkBoundsPreservation` certificate sub-check is a *general* condition checked for
+   every certificate and passes; it only surfaces transiently when LICM hoists an
+   array-indexing const (`LICM:[…, bounds_preservation]`, folded into class 1 above).
+   (A code comment in `CodeGen` still describes the pre-Phase-6 "hard-wired to false"
+   state and is stale.)
 
 ### B. Non-correctness limitations
 
@@ -530,5 +535,5 @@ that pass — the program still compiles correctly) or a non-correctness limitat
 | Trusted base (checker proofs, ARM model) | **sound**, 0 `sorry`, full build 3139 jobs |
 | LICM completeness | dominant sub-causes **fixed**; ~3/40 unreachable-preheader residual open |
 | RegAlloc completeness | 2 rare cases open (occupant-tracking; bool coverage) |
-| BoundsOpt | elision disabled by design ⇒ `bounds_preservation` dormant |
+| BoundsOpt | bounds-check elision **active** (Phase 6 `verifiedBoundsSafe`); `bounds_preservation` is a general cert condition that passes |
 | Performance | O(n^2.5) checker; pipeline schedule fixed ×4 LICM |

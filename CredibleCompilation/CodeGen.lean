@@ -969,12 +969,12 @@ structure GenAsmSpec (tyCtx : TyCtx) (p : Prog) (r : VerifiedAsmResult) : Prop w
   /-- bodyPerPC has one entry per TAC instruction. -/
   bodySize : r.bodyPerPC.size = p.size
   /-- Each non-print, non-lib-call bodyPerPC entry was produced by verifiedGenInstr
-      with `boundsSafe = verifiedBoundsSafe p pc`. Under Phases 4/5 (pre-Phase-6),
-      `verifiedBoundsSafe` is hard-wired to `false` via `isBoundsSafe`, so the
-      Phase 5 `hBoundsSafeOracle` in `ext_backward_simulation` discharges
-      trivially at the call site (`boundsSafe = true` is vacuous). The shape
-      of this field is already in place for Phase 6 un-wiring. Print PCs use
-      unverified codegen; lib-call PCs are wrapped (see callSiteSaveRestore). -/
+      with `boundsSafe = verifiedBoundsSafe p pc`. Phase 6 is live: `verifiedBoundsSafe`
+      computes a real per-PC elision decision from `BoundsOpt` interval analysis +
+      `checkLocalPreservation`/`checkInvAtStart`, so provably-in-bounds `arrLoad`/
+      `arrStore` checks are dropped (and `hBoundsSafeOracle` is discharged from that
+      decision, not vacuously). Print PCs use unverified codegen; lib-call PCs are
+      wrapped (see callSiteSaveRestore). -/
   instrGen : ∀ pc, (hpc : pc < p.size) →
     isLibCallTAC p[pc] = false →
     (∀ fmt vs, p[pc] ≠ .print fmt vs) →
