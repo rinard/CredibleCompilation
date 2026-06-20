@@ -5,7 +5,7 @@ Compilation compiler (While → certificate-checked optimization passes → veri
 ARM64 codegen), for the paper's evaluation/findings section. Branch
 `fix/cert-checker-completeness`.
 
-## ⚠ Most significant finding: unfaithful ARM shift semantics — FIXED (commit pending)
+## ⚠ Most significant finding: unfaithful ARM shift semantics — FIXED (commit c0ccf71)
 
 A single unfaithful definition in the **trusted target-ISA operational semantics**
 produced BOTH a real miscompilation AND an apparent certificate-checker soundness
@@ -188,6 +188,8 @@ soundness proof.
 | A1 | `Expr.simplify` / `simplifyFast` | **Non-confluent float-add normalization.** "`fadd` with `fmul` on the left → swap operands" oscillated when *both* operands were `fmul`: swapping put an `fmul` back on the left and re-fired next iteration. The normal form then depended on iteration *parity*, so two expressions equal under the invariant but reached via different variable-unfold depths compared unequal → spurious `invariants_preserved` rejection (CSE). | When both operands are `fmul`, do not swap (immediate fixed point). | `certaudit` + invariant-atom diagnostic | 2c434dc |
 | A2 | `Expr.simplify` / `simplifyFast` | **Simplify did not recurse into boolean-expr-as-`Expr` nodes** (`cmpE`, `cmpLitE`, `tobool`, `notE`, `andE`, `orE`). Invariant substitution could not resolve variables *inside* a comparison, so a variable holding a comparison result (e.g. a loop `done` flag set by `done := x == y`) simplified differently on the original side (`simplify`, no recursion) than the transformed side (`substSymFast`, which recurses) → spurious `relConsistency` failure (LICM hoisting around a bool flag). | Recurse into those six constructors. | EMI (Orion) induced + `all_transitions` diagnostic | 2c434dc |
 | A3 | `checkDivPreservation` | **No hoisted-constant fallback for the dividend.** The check required the transformed dividend to map to an original *variable*; when LICM hoists a constant *dividend* out of a loop its relation maps it to a *literal*, so the lookup failed and the whole certificate was rejected — even though division-by-zero depends only on the *divisor*. | Give the dividend the same hoisted-constant fallback the divisor already had (trans relation maps `y` to literal `c`, orig invariant proves `y' = c`). | Csmith random fuzzing of division-in-loop programs | 07ddb08 |
+| A4 | `checkAllTransitions` | **Demanded a valid original path for a statically-dead `ifgoto` edge** (the determined-`ifgoto` gap formerly deferred in §C). A determined `ifgoto` reaching a pass that does not fold branches (RegAlloc/CSE/LICM) has a dead arm with no original witness → rejected. **Dominant random-program failure class.** | Skip a successor edge the trans-side invariant proves dead (`isDeadSuccExec`: `computeNextPC` resolves the guard elsewhere under `inv_trans`); weaken `checkAllTransitionsProp` to assume `σ_t ⊨ inv_trans` (its only consumer, `step_sim`, already has it); discharge dead edges in the soundness proof via a new `step_target_eq_computeNextPC`. | `certaudit` on random programs (and originally an EMI mutant) | b0f9639 |
+| A0 | `BinOp.eval` / `ArmSemantics` (TAC + trusted ISA model) | **Shift amount used the full 64-bit value, not AArch64's low-6-bit mask** — the one *real miscompile* (a runtime `x >> a`, `a ≥ 64`, gave `0` in the verified semantics but `192` in the binary) and an *apparent* checker soundness hole (same root cause in the checker's constant folding). See the headline section. | Mask the amount to `mod 64` in `BinOp.eval`, the relational `ArmStep`, and the executable `armStepResult`; codegen `rfl` lemmas stay `rfl`. | certificate-mutation soundness campaign + the "checker proven vs TAC semantics ⇒ accept+divergent-binary = semantics bug" principle | c0ccf71 |
 
 Proof notes: A1 broke `Expr.simplify_sound` (2-way `match` → 3-way `split`); the
 new both-`fmul` arm needs no commutativity. A2 broke `simplifyFast_eq_simplify`
@@ -212,22 +214,32 @@ the checker accepts the new certificate, and differential output stays correct.
 | B2 | ConstProp + DAE | **Dataflow inconsistent across physically-dead edges.** `analyze` / `computeRels` seeded only PC 0; a statically-dead PC with no live predecessor kept an empty invariant/relation, so a merge fed by a dead edge that reassigns a live variable claimed the live edge's value — which the checker (correctly validating the physical dead edge) rejected. | Second analysis phase: seed every still-unreachable PC with `top` and re-propagate, making invariants/relations consistent on *all* physical edges. | `certaudit` + EMI Athena mutant | 5f3568f |
 | B3 | Peephole | **Over-collapsed a runtime conditional.** Removing *both* `goto (pc+1)` no-ops around `if(c){skip}else{skip}` skip-merged an `ifgoto`'s taken target onto its fall-through, producing a degenerate `ifgoto` whose target equals its fall-through. The checker could derive no `branchInfo` for it and could not validate the original path → `all_transitions` (`origPath`) failure. | Do not remove a `goto (pc+1)` that immediately follows an `ifgoto`; keep the branch distinguishable. | EMI (Orion) | b8bb66b |
 | B4 | FMAFusion | **`origLabels` off-by-one for a jump targeting a fused `fmul`.** `buildPcOrigMap` anchors a fused instruction's `pc_orig` on the *removed* `fmul`, but a `goto`/`ifgoto` targeting that fmul used `skipArr` to skip *past* it to the `fadd`, so the jump's path overshot the successor's `pc_orig` by one → `all_transitions` (`origPath`) failure. | When a jump target is itself a removed (fused) fmul, do not skip it. | `certaudit` (flt_accum) + `all_transitions` diagnostic | 1d1b1c3 |
+| B5 | CSE | **Dead-edge merge kept unavailable expressions.** `CSEOpt.analyze` (available-expression worklist) seeded only PC 0, so a merge fed by a physically-dead edge phase 1 never visited kept available expressions not actually available there → `invariants_preserved` rejection. | Same two-phase fix as B2: after the reachable pass, seed unreachable PCs with the top state and re-propagate so merges intersect with the dead edge. | `certaudit` cert-failure campaign | 789b792 |
+| B6 | LICM | **Imprecise + dead-unaware certificate relation.** (i) The per-PC relation used a PC-linear scan + global override, over-claiming hoisted-var coverage at branch targets a control edge could reach without the hoist → `relConsist` free-variable-coverage rejection. (ii) A hoisted variable *dead after the loop* carries the hoisted literal on the in-loop path but the original value on an immediate loop-exit path; an identity rel pair cannot express that sound divergence → `relConsist` rejection. **Reduced LICM's random-program rejection rate ~9/40 → 3/40 with the full hoist preserved.** | (i) CFG-correct forward MUST dataflow (`hoistedSetAt`, intersection at joins). (ii) Filter the relation to LIVE variables (`DAEOpt.analyzeLiveness`), dropping the dead var exactly where it diverges. No optimization dropped; checker untouched. | `certaudit` cert-failure campaign + relation-pair diagnostic | 1775d35 |
 
 B1's fix exposed B2 (ConstProp now folds, so programs reach DAE with the dead
 edges that trigger B2) and reshaped the pipeline so several earlier RegAlloc
 rejections disappeared — illustrating how completeness fixes cascade.
 
-### C. Documented gap (not fixed; correctness-safe)
+### C. (Resolved) — the determined-`ifgoto` dead-edge gap
 
-| Check | Gap | Why deferred | Commit |
-|---|---|---|---|
-| `checkAllTransitions` | **Demands a valid original path for *every* structural successor of an `ifgoto`, including a statically-dead one.** When a determined `ifgoto` reaches a pass that does not fold branches (RegAlloc, last in the pipeline), its dead edge has no original witness and the certificate is rejected. On real programs the front end + ConstProp fold every determined `ifgoto` first, so it is only reachable with a synthetic input (an EMI mutant with a chain of constant-determined `ifgoto`s whose dead arms reassign live vars). | The principled fix (skip an invariant-dead edge) needs `checkAllTransitionsProp` strengthened with a `σ_t ⊨ inv_trans` hypothesis threaded through the master simulation. The spec already only quantifies over *actual* trans steps, so soundness never needs the dead edge — only the executable check is stricter. Sound, incomplete; deferred. | fea049c |
+Originally documented here as deferred (commit fea049c). **Now fixed** — see A4
+(commit b0f9639): `checkAllTransitions` skips an invariant-dead successor edge,
+`checkAllTransitionsProp` was strengthened with the `σ_t ⊨ inv_trans` hypothesis it
+needed (its sole consumer `step_sim` already supplies it), and the master simulation
+proof was re-discharged. It was the *dominant* random-program rejection class once the
+campaign exercised real (not just synthetic) inputs, so closing it cut the overall
+rejection rate substantially.
 
 ### D. Remaining pass-imprecision (open; correctness-safe, optimization-only)
 
-- **LICM** still proposes un-certifiable hoists on adversarial, deeply-nested,
-  division-heavy random programs (`relConsist` / `all_transitions`). The hoists
-  are sound; the certificate is just imprecise. All real programs are clean.
+The full open list is in **"Remaining known issues"** below. In brief:
+- **LICM** dominant sub-causes (branch-target coverage, dead-variable divergence) are
+  **fixed** (B6); a ~3/40 residual remains — an *unreachable preheader* `buildTrans`
+  bug for loops whose header is entered by a non-fall-through edge, which the checker
+  *correctly* rejects (the hoist is genuinely broken there).
+- **RegAlloc** has 2 rare open cases (register-sharing occupant-tracking; a
+  `bool_vars_covered` sub-check).
 - **CSE** misses some loop-body cross-statement common subexpressions
   (`opt_cse_loop`) — a missed optimization, not a rejection.
 
