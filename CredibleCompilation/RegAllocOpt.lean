@@ -25,8 +25,9 @@ are consumed by CodeGen to emit register-aware instructions.
 ## Algorithm: graph coloring
 
 1. Backward liveness analysis (reuse `DAEOpt.analyzeLiveness`)
-2. Build interference graph: two variables interfere if both live at the
-   same PC. Separate graphs for int and float variables.
+2. Build interference graph: two variables interfere if either is defined at a
+   PC where the other is live-out (and when both are live-out at some PC).
+   Separate graphs for int and float variables.
 3. Simplify: repeatedly remove nodes with degree < K, push onto stack
 4. Spill selection: if no node has degree < K, spill the variable with
    the longest live range
@@ -58,12 +59,25 @@ def computeLiveRanges (liveOut : Array (List Var)) : List (Var × Nat) :=
 -- § 2. Interference graph
 -- ============================================================
 
-/-- Build interference graph: two variables interfere if both in liveOut at
-    the same PC. Returns adjacency list. -/
-def buildInterference (vars : List Var) (liveOut : Array (List Var)) : List (Var × List Var) :=
+/-- Build interference graph. Two variables interfere when either is **defined** at a
+    PC where the other is **live-out** (Chaitin's def-vs-liveOut rule), as well as when
+    both are live-out at some PC. The def-vs-liveOut edge is essential for soundness: a
+    variable can be defined yet immediately dead (a dead store), so it appears in NO
+    liveOut set — yet its definition still WRITES its register and would clobber any
+    live variable sharing that register. Omitting this edge lets such a dead def share a
+    register with a value that is live across it, producing an allocation the
+    certificate checker (correctly) rejects. Returns adjacency list. -/
+def buildInterference (prog : Prog) (vars : List Var) (liveOut : Array (List Var))
+    : List (Var × List Var) :=
+  let defAt : Array (Option Var) :=
+    ((List.range prog.size).map fun pc => (prog[pc]?).bind DAEOpt.instrDef).toArray
   vars.map fun v =>
     let neighbors := vars.filter fun w =>
-      v != w && liveOut.any fun lo => lo.contains v && lo.contains w
+      v != w && (List.range prog.size).any fun pc =>
+        let lo := liveOut.getD pc ([] : List Var)
+        (lo.contains v && lo.contains w)
+          || (defAt.getD pc none == some v && lo.contains w)
+          || (defAt.getD pc none == some w && lo.contains v)
     (v, neighbors)
 
 /-- Remove a node and all its edges from the graph. -/
@@ -230,13 +244,13 @@ def computeColoring (tyCtx : TyCtx) (prog : Prog) : List (Var × String) :=
       let intBoolVars := allVars.filter fun v => tyCtx v != .float
       let floatVars := allVars.filter fun v => tyCtx v == .float
       -- Build interference graph with type-conflict edges
-      let baseGraph := buildInterference intBoolVars liveOut
+      let baseGraph := buildInterference prog intBoolVars liveOut
       -- Add edges between every int-bool pair (different types must not share a color)
       let intBoolGraph := baseGraph.map fun (v, nbrs) =>
         let extraNbrs := intBoolVars.filter fun w =>
           v != w && tyCtx v != tyCtx w && !nbrs.contains w
         (v, nbrs ++ extraNbrs)
-      let floatGraph := buildInterference floatVars liveOut
+      let floatGraph := buildInterference prog floatVars liveOut
       -- Color each graph. Caller-saved registers are listed first in
       -- intRegNums/floatRegNums, so lowestAvailable naturally prioritizes them.
       -- CodeGen inserts save/restore around call sites for live caller-saved regs.
