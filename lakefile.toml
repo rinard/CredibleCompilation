@@ -24,3 +24,23 @@ root = "Main"
 [[lean_exe]]
 name = "compiler"
 root = "Compiler"
+
+[[lean_exe]]
+name = "k03direct"
+root = "Experiments.K03Direct"
+
+[[lean_exe]]
+name = "livermore_direct"
+root = "Experiments.LivermoreDirect"
+
+[[lean_exe]]
+name = "certaudit"
+root = "Experiments.CertAudit"
+
+[[lean_exe]]
+name = "emi"
+root = "Experiments.Emi"
+
+[[lean_exe]]
+name = "certmutate"
+root = "Experiments.CertMutate"
