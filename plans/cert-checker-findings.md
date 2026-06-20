@@ -124,11 +124,21 @@ expressions. Untrusted pass; 3139 jobs green; 81/81 differential tests.
 `RegAlloc/LICM/CSE:[all_transitions]` share one root: `checkAllTransitions` requires
 `origPath` (and `relConsist`) on *every* physical transition, including
 invariant-dead edges (a determined `ifgoto`'s untaken arm). The passes legitimately
-do not fold those branches, so the dead edge is checked and fails. This is the one
-*trusted-checker* fix remaining (skip edges the invariant proves unreachable, then
-re-prove `checkAllTransitionsExec_sound`); correctness-safe today since the dropped
-transforms are never miscompiles. Adding folding passes around the failing pass is a
-band-aid (changes the program, not the gap) and was deliberately reverted earlier.
+do not fold those branches, so the dead edge was checked and failed.
+
+**RESOLVED (commit b0f9639), trusted checker + re-proved soundness.**
+`checkAllTransitionsExec` now skips a successor edge that the trans-side invariant
+proves dead (`isDeadSuccExec`: `computeNextPC` resolves the guard to a different
+target under `inv_trans`). `checkAllTransitionsProp` was weakened to assume
+`σ_t ⊨ inv_trans` (its only consumer, `step_sim`, already has it), and
+`checkAllTransitionsExec_sound` discharges a dead edge by contradiction via the new
+`step_target_eq_computeNextPC` (an actual run-step lands at `computeNextPC`'s
+resolved target). RegAlloc and CSE `[all_transitions]` failures are gone; the
+certificate-mutation campaign still rejects every behaviour-changing mutation
+(3204 rejected / 0 holes), so the weakening did not open a soundness hole. The
+band-aid of folding passes around the failing pass (changes the program, not the
+gap) was deliberately *not* used. Residual: LICM still fails when its post-hoist
+`inv_trans` loses the constant, plus a separate LICM goto-relocation imprecision.
 
 ## Headline result
 
