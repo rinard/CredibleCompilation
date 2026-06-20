@@ -449,3 +449,74 @@ live state**, because aggressive transformations legitimately diverge on dead va
 and a whole-state relation cannot express that. RegAlloc's residual register-sharing
 cases (a register shared by provably-equal or non-interfering variables) have the
 same shape and are expected to close by the same method.
+
+## Remaining known issues (open) — for the paper's limitations section
+
+A precise accounting of everything still open after the fixes above. **None is a
+soundness hole or a miscompile**: the campaigns found 0 miscompiles under
+differential testing and 0 holes under certificate-mutation testing, and the one real
+miscompile (shift semantics) and the one trusted-checker gap (determined-`ifgoto`) are
+fixed and proved. Everything below is **untrusted-pass completeness** (a correct
+optimization whose certificate the verified checker rejects, so the pipeline skips
+that pass — the program still compiles correctly) or a non-correctness limitation.
+
+### A. Certificate-check failures still observed (completeness gaps)
+
+1. **`LICM:[all_transitions]` residual (~3/40 random loop-heavy programs).**
+   Root cause: **unreachable preheader**. LICM inserts the hoisted `const`s
+   immediately before the loop header and relies on a fall-through into them. When the
+   header's predecessor is a `goto` (not fall-through) and the loop's entry edge is not
+   a plain forward jump, the inserted preheader block ends up with **no predecessors**
+   — the hoisted consts never execute, so the transformation is *broken* and the
+   checker **correctly rejects it** (not a checker weakness). Fix requires `buildTrans`
+   to redirect **all** loop-entry edges to the preheader (or to hoist only when the
+   preheader is provably reachable); the obvious "redirect forward-goto entries" patch
+   was insufficient (the entry edge in the failing case is reached by a more complex
+   path). The dominant LICM sub-causes (branch-target coverage and goto-relocation /
+   dead-variable divergence) are fixed (commit 1775d35); this is the residual.
+
+2. **`RegAlloc:[all_transitions]` (rare, ~1 in 30–60).** Register shared between two
+   original variables that are provably *equal-valued* (copy/value-numbering related)
+   or non-interfering; the relation built by `computeOrigRels` records only the
+   last-defined occupant, so at a later read of the *other* variable it names the wrong
+   one and `checkRelConsistency` rejects. Sound transform (0 miscompiles), uncertifiable
+   relation. Fix: make the relation track the variable each register holds per-PC, or
+   record the value-equality as a (checker-validated) invariant.
+
+3. **`RegAlloc:[all_transitions, bool_vars_covered]` (rare).** A separate RegAlloc
+   sub-check (boolean-variable coverage) co-occurring with the above; not yet
+   independently diagnosed.
+
+4. **`bounds_preservation` is currently unreachable**, not because it passes but
+   because **BoundsOpt's bounds-check elision is disabled** (see
+   `plans/certified-interval-pangolin.md`). With elision off, no bounds check is ever
+   removed, so the sub-check never runs. (It *does* appear transiently when LICM hoists
+   array-indexing consts — `LICM:[…, bounds_preservation]` — folded into class 1.)
+
+### B. Non-correctness limitations
+
+5. **Compile-time scaling ≈ O(n^2.5).** The certificate checker (symbolic execution
+   per transition) dominates; programs beyond ~300–400 TAC instructions take tens of
+   seconds, and the campaigns chunk generated programs to stay tractable. Not a
+   correctness issue; a throughput one.
+
+6. **LICM cluster is a fixed ×4 unrolling** (one iteration per assumed loop-nesting
+   level). Loops nested deeper than 4 may not have all invariants lifted — a
+   completeness limit of the *pipeline schedule*, independent of the per-pass
+   certificate.
+
+7. **Liveness-filtered relation depends on `DAEOpt.analyzeLiveness` precision.** The
+   LICM fix (1775d35) drops dead variables from the relation; if the liveness analysis
+   were imprecise (kept a truly-dead var), a divergence could resurface as a rejection
+   (never as unsoundness — the checker would reject, not miscompile).
+
+### Status summary
+
+| area | state |
+|---|---|
+| Soundness (miscompiles / checker holes) | **clean** — 0 found; the one real miscompile + the one trusted gap fixed & proved |
+| Trusted base (checker proofs, ARM model) | **sound**, 0 `sorry`, full build 3139 jobs |
+| LICM completeness | dominant sub-causes **fixed**; ~3/40 unreachable-preheader residual open |
+| RegAlloc completeness | 2 rare cases open (occupant-tracking; bool coverage) |
+| BoundsOpt | elision disabled by design ⇒ `bounds_preservation` dormant |
+| Performance | O(n^2.5) checker; pipeline schedule fixed ×4 LICM |
