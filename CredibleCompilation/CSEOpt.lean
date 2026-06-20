@@ -129,9 +129,22 @@ def expandVarFull (avail : AvailSet) (cm : ConstMap) (v : Var) : Expr :=
     | some (_, .bool b)  => .blit b
     | none => .var v
 
+/-- Expand every variable leaf of an expression one level through the available
+    set + constant map (mapping each `result` var to its `invExpr`, constants to
+    their values). Makes a stored entry's `invExpr` comparable to a freshly
+    `expandVarFull`-expanded target, so a NESTED redundancy matches — e.g. the entry
+    `u = __t1 * __t2` canonicalizes to `(a+i)*(b+i)`, the same form a later
+    `__t3 * __t4` (with `__t3 = a+i`, `__t4 = b+i`) expands to. -/
+def expandExprViaAvail (avail : AvailSet) (cm : ConstMap) : Expr → Expr
+  | .var v       => expandVarFull avail cm v
+  | .bin op a b  => .bin op (expandExprViaAvail avail cm a) (expandExprViaAvail avail cm b)
+  | .fbin op a b => .fbin op (expandExprViaAvail avail cm a) (expandExprViaAvail avail cm b)
+  | e            => e
+
 /-- Find an available computation matching the expanded form of `lhs op rhs`.
-    Uses constant expansion so that e.g. `k + _t1` and `k + _t2` match
-    when both `_t1` and `_t2` are known to be the same constant. -/
+    Uses constant + available-set expansion so that e.g. `k + _t1` and `k + _t2`
+    match when both `_t1`/`_t2` are the same constant, AND a nested redundancy like
+    `(a+i)*(b+i)` recomputed via fresh temps matches the available product. -/
 def findAvail (avail : AvailSet) (cm : ConstMap) (op : AvailOp) (lhs rhs : Var) : Option AvailEntry :=
   let eLhs := expandVarFull avail cm lhs
   let eRhs := expandVarFull avail cm rhs
@@ -141,7 +154,7 @@ def findAvail (avail : AvailSet) (cm : ConstMap) (op : AvailOp) (lhs rhs : Var) 
       | .fadd, .fbin .fmul _ _ => Expr.fbin .fadd eRhs eLhs
       | _, _ => Expr.fbin o eLhs eRhs
   avail.find? fun e =>
-    e.op == op && expandExprConsts cm e.invExpr == targetExpr
+    e.op == op && expandExprViaAvail avail cm e.invExpr == targetExpr
 
 /-- Intersection: keep entries present in both sets (all fields equal). -/
 def availMerge (a b : AvailSet) : AvailSet :=
