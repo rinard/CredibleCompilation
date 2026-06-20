@@ -340,3 +340,28 @@ yet express), and it is intrinsic to the credible-compilation architecture: a fi
 verified checker can never be complete, so every optimizer sits somewhere on this
 curve and the engineering goal is to push the certifiability axis outward, not the
 optimization axis inward.
+
+### Update: route 3 (precise certificate) completed for LICM — commit 1775d35
+
+The design tension above was resolved for LICM the *right* way — by raising the
+certificate's precision, not by reducing optimization. Two untrusted-pass changes,
+verified checker untouched, nothing re-proved:
+
+1. **CFG-correct relation** (`hoistedSetAt`): a forward MUST-analysis giving the
+   hoisted vars established on every path to each PC (intersection at joins),
+   replacing the PC-linear scan + global-`lastHoisted` override. Fixes the
+   `relConsist` free-variable-coverage failures at branch targets.
+2. **Liveness-filtered relation**: the relation now ranges only over variables LIVE
+   at each PC (`DAEOpt.analyzeLiveness`/`livenessTransfer`). This closes the
+   goto-relocation residual, whose root cause was subtle: a hoisted variable that is
+   *dead after the loop* carries the hoisted literal on the in-loop path but the
+   original value on an immediate loop-exit path — a divergence that is sound only
+   because the variable is dead, yet which an identity rel pair cannot express.
+   Dropping dead variables removes it exactly where it diverges.
+
+Result: LICM performs its **full** hoist and the certificate validates (e.g. a repro
+that previously rejected now certifies its complete `444→503` hoist); LICM rejection
+rate on random programs fell from ~9/40 to 3/40 with no new `invariants_preserved`
+failures; full build 3139 jobs / 0 sorry; 81/81 differential; 1205 mutations
+rejected / 0 holes. A small residual (≈3/40, rarer/deeper CFGs) remains. This is a
+concrete instance of the principle: **make the certificate match the optimizer.**
