@@ -176,81 +176,93 @@ def buildTrans (prog : Prog) (hoistable : List (Nat × Nat × Var × Value)) : P
 -- § 5. Certificate with (lit c, var x) rel
 -- ============================================================
 
-private def buildHoistRel (allVars : List Var) (hoisted : List (Var × Value)) : EExprRel :=
-  allVars.map fun v =>
-    match hoisted.find? (fun (hv, _) => hv == v) with
-    | some (_, val) =>
-      let litExpr := match val with
-        | .int n => Expr.lit n | .bool b => .blit b | .float f => .flit f
-      (litExpr, .var v)
-    | none => (.var v, .var v)
+/-- Forward must-analysis: at each trans PC, the set of hoisted variables whose
+    inserted `const` has executed on EVERY path reaching that PC. A hoisted var is
+    set once and never redefined, so the only transfer is "at a hoisted `const x _`,
+    add x"; joins intersect. CFG-correct (unlike a PC-linear scan + global override),
+    so a branch jumping OVER a later hoisted block does not claim that block's vars
+    at the target — making the certificate's per-PC relation exactly match the real
+    dataflow, which is what `checkRelConsistency` validates. -/
+private partial def hoistLoop (trans : Prog) (origPCMap : Array Nat)
+    (states : Array (Option (List Var))) (wl : List Nat) : Array (Option (List Var)) :=
+  match wl with
+  | [] => states
+  | pc :: rest =>
+    match trans[pc]?, states[pc]? with
+    | some instr, some (some sin) =>
+      let out := match instr with
+        | .const x _ => if isHoisted trans origPCMap pc && !sin.contains x then x :: sin else sin
+        | _ => sin
+      let (states', newWork) := (instr.successors pc).foldl (fun (arr, w) pc' =>
+        if pc' < arr.size then
+          match arr[pc']? with
+          | some none | none => (arr.set! pc' (some out), pc' :: w)
+          | some (some old) =>
+            let merged := old.filter (out.contains ·)  -- must-merge = intersection
+            if merged.length == old.length then (arr, w)
+            else (arr.set! pc' (some merged), pc' :: w)
+        else (arr, w)) (states, rest)
+      hoistLoop trans origPCMap states' newWork
+    | _, _ => hoistLoop trans origPCMap states rest
+
+private def hoistedSetAt (trans : Prog) (origPCMap : Array Nat) : Array (List Var) :=
+  if trans.size == 0 then #[]
+  else
+    let init := (Array.replicate trans.size (none : Option (List Var))).set! 0 (some [])
+    (hoistLoop trans origPCMap init (0 :: [])).map fun
+      | some s => s
+      | none   => []
 
 private def buildInstrCerts (trans : Prog) (origPCMap : Array Nat)
-    (allVars : List Var) (hoistedVars : List (Var × Value)) : Array EInstrCert :=
-  let idRel : EExprRel := allVars.map fun v => (.var v, .var v)
-  let hoistRel := buildHoistRel allVars hoistedVars
-  -- Cumulative rels: one group only, so straightforward scan
-  let (relArray, _) := (List.range trans.size).foldl (fun (arr, curRel) tpc =>
+    (allVars : List Var) (_hoistedVars : List (Var × Value)) : Array EInstrCert :=
+  let hset := hoistedSetAt trans origPCMap
+  let liveOut := DAEOpt.analyzeLiveness trans
+  let litExprOf : Value → Expr
+    | .int n => .lit n | .bool b => .blit b | .float f => .flit f
+  -- Value of each hoisted variable, read from its inserted `const` in `trans`.
+  let hoistedValMap : List (Var × Value) := (List.range trans.size).filterMap fun tpc =>
     if isHoisted trans origPCMap tpc then
-      let nextRel := match trans[tpc]? with
-        | some (.const x v) =>
-          let litExpr := match v with
-            | .int n => Expr.lit n | .bool b => .blit b | .float f => .flit f
-          curRel.map fun (eo, et) =>
-            if et == .var x then (litExpr, .var x) else (eo, et)
-        | _ => curRel
-      (arr.push (curRel, nextRel), nextRel)
-    else
-      (arr.push (curRel, curRel), curRel)
-  ) (Array.mkEmpty trans.size, idRel)
-  let relAt (tpc : Nat) : EExprRel :=
-    (relArray.getD tpc (idRel, idRel)).1
-  let relAfter (tpc : Nat) : EExprRel :=
-    (relArray.getD tpc (idRel, idRel)).2
-  -- The replaced goto is a back-edge target. On re-entry, all hoisted vars
-  -- are set. Its rel should be hoistRel (= cumulative after all hoisted consts).
-  -- Override relAt for back-edge targets that are replaced gotos.
-  let _replacedGotoRel (tpc : Nat) : EExprRel :=
-    match trans[tpc]? with
-    | some (.goto _) =>
-      -- Check if this is a replaced goto (goto to next PC, orig was a const)
-      let _opc := origPCMap.getD tpc tpc
-      if relAt tpc != hoistRel &&
-         (hoistedVars.any fun (_x, _) =>
-           match trans[tpc]? with | some (.goto _) => true | _ => false) then
-        hoistRel
-      else relAt tpc
-    | _ => relAt tpc
-  -- After all hoisted consts, use hoistRel everywhere (vars never change back)
-  let lastHoisted := (List.range trans.size).foldl (fun last tpc =>
-    if isHoisted trans origPCMap tpc then tpc else last) 0
-  let effectiveRelAt (tpc : Nat) : EExprRel :=
-    if tpc > lastHoisted && lastHoisted > 0 then hoistRel
-    else relAt tpc
+      match trans[tpc]? with | some (.const x v) => some (x, v) | _ => none
+    else none
+  -- rel at a PC: for each LIVE variable, identity, plus `(lit, var)` for each hoisted
+  -- var established there. Dead variables are dropped: a hoisted var that is dead at a
+  -- relocated `goto`/loop-exit merge would otherwise carry the hoisted literal on one
+  -- path and the original (un-hoisted) value on another — a divergence that is sound
+  -- only because the variable is dead, but which an identity rel pair cannot express.
+  let relAtPC (tpc : Nat) : EExprRel :=
+    let est := hset.getD tpc ([] : List Var)
+    let live := match trans[tpc]? with
+      | some instr => DAEOpt.livenessTransfer instr (liveOut.getD tpc ([] : List Var))
+      | none       => ([] : List Var)
+    allVars.filterMap fun v =>
+      if !live.contains v then none
+      else match (if est.contains v then hoistedValMap.find? (fun (hv, _) => hv == v) else none) with
+        | some (_, val) => some (litExprOf val, .var v)
+        | none          => some (.var v, .var v)
   let arr := (List.range trans.size).map fun tpc =>
     let pc_orig := origPCMap.getD tpc tpc
-    let rel := effectiveRelAt tpc
+    let rel := relAtPC tpc
     match trans[tpc]? with
     | some .halt =>
       { pc_orig := pc_orig, rel := rel, transitions := ([] : List ETransCorr) }
     | some (.goto l) =>
       let origTarget := origPCMap.getD l l
       { pc_orig := pc_orig, rel := rel,
-        transitions := [{ origLabels := [origTarget], rel := rel, rel_next := effectiveRelAt l }] }
+        transitions := [{ origLabels := [origTarget], rel := rel, rel_next := relAtPC l }] }
     | some (.ifgoto _ l) =>
       let origTarget := origPCMap.getD l l
       { pc_orig := pc_orig, rel := rel,
-        transitions := [{ origLabels := [origTarget], rel := rel, rel_next := effectiveRelAt l },
+        transitions := [{ origLabels := [origTarget], rel := rel, rel_next := relAtPC l },
                         { origLabels := [origPCMap.getD (tpc + 1) (tpc + 1)],
-                          rel := rel, rel_next := effectiveRelAt (tpc + 1) }] }
+                          rel := rel, rel_next := relAtPC (tpc + 1) }] }
     | some _ =>
       if isHoisted trans origPCMap tpc then
         { pc_orig := pc_orig, rel := rel,
-          transitions := [{ origLabels := [], rel := rel, rel_next := relAfter tpc }] }
+          transitions := [{ origLabels := [], rel := rel, rel_next := relAtPC (tpc + 1) }] }
       else
         let origNext := origPCMap.getD (tpc + 1) (tpc + 1)
         { pc_orig := pc_orig, rel := rel,
-          transitions := [{ origLabels := [origNext], rel := rel, rel_next := effectiveRelAt (tpc + 1) }] }
+          transitions := [{ origLabels := [origNext], rel := rel, rel_next := relAtPC (tpc + 1) }] }
     | none => default
   arr.toArray
 
