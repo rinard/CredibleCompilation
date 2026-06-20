@@ -520,6 +520,51 @@ and a whole-state relation cannot express that. RegAlloc's residual register-sha
 cases (a register shared by provably-equal or non-interfering variables) have the
 same shape and are expected to close by the same method.
 
+## Paper finding: certifying constant-branch elimination by *decomposition* (ConstProp fold + DCE compaction)
+
+A clean, reusable pattern for the same whole-state-relation limitation, arrived at by an
+explicit design choice in `ConstPropOpt.optimize`.
+
+### The obstacle
+Constant-folding a branch — turning `ifgoto b l` (with `b` constant under the invariant)
+into an unconditional jump and **removing the now-unreachable arm** — is naturally one
+optimization. But removing instructions *renumbers* the program: `orig.code ≠ trans.code`
+in shape, so the per-PC whole-state certificate (which relates orig PC *i* to trans PC
+*i*) has nothing to relate the deleted region to. Worse, the pipeline driver (`applyPass`)
+only accepts a certificate whose `orig.code` equals the program it handed the pass, so a
+ConstProp that compacted its own `orig` was **rejected outright and silently dropped** —
+precisely on its signature case (a constant branch). This is the same defect class as
+code-motion: a structural reshape a per-PC relation cannot witness.
+
+### The resolution: split the transformation along the certifiability boundary
+ConstProp is deliberately made **structure-preserving**: it folds `ifgoto b l → goto l`
+**in place**, emitting exactly one trans instruction per orig instruction (1-to-1 aligned,
+`orig := prog` uncompacted). The fold alone is trivially certifiable — the invariant
+proves the guard constant, and every other PC is identity. The **physical removal** of the
+now-dead arm is then left to the **separate, independently-certified DCE pass** that runs
+immediately after. Each half is alignment-preserving and individually certifiable; their
+composition achieves the full optimization (fold + dead-arm deletion) that the single
+combined step could not certify.
+
+One subtlety made explicit in the code: because the dead arm is *kept* (not compacted),
+its dataflow effect must still reach control-flow merges, or an invariant that holds only
+on the live path would be unsound on the retained physical dead edge. ConstProp therefore
+**propagates the statically-dead edge too** (a second analysis phase seeding the unreached
+PCs), so `invariants_preserved` holds on every *physical* successor; the precision lost by
+not compacting is recovered downstream by DCE deleting the arm. (See also fix B-class
+"physically-dead edge" consistency for ConstProp/DAE.)
+
+### Generalizable lesson
+When an optimization both **rewrites in place** and **changes program structure**, do not
+try to certify it as one step against a positional whole-state relation. **Factor it into
+an alignment-preserving rewrite (label/operand folding) and a separate
+deletion/compaction pass, and certify each independently.** ConstProp+DCE is the canonical
+instance; the same factoring is why LICM hoists *before* the header (insertion, not
+reshape) and leaves cleanup to DCE. The cost is pipeline ordering discipline (the two
+passes must run adjacently and DCE must be trusted to follow), not optimization power:
+**no optimization is given up** — the branch *is* folded and certified; only the bookkeeping
+is split so each piece stays within what the checker can express.
+
 ## Remaining known issues (open) — for the paper's limitations section
 
 A precise accounting of everything still open after the fixes above. **None is a
