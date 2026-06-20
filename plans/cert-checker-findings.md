@@ -240,8 +240,10 @@ The full open list is in **"Remaining known issues"** below. In brief:
   *correctly* rejects (the hoist is genuinely broken there).
 - **RegAlloc** has 2 rare open cases (register-sharing occupant-tracking; a
   `bool_vars_covered` sub-check).
-- **CSE** misses some loop-body cross-statement common subexpressions
-  (`opt_cse_loop`) — a missed optimization, not a rejection.
+- **CSE** nested common subexpressions: **FIXED** (commit c778787) — `findAvail`
+  now expands a stored entry's `invExpr` through the available set, so a nested
+  redundancy like `(a+i)*(b+i)` recomputed via fresh temps matches the available
+  product. `opt_cse_loop` now computes the product once (1 `mul`, was 2).
 
 ## Diagnostic tooling built (reusable artifacts)
 
