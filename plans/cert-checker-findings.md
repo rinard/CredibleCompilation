@@ -365,3 +365,87 @@ rate on random programs fell from ~9/40 to 3/40 with no new `invariants_preserve
 failures; full build 3139 jobs / 0 sorry; 81/81 differential; 1205 mutations
 rejected / 0 holes. A small residual (≈3/40, rarer/deeper CFGs) remains. This is a
 concrete instance of the principle: **make the certificate match the optimizer.**
+
+## Paper finding: certifying full code-motion via a precise, liveness-aware certificate
+
+**Claim.** A loop-invariant code-motion (LICM) pass can emit certificates that a
+fixed, verified, deliberately-incomplete checker accepts for its *full* (unreduced)
+optimization, provided the certificate's simulation relation is (i) **CFG-correct**
+about which moved values are established where, and (ii) **restricted to live
+variables**. Both are properties of the *untrusted* certificate generator; the
+verified checker is not modified and no proof is re-discharged. This is the concrete,
+positive counterpart to the optimization-aggressiveness ↔ certifiability tension
+documented above: the tension is resolved by raising certifiability, never by
+lowering optimization.
+
+### Setting
+
+LICM hoists a loop-invariant `const x := c` into the loop preheader and leaves the
+in-loop slot as a `goto`. The certificate is a per-PC expression relation between the
+original and transformed programs; for a hoisted variable the relation carries a
+`(lit c, var x)` pair meaning "trans `x` equals the literal `c`." The verified
+`checkAllTransitions` / `checkRelConsistency` decision procedure accepts the pass iff,
+along every transition, the relation is consistent. On straight-line loops this holds
+trivially; on loops with internal branches and relocated control flow it failed —
+even though every hoist was correct (the 3-way differential campaign found **zero**
+miscompiles from LICM).
+
+### Two defects in the certificate generator, and the fixes
+
+**(1) Coverage over-claim — needs a CFG-correct relation.**
+The generator computed "which hoisted vars are set at PC *p*" with a PC-linear scan
+plus a coarse override ("after the last hoisted PC, assume all are set"). A branch
+that jumps *over* a later hoisted block then reaches a target whose relation claims
+that block's vars, while the branch did not establish them — so
+`checkRelConsistency`'s free-variable coverage check rejects. Fix: compute the set by
+a **forward MUST dataflow** — the hoisted vars established on *every* path to *p*
+(union as the transfer at a hoisting const, **intersection at control-flow joins**).
+The relation then neither over- nor under-claims, matching the program's real
+dataflow, which is exactly what the checker verifies.
+
+**(2) Dead-variable divergence at loop-exit merges — needs a live-variable relation.**
+This is the subtle one. Consider a loop guard `ifgoto (¬(li < x)) Exit` whose *only*
+edge into the exit block bypasses the hoisted `const __t := c` in the loop body. In
+the transformed program `__t = c` always (hoisted to the preheader); in the original,
+on an *immediate* exit (zero loop iterations), `__t` still holds its pre-loop value.
+The two programs therefore **disagree on `__t` at the exit merge** — and this is
+*sound* precisely because `__t` is dead after the loop (never observed). But the
+identity relation pair `(var __t, var __t)` the generator emits at the merge asserts
+`orig __t = trans __t`, which is false on that path, so `checkRelConsistency` rejects.
+No amount of relation precision or added invariant can fix this, because the values
+genuinely differ; the only thing making the transform correct is **deadness**. Fix:
+**filter the relation to variables live at each PC** (a standard backward liveness
+analysis: `liveIn = use ∪ (liveOut \ def)`). A dead variable is dropped from the
+relation exactly where it is dead, so the divergence is never asserted.
+
+### Why this stays inside the untrusted pass
+
+Both fixes change only what certificate the pass *proposes*. The verified checker —
+its decision procedure and its soundness proof against the operational semantics — is
+untouched, so no `sorry` is introduced and nothing is re-proved. The checker
+validates every relation and invariant the pass emits, so a generator bug can only
+cost completeness (a rejected certificate), never soundness. (Contrast the one
+genuinely trusted-checker gap in this project — the determined-`ifgoto` dead edge —
+where the checker *demanded a path for a physically impossible edge*, which no
+certificate could supply; that one required a checker change and a re-proof.)
+
+### Results
+
+The repro that previously rejected now certifies its **complete** `444→503` hoist
+(no hoists dropped). On random loop-heavy programs the LICM rejection rate fell from
+≈9/40 to 3/40 with **zero** new `invariants_preserved` failures. Full `lake build`
+3139 jobs / 0 `sorry`; 81/81 three-way differential tests; 1205 certificate-mutation
+soundness mutations rejected / 0 holes. A small residual (≈3/40, rarer/deeper CFGs)
+remains and is the same shape — a sound transform whose certificate is not yet
+precise enough.
+
+### Generalizable lesson
+
+For credible/translation-validated compilation, the engineering lever against
+optimizer/checker incompleteness is the **precision of the certificate the optimizer
+emits**, and two ingredients recur: (a) make the relation **CFG-correct** (a proper
+must/may dataflow, not a linear approximation), and (b) make it **range only over
+live state**, because aggressive transformations legitimately diverge on dead values
+and a whole-state relation cannot express that. RegAlloc's residual register-sharing
+cases (a register shared by provably-equal or non-interfering variables) have the
+same shape and are expected to close by the same method.
