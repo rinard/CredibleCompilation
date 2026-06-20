@@ -92,6 +92,58 @@ soundness testing** generates out-of-distribution programs and cross-checks the
 checker's TAC-level verdict against the actually-assembled binary — turning a
 model/hardware mismatch into an observable divergence.
 
+## Major finding: the checker caught a real register-allocation soundness bug — FIXED (commit b969cf5)
+
+This is the credible-compilation value proposition demonstrated end-to-end: a **verified
+certificate checker refusing to certify an untrusted optimizer's miscompilation**, with
+the bug then located and fixed in the optimizer.
+
+### Symptom
+On random loop-heavy programs (~3%), the verified checker rejected RegAlloc's certificate
+with `[all_transitions]` (sometimes also `[all_transitions, bool_vars_covered]`). For a
+long time this was filed as "checker incompleteness / relation imprecision." It was not.
+
+### The actual bug (in the untrusted allocator, not the certificate)
+The interference graph (`RegAllocOpt.buildInterference`) recorded an edge between two
+variables only when **both are live-out at the same PC**. That misses a case: a variable
+can be **defined and then immediately dead** — a dead store — so it is in *no* live-out
+set, yet its definition still **writes its physical register**. With no interference edge,
+graph coloring is free to place that dead def in the **same register as a value that is
+live across it**. Concretely (captured repro): a loop-carried constant `__t181` colored
+`__ir13`, and a dead `v3 := v1 / __t190` inside the loop body *also* colored `__ir13` —
+so every iteration the dead store clobbered `__t181`, and the next iteration's read of
+`__t181` got garbage. **That is a miscompilation.**
+
+### Why no miscompile was ever *observed*
+Because the checker did its job. The certificate for this allocation fails
+`checkRelConsistency` (the relation cannot claim `__ir13` holds `__t181` after a step that
+overwrote it), the pass is rejected, and the pipeline falls back to the un-allocated
+program. The verified checker converted a latent miscompiler bug into a *safe rejected
+certificate* — exactly the guarantee credible compilation promises. The "completeness
+residual" was the checker **correctly** refusing an unsound transform.
+
+### The fix
+Add Chaitin's standard **def-vs-liveOut** interference: a variable defined at a PC
+interferes with every variable live-out at that PC (not only with simultaneously-live-out
+variables). A dead def then can no longer share a register with a value live across it.
+The allocation becomes sound and the certificate is accepted.
+
+### How it was found, and the methodology lesson
+Random differential testing never flagged it (the rejected certificate means the buggy
+allocation is never emitted, so there is no oracle divergence). It was localized by
+**reading the rejected certificate**: `certaudit -diag` pinpointed the failing transition
+and `relConsist` pair, and a few targeted dumps showed the register's occupant was a
+loop-clobbered dead def. The lesson: a verified checker's *rejections* are a debugging
+signal about the optimizer, not merely a completeness nuisance — several were triaged as
+imprecision before this one turned out to be a true soundness bug the checker had been
+silently shielding against. **Distinguish "the checker is imprecise" from "the checker is
+right and the optimizer is wrong" before weakening anything.**
+
+### Verified
+Full `lake build` 3139 jobs / 0 sorry; 81/81 differential; both captured repros now ACCEPT
+with the allocation applied (205→212, 90→98). No certificate or checker change — the fix
+is entirely in the untrusted allocator.
+
 ## Certificate-failure fuzzing campaign (`stress/certfuzz.sh`)
 
 A dedicated campaign that, per random program, runs `certaudit` and **catalogues
@@ -238,8 +290,12 @@ The full open list is in **"Remaining known issues"** below. In brief:
   **fixed** (B6); a ~3/40 residual remains — an *unreachable preheader* `buildTrans`
   bug for loops whose header is entered by a non-fall-through edge, which the checker
   *correctly* rejects (the hoist is genuinely broken there).
-- **RegAlloc** has 2 rare open cases (register-sharing occupant-tracking; a
-  `bool_vars_covered` sub-check).
+- **RegAlloc** `[all_transitions]` (and its `bool_vars_covered` companion):
+  **RESOLVED — and it was a genuine miscompiler bug, not a checker gap** (commit
+  b969cf5). The checker was correctly rejecting an *unsound register allocation*
+  (a dead store clobbering a value live across it, from a missing interference
+  edge). Fixed in the allocator's interference graph. See the dedicated finding
+  **"The checker caught a real register-allocation soundness bug"** below.
 - **CSE** nested common subexpressions: **FIXED** (commit c778787) — `findAvail`
   now expands a stored entry's `invExpr` through the available set, so a nested
   redundancy like `(a+i)*(b+i)` recomputed via fresh temps matches the available
