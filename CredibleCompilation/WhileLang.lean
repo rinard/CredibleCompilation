@@ -730,8 +730,10 @@ def Stmt.toString : Stmt → String
   | .arrWrite arr idx val => s!"{arr}[{idx.toString}] := {val.toString}"
   | .barrWrite arr idx bval => s!"{arr}[{idx.toString}] := {bval.toString}"
   | .seq s1 s2 => s!"{s1.toString};\n{s2.toString}"
-  | .ite b s1 s2 => s!"if {b.toString} then\n  {s1.toString}\nelse\n  {s2.toString}"
-  | .loop b body => s!"while {b.toString} do\n  {body.toString}"
+  | .ite b s1 s2 =>
+    "if " ++ b.toString ++ " {\n  " ++ s1.toString ++ "\n} else {\n  " ++ s2.toString ++ "\n}"
+  | .loop b body =>
+    "while " ++ b.toString ++ " {\n  " ++ body.toString ++ "\n}"
   | .fassign x e => s!"{x} := {e.toString}"
   | .farrWrite arr idx val => s!"{arr}[{idx.toString}] := {val.toString}"
   | .label lbl => s!"{lbl}:"
@@ -2914,9 +2916,13 @@ private def tyToString : VarTy → String
   | .float => "float"
 
 def toString (prog : Program) : String :=
-  let declStrs := prog.decls.map fun (x, ty) => s!"var {x} : {tyToString ty}"
-  let declBlock := String.intercalate ";\n" declStrs
-  s!"{declBlock};\n{prog.body}"
+  -- ONE comma-separated `var` block + an `array` block, matching the parser's concrete syntax.
+  let varBlock := if prog.decls.isEmpty then "" else
+    "var " ++ String.intercalate ", " (prog.decls.map fun (x, ty) => s!"{x} : {tyToString ty}") ++ ";\n"
+  let arrBlock := if prog.arrayDecls.isEmpty then "" else
+    "array " ++ String.intercalate ", "
+      (prog.arrayDecls.map fun (a, sz, ty) => s!"{a}[{sz}] : {tyToString ty}") ++ ";\n"
+  s!"{varBlock}{arrBlock}{prog.body}"
 
 instance : ToString Program := ⟨Program.toString⟩
 

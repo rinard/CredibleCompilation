@@ -3546,3 +3546,180 @@ Eliminated 19 sorrys across three RefCompiler files. Down from ~65 to ~35 sorrys
 - `refCompileExpr_result_bound` float cases: `ftmpName` results use `left` + `ftmpName_not_isTmp`; `floatToInt` uses `right` (produces `tmpName`)
 - `refCompileBool_vars_bound` `fcmp`: mirrors `cmp` exactly
 - **5 remaining**: `refCompileExpr_correct`, `refCompileBool_correct`, `refCompileStmt_correct` float cases require generalizing theorem from `.int` to `.float` result wrapping — blocked on `refCompileExpr_float_correct` infrastructure
+
+---
+
+## Study instrumentation: T1 opsem co-simulation + protocol (2026-06-21)
+
+Built **T1**, machine-level co-simulation for the bug-finding study: an executable
+evaluator of the ARM opsem (`Harness/ArmExec.lean` — `execStep`/`execRun`, proven sound
+vs the relational `ArmStep`, 0 sorry) diffed against assemble-and-run on local arm64
+through the compiler's own asm printer. Harnesses `Harness/T1{,Branch,Stack,Array}.lean`
+cover the full **concrete** ISA — integer/shift/logical, cmp/cset flags, forward control
+(cbz), stack ldr/str, array arrLd/arrSt — each validated at 0 false positives on the
+correct model; catches the May-7 shift bug on the baseline (`model=0` vs masked machine).
+
+Key result: **float ops are `opaque`/axiomatized** (Core.lean:308–334), so float co-sim
+is fundamentally N/A — the float ISA is a trust assumption. Surfaced (status OPEN, not
+adjudicated) printer discrepancies vs the model: `cbnz→w0`, `cset→w0`, arrLd/arrSt
+x0-clobber. Findings in `plans/cert-checker-findings.md` (## T1 section).
+
+Wrote the study protocol (`plans/study-protocol.md`): RQs (RQ4a/4b checker
+strict/loose, RQ5a/5b transform/cert), two-pass design (characterization vs remediation),
+quarantine, open-ended ground truth, and **budget-based stopping** (token cap OR time cap,
+whichever first). Design: **one autonomous agent session per technique** self-loops discover->fix
+(no mid-loop runner); persistent append-only FINDINGS.md (survives compaction, prevents rework,
+replaces suppression set, = agent's first narrative); root-cause dedup + cascade discovery +
+RQ7-via-continuation (re-run accumulated + shared-code tests after each fix); discovery/fix stats
+via in-session markers; live monitoring (tail FINDINGS.md + transcript, metrics_parse --follow).
+Budgets (one hard session budget each): T1/T2/T3 2h/~670k out-tok, T4 12h/~4M; soft per-fix
+~30min/~170k; whole-study emergent (~18h, ~6M out-tok). Adjudication post-hoc by human.
+Auditability: every finding/fix gets a record (bug+fix location, versioned repro inputs, two
+narratives — agent draft + runner reconstruction, discovery stamps for saturation). Resource
+wrapper at `study-harness/`. RQs (RQ1–7) + techniques (T1–T4, T4a/b/c) finalized from the
+provided spec (trust-surface decomposition; bottom-up hardening order). Open: build T2 (AST
+round-trip) / T3 (text→parse) / T4 (Csmith-style gen + reference-C + EMI) / finish T4c
+mutation adjudicator; RQ1a float-axiom audit; port T1 sub-harnesses into the subject overlay.
+
+---
+
+## Study build: orchestration layer + T2 + generation docs (2026-06-21)
+
+Built the runnable orchestration for the autonomous-agent study model:
+- `study-harness/run_session.py` — session launcher enforcing the one hard budget
+  (kill on wall-clock OR live output-token cap, whichever first) + transcript tee. Tested:
+  token-cap kill and wall-clock kill both fire correctly with `budget_hit` recorded.
+- `study-harness/metrics_parse.py` — extended with discovery↔fix segmentation from in-session
+  `→ FIX`/`RESUME DISCOVERY` markers and a `--follow` live tally. Tested (disc/fix split correct).
+- `study-harness/prompts/{discover_fix_template,t1}.md` — the autonomous discover→fix prompt
+  (FINDINGS.md discipline, mode markers, soft per-fix limit, regression + shared-code re-runs).
+- `plans/generation-algorithms.md` — documents T1's exact built algorithm + implementable
+  algorithms for T2/T3/T4/T4c (PRNG, edge pools, panic-safe shifts, Csmith UB-freedom, EMI,
+  cert-mutation + equivalence-preserving classification).
+
+**T2 (AST round-trip) v1** — `Harness/T2.lean`, int subset; oracle = `print=print∘parse∘print`.
+Working: immediately surfaced (status OPEN, not adjudicated) that the display printer
+`Program.toString`/`Stmt.toString` is out of sync with the parser's concrete syntax — multi-line
+`var` blocks (parser wants comma-separated), `if…then…else` vs `if b {…}`, `while…do` vs
+`while b {…}`. A real RQ3 candidate cascade (printer never round-tripped in the prod text→AST→asm
+path). Recorded in cert-checker-findings.md (## T2).
+
+---
+
+## Artifact reproducibility record (2026-06-21)
+
+Wrote `plans/artifact-reproducibility.md` — everything needed to rebuild/re-verify the artifact
+for paper submission, with **real captured values**: Lean v4.28.0 (commit 7e01a1b), Lake 5.0.0,
+mathlib rev 8f9d9cff…, Apple clang 16.0.0, macOS Darwin 24.1.0 arm64, agent model
+claude-opus-4-8; repos pinned (dev fix/cert-checker-completeness@dfc90f7, subject
+ICSEBase@a3f6de4 = upstream d869719 May-7 severed history, RN extract@632c869). Documents the
+**two reproducibility regimes** (deterministic proofs/harnesses vs non-bit-reproducible agent
+runs), per-result repro commands + expected outputs, the build recipe (`lake exe cache get` +
+`lake build` → 0 sorry), the study run/re-run recipe, the bundle manifest (git bundles +
+SHA256SUMS), and an evaluator checklist. `metrics_parse.py` now also captures the per-session
+`model` (reproducibility pin). NOTE: `study-harness/` is not yet a git repo — must be
+committed/archived for the bundle.
+
+---
+
+## Study build cont'd: repos pinned + T3 (2026-06-21)
+
+- `study-harness/` git-init'd + committed (29f66e6): launcher, metrics, prompts; run outputs
+  gitignored. `CredibleCompilationReproCases` repo created (708b1ac): per-finding layout +
+  template. Both local (not pushed).
+- `metrics_parse.py` now captures the per-session agent `model` (reproducibility pin).
+- Prompts added: `prompts/t2.md` (round-trip), `prompts/t3.md` (parser totality).
+- **T3 (text→parse) v1** — `Harness/T3.lean`: mutates real livermore `.w` seeds + random text into
+  `parseProgram`, oracle = totality (return ok/error, never panic/hang). Validated: 2700 parses on
+  the sample all returned (12 seeds valid, 311 mutations parsed, 2389 rejected, 0 random accepted,
+  no panic) — parser robust on the sample. Panic-detecting (offending input → /tmp/t3_current.w);
+  hang-detection (subprocess timeout) is the documented extension.
+
+Built so far: T1 (co-sim), T2 v1 (round-trip), T3 v1 (parser totality), full orchestration +
+docs. Remaining: T4 (Csmith gen + ref-C + EMI), T4c finish, T2 coverage, T3 hang-detection.
+
+---
+
+## Study build: T4 differential (int + float) (2026-06-21)
+
+**T4a (differential) v1** — `stress/t4_gen.py` (Csmith-style, int **and float**, well-defined:
+guarded div, masked shifts, two's-complement wrap, bounded float magnitudes, positive divisors →
+no inf/NaN) emits matched `.w` + `.c` from one shared AST; `stress/t4_run.py` compiles `.w` with
+the verified compiler + `.c` with `cc`, runs both, compares token-wise — **ints exact, floats
+TOLERANT**. Validated: 0 divergences / 40 seeds on the correct (dev) compiler.
+
+Design correction (per feedback): **FMA fusion and reassociation produce CORRECT results that
+differ only in the bottom bits** — so float must be compared *tolerantly*, NOT bit-exact or
+ULP-amplified (those would flag legitimate optimizations). My earlier "amplify to catch
+FMA/reassoc as unsound-axiom bugs" plan was wrong and is removed; T4a catches *gross* float
+miscompiles (wrong instruction / control-flow / regalloc), and subtle bottom-bit float-axiom
+questions belong to the RQ1a audit (inspection), not differential testing. Also fixed a generator
+bug found en route: unbounded `intToFloat(int_expr)` could inject ~1e17 floats → `floatToInt`
+overflow where ARM `fcvtzs` saturates but a C cast is UB (spurious divergence); bounded with `%100`.
+
+Built: T1, T2 v1, T3 v1, **T4a v1**, orchestration, docs. Remaining: T4b (cert-failure harvest),
+T4c finish (cert mutation), EMI layer on T4, T2/T3 coverage extensions.
+
+---
+
+## Study build: T4b/T4c/EMI wired + baseline port (2026-06-21)
+
+The remaining T4 sub-experiments largely already existed as built exes:
+- **T4b** (cert-failure harvest): `stress/t4b_harvest.py` wires the existing `certaudit` exe to
+  the T4 generator (run passes on generated programs, collect REJECTED for RQ4/RQ5 adjudication).
+  Tested: 0 rejections on the hardened dev tree.
+- **T4c** (cert mutation): existing `certmutate` exe + `stress/soundness_campaign.sh` (corrupt a
+  cert, require checker REJECT; ACCEPT-with-divergent-output = RQ4b soundness hole; equivalence-
+  preserving ACCEPTs counted, not bugs).
+- **EMI**: existing `emi` exe + `stress/emi_campaign.sh` (Orion/Athena dead-region mutants).
+- `study-harness/prompts/t4.md` — T4 session prompt covering T4a/b/c + EMI.
+
+**Baseline port:** copied T1Branch/T1Stack/T1Array/T2/T3 + t4_gen/t4_run/t4b_harvest into the
+quarantined subject; all Lean harnesses compile there; T4a runs (built the baseline `compiler`).
+
+**Demonstrated limitation (good methodology story):** T4a on the baseline = 0 divergences, because
+the generator must mask shift amounts `& 63` (unmasked shift is UB in C), so differential testing
+**structurally cannot reach the shift bug** (amount ≥64). That bug is caught by T1 co-sim
+(model+machine) and by T4c (out-of-distribution mutation) — concretely why multiple techniques are
+needed. Cert/EMI exes still need a baseline build (subject has only `compiler`) for T4b/c on-subject.
+
+Study instruments now built: T1, T2, T3, T4a, T4b, T4c, EMI + full orchestration + docs +
+reproducibility record. Remaining = documented extensions (T2/T3 coverage, EMI-float, baseline
+exe build).
+
+---
+
+## Adjudication: add the locus axis (compiler vs testing-infrastructure) (2026-06-21)
+
+Confirmed (grep): the AST→text printer `Program.toString`/`Stmt.toString` is **display-only — not
+on the compile path** (compilation is text→AST→asm, parser-only) and was never debugged against
+the parser. So **T2 depends on undebugged AST pretty-printing** — true. Its findings are real but
+non-shipped.
+
+Added a second, orthogonal adjudication axis to the protocol (§8) — **locus**, recorded alongside
+the RQ class on every finding:
+- **compiler-shipped** — trusted/shipped path (model, parser, on-path asm printer, checker, passes).
+- **compiler-debug** — a compiler component NOT shipped (the AST→text display printer → T2's findings).
+- **testing-infrastructure** — harness/generator/oracle (e.g. the t4_gen intToFloat overflow; the
+  cbnz/cset/x0 out-of-distribution cases) — fixed in the harness, **excluded from compiler-defect counts**.
+- **not-a-bug** — correct behavior mis-flagged (FMA bottom-bit float diff).
+Threaded through §9 audit record, all four prompt FINDINGS formats, and the ReproCases META
+template (shift-bug-t1 marked compiler-shipped). Keeps the compiler-defect data honest.
+
+---
+
+## AST→text pretty-printer: fixed to round-trip (2026-06-21)
+
+Tested `Program.toString`/`Stmt.toString` against the 24 Livermore benchmarks (parse → print →
+re-parse → re-print, require the print∘parse fixpoint; `Harness/T2Bench.lean`). All 24 failed; the
+printer (a display-only aid never used in the compile path text→AST→asm, hence never debugged
+against the parser) emitted syntax the parser rejects. **Fixed** in `WhileLang.lean`:
+- var declarations: per-line `var x:int;` blocks → ONE comma-separated `var x:int, y:int;` block;
+- **array declarations were omitted entirely** → now emit `array a[N]:ty, ...;`;
+- `if b then … else …` → `if b { … } else { … }`;  `while b do …` → `while b { … }`.
+Now **24/24 benchmarks round-trip**, and random parser-reachable ASTs round-trip (300/300).
+Characterized one non-bug: `SBool.lit true/false` is **parser-unreachable** (Parser desugars
+`true→(0==0)`, `false→(0!=0)`), so the printer's `true`/`false` display is correct and the round-trip
+generator (`Harness/T2.lean`) was pointed at parser-reachable ASTs (drop `SBool.lit`).
+Display-only change: full `lake build` green (3139 jobs, 0 sorry), no proof impact. This also
+resolves the T2 study findings (was compiler-debug, now fixed) — T2 can test deeper round-tripping.

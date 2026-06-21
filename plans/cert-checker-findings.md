@@ -642,3 +642,114 @@ resolved:
 | RegAlloc completeness | 2 rare cases open (occupant-tracking; bool coverage) |
 | BoundsOpt | bounds-check elision **active** (Phase 6 `verifiedBoundsSafe`); `bounds_preservation` is a general cert condition that passes |
 | Performance | O(n^2.5) checker; pipeline schedule fixed ×4 LICM |
+
+---
+
+## T1 — executable opsem co-simulation (asm model vs local arm64 machine)
+
+T1 generates random ARM instruction sequences, runs them through an **executable
+evaluator** of the operational semantics (`Harness/ArmExec.lean`: `execStep`, proven
+sound w.r.t. the relational `ArmStep` — `execStep_sound`/`execRun_sound`, 0 sorry),
+and against the **same machine code** the compiler prints (`renderAsmBody` → assemble
+with `cc` → run on this arm64 box). Final register/flag state is diffed. `execStep`
+covers the full deterministic ISA: integer/shift/logical, cmp/cset, cbz/cbnz/bCond/branch,
+ldr/str, array memory, and all native float arms.
+
+**Validated (0 false positives on the correct model):** integer+shift+logical (200 seqs),
+cmp/cset flag semantics (200), forward-branch control flow with cbz (200).
+**Catches the shift bug** on the May-7 baseline: every witness `model=0 machine=<masked>`
+(unmasked `<<<` zeroes results ≥64-bit shift; the machine masks). Panic-safety: the
+unmasked model is *non-computable* on astronomically-large shift amounts (`Nat.shiftl
+exponent too big`) — T1 sources shift amounts from bounded registers (still ≥64, so the
+bug fires) to keep the evaluator total.
+
+### Findings T1 surfaced
+
+1. **Float arithmetic is opaque / axiomatized — co-simulation is fundamentally N/A.**
+   `FloatBinOp.eval`, `FloatCmpOp.eval`, `intToFloatBv`, `floatToIntBv`, and the float
+   unary ops are all `opaque` (Core.lean:308–334; comment line 42: "Float operations are
+   opaque/uninterpreted in proofs"). The model never pins float ops to concrete IEEE
+   semantics — only abstract axioms (e.g. `fadd_comm`). Consequence: the **native float
+   ISA is a trust assumption delegated to the hardware**, outside what translation-
+   validation / co-simulation can check. (`execStep`'s float arms are verified against
+   `ArmStep` but evaluate to a junk default, so they cannot be co-simulated — by design,
+   not a harness bug.) Paper-relevant: the credible-compilation guarantee does **not**
+   extend to floating-point numeric behavior.
+
+> **Status of findings 2–4 below: OPEN — surfaced by the instrument, not adjudicated here.**
+> These are candidate discrepancies between the asm printer and the relational model that
+> T1 exposed while being validated. Whether each is a *real* miscompile or *unreachable*
+> because codegen never emits the triggering input is a question for the testing experiment
+> / ground-truth establishment, done deliberately and kept out of the agents' view — **not**
+> resolved during harness construction. The only thing done here is *neutralizing* each so
+> T1 has 0 false positives on the correct model (necessary instrument validation).
+
+2. **Printer renders `cbnz` as `cbnz w0` — hardcodes register x0 and 32-bit width**
+   (CodeGen.lean `.cbnz _rn target => "cbnz w0, ..."`, note `_rn` is ignored). The model
+   `ArmStep.cbnz_*` tests `s.regs rn : BitVec 64` (the actual operand, full width). T1 fed
+   arbitrary registers / 64-bit values (e.g. `0x1_0000_0000`: w0=0 but x0≠0) and the branch
+   went opposite ways. By contrast `.cbz` renders `cbz xN` (full register, honored) and
+   matched for all inputs. **Open:** can codegen ever emit cbnz on a non-x0 register, or on
+   an x0 holding a value wider than 32 bits?
+
+3. **Printer renders `cset` as `cset w0` — hardcodes the destination to x0/w0**
+   (`.cset _rd c => "cset w0, ..."`). The model writes `rd`; the printer writes x0. T1
+   generating `cset` with arbitrary `rd` diverges. **Open:** can codegen ever emit cset to a
+   destination other than x0?
+
+### Memory co-simulation (implemented + validated)
+- **Stack memory (ldr/str)** — `Harness/T1Stack.lean`: offsets in the 96–159 frame slice
+  (allocated-but-unused by the save prologue), pre-zeroed (`stp xzr,xzr`) to match the
+  model's zero-init stack. **0 divergences / 200 seqs.**
+- **Array memory (arrLd/arrSt)** — `Harness/T1Array.lean`: arrays are `.comm _arr_{name}`
+  globals (BSS-zero, matching zero-init `arrayMem`); index regs held to 0..15 (in bounds).
+  **0 divergences / 200 seqs.**
+
+4. **Printer uses x0 as adrp address-scratch in arrLd/arrSt** (`.arrLd dst arr idxReg =>
+   "adrp x0,_arr_{arr}@PAGE; add x0,x0,...; ldr dst,[x0,idx,lsl #3]"`). This **clobbers x0**,
+   which the relational model never reflects (arrLd only writes `dst`). To validate the
+   instrument, T1 excludes x0 from the array diff/operands. **Open:** can codegen ever keep
+   a live value in x0 across an array access (→ a real clobber)?
+
+### T1 co-simulation coverage summary
+The executable opsem now co-simulates the **entire concrete (non-opaque) ISA** the compiler
+emits: integer/shift/logical, cmp/cset flags, forward-branch control (cbz), stack memory, and
+array memory — each validated at 0 false positives on the correct model, with the shift bug
+caught on the baseline. The only ISA surface outside co-simulation is **float**, by design
+(opaque/axiomatized — finding 1, a trust assumption).
+
+---
+
+## T2 — AST round-trip (`Harness/T2.lean`, v1: int subset)
+
+Oracle = string idempotence `print = print∘parse∘print` (the AST carries `Float`, no lawful
+structural eq). v1 generates type-correct int-subset `Program`s, runs `Program.toString` →
+`parseProgram` → `toString`, diffs. **STATUS OPEN — surfaced by the instrument, not adjudicated.**
+
+T2 immediately surfaced that the display printer (`Program.toString`/`Stmt.toString`) is **out of
+sync with the parser's concrete syntax** — a cascade of candidate RQ3 discrepancies:
+1. **var block:** printer emits one `var x : ty;` line *per* decl; parser wants a single
+   comma-separated block (`var a:int, b:int;`). Multi-decl programs don't parse.
+2. **if/else:** printer emits `if b then … else …`; parser wants `if b { … } else { … }` (or
+   `if b goto L`).
+3. **while:** printer emits `while b do …`; parser wants `while b { … }`.
+
+**Verified root cause (locus = compiler-debug).** Grep confirms `Program.toString`/`Stmt.toString`/
+`SExpr.toString` are *only* `ToString`/display instances — **nothing on the compile path uses
+them** (compilation is text→AST→TAC→asm, i.e. parser-only). So the AST→text printer is a
+display/debug aid that was **never used in compilation and never debugged against the parser**.
+These findings are therefore **locus = compiler-debug** (a real but non-shipped defect, *not* a
+`real-miscompile`) — the shipped text interface is the parser (T3). **Implication for T2's depth:**
+fixing the display printer to match the parser would unblock T2 to test deeper expression/operator-
+precedence round-tripping; otherwise T2 needs a separate concrete-syntax printer targeting the
+parser grammar. v1 is a working detector regardless. (Adjudication is post-hoc — see protocol §8
+locus axis.)
+
+**UPDATE — FIXED (2026-06-21).** The display printer was made faithful: ONE comma-separated `var`
+block, array declarations now emitted (were dropped), and `if {…} else {…}` / `while {…}` instead
+of `then/else` / `do`. **All 24 Livermore benchmarks now round-trip** (`Harness/T2Bench.lean`), and
+random parser-reachable ASTs round-trip 300/300. `SBool.lit true/false` confirmed parser-unreachable
+(parser desugars to `0==0`/`0!=0`) — the printer's `true`/`false` is correct; the round-trip
+generator was pointed at parser-reachable ASTs. Display-only change → full build green (0 sorry).
+So this RQ3/compiler-debug finding is **resolved**; T2 now exercises deeper expression/precedence
+round-tripping rather than tripping on the surface syntax.

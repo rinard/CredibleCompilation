@@ -350,6 +350,11 @@ where
       let nextFcmp := match instr with | .fcmpR .. => true | _ => false
       lines ++ ppInstrsAux lbl nextFcmp rest
 
+/-- Harness hook (T1): render ArmInstr list to asm via the verified printer. -/
+def renderAsmBody (instrs : List ArmInstr) : List String :=
+  ppInstrs (fun n => s!".L{n}") instrs
+
+
 -- ============================================================
 -- § 2b. VarLayout construction
 -- ============================================================
