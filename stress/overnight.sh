@@ -3,7 +3,7 @@
 # logs only ANOMALIES (miscompiles, compile/runtime failures, soundness holes) to
 # stress/overnight.log. Robust: continues past any single error. Portable timeout
 # (no coreutils `timeout` on macOS).
-ROOT="/Users/mr/CredibleCompilation"
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 C="$ROOT/stress/run_to.sh 120 $ROOT/.lake/build/bin/compiler"
 CM="$ROOT/stress/run_to.sh 120 $ROOT/.lake/build/bin/certmutate"
 EMI="$ROOT/stress/run_to.sh 120 $ROOT/.lake/build/bin/emi"

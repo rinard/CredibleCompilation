@@ -4,7 +4,7 @@
 # Novel (pass, sub-check) combinations get the program saved for investigation.
 # Also does a lighter differential (miscompile) + soundness check periodically.
 # Logs to stress/certfuzz.log; combo tally in stress/certfuzz_combos.txt.
-ROOT="/Users/mr/CredibleCompilation"
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 C="$ROOT/.lake/build/bin/compiler"
 CA="$ROOT/.lake/build/bin/certaudit"
 CM="$ROOT/.lake/build/bin/certmutate"

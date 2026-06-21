@@ -4,7 +4,7 @@
 # oracle) = miscompile. Also flags While compile/run failures and cert rejections.
 # Usage: csmith_campaign.sh <count> [start_seed]
 set -uo pipefail
-ROOT="/Users/mr/CredibleCompilation"
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 C="$ROOT/stress/run_to.sh 120 $ROOT/.lake/build/bin/compiler"
 CA="$ROOT/stress/run_to.sh 120 $ROOT/.lake/build/bin/certaudit"
 GEN="$ROOT/stress/csmith_gen.py"

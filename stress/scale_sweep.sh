@@ -3,7 +3,7 @@
 # whether While output matches C. Stops after first failure (plus a couple beyond).
 # Usage: scale_sweep.sh <kind> <sizes...>
 set -uo pipefail
-ROOT="/Users/mr/CredibleCompilation"
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 COMPILER="$ROOT/stress/run_to.sh 120 $ROOT/.lake/build/bin/compiler"
 RT="$ROOT/Compiler/runtime.c"
 TMP=$(mktemp -d); trap "rm -rf $TMP" EXIT

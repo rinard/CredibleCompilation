@@ -5,7 +5,7 @@
 # program's, the checker accepted a non-refinement => SOUNDNESS HOLE.
 # Usage: soundness_campaign.sh <dir-with-.w | --rand N>
 set -uo pipefail
-ROOT="/Users/mr/CredibleCompilation"
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 CM="$ROOT/stress/run_to.sh 120 $ROOT/.lake/build/bin/certmutate"
 RT="$ROOT/Compiler/runtime.c"
 GEN="$ROOT/stress/csmith_gen.py"

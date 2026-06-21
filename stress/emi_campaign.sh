@@ -5,7 +5,7 @@
 #   - every mutant MUST produce identical output to the seed (dead code never runs).
 # Divergence — especially the sentinel [EMILEAK] appearing — is a compiler bug.
 set -uo pipefail
-ROOT="/Users/mr/CredibleCompilation"
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 C="$ROOT/stress/run_to.sh 120 $ROOT/.lake/build/bin/compiler"
 EMI="$ROOT/stress/run_to.sh 120 $ROOT/.lake/build/bin/emi"
 SEEDDIR="$ROOT/stress/t"

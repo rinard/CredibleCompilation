@@ -2,7 +2,7 @@
 # Run the SPE exhaustive operator×boundary-operand enumeration in chunks (each a
 # small, fast-compiling program), diffing While vs C. Pinpoints any bad combo.
 set -uo pipefail
-ROOT="/Users/mr/CredibleCompilation"
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 C="$ROOT/stress/run_to.sh 120 $ROOT/.lake/build/bin/compiler"; GEN="$ROOT/stress/spe_gen.py"
 NCH="${1:-16}"; D=$(mktemp -d); trap "rm -rf $D" EXIT
 ok=0; bad=0

@@ -5,7 +5,7 @@
 # already matches). A divergence means either the optimizer/codegen miscompiled
 # the rewritten shape or the certificate checker accepted an unsound transform.
 set -uo pipefail
-ROOT="/Users/mr/CredibleCompilation"
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 C="$ROOT/stress/run_to.sh 120 $ROOT/.lake/build/bin/compiler"
 EMI="$ROOT/stress/run_to.sh 120 $ROOT/.lake/build/bin/emi"
 SEEDDIR="$ROOT/stress/t"
