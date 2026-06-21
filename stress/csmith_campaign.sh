@@ -5,15 +5,15 @@
 # Usage: csmith_campaign.sh <count> [start_seed]
 set -uo pipefail
 ROOT="/Users/mr/CredibleCompilation"
-C="$ROOT/.lake/build/bin/compiler"
-CA="$ROOT/.lake/build/bin/certaudit"
+C="$ROOT/stress/run_to.sh 120 $ROOT/.lake/build/bin/compiler"
+CA="$ROOT/stress/run_to.sh 120 $ROOT/.lake/build/bin/certaudit"
 GEN="$ROOT/stress/csmith_gen.py"
 N="${1:-100}"; START="${2:-1}"
 D=$(mktemp -d); trap "rm -rf $D" EXIT
 pass=0; diff=0; wfail=0; cfail=0; rej=0
 for s in $(seq "$START" $((START+N-1))); do
   python3 "$GEN" "$s" "$D/p" ${GENMODE:-} || { echo "GEN-FAIL $s"; continue; }
-  if ! "$C" "$D/p.w" -o "$D/w" 2>"$D/we"; then
+  if ! $C "$D/p.w" -o "$D/w" 2>"$D/we"; then
     wfail=$((wfail+1)); echo "WHILE-COMPILE-FAIL seed=$s: $(head -1 $D/we)"; continue
   fi
   wout=$("$D/w" 2>&1); wrc=$?
@@ -30,7 +30,7 @@ for s in $(seq "$START" $((START+N-1))); do
   pass=$((pass+1))
   # cert audit: flag any rejection (silently-dropped optimization) on random input
   if [ -n "${CHECKCERT:-}" ]; then
-    rc=$("$CA" "$D/p.w" 2>/dev/null | grep -c "REJECTED")
+    rc=$($CA "$D/p.w" 2>/dev/null | grep -c "REJECTED")
     [ "$rc" -gt 0 ] && { rej=$((rej+1)); echo "CERT-REJECT seed=$s ($rc)"; cp "$D/p.w" "$ROOT/stress/csmith_certrej_$s.w"; }
   fi
 done

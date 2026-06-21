@@ -6,7 +6,7 @@
 # Usage: soundness_campaign.sh <dir-with-.w | --rand N>
 set -uo pipefail
 ROOT="/Users/mr/CredibleCompilation"
-CM="$ROOT/.lake/build/bin/certmutate"
+CM="$ROOT/stress/run_to.sh 120 $ROOT/.lake/build/bin/certmutate"
 RT="$ROOT/Compiler/runtime.c"
 GEN="$ROOT/stress/csmith_gen.py"
 D=$(mktemp -d); trap "rm -rf $D" EXIT
@@ -14,7 +14,7 @@ D=$(mktemp -d); trap "rm -rf $D" EXIT
 run_one() {  # $1 = .w file
   local w="$1" name; name=$(basename "$w" .w)
   rm -f "$D"/*.s
-  local out; out=$("$CM" "$w" "$D" 2>&1)
+  local out; out=$($CM "$w" "$D" 2>&1)
   local acc rej
   acc=$(echo "$out" | grep -oE "accepted=[0-9]+" | cut -d= -f2)
   rej=$(echo "$out" | grep -oE "rejected=[0-9]+" | cut -d= -f2)

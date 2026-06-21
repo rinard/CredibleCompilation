@@ -3,7 +3,7 @@
 # small, fast-compiling program), diffing While vs C. Pinpoints any bad combo.
 set -uo pipefail
 ROOT="/Users/mr/CredibleCompilation"
-C="$ROOT/.lake/build/bin/compiler"; GEN="$ROOT/stress/spe_gen.py"
+C="$ROOT/stress/run_to.sh 120 $ROOT/.lake/build/bin/compiler"; GEN="$ROOT/stress/spe_gen.py"
 NCH="${1:-16}"; D=$(mktemp -d); trap "rm -rf $D" EXIT
 ok=0; bad=0
 for k in $(seq 0 $((NCH-1))); do

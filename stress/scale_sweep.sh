@@ -4,7 +4,7 @@
 # Usage: scale_sweep.sh <kind> <sizes...>
 set -uo pipefail
 ROOT="/Users/mr/CredibleCompilation"
-COMPILER="$ROOT/.lake/build/bin/compiler"
+COMPILER="$ROOT/stress/run_to.sh 120 $ROOT/.lake/build/bin/compiler"
 RT="$ROOT/Compiler/runtime.c"
 TMP=$(mktemp -d); trap "rm -rf $TMP" EXIT
 kind="$1"; shift
@@ -14,7 +14,7 @@ for n in "$@"; do
   python3 "$ROOT/stress/gen_scale.py" "$kind" "$n" "$stem"
   # compile while -> asm (capture stage markers for arm instr count + total time)
   t0=$(python3 -c 'import time;print(time.time())')
-  if ! "$COMPILER" "$stem.w" -S "$stem.s" >"$stem.log" 2>&1; then
+  if ! $COMPILER "$stem.w" -S "$stem.s" >"$stem.log" 2>&1; then
     comp_s=$(python3 -c "import time;print(f'{time.time()-$t0:.2f}')")
     note=$(grep -iE "error|fail|exceed|not well" "$stem.log" | head -1 | cut -c1-50)
     printf "%-6s %-7s %-10s %-9s %-8s %-10s %s\n" "$kind" "$n" "$comp_s" "-" "-" "COMPILE-FAIL" "$note"

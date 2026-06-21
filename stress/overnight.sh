@@ -4,9 +4,9 @@
 # stress/overnight.log. Robust: continues past any single error. Portable timeout
 # (no coreutils `timeout` on macOS).
 ROOT="/Users/mr/CredibleCompilation"
-C="$ROOT/.lake/build/bin/compiler"
-CM="$ROOT/.lake/build/bin/certmutate"
-EMI="$ROOT/.lake/build/bin/emi"
+C="$ROOT/stress/run_to.sh 120 $ROOT/.lake/build/bin/compiler"
+CM="$ROOT/stress/run_to.sh 120 $ROOT/.lake/build/bin/certmutate"
+EMI="$ROOT/stress/run_to.sh 120 $ROOT/.lake/build/bin/emi"
 GEN="$ROOT/stress/csmith_gen.py"
 RT="$ROOT/Compiler/runtime.c"
 LOG="$ROOT/stress/overnight.log"
@@ -28,7 +28,7 @@ while [ "$s" -lt "$MAXSEED" ]; do
   s=$((s+1))
   mode=""; [ $((s % 3)) -eq 0 ] && mode="boundary"
   python3 "$GEN" "$s" "$D/p" $mode 2>/dev/null || continue
-  if ! run_to "$TMO" "$C" "$D/p.w" -o "$D/w" 2>"$D/we"; then
+  if ! run_to "$TMO" $C "$D/p.w" -o "$D/w" 2>"$D/we"; then
     # distinguish timeout (too big) from real failure: re-check small marker
     if grep -qiE "error|fail" "$D/we"; then
       wfail=$((wfail+1)); log "WHILE-COMPILE-FAIL seed=$s mode=$mode: $(head -1 $D/we)"
@@ -51,7 +51,7 @@ while [ "$s" -lt "$MAXSEED" ]; do
   # behaviour-changing mutations; an accept whose codegen output diverges = hole)
   if [ $((s % 10)) -eq 0 ]; then
     rm -f "$D"/*.s
-    out=$(run_to "$TMO" "$CM" "$D/p.w" "$D" 2>/dev/null)
+    out=$(run_to "$TMO" $CM "$D/p.w" "$D" 2>/dev/null)
     if echo "$out" | grep -q '^ACCEPT'; then
       [ -f "$D/correct.s" ] && cc -o "$D/cor" "$D/correct.s" "$RT" 2>/dev/null && O=$("$D/cor" 2>&1) || O="__nocorrect__"
       while read -r f; do

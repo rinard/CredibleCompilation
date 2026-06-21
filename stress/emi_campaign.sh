@@ -6,8 +6,8 @@
 # Divergence — especially the sentinel [EMILEAK] appearing — is a compiler bug.
 set -uo pipefail
 ROOT="/Users/mr/CredibleCompilation"
-C="$ROOT/.lake/build/bin/compiler"
-EMI="$ROOT/.lake/build/bin/emi"
+C="$ROOT/stress/run_to.sh 120 $ROOT/.lake/build/bin/compiler"
+EMI="$ROOT/stress/run_to.sh 120 $ROOT/.lake/build/bin/emi"
 SEEDDIR="$ROOT/stress/t"
 OUT="$ROOT/stress/emi"; rm -rf "$OUT"; mkdir -p "$OUT"
 TMP=$(mktemp -d); trap "rm -rf $TMP" EXIT
@@ -17,18 +17,18 @@ for seed in "$SEEDDIR"/int_*.w "$SEEDDIR"/ctl_*.w "$SEEDDIR"/arr_*.w "$SEEDDIR"/
   [ -f "$seed" ] || continue
   name=$(basename "$seed" .w)
   # seed output
-  if ! "$C" "$seed" -o "$TMP/seed" 2>/dev/null; then continue; fi
+  if ! $C "$seed" -o "$TMP/seed" 2>/dev/null; then continue; fi
   seedout=$("$TMP/seed" 2>&1)
   seeds=$((seeds+1))
   for mode in orion athena; do
-    res=$("$EMI" "$mode" "$seed" "$OUT" 2>&1)
+    res=$($EMI "$mode" "$seed" "$OUT" 2>&1)
     if echo "$res" | grep -q "^skip:"; then skipped=$((skipped+1)); continue; fi
     nd=$(echo "$res" | grep -oE "dead arms: [0-9]+" | grep -oE "[0-9]+")
     [ "${nd:-0}" = "0" ] && { nodead=$((nodead+1)); continue; }
     mut="$OUT/${name}_${mode}_all.w"
     [ -f "$mut" ] || continue
     mutants=$((mutants+1))
-    if ! "$C" "$mut" -o "$TMP/mut" 2>"$TMP/cerr"; then
+    if ! $C "$mut" -o "$TMP/mut" 2>"$TMP/cerr"; then
       cfail=$((cfail+1)); echo "COMPILE-FAIL $mode $name : $(head -1 $TMP/cerr)"; continue
     fi
     mutout=$("$TMP/mut" 2>&1)
