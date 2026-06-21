@@ -189,14 +189,19 @@ token-light one runs the full wall. The rate is a guess — **recalibrate from t
 The launcher enforces the session budget from wall-clock + a live output-token estimate; the
 per-fix ~30 min/170k is prompt guidance, not a separate hard gate.
 
-**Enforcement caveat (measured).** The agent CLI's stream-json reports per-event
-`usage.output_tokens` that badly *undercount* (streaming splits a message across events; extended-
-thinking tokens are unreported), and the authoritative `result` usage only appears on an *unkilled*
-completion — absent on every budgeted (killed) run. So **wall-clock is the reliable binding cap**;
-the output-token cap is a best-effort secondary gate, and recorded `output_tokens` is a **content-
-based estimate** (text + tool-call JSON ÷ 4, excludes thinking) tagged `output_tokens_source:
-estimated(content,excl-thinking)` — exact (`source: result`) only when a session finishes under
-budget. Treat token figures as estimates ±thinking; treat wall-clock as ground truth.
+**Enforcement: wall-clock ONLY (measured decision).** The agent CLI's stream-json per-event
+`usage.output_tokens` badly *undercounts* (streaming splits a message across ~3 events;
+extended-thinking tokens are unreported), and the authoritative `result` usage only appears on an
+*unkilled* completion — absent on every budgeted run. So there is **no token cap**: the single hard
+gate is `--max-wall-seconds`. `--max-output-tokens` is informational only.
+
+**Metrics are still recorded accurately on a killed run** (`metrics_parse.py` dedupes the streamed
+events by `message.id`): **`input_tokens`, `cache_creation/read_tokens`, `num_turns`, tool counts,
+`build_invocations`, `edit_attempts`, and `wall_seconds` are exact**; `output_tokens` is a labeled
+**content estimate** (text + tool JSON ÷ 4, excl thinking; `output_tokens_source`); `cost_usd` and
+`duration_ms` are only in the `result` event, so they are `null` on a killed run (flagged by
+`metrics_source`) — `wall_seconds` is the true duration regardless. Treat output tokens as an
+estimate ±thinking; everything else is accurate.
 
 **On L3 / total study budget (math).** No global cap to set — the four session budgets self-bound
 the total: `T1+T2+T3 (2 h, ~670k each) + T4 (12 h, ~4M)` = **~18 h wall serial** (or ~14 h if
