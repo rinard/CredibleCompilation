@@ -32,7 +32,10 @@ def genRandStr (s : UInt64) : Nat → List Char × UInt64
   | k+1 => let c := (charPool[s.toNat % charPool.size]?).getD 'x'
            let (rest, s') := genRandStr (lcg s) k; (c :: rest, s')
 
+def seedBase : IO Nat := do return ((← IO.getEnv "SEED_BASE").bind String.toNat?).getD 0
+
 def main : IO Unit := do
+  let base ← seedBase
   let dir : System.FilePath := "benchmarks/livermore"
   let entries ← (try dir.readDir catch _ => pure #[])
   let wpaths := entries.toList.filterMap (fun e =>
@@ -51,7 +54,7 @@ def main : IO Unit := do
 
   -- (b) mutational fuzz — every parse must RETURN (totality)
   let mut total := 0; let mut ok := 0; let mut err := 0
-  let mut s : UInt64 := 0x1234567
+  let mut s : UInt64 := UInt64.ofNat base + 0x1234567
   for c in seeds do
     for _ in [0:200] do
       let k := 1 + (s.toNat % 6)

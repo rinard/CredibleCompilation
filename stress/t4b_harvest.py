@@ -8,12 +8,13 @@ CERTAUDIT = os.path.join(ROOT, ".lake/build/bin/certaudit")
 GEN = os.path.join(ROOT, "stress/t4_gen.py")
 
 def main():
+    base = int(os.environ.get('SEED_BASE','0'))
     N = int(sys.argv[1]) if len(sys.argv) > 1 else 50
     if not os.path.exists(CERTAUDIT):
         print("build certaudit first: lake build certaudit"); sys.exit(2)
     d = tempfile.mkdtemp(prefix="t4b_")
     progs = rej = 0; by_pass = {}
-    for seed in range(N):
+    for seed in range(base, base + N):
         stem = os.path.join(d, f"t4b_{seed}")
         subprocess.run([sys.executable, GEN, str(seed), stem], check=True)
         try:

@@ -64,9 +64,12 @@ def genProgram (s : UInt64) : Program × UInt64 :=
   let (body, s') := genStmt s 3
   ({ decls := [("a", .int), ("b", .int), ("c", .int), ("d", .int)], body := body }, s')
 
+def seedBase : IO Nat := do return ((← IO.getEnv "SEED_BASE").bind String.toNat?).getD 0
+
 def main : IO Unit := do
+  let base ← seedBase
   let mut div := 0; let mut n := 0
-  for seed in [0:300] do
+  for seed in [base:base+300] do
     n := n + 1
     let s0 := lcg (UInt64.ofNat (seed + 1))
     let (prog, _) := genProgram s0

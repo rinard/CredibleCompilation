@@ -33,12 +33,13 @@ def run(cmd, timeout=30):
         return -1, "", "TIMEOUT"
 
 def main():
+    base = int(os.environ.get('SEED_BASE','0'))
     N = int(sys.argv[1]) if len(sys.argv) > 1 else 50
     if not os.path.exists(COMPILER):
         print(f"compiler missing: {COMPILER} — run `lake build compiler`"); sys.exit(2)
     d = tempfile.mkdtemp(prefix="t4_")
     div = comp_err = ran = 0
-    for seed in range(N):
+    for seed in range(base, base + N):
         stem = os.path.join(d, f"t4_{seed}")
         subprocess.run([sys.executable, GEN, str(seed), stem], check=True)
         rcw, _, sew = run([COMPILER, stem + ".w", "-o", stem + ".wbin"])

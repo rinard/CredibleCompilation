@@ -125,11 +125,14 @@ def runOne (dir : String) (seed : Nat) (nInstr : Nat) : IO (Option String) := do
         return some s!"DIVERGENCE seed={seed} {regName r}: model={m} machine={mach}\n  body:\n{bodyStr}"
     return none
 
+def seedBase : IO Nat := do return ((← IO.getEnv "SEED_BASE").bind String.toNat?).getD 0
+
 def main : IO Unit := do
+  let base ← seedBase
   let dir := "/tmp/t1"
   let _ ← IO.Process.output { cmd := "mkdir", args := #["-p", dir] }
   let mut div := 0; let mut n := 0
-  for seed in [0:200] do
+  for seed in [base:base+200] do
     n := n + 1
     match ← runOne dir seed 8 with
     | none => pure ()
