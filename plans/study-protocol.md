@@ -186,8 +186,17 @@ design.
 sustained ~670k output-tok/h. **T1/T2/T3** 2 h → ~1 h of tokens → **~670k out-tok**; **T4** 12 h →
 ~6 h of tokens → **~4M out-tok**. So a token-hungry session is cut at ~half its wall budget while a
 token-light one runs the full wall. The rate is a guess — **recalibrate from the first session**.
-The launcher enforces the session budget from the live transcript's output-token count + wall
-clock; the per-fix ~30 min/170k is prompt guidance to the agent, not a separate hard gate.
+The launcher enforces the session budget from wall-clock + a live output-token estimate; the
+per-fix ~30 min/170k is prompt guidance, not a separate hard gate.
+
+**Enforcement caveat (measured).** The agent CLI's stream-json reports per-event
+`usage.output_tokens` that badly *undercount* (streaming splits a message across events; extended-
+thinking tokens are unreported), and the authoritative `result` usage only appears on an *unkilled*
+completion — absent on every budgeted (killed) run. So **wall-clock is the reliable binding cap**;
+the output-token cap is a best-effort secondary gate, and recorded `output_tokens` is a **content-
+based estimate** (text + tool-call JSON ÷ 4, excludes thinking) tagged `output_tokens_source:
+estimated(content,excl-thinking)` — exact (`source: result`) only when a session finishes under
+budget. Treat token figures as estimates ±thinking; treat wall-clock as ground truth.
 
 **On L3 / total study budget (math).** No global cap to set — the four session budgets self-bound
 the total: `T1+T2+T3 (2 h, ~670k each) + T4 (12 h, ~4M)` = **~18 h wall serial** (or ~14 h if
