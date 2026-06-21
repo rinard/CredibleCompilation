@@ -164,6 +164,14 @@ built-in RQ7 check.
   - the stream-json transcript is tee'd live → `tail -f`, and `metrics_parse.py --follow` reads
     the *partial* transcript for a running tally of tokens / turns / build cycles and the mode
     markers as they pass.
+- **Hang safety (long-running / looping tests).** Optimizer passes and the checker can be
+  pathologically slow or non-terminating on adversarial inputs (observed: a `certaudit` that ran
+  ~35 h on one program). Two defenses: (1) the launcher runs the agent in its **own process group**
+  and kills the **whole group** at the wall-clock cap, so a hung tool child never orphans/runs on;
+  (2) the agent is instructed (prompts) to run every tool/compiled program under a **`timeout`** and
+  to record a timeout as a **candidate non-termination / pathological-slowness finding** (`locus:
+  compiler-shipped` — a pass or the checker; a *verified* checker should be total) rather than
+  retry it. A timeout is a finding, not a failure.
 
 ## 7. Stopping criteria — **budget-based: token cap OR time cap, whichever expires first**
 
