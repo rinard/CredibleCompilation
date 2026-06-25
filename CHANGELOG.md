@@ -4,6 +4,24 @@ Chronological record of what was built and why, to reconstruct the sequence of d
 
 ---
 
+## certaudit mirrors the production fixpoint driver (2026-06-25)
+
+`certaudit` (the cert tester invoked by `stress/t4b_harvest.py`) previously
+audited the flat once-through `standardPasses` list (LICM cluster unrolled
+exactly 4×). That diverged from the shipped driver
+`applyStandardPipelineFixpoint` (prologue `prefixPasses` → `licmClusterPasses`
+to a fixed point or 5 iterations → epilogue `suffixPasses`): the audit could
+never reach a 5th cluster iteration production may run, and it ground noop
+passes on already-converged programs.
+
+`auditPasses` rewritten to replicate the prologue/loop/epilogue structure with
+the same `p'.code == p.code` early-stop, so every certificate audited is one
+production actually checks, in the same order. Factored into `auditOnePass` /
+`auditPassList` / `auditClusterFixpoint`. ACCEPTED/REJECTED/`-diag` logging
+preserved, so `t4b_harvest.py`'s `REJECTED` scraping is unaffected.
+
+---
+
 ## Compiler performance: checker speedup (2026-04-26)
 
 End-to-end Livermore compile time **282.6 s → 139.8 s (2.0×)** by

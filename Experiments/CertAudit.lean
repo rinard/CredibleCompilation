@@ -104,28 +104,71 @@ def diagnoseAllTransitions (cert : ECertificate) : IO Unit := do
       | none => IO.println s!"    [all_trans] no instrCert at pc_t={pc_t}"
     | none => pure ()
 
-def auditPasses (tyCtx : TyCtx) (passes : List (String × (Prog → ECertificate)))
-    (diag : Bool) (p0 : Prog) : IO Prog := do
+/-- Audit a single pass: run it, log ACCEPTED / REJECTED (+ optional `-diag`
+    diagnostics) / rejected-but-noop, and return the (possibly unchanged)
+    program. Mirrors `applyPass`'s resilient semantics: a rejected pass is
+    skipped and the program is left as-is. -/
+def auditOnePass (tyCtx : TyCtx) (diag : Bool) (name : String)
+    (pass : Prog → ECertificate) (p : Prog) : IO Prog := do
+  let cert := { pass p with tyCtx := tyCtx }
+  let changed := cert.trans.code != p.code
+  match applyPass name tyCtx pass p with
+  | .ok p' =>
+    if p'.code != p.code then
+      IO.println s!"  {name}: ACCEPTED  {p.size} -> {p'.size}"
+    pure p'
+  | .error e =>
+    -- Only interesting when the pass actually proposed a change.
+    if changed then
+      IO.println s!"  {name}: REJECTED (proposed {p.size} -> {cert.trans.size})  {e}"
+      if diag then
+        diagnoseInvPreserved cert
+        diagnoseAllTransitions cert
+        if name == "Peephole" || name == "FMAFusion" || name == "RegAlloc" then dumpOrig cert
+    else
+      IO.println s!"  {name}: rejected-but-noop  {e}"
+    pure p
+
+/-- Audit a list of passes once, threading the program through. Logging mirror
+    of `applyPasses`. -/
+def auditPassList (tyCtx : TyCtx) (diag : Bool)
+    (passes : List (String × (Prog → ECertificate))) (p0 : Prog) : IO Prog := do
   let mut p := p0
   for (name, pass) in passes do
-    let cert := { pass p with tyCtx := tyCtx }
-    let changed := cert.trans.code != p.code
-    match applyPass name tyCtx pass p with
-    | .ok p' =>
-      if p'.code != p.code then
-        IO.println s!"  {name}: ACCEPTED  {p.size} -> {p'.size}"
-      p := p'
-    | .error e =>
-      -- Only interesting when the pass actually proposed a change.
-      if changed then
-        IO.println s!"  {name}: REJECTED (proposed {p.size} -> {cert.trans.size})  {e}"
-        if diag then
-          diagnoseInvPreserved cert
-          diagnoseAllTransitions cert
-          if name == "Peephole" || name == "FMAFusion" || name == "RegAlloc" then dumpOrig cert
-      else
-        IO.println s!"  {name}: rejected-but-noop  {e}"
+    p ← auditOnePass tyCtx diag name pass p
   return p
+
+/-- Audit `passes` repeatedly, stopping when the program code is unchanged after
+    a full iteration (fixed point) or `maxIter` iterations have run. Logging
+    mirror of `applyPassesUntilFixedOrN`. -/
+def auditClusterFixpoint (tyCtx : TyCtx) (diag : Bool)
+    (passes : List (String × (Prog → ECertificate))) (maxIter : Nat)
+    (p0 : Prog) : IO Prog := do
+  let mut p := p0
+  let mut done := false
+  for iter in [0:maxIter] do
+    if !done then
+      IO.println s!"  -- LICM cluster iteration {iter + 1}/{maxIter} --"
+      let p' ← auditPassList tyCtx diag passes p
+      if p'.code == p.code then
+        IO.println s!"  -- cluster fixed point reached after {iter + 1} iteration(s) --"
+        done := true
+      p := p'
+  return p
+
+/-- Audit the production pipeline (`applyStandardPipelineFixpoint`) pass-by-pass:
+    prologue (`prefixPasses`) once, then the LICM cluster to a fixed point
+    (≤ 5 iterations), then epilogue (`suffixPasses`) once. This mirrors the
+    shipped driver exactly, so every certificate audited is one production
+    actually checks, in the same order — including a 5th cluster iteration that
+    the flat unrolled `standardPasses` (4 unrolls) would never reach. -/
+def auditPasses (tyCtx : TyCtx) (diag : Bool) (p0 : Prog) : IO Prog := do
+  IO.println "  == prologue (prefixPasses) =="
+  let p ← auditPassList tyCtx diag (prefixPasses tyCtx) p0
+  IO.println "  == loop (licmClusterPasses, fixed point ≤ 5) =="
+  let p ← auditClusterFixpoint tyCtx diag (licmClusterPasses tyCtx) 5 p
+  IO.println "  == epilogue (suffixPasses) =="
+  auditPassList tyCtx diag (suffixPasses tyCtx) p
 
 def main (args : List String) : IO UInt32 := do
   let diag := args.contains "-diag"
@@ -166,7 +209,7 @@ def main (args : List String) : IO UInt32 := do
       let tyCtx := prog.tyCtx
       let tac := prog.compileToTAC
       IO.println s!"=== Cert audit: {inputFile}  (TAC size {tac.size}) ==="
-      let p ← auditPasses tyCtx (standardPasses tyCtx) diag tac
+      let p ← auditPasses tyCtx diag tac
       IO.println s!"final size: {p.size}"
       -- Also confirm verified codegen still succeeds on the result.
       match verifiedGenerateAsm tyCtx p with
