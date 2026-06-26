@@ -44,3 +44,22 @@ root = "Experiments.Emi"
 [[lean_exe]]
 name = "certmutate"
 root = "Experiments.CertMutate"
+
+# T1 co-simulation harnesses — built to NATIVE exes (`lake build t1 && ./.lake/build/bin/t1`),
+# never `lake env lean --run` (interpreted is too slow to finish a full sweep). Add a new
+# `[[lean_exe]]` here for any new harness (e.g. t1float) so it compiles too.
+[[lean_exe]]
+name = "t1"
+root = "Harness.T1"
+
+[[lean_exe]]
+name = "t1branch"
+root = "Harness.T1Branch"
+
+[[lean_exe]]
+name = "t1stack"
+root = "Harness.T1Stack"
+
+[[lean_exe]]
+name = "t1array"
+root = "Harness.T1Array"

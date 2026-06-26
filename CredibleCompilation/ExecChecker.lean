@@ -307,7 +307,7 @@ def BoolExpr.symEval (ss : SymStore) (inv : EInv) : BoolExpr → Option Bool
     | .lit va, .lit vb => some (op.eval va vb)
     | _, _ => none
   | .not e => e.symEval ss inv |>.map (!·)
-  | .fcmp _op _a _b => none  -- FloatCmpOp.eval is opaque; fall back to branchInfo
+  | .fcmp _op _a _b => none  -- symbolic fcmp operands don't reduce to literals here; fall back to branchInfo
   | .bexpr e =>
     match (e.substSym' ss).simplifyDeep (sdFuel inv) inv with
     | .blit b => some b
