@@ -52,9 +52,15 @@ while [ "$s" -lt "$MAXSEED" ]; do
   if [ $((s % 6)) -eq 0 ]; then
     if run_to "$TMO" "$C" "$D/p.w" -o "$D/w" 2>/dev/null; then
       wout=$(run_to "$TMO" "$D/w" 2>&1); wrc=$?
-      cc -O2 -w -o "$D/c" "$D/p.c" 2>/dev/null && cout=$("$D/c" 2>&1) || cout="$wout"
-      if [ "$wrc" -eq 0 ] && [ "$wout" != "$cout" ]; then
-        miscomp=$((miscomp+1)); log "*** MISCOMPILE seed=$s W=[$wout] C=[$cout]"; cp "$D/p.w" "$ROOT/stress/certfuzz_miscompile_$s.w"; cp "$D/p.c" "$ROOT/stress/certfuzz_miscompile_$s.c"
+      # Only compare when BOTH the While binary AND the C reference build and run
+      # cleanly. The old `|| cout="$wout"` set cout=wout whenever the C ref failed to
+      # build or exited non-zero, which made the `!=` guard unfalsifiable — nulling the
+      # oracle on exactly the inputs the reference could not run.
+      if cc -O2 -w -o "$D/c" "$D/p.c" 2>/dev/null; then
+        cout=$("$D/c" 2>&1); crc=$?
+        if [ "$wrc" -eq 0 ] && [ "$crc" -eq 0 ] && [ "$wout" != "$cout" ]; then
+          miscomp=$((miscomp+1)); log "*** MISCOMPILE seed=$s W=[$wout] C=[$cout]"; cp "$D/p.w" "$ROOT/stress/certfuzz_miscompile_$s.w"; cp "$D/p.c" "$ROOT/stress/certfuzz_miscompile_$s.c"
+        fi
       fi
     fi
   fi

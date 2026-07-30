@@ -2948,22 +2948,22 @@ theorem ArmSteps.one_then {prog : ArmProg} {s s' s'' : ArmState}
     (s.setArrayMem arr idx v).flags = s.flags := rfl
 
 -- Register inequality facts for simp
-@[simp] theorem ArmReg.x0_ne_x1 : (ArmReg.x0 == ArmReg.x1) = false := by native_decide
-@[simp] theorem ArmReg.x0_ne_x2 : (ArmReg.x0 == ArmReg.x2) = false := by native_decide
-@[simp] theorem ArmReg.x1_ne_x0 : (ArmReg.x1 == ArmReg.x0) = false := by native_decide
-@[simp] theorem ArmReg.x1_ne_x2 : (ArmReg.x1 == ArmReg.x2) = false := by native_decide
-@[simp] theorem ArmReg.x2_ne_x0 : (ArmReg.x2 == ArmReg.x0) = false := by native_decide
-@[simp] theorem ArmReg.x2_ne_x1 : (ArmReg.x2 == ArmReg.x1) = false := by native_decide
-@[simp] theorem ArmReg.beq_self (r : ArmReg) : (r == r) = true := by cases r <;> native_decide
+@[simp] theorem ArmReg.x0_ne_x1 : (ArmReg.x0 == ArmReg.x1) = false := by decide
+@[simp] theorem ArmReg.x0_ne_x2 : (ArmReg.x0 == ArmReg.x2) = false := by decide
+@[simp] theorem ArmReg.x1_ne_x0 : (ArmReg.x1 == ArmReg.x0) = false := by decide
+@[simp] theorem ArmReg.x1_ne_x2 : (ArmReg.x1 == ArmReg.x2) = false := by decide
+@[simp] theorem ArmReg.x2_ne_x0 : (ArmReg.x2 == ArmReg.x0) = false := by decide
+@[simp] theorem ArmReg.x2_ne_x1 : (ArmReg.x2 == ArmReg.x1) = false := by decide
+@[simp] theorem ArmReg.beq_self (r : ArmReg) : (r == r) = true := by cases r <;> decide
 
 -- FP register inequality facts for simp
-@[simp] theorem ArmFReg.d0_ne_d1 : (ArmFReg.d0 == ArmFReg.d1) = false := by native_decide
-@[simp] theorem ArmFReg.d0_ne_d2 : (ArmFReg.d0 == ArmFReg.d2) = false := by native_decide
-@[simp] theorem ArmFReg.d1_ne_d0 : (ArmFReg.d1 == ArmFReg.d0) = false := by native_decide
-@[simp] theorem ArmFReg.d1_ne_d2 : (ArmFReg.d1 == ArmFReg.d2) = false := by native_decide
-@[simp] theorem ArmFReg.d2_ne_d0 : (ArmFReg.d2 == ArmFReg.d0) = false := by native_decide
-@[simp] theorem ArmFReg.d2_ne_d1 : (ArmFReg.d2 == ArmFReg.d1) = false := by native_decide
-@[simp] theorem ArmFReg.beq_self (r : ArmFReg) : (r == r) = true := by cases r <;> native_decide
+@[simp] theorem ArmFReg.d0_ne_d1 : (ArmFReg.d0 == ArmFReg.d1) = false := by decide
+@[simp] theorem ArmFReg.d0_ne_d2 : (ArmFReg.d0 == ArmFReg.d2) = false := by decide
+@[simp] theorem ArmFReg.d1_ne_d0 : (ArmFReg.d1 == ArmFReg.d0) = false := by decide
+@[simp] theorem ArmFReg.d1_ne_d2 : (ArmFReg.d1 == ArmFReg.d2) = false := by decide
+@[simp] theorem ArmFReg.d2_ne_d0 : (ArmFReg.d2 == ArmFReg.d0) = false := by decide
+@[simp] theorem ArmFReg.d2_ne_d1 : (ArmFReg.d2 == ArmFReg.d1) = false := by decide
+@[simp] theorem ArmFReg.beq_self (r : ArmFReg) : (r == r) = true := by cases r <;> decide
 
 -- Helper: CodeAt on a flat list lifts to CodeAt on that list appended with a suffix.
 theorem CodeAt.liftToSuffix {pre suf : List ArmInstr} {startPC : Nat}

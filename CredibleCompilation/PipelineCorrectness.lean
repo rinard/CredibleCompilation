@@ -956,30 +956,24 @@ theorem compileProgramAst_total (prog : Program) (htcs : prog.wellFormed = true)
     exact generateAsm_total_with_passes prog htcs allPasses
 
 -- ============================================================
--- § 8. Phase 6 — ARM behavior exhaustion (SKELETON)
+-- § 8. Phase 6 — ARM behavior exhaustion
 -- ============================================================
 
 /-!
-## Phase 6 skeleton
+## Phase 6 — ARM behavior exhaustion (complete)
 
 The theorem statements in this section match the design at
 `plans/backward-jumping-octopus.md` § Phase 6 and
-`plans/backward-jumping-octopus-phase6-design.md`.  Every proof is
-currently `sorry`.  See the design doc for the proof-obligation
-dependency graph, LOC estimates, and discharge strategy.
+`plans/backward-jumping-octopus-phase6-design.md`.  All proofs here are
+**discharged** — this section contains no `sorry`/`admit` (confirmed by
+`#print axioms` on the capstones, which depend only on the two float trust
+axioms + the standard `propext`/`Classical.choice`/`Quot.sound`).
 
-Foundational pieces already landed on `main` (commit `94f4fe6`):
-  - `ArmStep_total_of_codeAt` — stuck-free on in-bounds PCs.
-  - `ArmStep_stuck_of_none` — stuck on out-of-bounds PCs.
-  - sdivR rule unconditional (design doc line 27).
-Plus, from older commits: `bodyPerPC_length_pos`, `ArmStepsN.single`,
-`ArmStepsN.refl_zero`.
-
-The single load-bearing missing lemma is `bodyFlat_branch_target_bounded`:
-every branch instruction in `r.bodyFlat` targets a PC ≤ `r.boundsS`.
-Probes for two representative cases (`.goto`, `.binop .div`) live in
-`CredibleCompilation/ArmSemantics.lean` after the `verifiedGenInstr_*`
-cluster (committed on the `phase6-prep` branch alongside this skeleton).
+The once "load-bearing missing" lemma `bodyFlat_branch_target_bounded`
+(every branch in `r.bodyFlat` targets a PC ≤ `r.boundsS`) is proven below,
+as is the capstone `arm_behavior_exhaustive` (every ARM execution lands in
+exactly one of {clean halt, div sentinel, bounds sentinel, divergence}) and
+its feeders (`pcMap_le_haltS`, `sentinel_stuck`, `arm_step_det`, …).
 -/
 
 section Phase6Skeleton
