@@ -1,4 +1,5 @@
 import Mathlib.Data.List.Nodup
+import CredibleCompilation.AsmEnc
 import CredibleCompilation.WhileLang
 import CredibleCompilation.Parser
 import CredibleCompilation.ConstPropOpt
@@ -198,18 +199,18 @@ private def ppInstr (lbl : Nat → String) (afterFcmp : Bool)
     (instr : ArmInstr) : List String :=
   match instr with
   | .mov rd n =>
-    [s!"  mov {ppReg rd}, #{n.toInt}"]
+    AsmEnc.render (.mov rd n)
   | .movR rd rn =>
     if rd == rn then [] else [s!"  mov {ppReg rd}, {ppReg rn}"]
   | .movz rd imm16 shift =>
-    if shift == 0 then [s!"  movz {ppReg rd}, #{imm16}"]
-    else [s!"  movz {ppReg rd}, #{imm16}, lsl #{shift}"]
+    AsmEnc.render (.movz rd imm16 shift)
   | .movk rd imm16 shift =>
-    [s!"  movk {ppReg rd}, #{imm16}, lsl #{shift}"]
+    AsmEnc.render (.movk rd imm16 shift)
   | .ldr rd off =>
-    [s!"  ldr {ppReg rd}, [sp, #{off}]"]
+    -- verified, encodability-checked load (legalizes over-ceiling offsets); see AsmEnc
+    AsmEnc.render (.ldr rd off)
   | .str rs off =>
-    [s!"  str {ppReg rs}, [sp, #{off}]"]
+    AsmEnc.render (.str rs off)
   | .addR rd rn rm =>
     [s!"  add {ppReg rd}, {ppReg rn}, {ppReg rm}"]
   | .subR rd rn rm =>
@@ -221,23 +222,24 @@ private def ppInstr (lbl : Nat → String) (afterFcmp : Bool)
   | .cmp rn rm =>
     [s!"  cmp {ppReg rn}, {ppReg rm}"]
   | .cmpImm rn imm =>
-    if imm.toInt ≤ 4095 then
-      [s!"  cmp {ppReg rn}, #{imm.toInt}"]
-    else
-      -- Large immediate: load into x0, then compare with register
-      [s!"  mov x0, #{imm.toInt}", s!"  cmp {ppReg rn}, x0"]
-  | .cset _rd c =>
-    [s!"  cset w0, {if afterFcmp then ppCondFloat c else ppCond c}"]
+    -- verified, encodability-checked compare (imm12, else legalize via ldr =imm); see AsmEnc
+    AsmEnc.render (.cmpImm rn imm)
+  | .cset rd c =>
+    -- Model sets the named register `rd` (not always x0), 64-bit. Emit into
+    -- `rd`; `cset Xd, cond` writes 0/1 zero-extended, matching `setReg rd`.
+    [s!"  cset {ppReg rd}, {if afterFcmp then ppCondFloat c else ppCond c}"]
   | .cbz rn target =>
     [s!"  cbz {ppReg rn}, {lbl target}"]
-  | .cbnz _rn target =>
-    [s!"  cbnz w0, {lbl target}"]
-  | .andImm _rd _rn imm =>
-    [s!"  and w0, w0, #{imm.toInt}"]
+  | .cbnz rn target =>
+    -- Model tests the full 64-bit register `rn`; emit `cbnz Xn` (not `w0`),
+    -- which tests all 64 bits and the register the model names.
+    [s!"  cbnz {ppReg rn}, {lbl target}"]
+  | .andImm rd rn imm =>
+    AsmEnc.render (.andImm rd rn imm)
   | .andR rd rn rm =>
     [s!"  and {ppReg rd}, {ppReg rn}, {ppReg rm}"]
-  | .eorImm _rd _rn imm =>
-    [s!"  eor w0, w0, #{imm.toInt}"]
+  | .eorImm rd rn imm =>
+    AsmEnc.render (.eorImm rd rn imm)
   | .orrR rd rn rm =>
     [s!"  orr {ppReg rd}, {ppReg rn}, {ppReg rm}"]
   | .eorR rd rn rm =>
@@ -276,9 +278,9 @@ private def ppInstr (lbl : Nat → String) (afterFcmp : Bool)
   | .fmovRR fd fn =>
     if fd == fn then [] else [s!"  fmov {ppFReg fd}, {ppFReg fn}"]
   | .fldr fd off =>
-    [s!"  ldr {ppFReg fd}, [sp, #{off}]"]
+    AsmEnc.render (.fldr fd off)
   | .fstr fs off =>
-    [s!"  str {ppFReg fs}, [sp, #{off}]"]
+    AsmEnc.render (.fstr fs off)
   | .faddR fd fn fm =>
     [s!"  fadd {ppFReg fd}, {ppFReg fn}, {ppFReg fm}"]
   | .fsubR fd fn fm =>
