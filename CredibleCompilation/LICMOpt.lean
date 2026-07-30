@@ -158,14 +158,42 @@ def buildTrans (prog : Prog) (hoistable : List (Nat × Nat × Var × Value)) : P
   let constsForHeader (h : Nat) : List TAC :=
     (hoistable.filter fun (h', _, _, _) => h' == h).map fun (_, _, x, v) => .const x v
   let replacedPCs := hoistable.map fun (_, pc, _, _) => pc
+  -- For each hoisted header `h`: its loop tail (max back-edge source) and inserted-const
+  -- count. The `count` consts occupy `[mapPC h - count, mapPC h - 1]` (the preheader) and
+  -- `mapPC h` is the header instruction after them. Placement rule for an edge `spc → h`:
+  --   * back-edge (source inside the loop, `h ≤ spc ≤ tail`): target `mapPC h` — SKIP the
+  --     preheader, so the hoisted consts run once, not once per iteration;
+  --   * entry/bypass edge (source outside `[h, tail]`, incl. a non-fall-through goto into
+  --     the header): target `mapPC h - count` — route THROUGH the preheader, so the hoisted
+  --     value is established on this path too.
+  -- Establishing the value on every entry path (not just the fall-through) is what lets the
+  -- existing certificate certify the hoist even when the header has a bypass entry — no
+  -- checker/proof change, just a better placement. Fall-through entries already pass through
+  -- the inline consts.
+  let headerInfo : List (Nat × Nat × Nat) :=
+    (countsPerHeader hoistable).map fun (h, count) =>
+      let tail := ((List.range prog.size).foldl (fun best spc =>
+        match prog[spc]? with
+        | some instr =>
+          if (instr.successors spc).any (· == h) && h ≤ spc then
+            match best with | none => some spc | some b => some (max b spc)
+          else best
+        | none => best) (none : Option Nat)).getD h
+      (h, tail, count)
+  let remapTarget (spc l : Nat) : Nat :=
+    match headerInfo.find? (fun (h, _, _) => h == l) with
+    | some (h, tail, count) =>
+      if h ≤ spc && spc ≤ tail then mapPC h      -- back-edge: skip preheader
+      else mapPC h - count                        -- entry/bypass: route through preheader
+    | none => mapPC l
   let newCode := (List.range prog.size).foldl (fun acc origPC =>
     let toInsert := constsForHeader origPC
     let instr := prog.code.getD origPC .halt
     let adjusted := if replacedPCs.contains origPC then
       TAC.goto (mapPC origPC + 1)
     else match instr with
-      | .goto l => .goto (mapPC l)
-      | .ifgoto be l => .ifgoto be (mapPC l)
+      | .goto l => .goto (remapTarget origPC l)
+      | .ifgoto be l => .ifgoto be (remapTarget origPC l)
       | other => other
     acc ++ toInsert ++ [adjusted]
   ) ([] : List TAC)
