@@ -78,8 +78,6 @@ def findFusions (prog : Prog) (liveOut : Array (List Var))
     (preds : Array (List Nat))
     : Array Bool × Array (Option TAC) × Array (Option Var) :=
   let n := prog.size
-  -- Multiset of all defined variables, to detect reused (multiply-defined) names.
-  let defVars : List Var := prog.code.toList.filterMap DAEOpt.instrDef
   let init := (Array.replicate n false, Array.replicate n (none : Option TAC),
                Array.replicate n (none : Option Var))
   (List.range n).foldl (fun (removed, replaced, deadTemps) pc =>
@@ -87,12 +85,12 @@ def findFusions (prog : Prog) (liveOut : Array (List Var))
     if removed.getD pc false then (removed, replaced, deadTemps)
     else match prog[pc]? with
     | some (.fbinop t .fmul _ _) =>
-      -- Only fuse when `t` is a genuine fresh temp: defined exactly once in the
-      -- whole program. `buildInstrCerts` globally excludes fused temps from the
-      -- base rel; a reused/multiply-defined var is live/observed elsewhere and
-      -- must stay in the rel, so excluding it globally would break those PCs.
-      if defVars.count t != 1 then (removed, replaced, deadTemps)
-      else match isFusible prog liveOut preds pc with
+      -- Reused (multiply-defined) temps are fine: `buildInstrCerts` excludes `t`
+      -- from the relation only in its per-fusion divergence window `(p, r]`, and
+      -- keeps `(t,t)` everywhere else, so a temp that is live/observed elsewhere is
+      -- correctly related. Fusion validity itself is the `isFusible` check (`t`
+      -- dead after the fadd), which holds regardless of definitions elsewhere.
+      match isFusible prog liveOut preds pc with
       | some (dst, op, a, b, c) =>
         (removed.set! pc true,
          replaced.set! (pc + 1) (some (.fternop dst op a b c)),
@@ -165,20 +163,36 @@ def buildPcOrigMap (origMap : Array Nat) (removed : Array Bool)
 def buildInstrCerts (origProg : Prog) (origMap : Array Nat)
     (skipArr : Array Nat) (trans : Prog) (allVars : List Var)
     (removed : Array Bool) (deadTemps : Array (Option Var)) : Array EInstrCert :=
-  -- Collect all dead temp vars from fusions
-  let deadTempVars := deadTemps.foldl (fun acc dt =>
-    match dt with | some t => t :: acc | none => acc) ([] : List Var)
-  -- Identity relation excluding dead temps (they diverge between orig and trans
-  -- after the fusion point; since they're dead, no downstream instruction reads them)
-  let baseRel : EExprRel := allVars.filter (fun v => !deadTempVars.contains v)
-    |>.map fun v => (.var v, .var v)
+  -- Per-fusion divergence windows. For a fused temp `t` whose fmul is at orig PC `p`,
+  -- the original program computes `t := b*c` at `p` while the transformed program never
+  -- writes `t` there (the fmul is absorbed into the fma). So orig-`t` and trans-`t`
+  -- diverge for orig positions `q` with `p < q ≤ r`, where `r` is `t`'s next
+  -- redefinition after `p` (or `origProg.size` = ∞ if none). `t` is dead across that
+  -- window (guaranteed by `isFusible`'s liveOut check), so dropping it from the relation
+  -- there is sound; OUTSIDE the window orig-`t` = trans-`t`, so `(t,t)` stays in the
+  -- relation — which is exactly what makes fusion certifiable even when `t` is reused
+  -- (defined/used elsewhere in the program).
+  let windows : List (Nat × Nat × Var) :=
+    (List.range origProg.size).filterMap fun p =>
+      match deadTemps.getD p none with
+      | some t =>
+        let r := (((List.range origProg.size).filter fun q =>
+                     q > p && DAEOpt.instrDef ((origProg[q]?).getD .halt) == some t).head?).getD
+                   origProg.size
+        some (p, r, t)
+      | none => none
+  -- The identity relation at orig position `q`: all vars except fused temps whose
+  -- divergence window contains `q`.
+  let relAt (q : Nat) : EExprRel :=
+    (allVars.filter fun v =>
+      !(windows.any fun (p, r, t) => v == t && p < q && q ≤ r)).map fun v => (.var v, .var v)
   let pcOrigMap := buildPcOrigMap origMap removed trans.size
   ((List.range trans.size).map fun i =>
     let myPcOrig := pcOrigMap.getD i 0
     let nextPcOrig := pcOrigMap.getD (i + 1) 0
     match trans[i]? with
     | some .halt =>
-      { pc_orig := myPcOrig, rel := baseRel,
+      { pc_orig := myPcOrig, rel := relAt myPcOrig,
         transitions := ([] : List ETransCorr) }
     | some (.goto _) =>
       let origTarget := match origProg[myPcOrig]? with
@@ -190,9 +204,9 @@ def buildInstrCerts (origProg : Prog) (origMap : Array Nat)
       let finalOrigTarget :=
         if removed.getD origTarget false then origTarget
         else skipArr.getD origTarget origTarget
-      { pc_orig := myPcOrig, rel := baseRel,
+      { pc_orig := myPcOrig, rel := relAt myPcOrig,
         transitions := [{ origLabels := buildPath origTarget finalOrigTarget,
-                          rel := baseRel, rel_next := baseRel }] }
+                          rel := relAt myPcOrig, rel_next := relAt finalOrigTarget }] }
     | some (.ifgoto _ _) =>
       let origTaken := match origProg[myPcOrig]? with
         | some (.ifgoto _ l) => l
@@ -200,22 +214,22 @@ def buildInstrCerts (origProg : Prog) (origMap : Array Nat)
       let takenFinal :=
         if removed.getD origTaken false then origTaken
         else skipArr.getD origTaken origTaken
-      { pc_orig := myPcOrig, rel := baseRel,
+      { pc_orig := myPcOrig, rel := relAt myPcOrig,
         transitions := [{ origLabels := buildPath origTaken takenFinal,
-                          rel := baseRel, rel_next := baseRel },
+                          rel := relAt myPcOrig, rel_next := relAt takenFinal },
                         { origLabels := buildPath (myPcOrig + 1) nextPcOrig,
-                          rel := baseRel, rel_next := baseRel }] }
+                          rel := relAt myPcOrig, rel_next := relAt nextPcOrig }] }
     | some _ =>
       let origPC := origMap.getD i 0
       if removed.getD (origPC - 1) false then
         -- Fused: orig executes fmul at origPC-1, then fadd at origPC
-        { pc_orig := origPC - 1, rel := baseRel,
+        { pc_orig := origPC - 1, rel := relAt (origPC - 1),
           transitions := [{ origLabels := origPC :: buildPath (origPC + 1) nextPcOrig,
-                            rel := baseRel, rel_next := baseRel }] }
+                            rel := relAt (origPC - 1), rel_next := relAt nextPcOrig }] }
       else
-        { pc_orig := origPC, rel := baseRel,
+        { pc_orig := origPC, rel := relAt origPC,
           transitions := [{ origLabels := buildPath (origPC + 1) nextPcOrig,
-                            rel := baseRel, rel_next := baseRel }] }
+                            rel := relAt origPC, rel_next := relAt nextPcOrig }] }
     | none => default).toArray
 
 -- ============================================================
