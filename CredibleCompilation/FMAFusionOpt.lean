@@ -78,6 +78,8 @@ def findFusions (prog : Prog) (liveOut : Array (List Var))
     (preds : Array (List Nat))
     : Array Bool × Array (Option TAC) × Array (Option Var) :=
   let n := prog.size
+  -- Multiset of all defined variables, to detect reused (multiply-defined) names.
+  let defVars : List Var := prog.code.toList.filterMap DAEOpt.instrDef
   let init := (Array.replicate n false, Array.replicate n (none : Option TAC),
                Array.replicate n (none : Option Var))
   (List.range n).foldl (fun (removed, replaced, deadTemps) pc =>
@@ -85,7 +87,12 @@ def findFusions (prog : Prog) (liveOut : Array (List Var))
     if removed.getD pc false then (removed, replaced, deadTemps)
     else match prog[pc]? with
     | some (.fbinop t .fmul _ _) =>
-      match isFusible prog liveOut preds pc with
+      -- Only fuse when `t` is a genuine fresh temp: defined exactly once in the
+      -- whole program. `buildInstrCerts` globally excludes fused temps from the
+      -- base rel; a reused/multiply-defined var is live/observed elsewhere and
+      -- must stay in the rel, so excluding it globally would break those PCs.
+      if defVars.count t != 1 then (removed, replaced, deadTemps)
+      else match isFusible prog liveOut preds pc with
       | some (dst, op, a, b, c) =>
         (removed.set! pc true,
          replaced.set! (pc + 1) (some (.fternop dst op a b c)),

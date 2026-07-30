@@ -104,6 +104,30 @@ def Flags.condHolds (f : Flags) : Cond → Bool
   | .hs => f.rhs ≤ f.lhs
   | .lo => f.lhs < f.rhs
 
+instance : Inhabited Flags := ⟨Flags.mk 0 0⟩
+
+/-- Flags produced by an AArch64 `fcmp Dn, Dm` (opaque; concrete IEEE-754 behaviour attached
+    via `@[implemented_by]`, exactly like the float binops in `Core`). Real `fcmp` sets NZCV from
+    the IEEE 4-way result (less / equal / greater / unordered). Rather than model NZCV directly, we
+    store a canonical `(lhs, rhs)` pair whose `condHolds` reproduces the AArch64 condition-code
+    outcomes for every `Cond`:
+    * a < b (ordered)  → (0, 1)                 : {ne, lt, le, lo}
+    * a > b (ordered)  → (1, 0)                 : {ne, gt, ge, hs}
+    * a = b            → (0, 0)                 : {eq, le, ge, hs}
+    * unordered (NaN)  → (INT64_MIN, 0)         : {ne, lt, le, hs}  (N≠V and C=1)
+    Storing raw bit patterns (the old model) was wrong: signed comparison of IEEE bits reverses
+    order for negative floats and mishandles NaN/±0. -/
+def fcmpFlagsImpl (a b : BitVec 64) : Flags :=
+  let x := bitsToF64 a
+  let y := bitsToF64 b
+  if x < y then Flags.mk 0 1                                   -- a < b (ordered)
+  else if y < x then Flags.mk 1 0                              -- a > b (ordered)
+  else if x ≤ y then Flags.mk 0 0                              -- a = b (incl. +0/−0)
+  else Flags.mk (BitVec.ofNat 64 0x8000000000000000) 0        -- unordered (NaN)
+
+@[implemented_by fcmpFlagsImpl]
+opaque fcmpFlags : BitVec 64 → BitVec 64 → Flags
+
 /-- Negate a condition code: the result holds iff the original does not. -/
 def Cond.negate : Cond → Cond
   | .eq => .ne | .ne => .eq

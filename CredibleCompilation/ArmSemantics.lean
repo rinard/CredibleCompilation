@@ -236,7 +236,7 @@ inductive ArmStep (prog : ArmProg) : ArmState → ArmState → Prop where
 
   | fcmpRR (fn fm : ArmFReg) :
     prog[s.pc]? = some (.fcmpR fn fm) →
-    ArmStep prog s ({ s with flags := Flags.mk (s.fregs fn) (s.fregs fm), pc := s.pc + 1 })
+    ArmStep prog s ({ s with flags := fcmpFlags (s.fregs fn) (s.fregs fm), pc := s.pc + 1 })
 
   | scvtf (fd : ArmFReg) (rn : ArmReg) :
     prog[s.pc]? = some (.scvtf fd rn) →

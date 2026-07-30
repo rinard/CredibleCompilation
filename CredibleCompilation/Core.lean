@@ -321,6 +321,10 @@ inductive FloatCmpOp | feq | fne | flt | fle deriving Repr, DecidableEq
     are uninterpreted predicates over BitVec 64. -/
 opaque FloatCmpOp.eval : FloatCmpOp → BitVec 64 → BitVec 64 → Bool
 
+/-- Reinterpret 64 bits as an IEEE-754 double. Used only by the executable `@[implemented_by]`
+    for `fcmpFlags` (the ARM `fcmp` flag model); never referenced in proofs. -/
+@[inline] def bitsToF64 (b : BitVec 64) : Float := Float.ofBits b.toNat.toUInt64
+
 -- IEEE 754 flip axioms removed: no longer needed with Expr operands in BoolExpr
 
 /-- Convert a signed integer (BitVec 64) to float (BitVec 64).

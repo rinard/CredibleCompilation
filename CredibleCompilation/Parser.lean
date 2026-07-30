@@ -325,8 +325,8 @@ partial def parseExpr' (lhs : SExpr) (toks : List Token) : Except String (SExpr 
 
 partial def parseBAtom (toks : List Token) : Except String (SBool × List Token) :=
   match toks with
-  | Token.kw "true" :: rest => .ok (.cmp .eq (.lit 0) (.lit 0), rest)
-  | Token.kw "false" :: rest => .ok (.cmp .ne (.lit 0) (.lit 0), rest)
+  | Token.kw "true" :: rest => .ok (.lit true, rest)
+  | Token.kw "false" :: rest => .ok (.lit false, rest)
   | Token.lparen :: rest => do
     -- Try as boolean expression first
     match parseBOr rest with

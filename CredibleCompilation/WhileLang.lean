@@ -723,6 +723,19 @@ def SBool.toString : SBool → String
     let opStr := match op with | .feq => "==" | .fne => "!=" | .flt => "<" | .fle => "<="
     s!"({a.toString} {opStr} {b.toString})"
 
+/-- Escape a string literal body so the tokenizer's `scanStr` (Parser.lean) reparses it
+    identically. `scanStr` recognises `\"`, `\\`, `\n`, `\t`; every other character is
+    emitted verbatim. Keeps `print`/`printString` round-tripping when the literal contains
+    a quote, backslash, newline or tab. -/
+def escapeStringLit (s : String) : String :=
+  s.foldl (fun acc c =>
+    acc ++ (match c with
+      | '"'  => "\\\""
+      | '\\' => "\\\\"
+      | '\n' => "\\n"
+      | '\t' => "\\t"
+      | _    => String.singleton c)) ""
+
 def Stmt.toString : Stmt → String
   | .skip => "skip"
   | .assign x e => s!"{x} := {e.toString}"
@@ -739,11 +752,11 @@ def Stmt.toString : Stmt → String
   | .label lbl => s!"{lbl}:"
   | .goto lbl => s!"goto {lbl}"
   | .ifgoto b lbl => s!"if {b.toString} goto {lbl}"
-  | .print fmt args => s!"print \"{fmt}\", {", ".intercalate (args.map SExpr.toString)}"
+  | .print fmt args => s!"print \"{escapeStringLit fmt}\", {", ".intercalate (args.map SExpr.toString)}"
   | .printInt e => s!"printInt({e.toString})"
   | .printBool b => s!"printBool({b.toString})"
   | .printFloat e => s!"printFloat({e.toString})"
-  | .printString lit => s!"printString(\"{lit}\")"
+  | .printString lit => s!"printString(\"{escapeStringLit lit}\")"
 
 instance : ToString Stmt := ⟨Stmt.toString⟩
 instance : ToString SExpr := ⟨SExpr.toString⟩

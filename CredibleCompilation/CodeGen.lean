@@ -155,10 +155,16 @@ private def ppCond : Cond → String
   | .hs => "hs" | .lo => "lo"
 
 /-- Map float-comparison condition codes to ARM64 mnemonics.
-    After `fcmp`, ARM64 uses `mi` (minus) for less-than and `ls` (lower or same)
-    for less-or-equal, unlike integer `cmp` which uses `lt`/`le`. -/
+    After `fcmp`, we use the SAME (signed) mnemonics as integer `cmp`. The model
+    (`fcmpFlags` + `Flags.condHolds`) is a total-order encoding: it maps the IEEE
+    4-way result (less / equal / greater / unordered) to a canonical `(lhs, rhs)`
+    pair, with UNORDERED encoded so that `lt`/`le` hold and `gt`/`ge`/`eq` do not
+    — exactly the AArch64 `lt`/`le` (N≠V) semantics, which INCLUDE the unordered
+    case. Using `mi`/`ls` here (ordered-only, excluding unordered) would disagree
+    with that encoding for NaN operands and is unrepresentable by `condHolds`
+    without breaking `Cond.negate_correct`. -/
 private def ppCondFloat : Cond → String
-  | .eq => "eq" | .ne => "ne" | .lt => "mi" | .le => "ls" | .gt => "gt" | .ge => "ge"
+  | .eq => "eq" | .ne => "ne" | .lt => "lt" | .le => "le" | .gt => "gt" | .ge => "ge"
   | .hs => "hs" | .lo => "lo"
 
 /-- Resolve a branch target (Nat) to a label string.

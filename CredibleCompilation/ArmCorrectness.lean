@@ -256,7 +256,7 @@ theorem Flags.condHolds_correct (op : CmpOp) (a b : BitVec 64) :
     Since FP semantics are opaque (uninterpreted bitvectors), this is an axiom
     asserting our flag model faithfully represents IEEE 754 comparison. -/
 axiom Flags.condHolds_float_correct (op : FloatCmpOp) (a b : BitVec 64) :
-    (Flags.mk a b).condHolds
+    (fcmpFlags a b).condHolds
       (match op with | .feq => .eq | .fne => .ne | .flt => .lt | .fle => .le)
     = FloatCmpOp.eval op a b
 
@@ -1228,7 +1228,7 @@ theorem verifiedGenBoolExpr_correct (prog : ArmProg) (layout : VarLayout)
         have hFcmp := hCodeFcmpCset.head
         rw [show startPC + (vLoadVarFP layout va .d1 ++ vLoadVarFP layout vb .d2).length
             = s2.pc from by rw [List.length_append]; omega] at hFcmp
-        let s3 := { s2 with flags := Flags.mk (s2.fregs .d1) (s2.fregs .d2), pc := s2.pc + 1 }
+        let s3 := { s2 with flags := fcmpFlags (s2.fregs .d1) (s2.fregs .d2), pc := s2.pc + 1 }
         have hRelFcmp : ExtStateRel layout σ s3 := fun v loc hv => hRel2 v loc hv
         have hCset := hCodeFcmpCset.tail.head
         rw [show startPC + (vLoadVarFP layout va .d1 ++ vLoadVarFP layout vb .d2).length + 1
@@ -1277,7 +1277,7 @@ theorem verifiedGenBoolExpr_correct (prog : ArmProg) (layout : VarLayout)
         have hFcmp := hCodeFcmpCset.head
         rw [show startPC + (vLoadVarFP layout va .d1 ++ (formalLoadImm64 .x0 fb ++ [ArmInstr.fmovToFP .d2 .x0])).length
             = s3.pc from by simp [s3, ArmState.setFReg, ArmState.nextPC, List.length_append]; omega] at hFcmp
-        let s4 := { s3 with flags := Flags.mk (s3.fregs .d1) (s3.fregs .d2), pc := s3.pc + 1 }
+        let s4 := { s3 with flags := fcmpFlags (s3.fregs .d1) (s3.fregs .d2), pc := s3.pc + 1 }
         have hRel4 : ExtStateRel layout σ s4 := fun v loc hv => hRel3 v loc hv
         have hCset := hCodeFcmpCset.tail.head
         rw [show startPC + (vLoadVarFP layout va .d1 ++ (formalLoadImm64 .x0 fb ++ [ArmInstr.fmovToFP .d2 .x0])).length + 1
@@ -1334,7 +1334,7 @@ theorem verifiedGenBoolExpr_correct (prog : ArmProg) (layout : VarLayout)
         have hFcmp := hCodeFcmpCset.head
         rw [show startPC + ((formalLoadImm64 .x0 fa ++ [ArmInstr.fmovToFP .d1 .x0]) ++ vLoadVarFP layout vb .d2).length
             = s3.pc from by simp [List.length_append] at hPC3 ⊢; omega] at hFcmp
-        let s4 := { s3 with flags := Flags.mk (s3.fregs .d1) (s3.fregs .d2), pc := s3.pc + 1 }
+        let s4 := { s3 with flags := fcmpFlags (s3.fregs .d1) (s3.fregs .d2), pc := s3.pc + 1 }
         have hRel4 : ExtStateRel layout σ s4 := fun v loc hv => hRel3 v loc hv
         have hCset := hCodeFcmpCset.tail.head
         rw [show startPC + ((formalLoadImm64 .x0 fa ++ [ArmInstr.fmovToFP .d1 .x0]) ++ vLoadVarFP layout vb .d2).length + 1
@@ -1397,7 +1397,7 @@ theorem verifiedGenBoolExpr_correct (prog : ArmProg) (layout : VarLayout)
         have hFcmp := hCodeFcmpCset.head
         rw [show startPC + ((formalLoadImm64 .x0 fa ++ [ArmInstr.fmovToFP .d1 .x0]) ++ (formalLoadImm64 .x0 fb ++ [ArmInstr.fmovToFP .d2 .x0])).length
             = s4.pc from by simp [s4, ArmState.setFReg, ArmState.nextPC, List.length_append] at hPC3 ⊢; omega] at hFcmp
-        let s5 := { s4 with flags := Flags.mk (s4.fregs .d1) (s4.fregs .d2), pc := s4.pc + 1 }
+        let s5 := { s4 with flags := fcmpFlags (s4.fregs .d1) (s4.fregs .d2), pc := s4.pc + 1 }
         have hRel5 : ExtStateRel layout σ s5 := fun v loc hv => hRel4 v loc hv
         have hCset := hCodeFcmpCset.tail.head
         rw [show startPC + ((formalLoadImm64 .x0 fa ++ [ArmInstr.fmovToFP .d1 .x0]) ++ (formalLoadImm64 .x0 fb ++ [ArmInstr.fmovToFP .d2 .x0])).length + 1
@@ -1604,7 +1604,7 @@ theorem verifiedGenBoolExpr_correct (prog : ArmProg) (layout : VarLayout)
     have hFcmp := hCodeFcmpCset.head
     rw [show startPC + (vLoadVarFP layout lv .d1 ++ vLoadVarFP layout rv .d2).length
         = s2.pc from by rw [List.length_append]; omega] at hFcmp
-    let s3 := { s2 with flags := Flags.mk (s2.fregs .d1) (s2.fregs .d2), pc := s2.pc + 1 }
+    let s3 := { s2 with flags := fcmpFlags (s2.fregs .d1) (s2.fregs .d2), pc := s2.pc + 1 }
     have hRelFcmp : ExtStateRel layout σ s3 := fun v loc hv => hRel2 v loc hv
     -- Step 4: cset x0 cond
     have hCset := hCodeFcmpCset.tail.head
@@ -1666,7 +1666,7 @@ theorem verifiedGenBoolExpr_correct (prog : ArmProg) (layout : VarLayout)
     have hFcmp := hCodeFmovFcmpCset.tail.head
     rw [show startPC + (vLoadVarFP layout v .d1 ++ formalLoadImm64 .x0 n).length + 1
         = s3.pc from by simp [s3, ArmState.setFReg, ArmState.nextPC]; omega] at hFcmp
-    let s4 := { s3 with flags := Flags.mk (s3.fregs .d1) (s3.fregs .d2), pc := s3.pc + 1 }
+    let s4 := { s3 with flags := fcmpFlags (s3.fregs .d1) (s3.fregs .d2), pc := s3.pc + 1 }
     have hRel4 : ExtStateRel layout σ s4 := fun v loc hv => hRel3 v loc hv
     -- Step 5: cset x0 cond
     have hCset := hCodeFmovFcmpCset.tail.tail.head
@@ -3415,7 +3415,7 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
             have hB_s2 : s2.fregs b_freg = fB := by rw [hVal2, hfB]; rfl
             have hFcmpI := hCodeFcmpBCond.head; rw [← hPC2] at hFcmpI
             let s3 : ArmState :=
-              { s2 with flags := Flags.mk (s2.fregs a_freg) (s2.fregs b_freg), pc := s2.pc + 1 }
+              { s2 with flags := fcmpFlags (s2.fregs a_freg) (s2.fregs b_freg), pc := s2.pc + 1 }
             have hStepFcmpN : ArmStepsN prog s2 s3 1 :=
               ArmStepsN.single (.fcmpRR a_freg b_freg hFcmpI)
             have hPC3 : s3.pc = pcMap pc + (vLoadVarFP layout va a_freg ++
@@ -3424,7 +3424,7 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
             have hBCond := hCodeFcmpBCond.tail.head; rw [← hPC3] at hBCond
             simp only [BoolExpr.eval, Expr.eval, Value.toFloat, hfA, hfB] at hfcmp_false
             have hCondTrue : s3.flags.condHolds cond.negate = true := by
-              show ({ lhs := s2.fregs a_freg, rhs := s2.fregs b_freg } : Flags).condHolds
+              show (fcmpFlags (s2.fregs a_freg) (s2.fregs b_freg)).condHolds
                 cond.negate = true
               rw [hA_s2, hB_s2, Cond.negate_correct]
               cases fop <;>
@@ -3481,7 +3481,7 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
               rw [this, hfA]; rfl
             have hFcmpI := hCodeTail.tail.head; rw [← hPC3] at hFcmpI
             let s4 : ArmState :=
-              { s3 with flags := Flags.mk (s3.fregs a_freg) (s3.fregs .d2), pc := s3.pc + 1 }
+              { s3 with flags := fcmpFlags (s3.fregs a_freg) (s3.fregs .d2), pc := s3.pc + 1 }
             have hStepFcmpN : ArmStepsN prog s3 s4 1 :=
               ArmStepsN.single (.fcmpRR a_freg .d2 hFcmpI)
             have hPC4 : s4.pc = pcMap pc +
@@ -3490,7 +3490,7 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
             have hBCond := hCodeTail.tail.tail.head; rw [← hPC4] at hBCond
             simp only [BoolExpr.eval, Expr.eval, Value.toFloat, hfA] at hfcmp_false
             have hCondTrue : s4.flags.condHolds cond.negate = true := by
-              show ({ lhs := s3.fregs a_freg, rhs := s3.fregs .d2 } : Flags).condHolds
+              show (fcmpFlags (s3.fregs a_freg) (s3.fregs .d2)).condHolds
                 cond.negate = true
               rw [hA_s3, hD2_s3, Cond.negate_correct]
               cases fop <;>
@@ -3549,7 +3549,7 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
               rw [this, hfB]; rfl
             have hFcmpI := hCodeTail.tail.head; rw [← hPC3] at hFcmpI
             let s4 : ArmState :=
-              { s3 with flags := Flags.mk (s3.fregs .d1) (s3.fregs b_freg), pc := s3.pc + 1 }
+              { s3 with flags := fcmpFlags (s3.fregs .d1) (s3.fregs b_freg), pc := s3.pc + 1 }
             have hStepFcmpN : ArmStepsN prog s3 s4 1 :=
               ArmStepsN.single (.fcmpRR .d1 b_freg hFcmpI)
             have hPC4 : s4.pc = pcMap pc +
@@ -3558,7 +3558,7 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
             have hBCond := hCodeTail.tail.tail.head; rw [← hPC4] at hBCond
             simp only [BoolExpr.eval, Expr.eval, Value.toFloat, hfB] at hfcmp_false
             have hCondTrue : s4.flags.condHolds cond.negate = true := by
-              show ({ lhs := s3.fregs .d1, rhs := s3.fregs b_freg } : Flags).condHolds
+              show (fcmpFlags (s3.fregs .d1) (s3.fregs b_freg)).condHolds
                 cond.negate = true
               rw [hD1_s3, hB_s3, Cond.negate_correct]
               cases fop <;>
@@ -3614,7 +3614,7 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
             have hFcmpI : prog[s4.pc]? = some (.fcmpR .d1 .d2) := by
               rw [hPC4]; exact hCodeTail.tail.head
             let s5 : ArmState :=
-              { s4 with flags := Flags.mk (s4.fregs .d1) (s4.fregs .d2), pc := s4.pc + 1 }
+              { s4 with flags := fcmpFlags (s4.fregs .d1) (s4.fregs .d2), pc := s4.pc + 1 }
             have hStepFcmp : ArmStepsN prog s4 s5 1 :=
               ArmStepsN.single (.fcmpRR .d1 .d2 hFcmpI)
             have hBCond : prog[s5.pc]? = some (.bCond cond.negate (pcMap l_var)) := by
@@ -3622,7 +3622,7 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
               rw [hPC4]; exact hCodeTail.tail.tail.head
             simp only [BoolExpr.eval, Expr.eval, Value.toFloat] at hfcmp_false
             have hCondTrue : s5.flags.condHolds cond.negate = true := by
-              show ({ lhs := s4.fregs .d1, rhs := s4.fregs .d2 } : Flags).condHolds
+              show (fcmpFlags (s4.fregs .d1) (s4.fregs .d2)).condHolds
                 cond.negate = true
               rw [hD1_s4, hD2_s4, Cond.negate_correct]
               cases fop <;>
@@ -4096,7 +4096,7 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
             have hB_s2 : s2.fregs b_freg = fB := by rw [hVal2, hfB]; rfl
             have hFcmpI := hCodeFcmpBCond.head; rw [← hPC2] at hFcmpI
             let s3 : ArmState :=
-              { s2 with flags := Flags.mk (s2.fregs a_freg) (s2.fregs b_freg), pc := s2.pc + 1 }
+              { s2 with flags := fcmpFlags (s2.fregs a_freg) (s2.fregs b_freg), pc := s2.pc + 1 }
             have hStepFcmpN : ArmStepsN prog s2 s3 1 :=
               ArmStepsN.single (.fcmpRR a_freg b_freg hFcmpI)
             have hPC3 : s3.pc = pcMap pc + (vLoadVarFP layout va a_freg ++
@@ -4105,7 +4105,7 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
             have hBCond := hCodeFcmpBCond.tail.head; rw [← hPC3] at hBCond
             simp only [BoolExpr.eval, Expr.eval, Value.toFloat, hfA, hfB] at hfcmp_true
             have hCondFalse : s3.flags.condHolds cond.negate = false := by
-              show ({ lhs := s2.fregs a_freg, rhs := s2.fregs b_freg } : Flags).condHolds
+              show (fcmpFlags (s2.fregs a_freg) (s2.fregs b_freg)).condHolds
                 cond.negate = false
               rw [hA_s2, hB_s2, Cond.negate_correct]
               cases fop <;>
@@ -4165,7 +4165,7 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
               rw [this, hfA]; rfl
             have hFcmpI := hCodeTail.tail.head; rw [← hPC3] at hFcmpI
             let s4 : ArmState :=
-              { s3 with flags := Flags.mk (s3.fregs a_freg) (s3.fregs .d2), pc := s3.pc + 1 }
+              { s3 with flags := fcmpFlags (s3.fregs a_freg) (s3.fregs .d2), pc := s3.pc + 1 }
             have hStepFcmpN : ArmStepsN prog s3 s4 1 :=
               ArmStepsN.single (.fcmpRR a_freg .d2 hFcmpI)
             have hPC4 : s4.pc = pcMap pc +
@@ -4174,7 +4174,7 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
             have hBCond := hCodeTail.tail.tail.head; rw [← hPC4] at hBCond
             simp only [BoolExpr.eval, Expr.eval, Value.toFloat, hfA] at hfcmp_true
             have hCondFalse : s4.flags.condHolds cond.negate = false := by
-              show ({ lhs := s3.fregs a_freg, rhs := s3.fregs .d2 } : Flags).condHolds
+              show (fcmpFlags (s3.fregs a_freg) (s3.fregs .d2)).condHolds
                 cond.negate = false
               rw [hA_s3, hD2_s3, Cond.negate_correct]
               cases fop <;>
@@ -4236,7 +4236,7 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
               rw [this, hfB]; rfl
             have hFcmpI := hCodeTail.tail.head; rw [← hPC3] at hFcmpI
             let s4 : ArmState :=
-              { s3 with flags := Flags.mk (s3.fregs .d1) (s3.fregs b_freg), pc := s3.pc + 1 }
+              { s3 with flags := fcmpFlags (s3.fregs .d1) (s3.fregs b_freg), pc := s3.pc + 1 }
             have hStepFcmpN : ArmStepsN prog s3 s4 1 :=
               ArmStepsN.single (.fcmpRR .d1 b_freg hFcmpI)
             have hPC4 : s4.pc = pcMap pc +
@@ -4245,7 +4245,7 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
             have hBCond := hCodeTail.tail.tail.head; rw [← hPC4] at hBCond
             simp only [BoolExpr.eval, Expr.eval, Value.toFloat, hfB] at hfcmp_true
             have hCondFalse : s4.flags.condHolds cond.negate = false := by
-              show ({ lhs := s3.fregs .d1, rhs := s3.fregs b_freg } : Flags).condHolds
+              show (fcmpFlags (s3.fregs .d1) (s3.fregs b_freg)).condHolds
                 cond.negate = false
               rw [hD1_s3, hB_s3, Cond.negate_correct]
               cases fop <;>
@@ -4300,7 +4300,7 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
             have hFcmpI : prog[s4.pc]? = some (.fcmpR .d1 .d2) := by
               rw [hPC4]; exact hCodeTail.tail.head
             let s5 : ArmState :=
-              { s4 with flags := Flags.mk (s4.fregs .d1) (s4.fregs .d2), pc := s4.pc + 1 }
+              { s4 with flags := fcmpFlags (s4.fregs .d1) (s4.fregs .d2), pc := s4.pc + 1 }
             have hStepFcmp : ArmStepsN prog s4 s5 1 :=
               ArmStepsN.single (.fcmpRR .d1 .d2 hFcmpI)
             have hBCond : prog[s5.pc]? = some (.bCond cond.negate (pcMap l_var)) := by
@@ -4308,7 +4308,7 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
               rw [hPC4]; exact hCodeTail.tail.tail.head
             simp only [BoolExpr.eval, Expr.eval, Value.toFloat] at hfcmp_true
             have hCondFalse : s5.flags.condHolds cond.negate = false := by
-              show ({ lhs := s4.fregs .d1, rhs := s4.fregs .d2 } : Flags).condHolds
+              show (fcmpFlags (s4.fregs .d1) (s4.fregs .d2)).condHolds
                 cond.negate = false
               rw [hD1_s4, hD2_s4, Cond.negate_correct]
               cases fop <;>

@@ -1157,7 +1157,7 @@ private def armStepResult (s : ArmState) (i : ArmInstr) : ArmState :=
       s.havocCallerSaved (havocRegsFn s) (havocFRegsFn s)
         |>.setFReg fd (FloatBinOp.eval fop (s.fregs fn) (s.fregs fm)) |>.nextPC
   | .fcmpR fn fm =>
-      { s with flags := Flags.mk (s.fregs fn) (s.fregs fm), pc := s.pc + 1 }
+      { s with flags := fcmpFlags (s.fregs fn) (s.fregs fm), pc := s.pc + 1 }
   | .scvtf fd rn => s.setFReg fd (intToFloatBv (s.regs rn)) |>.nextPC
   | .fcvtzs rd fn => s.setReg rd (floatToIntBv (s.fregs fn)) |>.nextPC
   | .farrLd fd arr idxReg =>
