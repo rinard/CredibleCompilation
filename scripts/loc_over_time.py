@@ -95,6 +95,13 @@ def main():
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
+    # Embed TrueType (Type 42) fonts instead of Type 3 — required by
+    # ACM/PLDI camera-ready checks (pdffonts should show no "Type 3").
+    plt.rcParams.update({
+        "pdf.fonttype": 42,
+        "ps.fonttype": 42,
+    })
+
     dates = [d for d, _ in data]
     code = [c["code"] for _, c in data]
     comment = [c["comment"] for _, c in data]
@@ -119,15 +126,19 @@ def main():
         fig, ax = plt.subplots(figsize=(3.3, 2.0))
     else:
         plt.rcParams.update({
+            "font.size": 16,
+            "axes.labelsize": 18,
+            "xtick.labelsize": 15,
+            "ytick.labelsize": 15,
             "font.family": "serif",
             "font.serif": ["Times New Roman", "Times", "DejaVu Serif"],
             "mathtext.fontset": "stix",
         })
-        fig, ax = plt.subplots(figsize=(7.5, 4.5))
+        fig, ax = plt.subplots(figsize=(6.4, 4.0))
 
-    # Line + small-dot markers; non-blank, non-comment LOC only
+    # Line + dot markers; non-blank, non-comment LOC only
     # (matches the paper's LOC-by-kind table total).
-    ax.plot(days, code, marker="o", markersize=2.5, linewidth=1.0, color="#2b6cb0")
+    ax.plot(days, code, marker="o", markersize=6, linewidth=2.4, color="#2b6cb0")
 
     ax.set_xlabel("Project day")
     ax.set_ylabel("Lines of Code")

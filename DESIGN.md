@@ -13,6 +13,21 @@ Useful prompts:
   g) Isolate failing goal and focus on that - try different alternatives quickly. 
   h) when it looks like it is thrashing, ask what is the problem - basically have it explain what is going on. This makes it reflect and apparently helps it get enough context to come up with a solution instead of thrashing. 
 
+Future:
+  Have a noop. Also have a TAC with binop x = y + c, x = c + y. 
+  Add executable IEEE 754 model to get constant folding for floats. 
+  Have a diverges label, branch there if goto pc, etc. infinite loops. 
+  Test after developing credible compilation experiments.
+  Optimization prompts should be explicit to create proper optimizations and not easy but incomplete optimizations. 
+  Make all gotos goto a label l, not some computed thing like pc+1.
+  Have a better idea how all simulation proofs should go. Also have a very good idea of what certificate needs to contain. 
+  Right now certificate checker apparently hardcodes that first instruction has to be the same in orig and trans. Remove this limitation. 
+  Right now all scalars are initialized to 0. Make this explicit in TAC and enable optimizations that eliminate initializations that are dead because program explicitly initializes. Looks like this already happens...
+
+  Don't use functions, use hash maps or some more efficient data structure. Been burned multiple times now. 
+
+  Use efficient worklist algorithms with efficient data structures. 
+
 Compromises:
   Provability compromises:
     All caller save variables live anywhere saved and restored across call instructions. Obviates a need to thread per instruction liveness information through proofs. 
