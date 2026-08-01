@@ -602,7 +602,9 @@ def VarLayout.regConventionSafe (layout : VarLayout) : Bool :=
     loc != .freg .d0 && loc != .freg .d1 && loc != .freg .d2 &&
     loc != .ireg .x16 && loc != .ireg .x17 && loc != .ireg .x18
 
-/-- Check no two variables share a location. -/
+/-- Check no two variables share a location.  The per-instruction validity guard was hoisted
+    out of `verifiedGenInstr` into `verifiedGenerateAsm`, so this runs **once** per compile
+    (not per instruction) — the O(N²) pairwise scan is fine and needs no trusted fast path. -/
 def VarLayout.isInjective (layout : VarLayout) : Bool :=
   go layout.entries
 where
@@ -1557,8 +1559,11 @@ def verifiedGenInstr (layout : VarLayout) (pcMap : Nat → Nat) (instr : TAC)
     (haltLabel : Nat) (divLabel : Nat) (boundsLabel : Nat)
     (arrayDecls : List (ArrayName × Nat × VarTy))
     (boundsSafe : Bool := false) : Option (List ArmInstr) :=
-  if !layout.regConventionSafe || !layout.isInjective then none
-  else match instr with
+  -- Layout validity (`regConventionSafe` + `isInjective`) is checked once by
+  -- `verifiedGenerateAsm` before the body loop, and threaded to the correctness lemmas as
+  -- hypotheses; re-checking it per instruction here was a loop-invariant O(N²) recomputation
+  -- (an O(N³) compile).  The guard is hoisted out.
+  match instr with
   | .const v (.int n) =>
     match layout v with
     | some (.stack _) | some (.ireg _) =>
@@ -1845,14 +1850,6 @@ theorem verifiedGenInstr_copy_output_pos
     (hWTI : WellTypedInstr Γ arrayDecls (.copy dst src))
     (hMapped : ∀ v, v ∈ (TAC.copy dst src).vars → layout v ≠ none) :
     1 ≤ instrs.length := by
-  have hRCb : layout.regConventionSafe = true := by
-    cases hbool : layout.regConventionSafe
-    · simp [verifiedGenInstr, hbool] at hGen
-    · rfl
-  have hIIb : layout.isInjective = true := by
-    cases hbool : layout.isInjective
-    · simp [verifiedGenInstr, hRCb, hbool] at hGen
-    · rfl
   have hVars_dst : dst ∈ TAC.vars (.copy dst src) := by simp [TAC.vars]
   have hVars_src : src ∈ TAC.vars (.copy dst src) := by simp [TAC.vars]
   have hMdst : layout dst ≠ none := hMapped dst hVars_dst
@@ -1862,7 +1859,7 @@ theorem verifiedGenInstr_copy_output_pos
   · -- Self-copy: `[.movR .x0 .x0]`
     subst hEq
     have hOutput : instrs = [.movR .x0 .x0] := by
-      simp [verifiedGenInstr, hRCb, hIIb] at hGen; exact hGen.symm
+      simp [verifiedGenInstr] at hGen; exact hGen.symm
     rw [hOutput]; simp
   · have hEqFalse : (dst == src) = false := by simp [hEq]
     by_cases hSrcFreg : ∃ r, layout src = some (.freg r)
@@ -1878,7 +1875,7 @@ theorem verifiedGenInstr_copy_output_pos
       have hDstNotIreg : ∀ r', layout dst ≠ some (.ireg r') :=
         hWTL.float_not_ireg hDstFloat
       have hOutput : instrs = vStoreVarFP layout dst r := by
-        simp [verifiedGenInstr, hRCb, hIIb, hLsrc, hEqFalse] at hGen
+        simp [verifiedGenInstr, hLsrc, hEqFalse] at hGen
         exact hGen.symm
       rw [hOutput]
       unfold vStoreVarFP
@@ -1907,16 +1904,16 @@ theorem verifiedGenInstr_copy_output_pos
         have hOutput : instrs = vLoadVar layout src .x0 ++ [.fmovToFP rf .x0] := by
           cases hLsrc : layout src with
           | none =>
-            simp [verifiedGenInstr, hRCb, hIIb, hLsrc, hLdst, hEqFalse] at hGen
+            simp [verifiedGenInstr, hLsrc, hLdst, hEqFalse] at hGen
             exact hGen.symm
           | some loc =>
             cases loc with
             | freg r => exact absurd hLsrc (hNotFregSrc r)
             | stack _ =>
-              simp [verifiedGenInstr, hRCb, hIIb, hLsrc, hLdst, hEqFalse] at hGen
+              simp [verifiedGenInstr, hLsrc, hLdst, hEqFalse] at hGen
               exact hGen.symm
             | ireg _ =>
-              simp [verifiedGenInstr, hRCb, hIIb, hLsrc, hLdst, hEqFalse] at hGen
+              simp [verifiedGenInstr, hLsrc, hLdst, hEqFalse] at hGen
               exact hGen.symm
         rw [hOutput]
         simp only [List.length_append, List.length_cons, List.length_nil]
@@ -1929,16 +1926,16 @@ theorem verifiedGenInstr_copy_output_pos
           | none =>
             cases hLdst : layout dst with
             | none =>
-              simp [verifiedGenInstr, hRCb, hIIb, hLsrc, hLdst, hEqFalse] at hGen
+              simp [verifiedGenInstr, hLsrc, hLdst, hEqFalse] at hGen
               exact hGen.symm
             | some locDst =>
               cases locDst with
               | freg r => exact absurd hLdst (hNotFregDst r)
               | stack _ =>
-                simp [verifiedGenInstr, hRCb, hIIb, hLsrc, hLdst, hEqFalse] at hGen
+                simp [verifiedGenInstr, hLsrc, hLdst, hEqFalse] at hGen
                 exact hGen.symm
               | ireg _ =>
-                simp [verifiedGenInstr, hRCb, hIIb, hLsrc, hLdst, hEqFalse] at hGen
+                simp [verifiedGenInstr, hLsrc, hLdst, hEqFalse] at hGen
                 exact hGen.symm
           | some locSrc =>
             cases locSrc with
@@ -1946,30 +1943,30 @@ theorem verifiedGenInstr_copy_output_pos
             | stack _ =>
               cases hLdst : layout dst with
               | none =>
-                simp [verifiedGenInstr, hRCb, hIIb, hLsrc, hLdst, hEqFalse] at hGen
+                simp [verifiedGenInstr, hLsrc, hLdst, hEqFalse] at hGen
                 exact hGen.symm
               | some locDst =>
                 cases locDst with
                 | freg r => exact absurd hLdst (hNotFregDst r)
                 | stack _ =>
-                  simp [verifiedGenInstr, hRCb, hIIb, hLsrc, hLdst, hEqFalse] at hGen
+                  simp [verifiedGenInstr, hLsrc, hLdst, hEqFalse] at hGen
                   exact hGen.symm
                 | ireg _ =>
-                  simp [verifiedGenInstr, hRCb, hIIb, hLsrc, hLdst, hEqFalse] at hGen
+                  simp [verifiedGenInstr, hLsrc, hLdst, hEqFalse] at hGen
                   exact hGen.symm
             | ireg _ =>
               cases hLdst : layout dst with
               | none =>
-                simp [verifiedGenInstr, hRCb, hIIb, hLsrc, hLdst, hEqFalse] at hGen
+                simp [verifiedGenInstr, hLsrc, hLdst, hEqFalse] at hGen
                 exact hGen.symm
               | some locDst =>
                 cases locDst with
                 | freg r => exact absurd hLdst (hNotFregDst r)
                 | stack _ =>
-                  simp [verifiedGenInstr, hRCb, hIIb, hLsrc, hLdst, hEqFalse] at hGen
+                  simp [verifiedGenInstr, hLsrc, hLdst, hEqFalse] at hGen
                   exact hGen.symm
                 | ireg _ =>
-                  simp [verifiedGenInstr, hRCb, hIIb, hLsrc, hLdst, hEqFalse] at hGen
+                  simp [verifiedGenInstr, hLsrc, hLdst, hEqFalse] at hGen
                   exact hGen.symm
         rw [hOutput]
         simp only [List.length_append]
@@ -1996,15 +1993,7 @@ theorem verifiedGenInstr_binop_output_pos
     (hWTI : WellTypedInstr Γ arrayDecls (.binop dst op lv rv))
     (hMapped : ∀ v, v ∈ (TAC.binop dst op lv rv).vars → layout v ≠ none) :
     1 ≤ instrs.length := by
-  have hRCb : layout.regConventionSafe = true := by
-    cases hbool : layout.regConventionSafe
-    · simp [verifiedGenInstr, hbool] at hGen
-    · rfl
-  have hIIb : layout.isInjective = true := by
-    cases hbool : layout.isInjective
-    · simp [verifiedGenInstr, hRCb, hbool] at hGen
-    · rfl
-  simp [verifiedGenInstr, hRCb, hIIb] at hGen
+  simp [verifiedGenInstr] at hGen
   split at hGen <;> first
     | simp at hGen
     | (split at hGen <;>
@@ -2030,15 +2019,7 @@ theorem verifiedGenInstr_boolop_output_pos
     (hWTI : WellTypedInstr Γ arrayDecls (.boolop dst be))
     (hMapped : ∀ v, v ∈ (TAC.boolop dst be).vars → layout v ≠ none) :
     1 ≤ instrs.length := by
-  have hRCb : layout.regConventionSafe = true := by
-    cases hbool : layout.regConventionSafe
-    · simp [verifiedGenInstr, hbool] at hGen
-    · rfl
-  have hIIb : layout.isInjective = true := by
-    cases hbool : layout.isInjective
-    · simp [verifiedGenInstr, hRCb, hbool] at hGen
-    · rfl
-  simp [verifiedGenInstr, hRCb, hIIb] at hGen
+  simp [verifiedGenInstr] at hGen
   cases hSimple : be.hasSimpleOps
   case false => simp [hSimple] at hGen
   case true =>
@@ -2072,15 +2053,7 @@ theorem verifiedGenInstr_ifgoto_output_pos
     (hWTI : WellTypedInstr Γ arrayDecls (.ifgoto be l))
     (hMapped : ∀ v, v ∈ (TAC.ifgoto be l).vars → layout v ≠ none) :
     1 ≤ instrs.length := by
-  have hRCb : layout.regConventionSafe = true := by
-    cases hbool : layout.regConventionSafe
-    · simp [verifiedGenInstr, hbool] at hGen
-    · rfl
-  have hIIb : layout.isInjective = true := by
-    cases hbool : layout.isInjective
-    · simp [verifiedGenInstr, hRCb, hbool] at hGen
-    · rfl
-  simp [verifiedGenInstr, hRCb, hIIb] at hGen
+  simp [verifiedGenInstr] at hGen
   cases hSimple : be.hasSimpleOps
   case false => simp [hSimple] at hGen
   case true =>
@@ -2116,15 +2089,7 @@ theorem verifiedGenInstr_goto_output_pos
     (hWTI : WellTypedInstr Γ arrayDecls (.goto l))
     (hMapped : ∀ v, v ∈ (TAC.goto l).vars → layout v ≠ none) :
     1 ≤ instrs.length := by
-  have hRCb : layout.regConventionSafe = true := by
-    cases hbool : layout.regConventionSafe
-    · simp [verifiedGenInstr, hbool] at hGen
-    · rfl
-  have hIIb : layout.isInjective = true := by
-    cases hbool : layout.isInjective
-    · simp [verifiedGenInstr, hRCb, hbool] at hGen
-    · rfl
-  simp [verifiedGenInstr, hRCb, hIIb] at hGen
+  simp [verifiedGenInstr] at hGen
   subst hGen
   simp
 
@@ -2147,17 +2112,9 @@ theorem verifiedGenInstr_const_output_pos
     (hWTI : WellTypedInstr Γ arrayDecls (.const v val))
     (hMapped : ∀ v', v' ∈ (TAC.const v val).vars → layout v' ≠ none) :
     1 ≤ instrs.length := by
-  have hRCb : layout.regConventionSafe = true := by
-    cases hbool : layout.regConventionSafe
-    · simp [verifiedGenInstr, hbool] at hGen
-    · rfl
-  have hIIb : layout.isInjective = true := by
-    cases hbool : layout.isInjective
-    · simp [verifiedGenInstr, hRCb, hbool] at hGen
-    · rfl
   cases val with
   | int n =>
-    simp [verifiedGenInstr, hRCb, hIIb] at hGen
+    simp [verifiedGenInstr] at hGen
     split at hGen <;>
       (first
         | (subst hGen
@@ -2170,7 +2127,7 @@ theorem verifiedGenInstr_const_output_pos
            omega)
         | simp at hGen)
   | bool b =>
-    simp [verifiedGenInstr, hRCb, hIIb] at hGen
+    simp [verifiedGenInstr] at hGen
     split at hGen <;>
       (first
         | (subst hGen
@@ -2181,7 +2138,7 @@ theorem verifiedGenInstr_const_output_pos
            omega)
         | simp at hGen)
   | float f =>
-    simp [verifiedGenInstr, hRCb, hIIb] at hGen
+    simp [verifiedGenInstr] at hGen
     split at hGen <;>
       (first
         | (subst hGen
@@ -2210,15 +2167,7 @@ theorem verifiedGenInstr_arrLoad_output_pos
     (hWTI : WellTypedInstr Γ arrayDecls (.arrLoad x arr idx ty))
     (hMapped : ∀ v, v ∈ (TAC.arrLoad x arr idx ty).vars → layout v ≠ none) :
     1 ≤ instrs.length := by
-  have hRCb : layout.regConventionSafe = true := by
-    cases hbool : layout.regConventionSafe
-    · simp [verifiedGenInstr, hbool] at hGen
-    · rfl
-  have hIIb : layout.isInjective = true := by
-    cases hbool : layout.isInjective
-    · simp [verifiedGenInstr, hRCb, hbool] at hGen
-    · rfl
-  simp [verifiedGenInstr, hRCb, hIIb] at hGen
+  simp [verifiedGenInstr] at hGen
   cases ty <;>
     (simp at hGen
      split at hGen <;>
@@ -2242,15 +2191,7 @@ theorem verifiedGenInstr_arrStore_output_pos
     (hWTI : WellTypedInstr Γ arrayDecls (.arrStore arr idx val ty))
     (hMapped : ∀ v, v ∈ (TAC.arrStore arr idx val ty).vars → layout v ≠ none) :
     1 ≤ instrs.length := by
-  have hRCb : layout.regConventionSafe = true := by
-    cases hbool : layout.regConventionSafe
-    · simp [verifiedGenInstr, hbool] at hGen
-    · rfl
-  have hIIb : layout.isInjective = true := by
-    cases hbool : layout.isInjective
-    · simp [verifiedGenInstr, hRCb, hbool] at hGen
-    · rfl
-  simp [verifiedGenInstr, hRCb, hIIb] at hGen
+  simp [verifiedGenInstr] at hGen
   split at hGen <;>
     (first
       | (subst hGen
@@ -2275,15 +2216,7 @@ theorem verifiedGenInstr_halt_output_pos
     (hWTI : WellTypedInstr Γ arrayDecls .halt)
     (hMapped : ∀ v, v ∈ TAC.vars .halt → layout v ≠ none) :
     1 ≤ instrs.length := by
-  have hRCb : layout.regConventionSafe = true := by
-    cases hbool : layout.regConventionSafe
-    · simp [verifiedGenInstr, hbool] at hGen
-    · rfl
-  have hIIb : layout.isInjective = true := by
-    cases hbool : layout.isInjective
-    · simp [verifiedGenInstr, hRCb, hbool] at hGen
-    · rfl
-  simp [verifiedGenInstr, hRCb, hIIb] at hGen
+  simp [verifiedGenInstr] at hGen
   subst hGen
   simp
 
@@ -2304,15 +2237,7 @@ theorem verifiedGenInstr_fbinop_output_pos
     (hWTI : WellTypedInstr Γ arrayDecls (.fbinop dst fop lv rv))
     (hMapped : ∀ v, v ∈ (TAC.fbinop dst fop lv rv).vars → layout v ≠ none) :
     1 ≤ instrs.length := by
-  have hRCb : layout.regConventionSafe = true := by
-    cases hbool : layout.regConventionSafe
-    · simp [verifiedGenInstr, hbool] at hGen
-    · rfl
-  have hIIb : layout.isInjective = true := by
-    cases hbool : layout.isInjective
-    · simp [verifiedGenInstr, hRCb, hbool] at hGen
-    · rfl
-  simp [verifiedGenInstr, hRCb, hIIb] at hGen
+  simp [verifiedGenInstr] at hGen
   split at hGen <;> first
     | (subst hGen
        simp only [List.length_append, List.length_cons, List.length_nil]; omega)
@@ -2336,15 +2261,7 @@ theorem verifiedGenInstr_intToFloat_output_pos
     (hWTI : WellTypedInstr Γ arrayDecls (.intToFloat dst src))
     (hMapped : ∀ v, v ∈ (TAC.intToFloat dst src).vars → layout v ≠ none) :
     1 ≤ instrs.length := by
-  have hRCb : layout.regConventionSafe = true := by
-    cases hbool : layout.regConventionSafe
-    · simp [verifiedGenInstr, hbool] at hGen
-    · rfl
-  have hIIb : layout.isInjective = true := by
-    cases hbool : layout.isInjective
-    · simp [verifiedGenInstr, hRCb, hbool] at hGen
-    · rfl
-  simp [verifiedGenInstr, hRCb, hIIb] at hGen
+  simp [verifiedGenInstr] at hGen
   split at hGen <;> first
     | (subst hGen
        simp only [List.length_append, List.length_cons, List.length_nil]; omega)
@@ -2368,15 +2285,7 @@ theorem verifiedGenInstr_floatToInt_output_pos
     (hWTI : WellTypedInstr Γ arrayDecls (.floatToInt dst src))
     (hMapped : ∀ v, v ∈ (TAC.floatToInt dst src).vars → layout v ≠ none) :
     1 ≤ instrs.length := by
-  have hRCb : layout.regConventionSafe = true := by
-    cases hbool : layout.regConventionSafe
-    · simp [verifiedGenInstr, hbool] at hGen
-    · rfl
-  have hIIb : layout.isInjective = true := by
-    cases hbool : layout.isInjective
-    · simp [verifiedGenInstr, hRCb, hbool] at hGen
-    · rfl
-  simp [verifiedGenInstr, hRCb, hIIb] at hGen
+  simp [verifiedGenInstr] at hGen
   split at hGen <;> first
     | (subst hGen
        simp only [List.length_append, List.length_cons, List.length_nil]; omega)
@@ -2400,15 +2309,7 @@ theorem verifiedGenInstr_floatUnary_output_pos
     (hWTI : WellTypedInstr Γ arrayDecls (.floatUnary dst op src))
     (hMapped : ∀ v, v ∈ (TAC.floatUnary dst op src).vars → layout v ≠ none) :
     1 ≤ instrs.length := by
-  have hRCb : layout.regConventionSafe = true := by
-    cases hbool : layout.regConventionSafe
-    · simp [verifiedGenInstr, hbool] at hGen
-    · rfl
-  have hIIb : layout.isInjective = true := by
-    cases hbool : layout.isInjective
-    · simp [verifiedGenInstr, hRCb, hbool] at hGen
-    · rfl
-  simp [verifiedGenInstr, hRCb, hIIb] at hGen
+  simp [verifiedGenInstr] at hGen
   split at hGen <;> first
     | (subst hGen
        simp only [List.length_append, List.length_cons, List.length_nil]; omega)
@@ -2432,15 +2333,7 @@ theorem verifiedGenInstr_fternop_output_pos
     (hWTI : WellTypedInstr Γ arrayDecls (.fternop dst op a b c))
     (hMapped : ∀ v, v ∈ (TAC.fternop dst op a b c).vars → layout v ≠ none) :
     1 ≤ instrs.length := by
-  have hRCb : layout.regConventionSafe = true := by
-    cases hbool : layout.regConventionSafe
-    · simp [verifiedGenInstr, hbool] at hGen
-    · rfl
-  have hIIb : layout.isInjective = true := by
-    cases hbool : layout.isInjective
-    · simp [verifiedGenInstr, hRCb, hbool] at hGen
-    · rfl
-  simp [verifiedGenInstr, hRCb, hIIb] at hGen
+  simp [verifiedGenInstr] at hGen
   split at hGen <;> first
     | (subst hGen
        simp only [List.length_append, List.length_cons, List.length_nil]; omega)
@@ -2462,15 +2355,7 @@ theorem verifiedGenInstr_printInt_output_pos
     (hWTI : WellTypedInstr Γ arrayDecls (.printInt v))
     (hMapped : ∀ v', v' ∈ (TAC.printInt v).vars → layout v' ≠ none) :
     1 ≤ instrs.length := by
-  have hRCb : layout.regConventionSafe = true := by
-    cases hbool : layout.regConventionSafe
-    · simp [verifiedGenInstr, hbool] at hGen
-    · rfl
-  have hIIb : layout.isInjective = true := by
-    cases hbool : layout.isInjective
-    · simp [verifiedGenInstr, hRCb, hbool] at hGen
-    · rfl
-  simp [verifiedGenInstr, hRCb, hIIb] at hGen
+  simp [verifiedGenInstr] at hGen
   split at hGen <;> first
     | (subst hGen
        simp only [List.length_append, List.length_cons, List.length_nil]; omega)
@@ -2492,15 +2377,7 @@ theorem verifiedGenInstr_printBool_output_pos
     (hWTI : WellTypedInstr Γ arrayDecls (.printBool v))
     (hMapped : ∀ v', v' ∈ (TAC.printBool v).vars → layout v' ≠ none) :
     1 ≤ instrs.length := by
-  have hRCb : layout.regConventionSafe = true := by
-    cases hbool : layout.regConventionSafe
-    · simp [verifiedGenInstr, hbool] at hGen
-    · rfl
-  have hIIb : layout.isInjective = true := by
-    cases hbool : layout.isInjective
-    · simp [verifiedGenInstr, hRCb, hbool] at hGen
-    · rfl
-  simp [verifiedGenInstr, hRCb, hIIb] at hGen
+  simp [verifiedGenInstr] at hGen
   split at hGen <;> first
     | (subst hGen
        simp only [List.length_append, List.length_cons, List.length_nil]; omega)
@@ -2522,15 +2399,7 @@ theorem verifiedGenInstr_printFloat_output_pos
     (hWTI : WellTypedInstr Γ arrayDecls (.printFloat v))
     (hMapped : ∀ v', v' ∈ (TAC.printFloat v).vars → layout v' ≠ none) :
     1 ≤ instrs.length := by
-  have hRCb : layout.regConventionSafe = true := by
-    cases hbool : layout.regConventionSafe
-    · simp [verifiedGenInstr, hbool] at hGen
-    · rfl
-  have hIIb : layout.isInjective = true := by
-    cases hbool : layout.isInjective
-    · simp [verifiedGenInstr, hRCb, hbool] at hGen
-    · rfl
-  simp [verifiedGenInstr, hRCb, hIIb] at hGen
+  simp [verifiedGenInstr] at hGen
   split at hGen <;> first
     | (subst hGen
        simp only [List.length_append, List.length_cons, List.length_nil]; omega)
@@ -2552,15 +2421,7 @@ theorem verifiedGenInstr_printString_output_pos
     (hWTI : WellTypedInstr Γ arrayDecls (.printString lit))
     (hMapped : ∀ v, v ∈ (TAC.printString lit).vars → layout v ≠ none) :
     1 ≤ instrs.length := by
-  have hRCb : layout.regConventionSafe = true := by
-    cases hbool : layout.regConventionSafe
-    · simp [verifiedGenInstr, hbool] at hGen
-    · rfl
-  have hIIb : layout.isInjective = true := by
-    cases hbool : layout.isInjective
-    · simp [verifiedGenInstr, hRCb, hbool] at hGen
-    · rfl
-  simp [verifiedGenInstr, hRCb, hIIb] at hGen
+  simp [verifiedGenInstr] at hGen
   subst hGen
   simp
 
@@ -2666,8 +2527,8 @@ theorem verifiedGenInstr_length_pcMap_ind
     simp only [verifiedGenInstr] at h1 h2
     split at h1 <;> simp_all <;> split at h2 <;> simp_all
   | goto l =>
-    simp only [verifiedGenInstr] at h1 h2
-    split at h1 <;> simp_all; subst h1; subst h2; rfl
+    simp only [verifiedGenInstr, Option.some.injEq] at h1 h2
+    subst_vars; rfl
   | ifgoto be l =>
     simp only [verifiedGenInstr] at h1 h2
     -- Split the `if !be.hasSimpleOps` guard
@@ -2678,8 +2539,8 @@ theorem verifiedGenInstr_length_pcMap_ind
     all_goals (try obtain ⟨_, h2⟩ := h2)
     all_goals (subst_vars; simp [List.length_append, List.length_cons])
   | halt =>
-    simp only [verifiedGenInstr] at h1 h2
-    split at h1 <;> simp_all <;> subst_vars <;> simp_all
+    simp only [verifiedGenInstr, Option.some.injEq] at h1 h2
+    subst_vars; rfl
   | arrLoad x arr idx ty =>
     simp only [verifiedGenInstr] at h1 h2
     split at h1 <;> simp_all <;> split at h2 <;> simp_all
@@ -2746,30 +2607,26 @@ theorem verifiedGenInstr_length_params_ind
     simp only [verifiedGenInstr] at h1 h2
     split at h1 <;> simp_all <;> split at h2 <;> simp_all
   | goto l =>
-    simp only [verifiedGenInstr] at h1 h2
-    split at h1 <;> split at h2 <;> simp_all
-    cases h1; cases h2; rfl
+    simp only [verifiedGenInstr, Option.some.injEq] at h1 h2
+    subst_vars; rfl
   | ifgoto be l =>
     simp only [verifiedGenInstr] at h1 h2
-    split at h1 <;> simp_all
-    all_goals try (split at h1 <;> simp_all)
+    split at h1 <;> split at h2 <;> simp_all
+    all_goals (try (split at h1 <;> split at h2 <;> simp_all))
     all_goals (try obtain ⟨_, h1⟩ := h1)
     all_goals (try obtain ⟨_, h2⟩ := h2)
-    all_goals (try (subst_vars; simp [List.length_append, List.length_cons]))
+    all_goals (subst_vars; simp [List.length_append, List.length_cons])
   | halt =>
-    simp only [verifiedGenInstr] at h1 h2
-    split at h1 <;> split at h2 <;> simp_all
-    cases h1; cases h2; rfl
+    simp only [verifiedGenInstr, Option.some.injEq] at h1 h2
+    subst_vars; rfl
   | arrLoad x arr idx ty =>
     simp only [verifiedGenInstr] at h1 h2
-    split at h1 <;> simp_all
     cases ty
     all_goals (
       simp_all <;>
       (try (cases h1; cases h2; simp [List.length_append, List.length_cons]; try split <;> simp [List.length_append, List.length_cons])))
   | arrStore arr idx val ty =>
     simp only [verifiedGenInstr] at h1 h2
-    split at h1 <;> simp_all
     cases ty
     all_goals (
       simp_all <;>

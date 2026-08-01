@@ -98,21 +98,33 @@ private def collectArrays (p : Prog) : List String :=
 private def emit (lines : List String) : String :=
   String.intercalate "\n" lines
 
+/-- Emit a `ldr`/`str` of `reg` at stack byte-offset `off`, legalizing offsets past the AArch64
+    scaled 12-bit immediate ceiling.  An 8-aligned offset `≤ 32760` uses the compact immediate
+    form `[sp, #off]`; any larger (or unaligned) offset is materialized in the reserved scratch
+    `x16` (IP0 — never used by the emitted body) and accessed register-indexed.  This removes any
+    limit on the number of stack-resident variables: the frame may be arbitrarily large.
+    `verb` is `"ldr"` or `"str"`; the same form is valid for the `d*` float registers. -/
+private def slotAccess (verb reg : String) (off : Nat) : List String :=
+  if off % 8 == 0 && off ≤ 32760 then
+    [s!"  {verb} {reg}, [sp, #{off}]"]
+  else
+    [s!"  ldr x16, ={off}", s!"  {verb} {reg}, [sp, x16]"]
+
 /-- Load/store a stack variable (used only in prologue/epilogue/printf code). -/
-private def loadVar (varMap : List (Var × Nat)) (v : Var) (reg : String) : String :=
+private def loadVar (varMap : List (Var × Nat)) (v : Var) (reg : String) : List String :=
   match lookupVar varMap v with
-  | some off => s!"  ldr {reg}, [sp, #{off}]"
-  | none => s!"  // ERROR: unknown variable {v}"
+  | some off => slotAccess "ldr" reg off
+  | none => [s!"  // ERROR: unknown variable {v}"]
 
-private def storeVar (varMap : List (Var × Nat)) (v : Var) (reg : String) : String :=
+private def storeVar (varMap : List (Var × Nat)) (v : Var) (reg : String) : List String :=
   match lookupVar varMap v with
-  | some off => s!"  str {reg}, [sp, #{off}]"
-  | none => s!"  // ERROR: unknown variable {v}"
+  | some off => slotAccess "str" reg off
+  | none => [s!"  // ERROR: unknown variable {v}"]
 
-private def loadVarFP (varMap : List (Var × Nat)) (v : Var) (freg : String) : String :=
+private def loadVarFP (varMap : List (Var × Nat)) (v : Var) (freg : String) : List String :=
   match lookupVar varMap v with
-  | some off => s!"  ldr {freg}, [sp, #{off}]"
-  | none => s!"  // ERROR: unknown variable {v}"
+  | some off => slotAccess "ldr" freg off
+  | none => [s!"  // ERROR: unknown variable {v}"]
 
 -- ============================================================
 -- § 2a. ArmInstr pretty-printer
@@ -140,15 +152,15 @@ private def genPrintArgLoad (tyCtx : TyCtx) (layout : VarLayout)
   let storeInstr := "  str " ++ (if tyCtx v == .float then "d0" else "x1") ++
     ", [sp, #" ++ toString (i * 8) ++ "]"
   if tyCtx v == .float then
-    let loadLine := match layout v with
-      | some (.freg reg) => s!"  fmov d0, {ppFReg reg}"
+    let loadLines := match layout v with
+      | some (.freg reg) => [s!"  fmov d0, {ppFReg reg}"]
       | _ => loadVarFP varMap v "d0"
-    loadLine :: storeInstr :: []
+    loadLines ++ [storeInstr]
   else
-    let loadLine := match layout v with
-      | some (.ireg reg) => s!"  mov x1, {ppReg reg}"
+    let loadLines := match layout v with
+      | some (.ireg reg) => [s!"  mov x1, {ppReg reg}"]
       | _ => loadVar varMap v "x1"
-    loadLine :: storeInstr :: []
+    loadLines ++ [storeInstr]
 
 private def ppCond : Cond → String
   | .eq => "eq" | .ne => "ne" | .lt => "lt" | .le => "le" | .gt => "gt" | .ge => "ge"
@@ -979,6 +991,11 @@ structure GenAsmSpec (tyCtx : TyCtx) (p : Prog) (r : VerifiedAsmResult) : Prop w
   regConventionSafe : RegConventionSafe r.layout
   /-- No two variables share a register/stack location. -/
   injective : VarLayoutInjective r.layout
+  /-- The layout passed `verifiedGenerateAsm`'s executable `regConventionSafe`/`isInjective`
+      checks.  These `Bool` facts are needed now that the per-instruction validity guard was
+      hoisted out of `verifiedGenInstr`: the correctness lemmas take them as hypotheses. -/
+  regConventionSafeBool : r.layout.regConventionSafe = true
+  isInjectiveBool : r.layout.isInjective = true
   /-- bodyPerPC has one entry per TAC instruction. -/
   bodySize : r.bodyPerPC.size = p.size
   /-- Each non-print, non-lib-call bodyPerPC entry was produced by verifiedGenInstr
@@ -1285,8 +1302,7 @@ private theorem verifiedGenInstr_length_pcMap_indep {layout : VarLayout}
     l₁.length = l₂.length := by
   cases instr with
   | goto l =>
-    simp [verifiedGenInstr] at h₁ h₂
-    obtain ⟨_, h₁⟩ := h₁; obtain ⟨_, h₂⟩ := h₂; subst h₁; subst h₂; rfl
+    simp only [verifiedGenInstr, Option.some.injEq] at h₁ h₂ <;> subst_vars <;> rfl
   | ifgoto be l =>
     simp only [verifiedGenInstr] at h₁ h₂
     split at h₁ <;> simp_all
@@ -1392,7 +1408,6 @@ private theorem instrLength_eq_length {layout : VarLayout} {pcMap : Nat → Nat}
       -- Failure of verifiedGenInstr for .binop depends only on layout (freg checks).
       simp only [verifiedGenInstr] at h hd
       split at hd <;> simp_all <;> split at h <;> simp_all
-      split at hd <;> split at h <;> simp_all
     | some dl =>
       have hLen := verifiedGenInstr_length_params_ind layout (.binop x op y z)
         (fun _ => 0) pcMap 0 0 0 haltS divS boundsS arrayDecls safe dl instrs hd h
@@ -1401,8 +1416,8 @@ private theorem instrLength_eq_length {layout : VarLayout} {pcMap : Nat → Nat}
     simp only [instrLength, isLibCallTAC, verifiedGenInstr] at *
     split at h <;> simp_all
   | goto l =>
-    simp only [instrLength, isLibCallTAC, verifiedGenInstr] at *
-    split at h <;> simp_all; subst_vars; simp
+    simp only [instrLength, isLibCallTAC, verifiedGenInstr, Option.some.injEq] at *
+    subst_vars; rfl
   | ifgoto be l =>
     simp only [instrLength, isLibCallTAC]
     generalize hd : verifiedGenInstr layout (fun _ => 0)
@@ -1422,7 +1437,7 @@ private theorem instrLength_eq_length {layout : VarLayout} {pcMap : Nat → Nat}
     cases dr with
     | none =>
       simp only [verifiedGenInstr] at h hd
-      split at hd <;> simp_all <;> split at h <;> simp_all
+      simp_all
     | some dl =>
       have hLen := verifiedGenInstr_length_params_ind layout TAC.halt
         (fun _ => 0) pcMap 0 0 0 haltS divS boundsS arrayDecls safe dl instrs hd h
@@ -2253,7 +2268,7 @@ private theorem verifiedGenInstr_total
         | freg _ => simp_all
         | stack _ => simp_all
   case binop hx hy hz =>
-    unfold verifiedGenInstr; simp only [hRC, hII, Bool.not_true, Bool.false_or]; dsimp
+    unfold verifiedGenInstr; simp only [hRC, hII, Bool.not_true, Bool.false_or]
     split
     · next _ _ _ _ r h => exact absurd h (hWTL.int_not_freg hy r)
     · next _ _ _ r h _ => exact absurd h (hWTL.int_not_freg hz r)
@@ -2269,7 +2284,7 @@ private theorem verifiedGenInstr_total
       · rename_i _ _ r h; exact absurd h (hWTL.bool_not_freg hx r)
       · exact ⟨_, rfl⟩
   case ifgoto _ =>
-    unfold verifiedGenInstr; simp only [hRC, hII, Bool.not_true, Bool.false_or]; dsimp
+    unfold verifiedGenInstr; simp only [hRC, hII, Bool.not_true, Bool.false_or]
     simp only [TAC.hasSimpleOps] at hSimple; simp only [hSimple, Bool.not_true, ↓reduceIte]
     split
     · rename_i h; exact absurd h (by decide)
@@ -2277,32 +2292,32 @@ private theorem verifiedGenInstr_total
   case arrLoad => unfold verifiedGenInstr; simp [hRC, hII]; split <;> exact ⟨_, rfl⟩
   case arrStore => unfold verifiedGenInstr; simp [hRC, hII]; split <;> exact ⟨_, rfl⟩
   case fbinop hx hy hz =>
-    unfold verifiedGenInstr; simp only [hRC, hII, Bool.not_true, Bool.false_or]; dsimp
+    unfold verifiedGenInstr; simp only [hRC, hII, Bool.not_true, Bool.false_or]
     split
     · next _ _ _ _ r h => exact absurd h (hWTL.float_not_ireg hy r)
     · next _ _ _ r h _ => exact absurd h (hWTL.float_not_ireg hz r)
     · next _ _ r h _ _ => exact absurd h (hWTL.float_not_ireg hx r)
     · exact ⟨_, rfl⟩
   case intToFloat hx hy =>
-    unfold verifiedGenInstr; simp only [hRC, hII, Bool.not_true, Bool.false_or]; dsimp
+    unfold verifiedGenInstr; simp only [hRC, hII, Bool.not_true, Bool.false_or]
     split
     · next _ _ r h => exact absurd h (hWTL.int_not_freg hy r)
     · next _ r h _ => exact absurd h (hWTL.float_not_ireg hx r)
     · exact ⟨_, rfl⟩
   case floatToInt hx hy =>
-    unfold verifiedGenInstr; simp only [hRC, hII, Bool.not_true, Bool.false_or]; dsimp
+    unfold verifiedGenInstr; simp only [hRC, hII, Bool.not_true, Bool.false_or]
     split
     · next _ _ r h => exact absurd h (hWTL.float_not_ireg hy r)
     · next _ r h _ => exact absurd h (hWTL.int_not_freg hx r)
     · exact ⟨_, rfl⟩
   case floatUnary hx hy =>
-    unfold verifiedGenInstr; simp only [hRC, hII, Bool.not_true, Bool.false_or]; dsimp
+    unfold verifiedGenInstr; simp only [hRC, hII, Bool.not_true, Bool.false_or]
     split
     · next _ _ r h => exact absurd h (hWTL.float_not_ireg hy r)
     · next _ r h _ => exact absurd h (hWTL.float_not_ireg hx r)
     · exact ⟨_, rfl⟩
   case fternop hx ha hb hc =>
-    unfold verifiedGenInstr; simp only [hRC, hII, Bool.not_true, Bool.false_or]; dsimp
+    unfold verifiedGenInstr; simp only [hRC, hII, Bool.not_true, Bool.false_or]
     split
     · next _ _ _ _ r h => exact absurd h (hWTL.float_not_ireg ha r)
     · next _ _ _ r h _ => exact absurd h (hWTL.float_not_ireg hb r)
@@ -2311,13 +2326,13 @@ private theorem verifiedGenInstr_total
     · exact ⟨_, rfl⟩
   case printInt hv =>
     rename_i v
-    unfold verifiedGenInstr; simp only [hRC, hII, Bool.not_true, Bool.false_or]; dsimp
+    unfold verifiedGenInstr; simp only [hRC, hII, Bool.not_true, Bool.false_or]
     split
     · next r h => exact absurd h (hWTL.int_not_freg hv r)
     · exact ⟨_, rfl⟩
   case printBool hv =>
     rename_i v
-    unfold verifiedGenInstr; simp only [hRC, hII, Bool.not_true, Bool.false_or]; dsimp
+    unfold verifiedGenInstr; simp only [hRC, hII, Bool.not_true, Bool.false_or]
     split
     · next r h =>
       rcases hv with h_bool | h_int
@@ -2326,7 +2341,7 @@ private theorem verifiedGenInstr_total
     · exact ⟨_, rfl⟩
   case printFloat hv =>
     rename_i v
-    unfold verifiedGenInstr; simp only [hRC, hII, Bool.not_true, Bool.false_or]; dsimp
+    unfold verifiedGenInstr; simp only [hRC, hII, Bool.not_true, Bool.false_or]
     split
     · next r h => exact absurd h (hWTL.float_not_ireg hv r)
     · exact ⟨_, rfl⟩
@@ -3696,6 +3711,8 @@ theorem verifiedGenerateAsm_spec {tyCtx : TyCtx} {p : Prog} {r : VerifiedAsmResu
             checkWellTypedLayout_wellTyped ‹_›,
             VarLayout.regConventionSafe_spec _ hRC,
             VarLayout.isInjective_spec _ hII,
+            hRC,
+            hII,
             by simp [Prog.size_eq]; exact hBSz,
             ?instrGen, ?pcMapLengths, ?layoutComplete, ?callSiteSaveRestore,
             ?printSaveRestore, ?callerSaveSpec,
@@ -4363,31 +4380,22 @@ private theorem step_simulation {tyCtx : TyCtx} {p : Prog} {r : VerifiedAsmResul
       | floatUnary x op y =>
         -- Step 2: unfold verifiedGenInstr for floatUnary
         rw [show p[pc] = p.code[pc] from rfl, hInstr] at hGenInstr
-        have hRC : r.layout.regConventionSafe = true := by
-          cases h : r.layout.regConventionSafe
-          · simp [verifiedGenInstr, h] at hGenInstr
-          · rfl
-        have hII : r.layout.isInjective = true := by
-          cases h : r.layout.isInjective
-          · simp [verifiedGenInstr, hRC, h] at hGenInstr
-          · rfl
-        have hRegConv : RegConventionSafe r.layout := VarLayout.regConventionSafe_spec r.layout hRC
-        have hInjective : VarLayoutInjective r.layout := VarLayout.isInjective_spec r.layout hII
+        have hRegConv : RegConventionSafe r.layout := spec.regConventionSafe
+        have hInjective : VarLayoutInjective r.layout := spec.injective
         have hNotIregY : ∀ ir, r.layout y ≠ some (.ireg ir) := by
-          intro ir h; have := hGenInstr; simp [verifiedGenInstr, hRC, hII, h] at this
+          intro ir h; have := hGenInstr; simp [verifiedGenInstr, h] at this
         have hNotIregX : ∀ ir, r.layout x ≠ some (.ireg ir) := by
           intro ir h; have := hGenInstr
-          simp only [verifiedGenInstr, hRC, hII, Bool.not_true, Bool.false_or, h] at this
-          split at this <;> simp_all
+          simp only [verifiedGenInstr, h] at this
+          first | (split at this <;> simp_all) | simp_all
         let src_reg := match r.layout y with | some (.freg r) => r | _ => ArmFReg.d0
         let dst_reg := match r.layout x with | some (.freg r) => r | _ => ArmFReg.d0
         have hInstrs : baseInstrs =
             vLoadVarFP r.layout y src_reg ++ [.floatUnaryInstr op dst_reg src_reg] ++
             vStoreVarFP r.layout x dst_reg := by
-          simp only [verifiedGenInstr, hRC, hII, Bool.not_true, Bool.false_or] at hGenInstr
-          split at hGenInstr
-          · simp_all
-          · exact (Option.some.inj hGenInstr).symm
+          simp only [verifiedGenInstr] at hGenInstr
+          split at hGenInstr <;> simp_all [src_reg, dst_reg]
+          all_goals exact hGenInstr.symm
         -- Phase A: load y into src_reg
         rw [hInstrs] at hCodeBase
         have hCodeLoad := hCodeBase.append_left.append_left
@@ -4713,22 +4721,14 @@ private theorem step_simulation {tyCtx : TyCtx} {p : Prog} {r : VerifiedAsmResul
         | fpow =>
           -- Step 2: unfold verifiedGenInstr for fbinop fpow
           rw [show p[pc] = p.code[pc] from rfl, hInstr] at hGenInstr
-          have hRC : r.layout.regConventionSafe = true := by
-            cases h : r.layout.regConventionSafe
-            · simp [verifiedGenInstr, h] at hGenInstr
-            · rfl
-          have hII : r.layout.isInjective = true := by
-            cases h : r.layout.isInjective
-            · simp [verifiedGenInstr, hRC, h] at hGenInstr
-            · rfl
-          have hRegConv : RegConventionSafe r.layout := VarLayout.regConventionSafe_spec r.layout hRC
-          have hInjective : VarLayoutInjective r.layout := VarLayout.isInjective_spec r.layout hII
+          have hRegConv : RegConventionSafe r.layout := spec.regConventionSafe
+          have hInjective : VarLayoutInjective r.layout := spec.injective
           have hNotIregY : ∀ ir, r.layout y ≠ some (.ireg ir) := by
-            intro ir h; have := hGenInstr; simp [verifiedGenInstr, hRC, hII, h] at this
+            intro ir h; have := hGenInstr; simp [verifiedGenInstr, h] at this
           have hNotIregZ : ∀ ir, r.layout z ≠ some (.ireg ir) := by
-            intro ir h; have := hGenInstr; simp [verifiedGenInstr, hRC, hII, h] at this
+            intro ir h; have := hGenInstr; simp [verifiedGenInstr, h] at this
           have hNotIregX : ∀ ir, r.layout x ≠ some (.ireg ir) := by
-            intro ir h; have := hGenInstr; simp [verifiedGenInstr, hRC, hII, h] at this
+            intro ir h; have := hGenInstr; simp [verifiedGenInstr, h] at this
           let lv_reg := match r.layout y with | some (.freg r) => r | _ => ArmFReg.d1
           let rv_reg := match r.layout z with | some (.freg r) => r | _ => ArmFReg.d2
           let dst_reg := match r.layout x with | some (.freg r) => r | _ => ArmFReg.d0
@@ -4737,7 +4737,7 @@ private theorem step_simulation {tyCtx : TyCtx} {p : Prog} {r : VerifiedAsmResul
               [.callBinF .fpow dst_reg lv_reg rv_reg] ++
               vStoreVarFP r.layout x dst_reg := by
             have h := hGenInstr
-            simp only [verifiedGenInstr, hRC, hII, Bool.not_true, Bool.false_or] at h
+            simp only [verifiedGenInstr] at h
             -- Eliminate ireg branches by case-splitting each layout
             rcases hly : r.layout y with _ | ⟨ir | fr | off⟩
             all_goals rcases hlz : r.layout z with _ | ⟨ir | fr | off⟩
@@ -5075,14 +5075,8 @@ private theorem step_simulation {tyCtx : TyCtx} {p : Prog} {r : VerifiedAsmResul
         -- Void lib call: bl _printInt, no destination → σ' = σ.
         -- Setup: extract regConvSafe / injective from non-failure of verifiedGenInstr
         rw [show p[pc] = p.code[pc] from rfl, hInstr] at hGenInstr
-        have hRC : r.layout.regConventionSafe = true := by
-          cases h : r.layout.regConventionSafe
-          · simp [verifiedGenInstr, h] at hGenInstr
-          · rfl
-        have hII : r.layout.isInjective = true := by
-          cases h : r.layout.isInjective
-          · simp [verifiedGenInstr, hRC, h] at hGenInstr
-          · rfl
+        have hRC : r.layout.regConventionSafe = true := spec.regConventionSafeBool
+        have hII : r.layout.isInjective = true := spec.isInjectiveBool
         have hRegConv : RegConventionSafe r.layout :=
           VarLayout.regConventionSafe_spec r.layout hRC
         have hNotFreg : ∀ fr, r.layout v ≠ some (.freg fr) := by
@@ -5092,10 +5086,8 @@ private theorem step_simulation {tyCtx : TyCtx} {p : Prog} {r : VerifiedAsmResul
           rw [show p[pc] = p.code[pc] from rfl, hInstr] at this
           exact this (by simp [TAC.vars])
         have hInstrs : baseInstrs = vLoadVar r.layout v .x0 ++ [.callPrintI] := by
-          simp only [verifiedGenInstr, hRC, hII, Bool.not_true, Bool.false_or] at hGenInstr
-          split at hGenInstr
-          · simp at hGenInstr
-          · simp at hGenInstr; exact hGenInstr.symm
+          simp only [verifiedGenInstr] at hGenInstr
+          exact (Option.some.inj hGenInstr).symm
         -- σ' = σ for printInt (no destination)
         have hσ_eq : σ' = σ := by
           funext w
@@ -5266,14 +5258,8 @@ private theorem step_simulation {tyCtx : TyCtx} {p : Prog} {r : VerifiedAsmResul
         -- Structurally identical to printInt: x0 calling convention,
         -- vLoadVar layout v .x0 ++ [.callPrintB].
         rw [show p[pc] = p.code[pc] from rfl, hInstr] at hGenInstr
-        have hRC : r.layout.regConventionSafe = true := by
-          cases h : r.layout.regConventionSafe
-          · simp [verifiedGenInstr, h] at hGenInstr
-          · rfl
-        have hII : r.layout.isInjective = true := by
-          cases h : r.layout.isInjective
-          · simp [verifiedGenInstr, hRC, h] at hGenInstr
-          · rfl
+        have hRC : r.layout.regConventionSafe = true := spec.regConventionSafeBool
+        have hII : r.layout.isInjective = true := spec.isInjectiveBool
         have hRegConv : RegConventionSafe r.layout :=
           VarLayout.regConventionSafe_spec r.layout hRC
         have hNotFreg : ∀ fr, r.layout v ≠ some (.freg fr) := by
@@ -5283,10 +5269,8 @@ private theorem step_simulation {tyCtx : TyCtx} {p : Prog} {r : VerifiedAsmResul
           rw [show p[pc] = p.code[pc] from rfl, hInstr] at this
           exact this (by simp [TAC.vars])
         have hInstrs : baseInstrs = vLoadVar r.layout v .x0 ++ [.callPrintB] := by
-          simp only [verifiedGenInstr, hRC, hII, Bool.not_true, Bool.false_or] at hGenInstr
-          split at hGenInstr
-          · simp at hGenInstr
-          · simp at hGenInstr; exact hGenInstr.symm
+          simp only [verifiedGenInstr] at hGenInstr
+          exact (Option.some.inj hGenInstr).symm
         have hσ_eq : σ' = σ := by
           funext w
           apply hDstOnly
@@ -5429,14 +5413,8 @@ private theorem step_simulation {tyCtx : TyCtx} {p : Prog} {r : VerifiedAsmResul
       | printString lit =>
         -- Void lib call, no operand: bl _printString. Single ARM step.
         rw [show p[pc] = p.code[pc] from rfl, hInstr] at hGenInstr
-        have hRC : r.layout.regConventionSafe = true := by
-          cases h : r.layout.regConventionSafe
-          · simp [verifiedGenInstr, h] at hGenInstr
-          · rfl
-        have hII : r.layout.isInjective = true := by
-          cases h : r.layout.isInjective
-          · simp [verifiedGenInstr, hRC, h] at hGenInstr
-          · rfl
+        have hRC : r.layout.regConventionSafe = true := spec.regConventionSafeBool
+        have hII : r.layout.isInjective = true := spec.isInjectiveBool
         have hInstrs : baseInstrs = [.callPrintS lit] := by
           simp only [verifiedGenInstr, hRC, hII, Bool.not_true, Bool.or_self,
                      Bool.false_eq_true, ↓reduceIte] at hGenInstr
@@ -5533,14 +5511,8 @@ private theorem step_simulation {tyCtx : TyCtx} {p : Prog} {r : VerifiedAsmResul
         -- Mirrors printInt but for fregs; vLoadVarFP_exec returns stack
         -- preservation directly so no inline 3-way case-split needed.
         rw [show p[pc] = p.code[pc] from rfl, hInstr] at hGenInstr
-        have hRC : r.layout.regConventionSafe = true := by
-          cases h : r.layout.regConventionSafe
-          · simp [verifiedGenInstr, h] at hGenInstr
-          · rfl
-        have hII : r.layout.isInjective = true := by
-          cases h : r.layout.isInjective
-          · simp [verifiedGenInstr, hRC, h] at hGenInstr
-          · rfl
+        have hRC : r.layout.regConventionSafe = true := spec.regConventionSafeBool
+        have hII : r.layout.isInjective = true := spec.isInjectiveBool
         have hRegConv : RegConventionSafe r.layout :=
           VarLayout.regConventionSafe_spec r.layout hRC
         have hNotIreg : ∀ ir, r.layout v ≠ some (.ireg ir) := by
@@ -5550,10 +5522,8 @@ private theorem step_simulation {tyCtx : TyCtx} {p : Prog} {r : VerifiedAsmResul
           rw [show p[pc] = p.code[pc] from rfl, hInstr] at this
           exact this (by simp [TAC.vars])
         have hInstrs : baseInstrs = vLoadVarFP r.layout v .d0 ++ [.callPrintF] := by
-          simp only [verifiedGenInstr, hRC, hII, Bool.not_true, Bool.false_or] at hGenInstr
-          split at hGenInstr
-          · simp at hGenInstr
-          · simp at hGenInstr; exact hGenInstr.symm
+          simp only [verifiedGenInstr] at hGenInstr
+          exact (Option.some.inj hGenInstr).symm
         have hσ_eq : σ' = σ := by
           funext w
           apply hDstOnly
@@ -5887,17 +5857,11 @@ private theorem step_simulation {tyCtx : TyCtx} {p : Prog} {r : VerifiedAsmResul
           cases hStep <;> simp_all
         subst hCfg
         -- verifiedGenInstr for .halt returns [.b r.haltS]
-        have hRC : r.layout.regConventionSafe = true := by
-          cases h : r.layout.regConventionSafe
-          · rw [hHalt] at hSome; simp [verifiedGenInstr, h] at hSome
-          · rfl
-        have hII : r.layout.isInjective = true := by
-          cases h : r.layout.isInjective
-          · rw [hHalt] at hSome; simp [verifiedGenInstr, hRC, h] at hSome
-          · rfl
+        have hRC : r.layout.regConventionSafe = true := spec.regConventionSafeBool
+        have hII : r.layout.isInjective = true := spec.isInjectiveBool
         have hInstrs : r.bodyPerPC[pc]'hpcB = [.b r.haltS] := by
           rw [hHalt] at hSome
-          simp only [verifiedGenInstr, hRC, hII, Bool.not_true, Bool.false_or] at hSome
+          simp only [verifiedGenInstr] at hSome
           exact (Option.some.inj hSome).symm
         rw [hInstrs] at hCodeAt
         -- Branch to r.haltS
@@ -5995,7 +5959,7 @@ private theorem step_simulation {tyCtx : TyCtx} {p : Prog} {r : VerifiedAsmResul
           r.haltS r.divS r.boundsS p.arrayDecls safe hOracle
           hStep hRel hPC tyCtx spec.wellTypedProg hTS spec.wellTypedLayout
           p[pc] (Prog.getElem?_eq_getElem hPC)
-          (r.bodyPerPC[pc]'hpcB) hSome hCodeAt hPcNext
+          (r.bodyPerPC[pc]'hpcB) hSome spec.regConventionSafeBool spec.isInjectiveBool hCodeAt hPcNext
           (spec.layoutComplete pc hPC) rfl hNCSL hNCSLBin hNCSLPrintInt hNCSLPrintBool hNCSLPrintFloat hNCSLPrintStr
         -- Phase D: propagate length-tracked tuple. On .run, kEBS = block length ≥ 1.
         have hLenPos : 1 ≤ (r.bodyPerPC[pc]'hpcB).length := bodyPerPC_length_pos spec pc hPC
@@ -6297,21 +6261,24 @@ def formatVerifiedAsm (r : VerifiedAsmResult) (p : Prog) : Except String String 
   -- Layout: [scratch 8B] [var1 8B] ... [varN 8B] [callee-saved slots] [padding] [x29 8B] [x30 8B]
   let calleeSaveBytes := (csIntRegs.length + csFloatRegs.length) * 8
   let frameSize := ((vars.length + 1) * 8 + calleeSaveBytes + 16 + 15) / 16 * 16
-  if frameSize > 32760 then
-    .error s!"stack frame too large ({frameSize} bytes, max 32760) — too many variables for ldr/str immediate offset"
-  -- Helpers for large immediates (AArch64 add/sub only support 12-bit unsigned imm)
+  -- Helpers for large frame constants.  AArch64 add/sub take a 12-bit unsigned immediate
+  -- (≤ 4095); anything larger is materialized in a scratch register.  `mov` only reaches a
+  -- 16-bit value, so for frames ≥ 65536 the constant comes from the literal pool (`ldr =`),
+  -- which imposes no bound on the frame size (hence no bound on the variable count).
+  let bigConst (r : String) (n : Nat) : List String :=
+    if n < 65536 then [s!"  mov {r}, #{n}"] else [s!"  ldr {r}, ={n}"]
   let subSpFrame := if frameSize ≤ 4095 then
       [s!"  sub sp, sp, #{frameSize}"]
     else
-      [s!"  mov x1, #{frameSize}", "  sub sp, sp, x1"]
+      bigConst "x1" frameSize ++ ["  sub sp, sp, x1"]
   let addSpFrame := if frameSize ≤ 4095 then
       [s!"  add sp, sp, #{frameSize}"]
     else
-      [s!"  mov x1, #{frameSize}", "  add sp, sp, x1"]
+      bigConst "x1" frameSize ++ ["  add sp, sp, x1"]
   let addFp := if frameSize - 16 ≤ 4095 then
       [s!"  add x29, sp, #{frameSize - 16}"]
     else
-      [s!"  mov x1, #{frameSize - 16}", "  add x29, sp, x1"]
+      bigConst "x1" (frameSize - 16) ++ ["  add x29, sp, x1"]
   -- Pretty-print callee-save prologue/epilogue from verified ArmInstr
   let lbl := ppLabel r.haltS r.divS r.boundsS r.tacPcOf
   let csProlog := ppInstrs lbl r.calleeSavePrologue
@@ -6322,8 +6289,8 @@ def formatVerifiedAsm (r : VerifiedAsmResult) (p : Prog) : Except String String 
     "",
     "_main:"] ++
     subSpFrame ++
-    [s!"  str x30, [sp, #{frameSize - 8}]",
-    s!"  str x29, [sp, #{frameSize - 16}]"] ++
+    slotAccess "str" "x30" (frameSize - 8) ++
+    slotAccess "str" "x29" (frameSize - 16) ++
     addFp ++
     (if csProlog.isEmpty then [] else
       ["  // Save callee-saved registers"] ++ csProlog) ++
@@ -6352,8 +6319,8 @@ def formatVerifiedAsm (r : VerifiedAsmResult) (p : Prog) : Except String String 
      "  mov x0, #0"] ++
     (if csEpilog.isEmpty then [] else
       ["  // Restore callee-saved registers"] ++ csEpilog) ++
-    [s!"  ldr x29, [sp, #{frameSize - 16}]",
-     s!"  ldr x30, [sp, #{frameSize - 8}]"] ++
+    slotAccess "ldr" "x29" (frameSize - 16) ++
+    slotAccess "ldr" "x30" (frameSize - 8) ++
     addSpFrame ++
     ["  ret",
      "",

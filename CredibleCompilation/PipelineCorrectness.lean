@@ -1478,11 +1478,8 @@ theorem tac_goto_self_loop_implies_arm_self_loop
   have hGenInstr := spec.instrGen pc hPC hNotLib hNotPrint
   rw [hGoto] at hGenInstr
   have hBodyEq : r.bodyPerPC[pc]'(spec.bodySize ▸ hPC) = [ArmInstr.b (r.pcMap pc)] := by
-    simp only [verifiedGenInstr] at hGenInstr
-    split at hGenInstr
-    · exact absurd hGenInstr (by intro h; cases h)
-    · simp only [Option.some.injEq] at hGenInstr
-      exact hGenInstr.symm
+    simp only [verifiedGenInstr, Option.some.injEq] at hGenInstr
+    exact hGenInstr.symm
   obtain ⟨lengths, hLSz, hPcMap, hLenEq⟩ := spec.pcMapLengths
   have hCodeAt0 :=
     codeAt_of_bodyFlat' r lengths hLSz hLenEq pc (spec.bodySize ▸ hPC)
@@ -2087,22 +2084,18 @@ private theorem verifiedGenInstr_goto_branch_bounded
        (∃ c, instr' = ArmInstr.bCond c lbl)) →
       lbl ≤ boundsS := by
   -- Unfold: the `if !regConv || !inj then none else …` guard.
-  simp only [verifiedGenInstr] at hGen
-  split at hGen
-  · exact absurd hGen (by intro h; cases h)
-  · -- Guard passes: output = [.b (pcMap l)].
-    simp only [Option.some.injEq] at hGen
-    subst hGen
-    intro instr' hmem lbl hbranch
-    simp only [List.mem_singleton] at hmem
-    subst hmem
-    -- instr' = ArmInstr.b (pcMap l).
-    rcases hbranch with h | ⟨rn, h⟩ | ⟨rn, h⟩ | ⟨c, h⟩
-    · -- h : ArmInstr.b (pcMap l) = ArmInstr.b lbl
-      cases h; exact hPcMapBound
-    · exact ArmInstr.noConfusion h
-    · exact ArmInstr.noConfusion h
-    · exact ArmInstr.noConfusion h
+  simp only [verifiedGenInstr, Option.some.injEq] at hGen
+  subst hGen
+  intro instr' hmem lbl hbranch
+  simp only [List.mem_singleton] at hmem
+  subst hmem
+  -- instr' = ArmInstr.b (pcMap l).
+  rcases hbranch with h | ⟨rn, h⟩ | ⟨rn, h⟩ | ⟨c, h⟩
+  · -- h : ArmInstr.b (pcMap l) = ArmInstr.b lbl
+    cases h; exact hPcMapBound
+  · exact ArmInstr.noConfusion h
+  · exact ArmInstr.noConfusion h
+  · exact ArmInstr.noConfusion h
 
 /-- Helper for Probe 2: `vLoadVar` output contains no branch instructions. -/
 private theorem vLoadVar_no_branches (layout : VarLayout) (v : Var) (tmp : ArmReg) :
@@ -2569,146 +2562,144 @@ private theorem verifiedGenInstr_ifgoto_branch_bounded
   simp only [verifiedGenInstr] at hGen
   split at hGen
   · exact absurd hGen (by intro h; cases h)
-  · split at hGen
-    · exact absurd hGen (by intro h; cases h)
-    · intro instr' hmem lbl hbranch
-      split at hGen
-      · -- .not (.cmp op a b) arm. Use fresh names to avoid conflicts with Expr `a`/`b`.
-        rename_i e1 e2 cOp
-        simp only [Option.some.injEq] at hGen
-        subst hGen
-        -- After subst, verify what e1/e2/cOp are. `cOp` should be CmpOp, e1/e2 Expr.
-        simp only [List.mem_append, List.mem_cons, List.not_mem_nil, or_false] at hmem
-        rcases hmem with (hA | hB) | hCmp | hBCond
-        · -- hA is about (match e1 with | .var => vLoadVar ... | .lit => formalLoadImm64 ... | _ => [])
-          have ⟨nb, nz, nnz, nbc⟩ := match_var_lit_loadVar_no_branches layout e1 _ hA
+  · intro instr' hmem lbl hbranch
+    split at hGen
+    · -- .not (.cmp op a b) arm. Use fresh names to avoid conflicts with Expr `a`/`b`.
+      rename_i e1 e2 cOp
+      simp only [Option.some.injEq] at hGen
+      subst hGen
+      -- After subst, verify what e1/e2/cOp are. `cOp` should be CmpOp, e1/e2 Expr.
+      simp only [List.mem_append, List.mem_cons, List.not_mem_nil, or_false] at hmem
+      rcases hmem with (hA | hB) | hCmp | hBCond
+      · -- hA is about (match e1 with | .var => vLoadVar ... | .lit => formalLoadImm64 ... | _ => [])
+        have ⟨nb, nz, nnz, nbc⟩ := match_var_lit_loadVar_no_branches layout e1 _ hA
+        rcases hbranch with h | ⟨rn, h⟩ | ⟨rn, h⟩ | ⟨c, h⟩
+        · exact absurd h (nb _)
+        · exact absurd h (nz rn _)
+        · exact absurd h (nnz rn _)
+        · exact absurd h (nbc c _)
+      · have ⟨nb, nz, nnz, nbc⟩ := match_var_lit_loadVar_no_branches layout e2 _ hB
+        rcases hbranch with h | ⟨rn, h⟩ | ⟨rn, h⟩ | ⟨c, h⟩
+        · exact absurd h (nb _)
+        · exact absurd h (nz rn _)
+        · exact absurd h (nnz rn _)
+        · exact absurd h (nbc c _)
+      · subst hCmp
+        rcases hbranch with h | ⟨rn, h⟩ | ⟨rn, h⟩ | ⟨c, h⟩
+        all_goals exact ArmInstr.noConfusion h
+      · subst hBCond
+        rcases hbranch with h | ⟨rn, h⟩ | ⟨rn, h⟩ | ⟨c, h⟩
+        · exact ArmInstr.noConfusion h
+        · exact ArmInstr.noConfusion h
+        · exact ArmInstr.noConfusion h
+        · cases h; exact hPcMapBound
+    · -- .not (.fcmp fop a b) arm. Same rename convention as .cmp: oldest-first.
+      rename_i e1 e2 fOp
+      simp only [Option.some.injEq] at hGen
+      subst hGen
+      simp only [List.mem_append, List.mem_cons, List.not_mem_nil, or_false] at hmem
+      rcases hmem with hLoads | hFcmp | hBCond
+      · -- instr' ∈ loads. Direct analysis: loadFP helper handles `.var` cleanly;
+        -- `.flit` gets distributed by simp — inline analysis in each sub-case.
+        -- Common continuation: given `(nb, nz, nnz, nbc)` for instr', close via hbranch.
+        suffices hnb :
+            (∀ lbl, instr' ≠ ArmInstr.b lbl) ∧
+            (∀ rn lbl, instr' ≠ ArmInstr.cbz rn lbl) ∧
+            (∀ rn lbl, instr' ≠ ArmInstr.cbnz rn lbl) ∧
+            (∀ c lbl, instr' ≠ ArmInstr.bCond c lbl) by
+          obtain ⟨nb, nz, nnz, nbc⟩ := hnb
           rcases hbranch with h | ⟨rn, h⟩ | ⟨rn, h⟩ | ⟨c, h⟩
           · exact absurd h (nb _)
           · exact absurd h (nz rn _)
           · exact absurd h (nnz rn _)
           · exact absurd h (nbc c _)
-        · have ⟨nb, nz, nnz, nbc⟩ := match_var_lit_loadVar_no_branches layout e2 _ hB
-          rcases hbranch with h | ⟨rn, h⟩ | ⟨rn, h⟩ | ⟨c, h⟩
-          · exact absurd h (nb _)
-          · exact absurd h (nz rn _)
-          · exact absurd h (nnz rn _)
-          · exact absurd h (nbc c _)
-        · subst hCmp
-          rcases hbranch with h | ⟨rn, h⟩ | ⟨rn, h⟩ | ⟨c, h⟩
-          all_goals exact ArmInstr.noConfusion h
-        · subst hBCond
-          rcases hbranch with h | ⟨rn, h⟩ | ⟨rn, h⟩ | ⟨c, h⟩
-          · exact ArmInstr.noConfusion h
-          · exact ArmInstr.noConfusion h
-          · exact ArmInstr.noConfusion h
-          · cases h; exact hPcMapBound
-      · -- .not (.fcmp fop a b) arm. Same rename convention as .cmp: oldest-first.
-        rename_i e1 e2 fOp
-        simp only [Option.some.injEq] at hGen
-        subst hGen
-        simp only [List.mem_append, List.mem_cons, List.not_mem_nil, or_false] at hmem
-        rcases hmem with hLoads | hFcmp | hBCond
-        · -- instr' ∈ loads. Direct analysis: loadFP helper handles `.var` cleanly;
-          -- `.flit` gets distributed by simp — inline analysis in each sub-case.
-          -- Common continuation: given `(nb, nz, nnz, nbc)` for instr', close via hbranch.
-          suffices hnb :
-              (∀ lbl, instr' ≠ ArmInstr.b lbl) ∧
-              (∀ rn lbl, instr' ≠ ArmInstr.cbz rn lbl) ∧
-              (∀ rn lbl, instr' ≠ ArmInstr.cbnz rn lbl) ∧
-              (∀ c lbl, instr' ≠ ArmInstr.bCond c lbl) by
-            obtain ⟨nb, nz, nnz, nbc⟩ := hnb
-            rcases hbranch with h | ⟨rn, h⟩ | ⟨rn, h⟩ | ⟨c, h⟩
-            · exact absurd h (nb _)
-            · exact absurd h (nz rn _)
-            · exact absurd h (nnz rn _)
-            · exact absurd h (nbc c _)
-          -- Now prove the no-branches conjunction for instr' in loads.
-          -- loads is either (match a,b) with swaps; analyze via cases on e1, e2.
-          cases e1 with
-          | var va =>
-            cases e2 with
-            | var vb =>
-              -- loads = vLoadVarFP va ++ vLoadVarFP vb
-              simp only [List.mem_append] at hLoads
-              rcases hLoads with hA | hB
-              · exact vLoadVarFP_no_branches _ _ _ _ hA
-              · exact vLoadVarFP_no_branches _ _ _ _ hB
-            | flit nb =>
-              -- loads = vLoadVarFP va ++ (formalLoadImm64 .x0 nb ++ [fmovToFP ..])
-              simp only [List.mem_append, List.mem_singleton] at hLoads
-              rcases hLoads with hA | hImm | hFmov
-              · exact vLoadVarFP_no_branches _ _ _ _ hA
-              · exact formalLoadImm64_no_branches _ _ _ hImm
-              · subst hFmov
-                refine ⟨?_, ?_, ?_, ?_⟩ <;> intros <;> intro heq <;>
-                  exact ArmInstr.noConfusion heq
-            | _ =>
-              -- loads = vLoadVarFP va ++ []
-              simp only [List.mem_append, List.not_mem_nil, or_false] at hLoads
-              exact vLoadVarFP_no_branches _ _ _ _ hLoads
-          | flit na =>
-            cases e2 with
-            | var vb =>
-              -- (e1, e2) = (.flit na, .var vb) swap — loads = loadB ++ loadA
-              -- = vLoadVarFP vb ++ (formalLoadImm64 .x0 na ++ [fmovToFP ..])
-              simp only [List.mem_append, List.mem_singleton] at hLoads
-              rcases hLoads with hB | hImm | hFmov
-              · exact vLoadVarFP_no_branches _ _ _ _ hB
-              · exact formalLoadImm64_no_branches _ _ _ hImm
-              · subst hFmov
-                refine ⟨?_, ?_, ?_, ?_⟩ <;> intros <;> intro heq <;>
-                  exact ArmInstr.noConfusion heq
-            | flit nb =>
-              -- loads = loadA ++ loadB = (formalLoadImm64 .x0 na ++ [fmov]) ++ (formalLoadImm64 .x0 nb ++ [fmov])
-              simp only [List.mem_append, List.mem_singleton] at hLoads
-              rcases hLoads with (hImmA | hFmovA) | (hImmB | hFmovB)
-              · exact formalLoadImm64_no_branches _ _ _ hImmA
-              · subst hFmovA
-                refine ⟨?_, ?_, ?_, ?_⟩ <;> intros <;> intro heq <;>
-                  exact ArmInstr.noConfusion heq
-              · exact formalLoadImm64_no_branches _ _ _ hImmB
-              · subst hFmovB
-                refine ⟨?_, ?_, ?_, ?_⟩ <;> intros <;> intro heq <;>
-                  exact ArmInstr.noConfusion heq
-            | _ =>
-              -- loads = (formalLoadImm64 .x0 na ++ [fmov]) ++ []
-              simp only [List.mem_append, List.mem_singleton, List.not_mem_nil, or_false]
-                at hLoads
-              rcases hLoads with hImm | hFmov
-              · exact formalLoadImm64_no_branches _ _ _ hImm
-              · subst hFmov
-                refine ⟨?_, ?_, ?_, ?_⟩ <;> intros <;> intro heq <;>
-                  exact ArmInstr.noConfusion heq
+        -- Now prove the no-branches conjunction for instr' in loads.
+        -- loads is either (match a,b) with swaps; analyze via cases on e1, e2.
+        cases e1 with
+        | var va =>
+          cases e2 with
+          | var vb =>
+            -- loads = vLoadVarFP va ++ vLoadVarFP vb
+            simp only [List.mem_append] at hLoads
+            rcases hLoads with hA | hB
+            · exact vLoadVarFP_no_branches _ _ _ _ hA
+            · exact vLoadVarFP_no_branches _ _ _ _ hB
+          | flit nb =>
+            -- loads = vLoadVarFP va ++ (formalLoadImm64 .x0 nb ++ [fmovToFP ..])
+            simp only [List.mem_append, List.mem_singleton] at hLoads
+            rcases hLoads with hA | hImm | hFmov
+            · exact vLoadVarFP_no_branches _ _ _ _ hA
+            · exact formalLoadImm64_no_branches _ _ _ hImm
+            · subst hFmov
+              refine ⟨?_, ?_, ?_, ?_⟩ <;> intros <;> intro heq <;>
+                exact ArmInstr.noConfusion heq
           | _ =>
-            -- e1 is neither .var nor .flit. loadA = []. loads = [] ++ loadB = loadB.
-            simp only [List.mem_append, List.not_mem_nil, false_or] at hLoads
-            exact match_var_flit_loadFP_no_branches layout e2 _ hLoads
-        · subst hFcmp
-          rcases hbranch with h | ⟨rn, h⟩ | ⟨rn, h⟩ | ⟨c, h⟩
-          all_goals exact ArmInstr.noConfusion h
-        · subst hBCond
-          rcases hbranch with h | ⟨rn, h⟩ | ⟨rn, h⟩ | ⟨c, h⟩
-          · exact ArmInstr.noConfusion h
-          · exact ArmInstr.noConfusion h
-          · exact ArmInstr.noConfusion h
-          · cases h; exact hPcMapBound
-      · -- fallback: verifiedGenBoolExpr be ++ [.cbnz .x0 (pcMap l)]
-        simp only [Option.some.injEq] at hGen
-        subst hGen
-        simp only [List.mem_append, List.mem_cons, List.not_mem_nil, or_false] at hmem
-        rcases hmem with hBE | hCbnz
-        · have ⟨nb, nz, nnz, nbc⟩ := verifiedGenBoolExpr_no_branches _ _ _ hBE
-          rcases hbranch with h | ⟨rn, h⟩ | ⟨rn, h⟩ | ⟨c, h⟩
-          · exact absurd h (nb _)
-          · exact absurd h (nz rn _)
-          · exact absurd h (nnz rn _)
-          · exact absurd h (nbc c _)
-        · subst hCbnz
-          rcases hbranch with h | ⟨rn, h⟩ | ⟨rn, h⟩ | ⟨c, h⟩
-          · exact ArmInstr.noConfusion h
-          · exact ArmInstr.noConfusion h
-          · cases h; exact hPcMapBound
-          · exact ArmInstr.noConfusion h
+            -- loads = vLoadVarFP va ++ []
+            simp only [List.mem_append, List.not_mem_nil, or_false] at hLoads
+            exact vLoadVarFP_no_branches _ _ _ _ hLoads
+        | flit na =>
+          cases e2 with
+          | var vb =>
+            -- (e1, e2) = (.flit na, .var vb) swap — loads = loadB ++ loadA
+            -- = vLoadVarFP vb ++ (formalLoadImm64 .x0 na ++ [fmovToFP ..])
+            simp only [List.mem_append, List.mem_singleton] at hLoads
+            rcases hLoads with hB | hImm | hFmov
+            · exact vLoadVarFP_no_branches _ _ _ _ hB
+            · exact formalLoadImm64_no_branches _ _ _ hImm
+            · subst hFmov
+              refine ⟨?_, ?_, ?_, ?_⟩ <;> intros <;> intro heq <;>
+                exact ArmInstr.noConfusion heq
+          | flit nb =>
+            -- loads = loadA ++ loadB = (formalLoadImm64 .x0 na ++ [fmov]) ++ (formalLoadImm64 .x0 nb ++ [fmov])
+            simp only [List.mem_append, List.mem_singleton] at hLoads
+            rcases hLoads with (hImmA | hFmovA) | (hImmB | hFmovB)
+            · exact formalLoadImm64_no_branches _ _ _ hImmA
+            · subst hFmovA
+              refine ⟨?_, ?_, ?_, ?_⟩ <;> intros <;> intro heq <;>
+                exact ArmInstr.noConfusion heq
+            · exact formalLoadImm64_no_branches _ _ _ hImmB
+            · subst hFmovB
+              refine ⟨?_, ?_, ?_, ?_⟩ <;> intros <;> intro heq <;>
+                exact ArmInstr.noConfusion heq
+          | _ =>
+            -- loads = (formalLoadImm64 .x0 na ++ [fmov]) ++ []
+            simp only [List.mem_append, List.mem_singleton, List.not_mem_nil, or_false]
+              at hLoads
+            rcases hLoads with hImm | hFmov
+            · exact formalLoadImm64_no_branches _ _ _ hImm
+            · subst hFmov
+              refine ⟨?_, ?_, ?_, ?_⟩ <;> intros <;> intro heq <;>
+                exact ArmInstr.noConfusion heq
+        | _ =>
+          -- e1 is neither .var nor .flit. loadA = []. loads = [] ++ loadB = loadB.
+          simp only [List.mem_append, List.not_mem_nil, false_or] at hLoads
+          exact match_var_flit_loadFP_no_branches layout e2 _ hLoads
+      · subst hFcmp
+        rcases hbranch with h | ⟨rn, h⟩ | ⟨rn, h⟩ | ⟨c, h⟩
+        all_goals exact ArmInstr.noConfusion h
+      · subst hBCond
+        rcases hbranch with h | ⟨rn, h⟩ | ⟨rn, h⟩ | ⟨c, h⟩
+        · exact ArmInstr.noConfusion h
+        · exact ArmInstr.noConfusion h
+        · exact ArmInstr.noConfusion h
+        · cases h; exact hPcMapBound
+    · -- fallback: verifiedGenBoolExpr be ++ [.cbnz .x0 (pcMap l)]
+      simp only [Option.some.injEq] at hGen
+      subst hGen
+      simp only [List.mem_append, List.mem_cons, List.not_mem_nil, or_false] at hmem
+      rcases hmem with hBE | hCbnz
+      · have ⟨nb, nz, nnz, nbc⟩ := verifiedGenBoolExpr_no_branches _ _ _ hBE
+        rcases hbranch with h | ⟨rn, h⟩ | ⟨rn, h⟩ | ⟨c, h⟩
+        · exact absurd h (nb _)
+        · exact absurd h (nz rn _)
+        · exact absurd h (nnz rn _)
+        · exact absurd h (nbc c _)
+      · subst hCbnz
+        rcases hbranch with h | ⟨rn, h⟩ | ⟨rn, h⟩ | ⟨c, h⟩
+        · exact ArmInstr.noConfusion h
+        · exact ArmInstr.noConfusion h
+        · cases h; exact hPcMapBound
+        · exact ArmInstr.noConfusion h
 /-
 -- Attempted proof below — kept commented for reference.  The structural
 -- issue is that Lean's elaborator generates `False.var` when reconstructing
@@ -2996,18 +2987,16 @@ private theorem verifiedGenInstr_halt_branch_bounded
        (∃ c, instr' = ArmInstr.bCond c lbl)) →
       lbl ≤ boundsS := by
   simp only [verifiedGenInstr] at hGen
-  split at hGen
-  · exact absurd hGen (by intro h; cases h)
-  · simp only [Option.some.injEq] at hGen
-    subst hGen
-    intro instr' hmem lbl hbranch
-    simp only [List.mem_cons, List.not_mem_nil, or_false] at hmem
-    subst hmem
-    rcases hbranch with h | ⟨rn, h⟩ | ⟨rn, h⟩ | ⟨c, h⟩
-    · cases h; exact hHaltBound
-    · exact ArmInstr.noConfusion h
-    · exact ArmInstr.noConfusion h
-    · exact ArmInstr.noConfusion h
+  simp only [Option.some.injEq] at hGen
+  subst hGen
+  intro instr' hmem lbl hbranch
+  simp only [List.mem_cons, List.not_mem_nil, or_false] at hmem
+  subst hmem
+  rcases hbranch with h | ⟨rn, h⟩ | ⟨rn, h⟩ | ⟨c, h⟩
+  · cases h; exact hHaltBound
+  · exact ArmInstr.noConfusion h
+  · exact ArmInstr.noConfusion h
+  · exact ArmInstr.noConfusion h
 
 /-- `.printString` emits `[.callPrintS lit]`. No branches. -/
 private theorem verifiedGenInstr_printString_branch_bounded
@@ -3023,15 +3012,13 @@ private theorem verifiedGenInstr_printString_branch_bounded
        (∃ c, instr' = ArmInstr.bCond c lbl)) →
       lbl ≤ boundsS := by
   simp only [verifiedGenInstr] at hGen
-  split at hGen
-  · exact absurd hGen (by intro h; cases h)
-  · simp only [Option.some.injEq] at hGen
-    subst hGen
-    intro instr' hmem lbl hbranch
-    simp only [List.mem_cons, List.not_mem_nil, or_false] at hmem
-    subst hmem
-    refine close_non_branch ⟨?_, ?_, ?_, ?_⟩ hbranch <;> intros <;> intro h <;>
-      exact ArmInstr.noConfusion h
+  simp only [Option.some.injEq] at hGen
+  subst hGen
+  intro instr' hmem lbl hbranch
+  simp only [List.mem_cons, List.not_mem_nil, or_false] at hmem
+  subst hmem
+  refine close_non_branch ⟨?_, ?_, ?_, ?_⟩ hbranch <;> intros <;> intro h <;>
+    exact ArmInstr.noConfusion h
 
 /-- `.printInt v` emits `vLoadVar ++ [.callPrintI]`. No branches. -/
 private theorem verifiedGenInstr_printInt_branch_bounded
@@ -3049,18 +3036,16 @@ private theorem verifiedGenInstr_printInt_branch_bounded
   simp only [verifiedGenInstr] at hGen
   split at hGen
   · exact absurd hGen (by intro h; cases h)
-  · split at hGen
-    · exact absurd hGen (by intro h; cases h)
-    · simp only [Option.some.injEq] at hGen
-      subst hGen
-      intro instr' hmem lbl hbranch
-      simp only [List.mem_append, List.mem_cons, List.not_mem_nil, or_false] at hmem
-      refine close_non_branch ?_ hbranch
-      rcases hmem with hLd | hCall
-      · exact vLoadVar_no_branches _ _ _ _ hLd
-      · subst hCall
-        refine ⟨?_, ?_, ?_, ?_⟩ <;> intros <;> intro heq <;>
-          exact ArmInstr.noConfusion heq
+  · simp only [Option.some.injEq] at hGen
+    subst hGen
+    intro instr' hmem lbl hbranch
+    simp only [List.mem_append, List.mem_cons, List.not_mem_nil, or_false] at hmem
+    refine close_non_branch ?_ hbranch
+    rcases hmem with hLd | hCall
+    · exact vLoadVar_no_branches _ _ _ _ hLd
+    · subst hCall
+      refine ⟨?_, ?_, ?_, ?_⟩ <;> intros <;> intro heq <;>
+        exact ArmInstr.noConfusion heq
 
 /-- `.printBool v` emits `vLoadVar ++ [.callPrintB]`. No branches. -/
 private theorem verifiedGenInstr_printBool_branch_bounded
@@ -3078,18 +3063,16 @@ private theorem verifiedGenInstr_printBool_branch_bounded
   simp only [verifiedGenInstr] at hGen
   split at hGen
   · exact absurd hGen (by intro h; cases h)
-  · split at hGen
-    · exact absurd hGen (by intro h; cases h)
-    · simp only [Option.some.injEq] at hGen
-      subst hGen
-      intro instr' hmem lbl hbranch
-      simp only [List.mem_append, List.mem_cons, List.not_mem_nil, or_false] at hmem
-      refine close_non_branch ?_ hbranch
-      rcases hmem with hLd | hCall
-      · exact vLoadVar_no_branches _ _ _ _ hLd
-      · subst hCall
-        refine ⟨?_, ?_, ?_, ?_⟩ <;> intros <;> intro heq <;>
-          exact ArmInstr.noConfusion heq
+  · simp only [Option.some.injEq] at hGen
+    subst hGen
+    intro instr' hmem lbl hbranch
+    simp only [List.mem_append, List.mem_cons, List.not_mem_nil, or_false] at hmem
+    refine close_non_branch ?_ hbranch
+    rcases hmem with hLd | hCall
+    · exact vLoadVar_no_branches _ _ _ _ hLd
+    · subst hCall
+      refine ⟨?_, ?_, ?_, ?_⟩ <;> intros <;> intro heq <;>
+        exact ArmInstr.noConfusion heq
 
 /-- `.printFloat v` emits `vLoadVarFP ++ [.callPrintF]`. No branches. -/
 private theorem verifiedGenInstr_printFloat_branch_bounded
@@ -3107,18 +3090,16 @@ private theorem verifiedGenInstr_printFloat_branch_bounded
   simp only [verifiedGenInstr] at hGen
   split at hGen
   · exact absurd hGen (by intro h; cases h)
-  · split at hGen
-    · exact absurd hGen (by intro h; cases h)
-    · simp only [Option.some.injEq] at hGen
-      subst hGen
-      intro instr' hmem lbl hbranch
-      simp only [List.mem_append, List.mem_cons, List.not_mem_nil, or_false] at hmem
-      refine close_non_branch ?_ hbranch
-      rcases hmem with hLd | hCall
-      · exact vLoadVarFP_no_branches _ _ _ _ hLd
-      · subst hCall
-        refine ⟨?_, ?_, ?_, ?_⟩ <;> intros <;> intro heq <;>
-          exact ArmInstr.noConfusion heq
+  · simp only [Option.some.injEq] at hGen
+    subst hGen
+    intro instr' hmem lbl hbranch
+    simp only [List.mem_append, List.mem_cons, List.not_mem_nil, or_false] at hmem
+    refine close_non_branch ?_ hbranch
+    rcases hmem with hLd | hCall
+    · exact vLoadVarFP_no_branches _ _ _ _ hLd
+    · subst hCall
+      refine ⟨?_, ?_, ?_, ?_⟩ <;> intros <;> intro heq <;>
+        exact ArmInstr.noConfusion heq
 
 /-- `.print fmt args` always returns `none` (verifiedGenInstr doesn't handle print);
     so the hypothesis `= some instrs` is vacuous. -/
@@ -3135,9 +3116,7 @@ private theorem verifiedGenInstr_print_branch_bounded
        (∃ c, instr' = ArmInstr.bCond c lbl)) →
       lbl ≤ boundsS := by
   simp only [verifiedGenInstr] at hGen
-  split at hGen
-  · exact absurd hGen (by intro h; cases h)
-  · exact absurd hGen (by intro h; cases h)
+  exact absurd hGen (by intro h; cases h)
 
 /-- `.copy dst src`: emits one of four forms — self-copy `[.movR .x0 .x0]`,
     freg-src `vStoreVarFP`, freg-dst `vLoadVar ++ [.fmovToFP]`, or
@@ -3155,31 +3134,29 @@ private theorem verifiedGenInstr_copy_branch_bounded
        (∃ c, instr' = ArmInstr.bCond c lbl)) →
       lbl ≤ boundsS := by
   simp only [verifiedGenInstr] at hGen
+  intro instr' hmem lbl hbranch
+  refine close_non_branch ?_ hbranch
   split at hGen
-  · exact absurd hGen (by intro h; cases h)
-  · intro instr' hmem lbl hbranch
-    refine close_non_branch ?_ hbranch
-    split at hGen
+  · simp only [Option.some.injEq] at hGen; subst hGen
+    simp only [List.mem_cons, List.not_mem_nil, or_false] at hmem; subst hmem
+    refine ⟨?_, ?_, ?_, ?_⟩ <;> intros <;> intro h <;>
+      exact ArmInstr.noConfusion h
+  · split at hGen
     · simp only [Option.some.injEq] at hGen; subst hGen
-      simp only [List.mem_cons, List.not_mem_nil, or_false] at hmem; subst hmem
-      refine ⟨?_, ?_, ?_, ?_⟩ <;> intros <;> intro h <;>
-        exact ArmInstr.noConfusion h
+      exact vStoreVarFP_no_branches _ _ _ _ hmem
     · split at hGen
       · simp only [Option.some.injEq] at hGen; subst hGen
-        exact vStoreVarFP_no_branches _ _ _ _ hmem
-      · split at hGen
-        · simp only [Option.some.injEq] at hGen; subst hGen
-          simp only [List.mem_append, List.mem_cons, List.not_mem_nil, or_false] at hmem
-          rcases hmem with hLd | hFmov
-          · exact vLoadVar_no_branches _ _ _ _ hLd
-          · subst hFmov
-            refine ⟨?_, ?_, ?_, ?_⟩ <;> intros <;> intro heq <;>
-              exact ArmInstr.noConfusion heq
-        · simp only [Option.some.injEq] at hGen; subst hGen
-          simp only [List.mem_append] at hmem
-          rcases hmem with hLd | hSt
-          · exact vLoadVar_no_branches _ _ _ _ hLd
-          · exact vStoreVar_no_branches _ _ _ _ hSt
+        simp only [List.mem_append, List.mem_cons, List.not_mem_nil, or_false] at hmem
+        rcases hmem with hLd | hFmov
+        · exact vLoadVar_no_branches _ _ _ _ hLd
+        · subst hFmov
+          refine ⟨?_, ?_, ?_, ?_⟩ <;> intros <;> intro heq <;>
+            exact ArmInstr.noConfusion heq
+      · simp only [Option.some.injEq] at hGen; subst hGen
+        simp only [List.mem_append] at hmem
+        rcases hmem with hLd | hSt
+        · exact vLoadVar_no_branches _ _ _ _ hLd
+        · exact vStoreVar_no_branches _ _ _ _ hSt
 
 /-- `.boolop dst be`: emits `verifiedGenBoolExpr ++ vStoreVar`. No branches. -/
 private theorem verifiedGenInstr_boolop_branch_bounded
@@ -3197,32 +3174,30 @@ private theorem verifiedGenInstr_boolop_branch_bounded
   simp only [verifiedGenInstr] at hGen
   split at hGen
   · exact absurd hGen (by intro h; cases h)
-  · split at hGen
-    · exact absurd hGen (by intro h; cases h)
-    · -- Inner `if (match layout dst with | some (.freg _) => true | _ => false) then none else some X`
-      -- Case-split on layout dst being a freg vs not.
-      by_cases hF : ∃ r, List.lookup dst layout.entries = some (VarLoc.freg r)
-      · obtain ⟨r, hR⟩ := hF
-        simp only [hR] at hGen
-        exact absurd hGen (by intro h; cases h)
-      · -- layout dst is not a freg → the match evaluates to false → if takes else → some (...)
-        have hNF : (match List.lookup dst layout.entries with
-                    | some (VarLoc.freg _) => true | _ => false) = false := by
-          rcases hL : List.lookup dst layout.entries with _ | loc
-          · rfl
-          · cases loc with
-            | stack _ => rfl
-            | ireg _ => rfl
-            | freg r => exact absurd ⟨r, hL⟩ hF
-        simp [hNF] at hGen
-        obtain ⟨_, hGen⟩ := hGen
-        subst hGen
-        intro instr' hmem lbl hbranch
-        refine close_non_branch ?_ hbranch
-        simp only [List.mem_append] at hmem
-        rcases hmem with hBE | hSt
-        · exact verifiedGenBoolExpr_no_branches _ _ _ hBE
-        · exact vStoreVar_no_branches _ _ _ _ hSt
+  · -- Inner `if (match layout dst with | some (.freg _) => true | _ => false) then none else some X`
+    -- Case-split on layout dst being a freg vs not.
+    by_cases hF : ∃ r, List.lookup dst layout.entries = some (VarLoc.freg r)
+    · obtain ⟨r, hR⟩ := hF
+      simp only [hR] at hGen
+      exact absurd hGen (by intro h; cases h)
+    · -- layout dst is not a freg → the match evaluates to false → if takes else → some (...)
+      have hNF : (match List.lookup dst layout.entries with
+                  | some (VarLoc.freg _) => true | _ => false) = false := by
+        rcases hL : List.lookup dst layout.entries with _ | loc
+        · rfl
+        · cases loc with
+          | stack _ => rfl
+          | ireg _ => rfl
+          | freg r => exact absurd ⟨r, hL⟩ hF
+      simp [hNF] at hGen
+      obtain ⟨_, hGen⟩ := hGen
+      subst hGen
+      intro instr' hmem lbl hbranch
+      refine close_non_branch ?_ hbranch
+      simp only [List.mem_append] at hmem
+      rcases hmem with hBE | hSt
+      · exact verifiedGenBoolExpr_no_branches _ _ _ hBE
+      · exact vStoreVar_no_branches _ _ _ _ hSt
 
 /-- `.binop dst .mod lv rv`: mirror of the `.div` probe with a 3-instruction
     opInstr `[.sdivR, .mulR, .subR]` and the same cbz-to-divLabel branch. -/
@@ -3327,22 +3302,20 @@ private theorem verifiedGenInstr_fbinop_branch_bounded
        (∃ c, instr' = ArmInstr.bCond c lbl)) →
       lbl ≤ boundsS := by
   simp only [verifiedGenInstr] at hGen
-  split at hGen
-  · exact absurd hGen (by intro h; cases h)
-  · split at hGen <;> simp at hGen
-    -- survivors: only the `_, _, _` fall-through case (with `some (...) = some instrs`)
-    subst hGen
-    intro instr' hmem lbl hbranch
-    refine close_non_branch ?_ hbranch
-    simp only [List.mem_append, List.mem_cons, List.not_mem_nil, or_false] at hmem
-    rcases hmem with hLv | hRv | hOp | hStore
-    · exact vLoadVarFP_no_branches _ _ _ _ hLv
-    · exact vLoadVarFP_no_branches _ _ _ _ hRv
-    · subst hOp
-      cases fop <;> (
-        refine ⟨?_, ?_, ?_, ?_⟩ <;> intros <;> intro heq <;>
-          exact ArmInstr.noConfusion heq)
-    · exact vStoreVarFP_no_branches _ _ _ _ hStore
+  split at hGen <;> simp at hGen
+  -- survivors: only the `_, _, _` fall-through case (with `some (...) = some instrs`)
+  subst hGen
+  intro instr' hmem lbl hbranch
+  refine close_non_branch ?_ hbranch
+  simp only [List.mem_append, List.mem_cons, List.not_mem_nil, or_false] at hmem
+  rcases hmem with hLv | hRv | hOp | hStore
+  · exact vLoadVarFP_no_branches _ _ _ _ hLv
+  · exact vLoadVarFP_no_branches _ _ _ _ hRv
+  · subst hOp
+    cases fop <;> (
+      refine ⟨?_, ?_, ?_, ?_⟩ <;> intros <;> intro heq <;>
+        exact ArmInstr.noConfusion heq)
+  · exact vStoreVarFP_no_branches _ _ _ _ hStore
 
 /-- `.intToFloat dst src`: emits `vLoadVar ++ [.scvtf] ++ vStoreVarFP`. No branches. -/
 private theorem verifiedGenInstr_intToFloat_branch_bounded
@@ -3358,19 +3331,17 @@ private theorem verifiedGenInstr_intToFloat_branch_bounded
        (∃ c, instr' = ArmInstr.bCond c lbl)) →
       lbl ≤ boundsS := by
   simp only [verifiedGenInstr] at hGen
-  split at hGen
-  · exact absurd hGen (by intro h; cases h)
-  · split at hGen <;> simp at hGen
-    subst hGen
-    intro instr' hmem lbl hbranch
-    refine close_non_branch ?_ hbranch
-    simp only [List.mem_append, List.mem_cons, List.not_mem_nil, or_false] at hmem
-    rcases hmem with hLd | hCvt | hSt
-    · exact vLoadVar_no_branches _ _ _ _ hLd
-    · subst hCvt
-      refine ⟨?_, ?_, ?_, ?_⟩ <;> intros <;> intro heq <;>
-        exact ArmInstr.noConfusion heq
-    · exact vStoreVarFP_no_branches _ _ _ _ hSt
+  split at hGen <;> simp at hGen
+  subst hGen
+  intro instr' hmem lbl hbranch
+  refine close_non_branch ?_ hbranch
+  simp only [List.mem_append, List.mem_cons, List.not_mem_nil, or_false] at hmem
+  rcases hmem with hLd | hCvt | hSt
+  · exact vLoadVar_no_branches _ _ _ _ hLd
+  · subst hCvt
+    refine ⟨?_, ?_, ?_, ?_⟩ <;> intros <;> intro heq <;>
+      exact ArmInstr.noConfusion heq
+  · exact vStoreVarFP_no_branches _ _ _ _ hSt
 
 /-- `.floatToInt dst src`: emits `vLoadVarFP ++ [.fcvtzs] ++ vStoreVar`. No branches. -/
 private theorem verifiedGenInstr_floatToInt_branch_bounded
@@ -3386,19 +3357,17 @@ private theorem verifiedGenInstr_floatToInt_branch_bounded
        (∃ c, instr' = ArmInstr.bCond c lbl)) →
       lbl ≤ boundsS := by
   simp only [verifiedGenInstr] at hGen
-  split at hGen
-  · exact absurd hGen (by intro h; cases h)
-  · split at hGen <;> simp at hGen
-    subst hGen
-    intro instr' hmem lbl hbranch
-    refine close_non_branch ?_ hbranch
-    simp only [List.mem_append, List.mem_cons, List.not_mem_nil, or_false] at hmem
-    rcases hmem with hLd | hCvt | hSt
-    · exact vLoadVarFP_no_branches _ _ _ _ hLd
-    · subst hCvt
-      refine ⟨?_, ?_, ?_, ?_⟩ <;> intros <;> intro heq <;>
-        exact ArmInstr.noConfusion heq
-    · exact vStoreVar_no_branches _ _ _ _ hSt
+  split at hGen <;> simp at hGen
+  subst hGen
+  intro instr' hmem lbl hbranch
+  refine close_non_branch ?_ hbranch
+  simp only [List.mem_append, List.mem_cons, List.not_mem_nil, or_false] at hmem
+  rcases hmem with hLd | hCvt | hSt
+  · exact vLoadVarFP_no_branches _ _ _ _ hLd
+  · subst hCvt
+    refine ⟨?_, ?_, ?_, ?_⟩ <;> intros <;> intro heq <;>
+      exact ArmInstr.noConfusion heq
+  · exact vStoreVar_no_branches _ _ _ _ hSt
 
 /-- `.floatUnary dst op src`: emits `vLoadVarFP ++ [.floatUnaryInstr] ++ vStoreVarFP`.
     No branches. -/
@@ -3415,19 +3384,17 @@ private theorem verifiedGenInstr_floatUnary_branch_bounded
        (∃ c, instr' = ArmInstr.bCond c lbl)) →
       lbl ≤ boundsS := by
   simp only [verifiedGenInstr] at hGen
-  split at hGen
-  · exact absurd hGen (by intro h; cases h)
-  · split at hGen <;> simp at hGen
-    subst hGen
-    intro instr' hmem lbl hbranch
-    refine close_non_branch ?_ hbranch
-    simp only [List.mem_append, List.mem_cons, List.not_mem_nil, or_false] at hmem
-    rcases hmem with hLd | hOp | hSt
-    · exact vLoadVarFP_no_branches _ _ _ _ hLd
-    · subst hOp
-      refine ⟨?_, ?_, ?_, ?_⟩ <;> intros <;> intro heq <;>
-        exact ArmInstr.noConfusion heq
-    · exact vStoreVarFP_no_branches _ _ _ _ hSt
+  split at hGen <;> simp at hGen
+  subst hGen
+  intro instr' hmem lbl hbranch
+  refine close_non_branch ?_ hbranch
+  simp only [List.mem_append, List.mem_cons, List.not_mem_nil, or_false] at hmem
+  rcases hmem with hLd | hOp | hSt
+  · exact vLoadVarFP_no_branches _ _ _ _ hLd
+  · subst hOp
+    refine ⟨?_, ?_, ?_, ?_⟩ <;> intros <;> intro heq <;>
+      exact ArmInstr.noConfusion heq
+  · exact vStoreVarFP_no_branches _ _ _ _ hSt
 
 /-- `.fternop dst op a b c`: emits `vLoadVarFP×3 ++ [fpInstr] ++ vStoreVarFP`. No branches. -/
 private theorem verifiedGenInstr_fternop_branch_bounded
@@ -3443,22 +3410,20 @@ private theorem verifiedGenInstr_fternop_branch_bounded
        (∃ c, instr' = ArmInstr.bCond c lbl)) →
       lbl ≤ boundsS := by
   simp only [verifiedGenInstr] at hGen
-  split at hGen
-  · exact absurd hGen (by intro h; cases h)
-  · split at hGen <;> simp at hGen
-    subst hGen
-    intro instr' hmem lbl hbranch
-    refine close_non_branch ?_ hbranch
-    simp only [List.mem_append, List.mem_cons, List.not_mem_nil, or_false] at hmem
-    rcases hmem with hA | hB | hC | hOp | hSt
-    · exact vLoadVarFP_no_branches _ _ _ _ hA
-    · exact vLoadVarFP_no_branches _ _ _ _ hB
-    · exact vLoadVarFP_no_branches _ _ _ _ hC
-    · subst hOp
-      cases op <;> (
-        refine ⟨?_, ?_, ?_, ?_⟩ <;> intros <;> intro heq <;>
-          exact ArmInstr.noConfusion heq)
-    · exact vStoreVarFP_no_branches _ _ _ _ hSt
+  split at hGen <;> simp at hGen
+  subst hGen
+  intro instr' hmem lbl hbranch
+  refine close_non_branch ?_ hbranch
+  simp only [List.mem_append, List.mem_cons, List.not_mem_nil, or_false] at hmem
+  rcases hmem with hA | hB | hC | hOp | hSt
+  · exact vLoadVarFP_no_branches _ _ _ _ hA
+  · exact vLoadVarFP_no_branches _ _ _ _ hB
+  · exact vLoadVarFP_no_branches _ _ _ _ hC
+  · subst hOp
+    cases op <;> (
+      refine ⟨?_, ?_, ?_, ?_⟩ <;> intros <;> intro heq <;>
+        exact ArmInstr.noConfusion heq)
+  · exact vStoreVarFP_no_branches _ _ _ _ hSt
 
 /-- `.arrLoad x arr idx ty`: emits `vLoadVar ++ boundsCheck ++ [load-instrs] ++ vStoreVar?`.
     The only branch is `.bCond .hs boundsLabel` inside `boundsCheck` (when not safe),
@@ -3529,39 +3494,37 @@ private theorem verifiedGenInstr_arrLoad_branch_bounded
       exact hStoreNB _ hSt
   simp only [verifiedGenInstr] at hGen
   split at hGen
-  · exact absurd hGen (by intro h; cases h)
-  · split at hGen
-    -- Case 1: ty = .float
-    · simp only [Option.some.injEq] at hGen
-      apply close_int_float instrs _ (vStoreVarFP_no_branches _ _ _) _ _ hGen.symm
-      refine ⟨?_, ?_, ?_, ?_⟩ <;> intros <;> intro heq <;> exact ArmInstr.noConfusion heq
-    -- Case 2: ty = .bool (has 3 instrs: arrLd, cmpImm, cset)
-    · simp only [Option.some.injEq] at hGen
-      subst hGen
-      intro instr' hmem lbl hbranch
-      simp only [List.mem_append, List.mem_cons, List.not_mem_nil, or_false] at hmem
-      rcases hmem with ((hLd | hBc) | hArrLd | hCmp | hCset) | hSt
-      · refine close_non_branch ?_ hbranch
-        exact vLoadVar_no_branches _ _ _ _ hLd
-      · exact bc_nb _ hBc lbl hbranch
-      · subst hArrLd
-        refine close_non_branch ?_ hbranch
-        refine ⟨?_, ?_, ?_, ?_⟩ <;> intros <;> intro heq <;>
-          exact ArmInstr.noConfusion heq
-      · subst hCmp
-        refine close_non_branch ?_ hbranch
-        refine ⟨?_, ?_, ?_, ?_⟩ <;> intros <;> intro heq <;>
-          exact ArmInstr.noConfusion heq
-      · subst hCset
-        refine close_non_branch ?_ hbranch
-        refine ⟨?_, ?_, ?_, ?_⟩ <;> intros <;> intro heq <;>
-          exact ArmInstr.noConfusion heq
-      · refine close_non_branch ?_ hbranch
-        exact vStoreVar_no_branches _ _ _ _ hSt
-    -- Case 3: ty = .int
-    · simp only [Option.some.injEq] at hGen
-      apply close_int_float instrs _ (vStoreVar_no_branches _ _ _) _ _ hGen.symm
-      refine ⟨?_, ?_, ?_, ?_⟩ <;> intros <;> intro heq <;> exact ArmInstr.noConfusion heq
+  -- Case 1: ty = .float
+  · simp only [Option.some.injEq] at hGen
+    apply close_int_float instrs _ (vStoreVarFP_no_branches _ _ _) _ _ hGen.symm
+    refine ⟨?_, ?_, ?_, ?_⟩ <;> intros <;> intro heq <;> exact ArmInstr.noConfusion heq
+  -- Case 2: ty = .bool (has 3 instrs: arrLd, cmpImm, cset)
+  · simp only [Option.some.injEq] at hGen
+    subst hGen
+    intro instr' hmem lbl hbranch
+    simp only [List.mem_append, List.mem_cons, List.not_mem_nil, or_false] at hmem
+    rcases hmem with ((hLd | hBc) | hArrLd | hCmp | hCset) | hSt
+    · refine close_non_branch ?_ hbranch
+      exact vLoadVar_no_branches _ _ _ _ hLd
+    · exact bc_nb _ hBc lbl hbranch
+    · subst hArrLd
+      refine close_non_branch ?_ hbranch
+      refine ⟨?_, ?_, ?_, ?_⟩ <;> intros <;> intro heq <;>
+        exact ArmInstr.noConfusion heq
+    · subst hCmp
+      refine close_non_branch ?_ hbranch
+      refine ⟨?_, ?_, ?_, ?_⟩ <;> intros <;> intro heq <;>
+        exact ArmInstr.noConfusion heq
+    · subst hCset
+      refine close_non_branch ?_ hbranch
+      refine ⟨?_, ?_, ?_, ?_⟩ <;> intros <;> intro heq <;>
+        exact ArmInstr.noConfusion heq
+    · refine close_non_branch ?_ hbranch
+      exact vStoreVar_no_branches _ _ _ _ hSt
+  -- Case 3: ty = .int
+  · simp only [Option.some.injEq] at hGen
+    apply close_int_float instrs _ (vStoreVar_no_branches _ _ _) _ _ hGen.symm
+    refine ⟨?_, ?_, ?_, ?_⟩ <;> intros <;> intro heq <;> exact ArmInstr.noConfusion heq
 
 /-- `.arrStore arr idx val ty`: emits `vLoadVar ++ boundsCheck ++ vLoadVar? ++ [arrSt]`.
     Only branch is `.bCond .hs boundsLabel` in boundsCheck, bounded trivially. -/
@@ -3599,36 +3562,34 @@ private theorem verifiedGenInstr_arrStore_branch_bounded
         · cases h; exact le_refl _
   simp only [verifiedGenInstr] at hGen
   split at hGen
-  · exact absurd hGen (by intro h; cases h)
-  · split at hGen
-    · -- float branch
-      simp only [Option.some.injEq] at hGen; subst hGen
-      intro instr' hmem lbl hbranch
-      simp only [List.mem_append, List.mem_cons, List.not_mem_nil, or_false] at hmem
-      rcases hmem with ((hLd | hBc) | hVal) | hArrSt
-      · refine close_non_branch ?_ hbranch
-        exact vLoadVar_no_branches _ _ _ _ hLd
-      · exact bc_nb _ hBc lbl hbranch
-      · refine close_non_branch ?_ hbranch
-        exact vLoadVarFP_no_branches _ _ _ _ hVal
-      · subst hArrSt
-        refine close_non_branch ?_ hbranch
-        refine ⟨?_, ?_, ?_, ?_⟩ <;> intros <;> intro heq <;>
-          exact ArmInstr.noConfusion heq
-    · -- non-float (int/bool) branch
-      simp only [Option.some.injEq] at hGen; subst hGen
-      intro instr' hmem lbl hbranch
-      simp only [List.mem_append, List.mem_cons, List.not_mem_nil, or_false] at hmem
-      rcases hmem with ((hLd | hBc) | hVal) | hArrSt
-      · refine close_non_branch ?_ hbranch
-        exact vLoadVar_no_branches _ _ _ _ hLd
-      · exact bc_nb _ hBc lbl hbranch
-      · refine close_non_branch ?_ hbranch
-        exact vLoadVar_no_branches _ _ _ _ hVal
-      · subst hArrSt
-        refine close_non_branch ?_ hbranch
-        refine ⟨?_, ?_, ?_, ?_⟩ <;> intros <;> intro heq <;>
-          exact ArmInstr.noConfusion heq
+  · -- float branch
+    simp only [Option.some.injEq] at hGen; subst hGen
+    intro instr' hmem lbl hbranch
+    simp only [List.mem_append, List.mem_cons, List.not_mem_nil, or_false] at hmem
+    rcases hmem with ((hLd | hBc) | hVal) | hArrSt
+    · refine close_non_branch ?_ hbranch
+      exact vLoadVar_no_branches _ _ _ _ hLd
+    · exact bc_nb _ hBc lbl hbranch
+    · refine close_non_branch ?_ hbranch
+      exact vLoadVarFP_no_branches _ _ _ _ hVal
+    · subst hArrSt
+      refine close_non_branch ?_ hbranch
+      refine ⟨?_, ?_, ?_, ?_⟩ <;> intros <;> intro heq <;>
+        exact ArmInstr.noConfusion heq
+  · -- non-float (int/bool) branch
+    simp only [Option.some.injEq] at hGen; subst hGen
+    intro instr' hmem lbl hbranch
+    simp only [List.mem_append, List.mem_cons, List.not_mem_nil, or_false] at hmem
+    rcases hmem with ((hLd | hBc) | hVal) | hArrSt
+    · refine close_non_branch ?_ hbranch
+      exact vLoadVar_no_branches _ _ _ _ hLd
+    · exact bc_nb _ hBc lbl hbranch
+    · refine close_non_branch ?_ hbranch
+      exact vLoadVar_no_branches _ _ _ _ hVal
+    · subst hArrSt
+      refine close_non_branch ?_ hbranch
+      refine ⟨?_, ?_, ?_, ?_⟩ <;> intros <;> intro heq <;>
+        exact ArmInstr.noConfusion heq
 
 /-- `.const v val`: emits `[loadImm/mov] ++ [store-steps]`. No branches. -/
 private theorem verifiedGenInstr_const_branch_bounded
@@ -3646,50 +3607,44 @@ private theorem verifiedGenInstr_const_branch_bounded
   cases val with
   | int n =>
     simp only [verifiedGenInstr] at hGen
-    split at hGen
-    · exact absurd hGen (by intro h; cases h)
-    · split at hGen <;> simp at hGen
-      all_goals (
-        subst hGen
-        intro instr' hmem lbl hbranch
-        refine close_non_branch ?_ hbranch
-        simp only [List.mem_append] at hmem
-        rcases hmem with hImm | hSt
-        · exact formalLoadImm64_no_branches _ _ _ hImm
-        · exact vStoreVar_no_branches _ _ _ _ hSt)
+    split at hGen <;> simp at hGen
+    all_goals (
+      subst hGen
+      intro instr' hmem lbl hbranch
+      refine close_non_branch ?_ hbranch
+      simp only [List.mem_append] at hmem
+      rcases hmem with hImm | hSt
+      · exact formalLoadImm64_no_branches _ _ _ hImm
+      · exact vStoreVar_no_branches _ _ _ _ hSt)
   | bool b =>
     simp only [verifiedGenInstr] at hGen
-    split at hGen
-    · exact absurd hGen (by intro h; cases h)
-    · split at hGen <;> simp at hGen
-      all_goals (
-        subst hGen
-        intro instr' hmem lbl hbranch
-        refine close_non_branch ?_ hbranch
-        simp only [List.mem_cons] at hmem
-        rcases hmem with hMov | hSt
-        · subst hMov
-          refine ⟨?_, ?_, ?_, ?_⟩ <;> intros <;> intro heq <;>
-            exact ArmInstr.noConfusion heq
-        · exact vStoreVar_no_branches _ _ _ _ hSt)
+    split at hGen <;> simp at hGen
+    all_goals (
+      subst hGen
+      intro instr' hmem lbl hbranch
+      refine close_non_branch ?_ hbranch
+      simp only [List.mem_cons] at hmem
+      rcases hmem with hMov | hSt
+      · subst hMov
+        refine ⟨?_, ?_, ?_, ?_⟩ <;> intros <;> intro heq <;>
+          exact ArmInstr.noConfusion heq
+      · exact vStoreVar_no_branches _ _ _ _ hSt)
   | float f =>
     simp only [verifiedGenInstr] at hGen
-    split at hGen
-    · exact absurd hGen (by intro h; cases h)
-    · split at hGen <;> simp at hGen
-      all_goals (
-        subst hGen
-        intro instr' hmem lbl hbranch
-        refine close_non_branch ?_ hbranch
-        rw [List.mem_append] at hmem
-        rcases hmem with hImm | hCons
-        · exact formalLoadImm64_no_branches _ _ _ hImm
-        · rw [List.mem_cons] at hCons
-          rcases hCons with hFmov | hSt
-          · subst hFmov
-            refine ⟨?_, ?_, ?_, ?_⟩ <;> intros <;> intro heq <;>
-              exact ArmInstr.noConfusion heq
-          · exact vStoreVarFP_no_branches _ _ _ _ hSt)
+    split at hGen <;> simp at hGen
+    all_goals (
+      subst hGen
+      intro instr' hmem lbl hbranch
+      refine close_non_branch ?_ hbranch
+      rw [List.mem_append] at hmem
+      rcases hmem with hImm | hCons
+      · exact formalLoadImm64_no_branches _ _ _ hImm
+      · rw [List.mem_cons] at hCons
+        rcases hCons with hFmov | hSt
+        · subst hFmov
+          refine ⟨?_, ?_, ?_, ?_⟩ <;> intros <;> intro heq <;>
+            exact ArmInstr.noConfusion heq
+        · exact vStoreVarFP_no_branches _ _ _ _ hSt)
 
 /-- **Aggregator**: every branch instruction emitted by `verifiedGenInstr` for any
     TAC constructor targets a label ≤ `boundsS`, assuming the standard bounds
@@ -4011,14 +3966,8 @@ theorem bodyFlat_branch_target_bounded
         obtain ⟨baseInstrs, hGenInstr, hEq⟩ :=
           spec.callSiteSaveRestore tac_pc htac_pc hLib
         -- Derive hRC/hII from hGenInstr (verifiedGenInstr = none when either fails)
-        have hRC : r.layout.regConventionSafe = true := by
-          cases h : r.layout.regConventionSafe
-          · simp [verifiedGenInstr, h] at hGenInstr
-          · rfl
-        have hII : r.layout.isInjective = true := by
-          cases h : r.layout.isInjective
-          · simp [verifiedGenInstr, hRC, h] at hGenInstr
-          · rfl
+        have hRC : r.layout.regConventionSafe = true := spec.regConventionSafeBool
+        have hII : r.layout.isInjective = true := spec.isInjectiveBool
         rw [hEq] at hXInBlock
         rw [List.mem_append, List.mem_append] at hXInBlock
         rcases hXInBlock with (hInSaves | hInBase) | hInRestores
@@ -4038,14 +3987,8 @@ theorem bodyFlat_branch_target_bounded
         have hNotLib : isLibCallTAC p[tac_pc] = false := by
           cases h : isLibCallTAC p[tac_pc] <;> simp_all
         have hGenInstr := spec.instrGen tac_pc htac_pc hNotLib hNotPrint
-        have hRC : r.layout.regConventionSafe = true := by
-          cases h : r.layout.regConventionSafe
-          · simp [verifiedGenInstr, h] at hGenInstr
-          · rfl
-        have hII : r.layout.isInjective = true := by
-          cases h : r.layout.isInjective
-          · simp [verifiedGenInstr, hRC, h] at hGenInstr
-          · rfl
+        have hRC : r.layout.regConventionSafe = true := spec.regConventionSafeBool
+        have hII : r.layout.isInjective = true := spec.isInjectiveBool
         have hLblBranch :
             X = ArmInstr.b lbl ∨
             (∃ rn, X = ArmInstr.cbz rn lbl) ∨

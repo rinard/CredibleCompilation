@@ -1875,6 +1875,10 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
     (hRel : ExtSimRel layout pcMap divLabel boundsLabel (.run pc σ am) s)
     (instrs : List ArmInstr)
     (hSome : verifiedGenInstr layout pcMap instr haltLabel divLabel boundsLabel arrayDecls boundsSafe = some instrs)
+    -- Layout validity is now checked once by `verifiedGenerateAsm` and threaded in (the
+    -- per-instruction guard was hoisted out of `verifiedGenInstr` to avoid an O(N³) compile).
+    (hRC : layout.regConventionSafe = true)
+    (hII : layout.isInjective = true)
     (hPC_bound : pc < p.size)
     (tyCtx : TyCtx)
     (hWT : WellTypedProg tyCtx p) (hTS : TypedStore tyCtx σ)
@@ -1896,14 +1900,6 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
         ExtSimRel layout pcMap divLabel boundsLabel cfg' s' := by
   -- Phase B.0 (session 7): per-case sorries; bodies filled in B.1+.
   -- Sig is length-tracked: k tracks ArmStepsN; on .run targets, k = instrs.length.
-  have hRC : layout.regConventionSafe = true := by
-    cases h : layout.regConventionSafe
-    · simp [verifiedGenInstr, h] at hSome
-    · rfl
-  have hII : layout.isInjective = true := by
-    cases h : layout.isInjective
-    · simp [verifiedGenInstr, hRC, h] at hSome
-    · rfl
   have hRegConv : RegConventionSafe layout := VarLayout.regConventionSafe_spec layout hRC
   have hInjective : VarLayoutInjective layout := VarLayout.isInjective_spec layout hII
   obtain ⟨hStateRel, hPcRel, hArrayMem⟩ := hRel
@@ -2134,10 +2130,8 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
       intro r h; simp [verifiedGenInstr, hRC, hII, h] at hSome
     have hVMapped : layout v ≠ none := hMapped v (by simp [TAC.vars])
     have hInstrs : instrs = vLoadVar layout v .x0 ++ [.callPrintI] := by
-      simp only [verifiedGenInstr, hRC, hII, Bool.not_true, Bool.false_or] at hSome
-      split at hSome
-      · simp at hSome
-      · simp at hSome; exact hSome.symm
+      simp only [verifiedGenInstr] at hSome
+      exact (Option.some.inj hSome).symm
     rw [hInstrs] at hCodeInstr hPcNext
     have hCodeLoad := hCodeInstr.append_left (l2 := [ArmInstr.callPrintI])
     obtain ⟨s1, k1, hSteps1N, hk1, _, hRel1, _, hPC1, hAM1, _⟩ :=
@@ -2168,10 +2162,8 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
       intro r h; simp [verifiedGenInstr, hRC, hII, h] at hSome
     have hVMapped : layout v ≠ none := hMapped v (by simp [TAC.vars])
     have hInstrs : instrs = vLoadVar layout v .x0 ++ [.callPrintB] := by
-      simp only [verifiedGenInstr, hRC, hII, Bool.not_true, Bool.false_or] at hSome
-      split at hSome
-      · simp at hSome
-      · simp at hSome; exact hSome.symm
+      simp only [verifiedGenInstr] at hSome
+      exact (Option.some.inj hSome).symm
     rw [hInstrs] at hCodeInstr hPcNext
     have hCodeLoad := hCodeInstr.append_left (l2 := [ArmInstr.callPrintB])
     obtain ⟨s1, k1, hSteps1N, hk1, _, hRel1, _, hPC1, hAM1, _⟩ :=
@@ -2202,10 +2194,8 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
       intro r h; simp [verifiedGenInstr, hRC, hII, h] at hSome
     have hVMapped : layout v ≠ none := hMapped v (by simp [TAC.vars])
     have hInstrs : instrs = vLoadVarFP layout v .d0 ++ [.callPrintF] := by
-      simp only [verifiedGenInstr, hRC, hII, Bool.not_true, Bool.false_or] at hSome
-      split at hSome
-      · simp at hSome
-      · simp at hSome; exact hSome.symm
+      simp only [verifiedGenInstr] at hSome
+      exact (Option.some.inj hSome).symm
     rw [hInstrs] at hCodeInstr hPcNext
     have hCodeLoad := hCodeInstr.append_left (l2 := [ArmInstr.callPrintF])
     obtain ⟨s1, k1, hSteps1N, hk1, _, hRel1, _, hPC1, hAM1, _, _⟩ :=
@@ -2331,8 +2321,8 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
     | float f =>
       have hNotIregX : ∀ r, layout x ≠ some (.ireg r) := by
         intro r h; have := hSome
-        simp only [verifiedGenInstr, hRC, hII, Bool.not_true, Bool.false_or, h] at this
-        split at this <;> simp_all
+        simp only [verifiedGenInstr, h] at this
+        simp_all
       have hLocXNe : layout x ≠ none := hMapped x (by simp [TAC.vars])
       match hLX : layout x with
       | some (.stack off) =>
@@ -5548,8 +5538,8 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
     have hNotFregY : ∀ r, layout y ≠ some (.freg r) := by
       intro r h; have := hSome; simp [verifiedGenInstr, hRC, hII, h] at this
     have hNotIregX : ∀ r, layout x ≠ some (.ireg r) := by
-      intro r h; have := hSome; simp only [verifiedGenInstr, hRC, hII, Bool.not_true, Bool.false_or, h] at this
-      split at this <;> simp_all
+      intro r h; have := hSome; simp only [verifiedGenInstr, h] at this
+      simp_all
     match hLX : layout x with
     | some (.freg r) =>
       have hInstrs : instrs =
@@ -5585,8 +5575,8 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
     | some (.stack _) =>
       have hInstrs : instrs =
         vLoadVar layout y .x0 ++ [ArmInstr.scvtf .d0 .x0] ++ vStoreVarFP layout x .d0 := by
-        simp only [verifiedGenInstr, hRC, hII, Bool.not_true, Bool.false_or, hLX] at hSome
-        split at hSome <;> simp_all
+        simp only [verifiedGenInstr, hLX] at hSome
+        simp_all
       rw [hInstrs] at hCodeInstr hPcNext
       have hCodeLM := hCodeInstr.append_left
       have hCodeR := hCodeInstr.append_right
@@ -5630,8 +5620,8 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
     have hNotIregY : ∀ r, layout y ≠ some (.ireg r) := by
       intro r h; have := hSome; simp [verifiedGenInstr, hRC, hII, h] at this
     have hNotFregX : ∀ r, layout x ≠ some (.freg r) := by
-      intro r h; have := hSome; simp only [verifiedGenInstr, hRC, hII, Bool.not_true, Bool.false_or, h] at this
-      split at this <;> simp_all
+      intro r h; have := hSome; simp only [verifiedGenInstr, h] at this
+      simp_all
     match hLY : layout y with
     | some (.freg r) =>
       have hInstrs : instrs =
@@ -5668,8 +5658,8 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
     | some (.stack _) =>
       have hInstrs : instrs =
         vLoadVarFP layout y .d0 ++ [ArmInstr.fcvtzs .x0 .d0] ++ vStoreVar layout x .x0 := by
-        simp only [verifiedGenInstr, hRC, hII, Bool.not_true, Bool.false_or, hLY] at hSome
-        split at hSome <;> simp_all
+        simp only [verifiedGenInstr, hLY] at hSome
+        simp_all
       rw [hInstrs] at hCodeInstr hPcNext
       have hCodeLM := hCodeInstr.append_left
       have hCodeR := hCodeInstr.append_right
@@ -5713,17 +5703,16 @@ theorem verifiedGenInstr_correct (prog : ArmProg) (layout : VarLayout) (pcMap : 
       intro r h; have := hSome; simp [verifiedGenInstr, hRC, hII, h] at this
     have hNotIregX : ∀ r, layout x ≠ some (.ireg r) := by
       intro r h; have := hSome
-      simp only [verifiedGenInstr, hRC, hII, Bool.not_true, Bool.false_or, h] at this
-      split at this <;> simp_all
+      simp only [verifiedGenInstr, h] at this
+      simp_all
     let src_reg := match layout y with | some (.freg r) => r | _ => ArmFReg.d0
     let dst_reg := match layout x with | some (.freg r) => r | _ => ArmFReg.d0
     let armOp := ArmInstr.floatUnaryInstr op dst_reg src_reg
     have hInstrs : instrs =
       vLoadVarFP layout y src_reg ++ [armOp] ++ vStoreVarFP layout x dst_reg := by
-      simp only [verifiedGenInstr, hRC, hII, Bool.not_true, Bool.false_or] at hSome
-      split at hSome
-      · simp_all
-      · exact (Option.some.inj hSome).symm
+      simp only [verifiedGenInstr] at hSome
+      split at hSome <;> simp_all [src_reg, dst_reg, armOp]
+      all_goals (try exact hSome.symm)
     rw [hInstrs] at hCodeInstr hPcNext
     have hCodeLM := hCodeInstr.append_left
     have hCodeR := hCodeInstr.append_right
@@ -5999,6 +5988,8 @@ theorem ext_backward_simulation (p : Prog) (armProg : ArmProg)
     (instr : TAC) (hInstr : p[pc]? = some instr)
     (instrs : List ArmInstr)
     (hSome : verifiedGenInstr layout pcMap instr haltLabel divLabel boundsLabel arrayDecls boundsSafe = some instrs)
+    (hRC : layout.regConventionSafe = true)
+    (hII : layout.isInjective = true)
     (hCode : CodeAt armProg (pcMap pc) instrs)
     (hPcNext : ∀ σ' am', cfg' = .run (pc + 1) σ' am' →
       pcMap (pc + 1) = pcMap pc + instrs.length)
@@ -6014,4 +6005,4 @@ theorem ext_backward_simulation (p : Prog) (armProg : ArmProg)
         (∀ pc' σ' am', cfg' = .run pc' σ' am' → k = instrs.length) ∧
         ExtSimRel layout pcMap divLabel boundsLabel cfg' s' :=
   verifiedGenInstr_correct armProg layout pcMap p pc σ am s haltLabel divLabel boundsLabel
-    arrayDecls boundsSafe hBoundsSafeOracle instr hInstr hRel instrs hSome hPC tyCtx hWT hTS hWTL hMapped cfg' hStep hCode hPcNext hAD hNCSL hNCSLBin hNCSLPrintInt hNCSLPrintBool hNCSLPrintFloat hNCSLPrintStr
+    arrayDecls boundsSafe hBoundsSafeOracle instr hInstr hRel instrs hSome hRC hII hPC tyCtx hWT hTS hWTL hMapped cfg' hStep hCode hPcNext hAD hNCSL hNCSLBin hNCSLPrintInt hNCSLPrintBool hNCSLPrintFloat hNCSLPrintStr
