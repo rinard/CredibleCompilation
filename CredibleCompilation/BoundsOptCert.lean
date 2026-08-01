@@ -1,5 +1,6 @@
 import CredibleCompilation.BoundsOpt
 import CredibleCompilation.PropChecker
+import Std.Data.HashMap
 
 /-!
 # BoundsOpt certificate-based checker
@@ -247,10 +248,73 @@ def refinesSingle (m_strong : IMap) (v : Var) (r' : IRange) : Bool :=
           decide (r'.lo ≤ r.lo) && decide (r.hi ≤ r'.hi)
     | none => false
 
+/-- Build a hash map from an `IMap`, reversed so the first list entry for each key wins
+    (matching `find?`/`imLookup` first-match semantics). -/
+def imHM (m : IMap) : Std.HashMap Var IRange :=
+  m.reverse.foldl (fun hm (p : Var × IRange) => hm.insert p.1 p.2) {}
+
+/-- `foldl insert` (last-wins) equals `find?` on the reversed list.  (Mirrors
+    `FastVarMap.foldl_insert_getD` in `ExecChecker`.) -/
+private theorem imHM_foldl_getD (l : List (Var × IRange)) (m : Std.HashMap Var IRange)
+    (v : Var) (d : IRange) :
+    (l.foldl (fun m (p : Var × IRange) => m.insert p.1 p.2) m).getD v d =
+    match l.reverse.find? (fun p => p.1 == v) with
+    | some (_, r) => r
+    | none => m.getD v d := by
+  induction l generalizing m with
+  | nil => simp
+  | cons p rest ih =>
+    simp only [List.foldl]; rw [ih]
+    simp only [List.reverse_cons, List.find?_append]
+    cases hfind : rest.reverse.find? (fun p => p.1 == v) with
+    | some val => simp [Option.or]
+    | none =>
+      simp only [Option.or, List.find?_cons, List.find?_nil, Std.HashMap.getD_insert]
+      cases hbeq : (p.1 == v) <;> simp
+
+/-- `imHM` lookup (with any default) agrees with `find?` first-match. -/
+theorem imHM_getD (m : IMap) (v : Var) (d : IRange) :
+    (imHM m).getD v d =
+    match m.find? (fun p => p.1 == v) with
+    | some (_, r) => r
+    | none => d := by
+  unfold imHM
+  rw [imHM_foldl_getD]
+  simp only [Std.HashMap.getD_empty, List.reverse_reverse]
+
+/-- O(N) executable equivalent of `refines`: builds a hash map from `m_strong` once, so
+    `refinesSingle`'s per-variable O(N) `find?` becomes an O(1) `getD` — `refines` drops from
+    O(N²) to O(N), and `checkLocalPreservation` from O(N³) to O(N²).  The invalid sentinel
+    `⟨1, 0⟩` (`validIntervalLoose = false`) makes the map-miss case short-circuit to `false`,
+    exactly as the `none` branch of `refinesSingle`. -/
+def refinesFast (m_strong m_weak : IMap) : Bool :=
+  let hm := imHM m_strong
+  m_weak.all fun (v, r') =>
+    if !validIntervalLoose r' then true
+    else
+      let r := hm.getD v ⟨1, 0⟩
+      validIntervalLoose r && decide (r'.lo ≤ r.lo) && decide (r.hi ≤ r'.hi)
+
 /-- `m_strong` refines `m_weak` pointwise: every entry in `m_weak` has a
     stronger, well-formed counterpart in `m_strong`. -/
 def refines (m_strong m_weak : IMap) : Bool :=
   m_weak.all fun (v, r') => refinesSingle m_strong v r'
+
+/-- **Verified fast path** (`@[csimp]`): the compiled `refines` runs `refinesFast`, proven
+    equal — so it is O(N) at runtime with **no** trusted-code obligation. -/
+@[csimp] theorem refines_eq_refinesFast : @refines = @refinesFast := by
+  funext m_strong m_weak
+  simp only [refines, refinesFast]
+  congr 1
+  funext p
+  obtain ⟨v, r'⟩ := p
+  simp only [refinesSingle]
+  split
+  · rfl
+  · rw [imHM_getD]
+    cases hf : m_strong.find? (fun p => p.1 == v) with
+    | some pair => obtain ⟨_, r⟩ := pair; rfl
+    | none => rfl
 
 -- ============================================================
 -- § 7. Local preservation checker
