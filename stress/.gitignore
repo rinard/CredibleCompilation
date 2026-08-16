@@ -11,3 +11,5 @@ certfuzz_seen.txt
 emi/
 meta/
 hermes/
+# Python bytecode
+__pycache__/

@@ -271,7 +271,8 @@
       "Bash(grep -c \"uses \\\\`sorry\\\\`\")",
       "Bash(awk 'NR==1615,/^$/' /Users/mr/CredibleCompilation/CredibleCompilation/CodeGen.lean)",
       "Bash(grep -E \"\\\\.lean$\")",
-      "Bash(xargs -I {} basename {})"
+      "Bash(xargs -I {} basename {})",
+      "Bash(git -C /Users/mr/CredibleCompilation remote -v)"
     ],
     "additionalDirectories": [
       "/Users/mr/CredibleCompilation/tests/programs",
